@@ -43,6 +43,8 @@ export interface Project {
   context_updated_by?: string | null;
   setup_input?: import("./project-context.js").ProjectInputRequest | null;
   setup_mode?: "auto" | "manual";
+  /** AI 自動設定時是否提供測試用 SQL Server：auto 依專案判斷，always／never 是管理者覆寫。 */
+  sql_server?: "auto" | "always" | "never";
   setup_plan?: import("./project-setup.js").SetupPlan | null;
   setup_status?: string | null;
   index_phase?: "queued" | "indexing" | "ready" | "failed" | "limited" | null;

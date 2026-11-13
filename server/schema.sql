@@ -19,6 +19,8 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS index_paths text[] NOT NULL DEFAUL
 -- 舊專案保留人工設定；新建專案由管理 API 明確選用自動模式。
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS setup_mode text NOT NULL DEFAULT 'manual' CHECK(setup_mode IN ('auto','manual'));
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS setup_plan jsonb;
+-- AI 自動設定時是否提供測試用 SQL Server：auto 依專案判斷，always／never 是管理者在進階設定的覆寫。
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS sql_server text NOT NULL DEFAULT 'auto' CHECK(sql_server IN ('auto','always','never'));
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS setup_status text;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS project_context jsonb NOT NULL DEFAULT '{}';
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS context_updated_at timestamptz;

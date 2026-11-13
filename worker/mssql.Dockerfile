@@ -9,4 +9,8 @@ COPY --from=sql /opt/microsoft /opt/microsoft
 COPY --from=sql /etc/odbcinst.ini /etc/odbcinst.ini
 # 執行時仍 cap-drop=ALL；移除上游執行檔能力需求，避免非 root 執行遭拒。
 RUN (setcap -r /opt/mssql/bin/sqlservr || test -z "$(getcap /opt/mssql/bin/sqlservr)") && rm -rf /var/opt/mssql && ln -s /workspace/obj/agentflow-sql /var/opt/mssql
+# 測試階段啟動本機 SQL Server、暫時把 LocalDB 連線導向它（見 docs/agents/project-environment.md）。
+COPY --chmod=755 worker/mssql/sqlserver.mjs /opt/agentflow-sql/sqlserver.mjs
+RUN ln -s /opt/agentflow-sql/sqlserver.mjs /usr/local/bin/agentflow-sqlserver
+LABEL io.agentflow.sqlserver-helper="1"
 USER 1000:1000
