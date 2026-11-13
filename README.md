@@ -2,7 +2,7 @@
 
 在 LINE 群組裡提需求，AI 整理成任務，交給隔離容器裡的 Codex 改程式或調查問題；通過測試與獨立審查後才開 GitHub PR，由人決定是否合併。
 
-（原名 LINE-AgentFlow。程式內部的容器、資料卷與排程工作仍沿用 `line-agentflow`／`LINE-AgentFlow` 名稱。）
+（程式內部的容器、資料卷與排程工作使用 `line-agentflow`／`LINE-AgentFlow` 作為固定識別名稱。）
 
 > 給 AI 代理與部署者：要部署請照 [部署手冊](docs/deployment.md) 由上而下執行；在這個儲存庫工作前請先讀 [專案慣例與注意事項](docs/conventions.md)。機密一律由人在本機設定頁輸入，不要貼進對話，也不要讀出 `.env`、`.local/`、`.codex-service/` 的內容。
 

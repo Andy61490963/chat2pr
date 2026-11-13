@@ -1110,7 +1110,7 @@ export class Execution {
 
 ${reportForGitHub(answer, `${config().publicUrl}/tasks?task=${task.id}`)}
 
-由 LINE-AgentFlow 查詢任務產生。`,
+由 chat2pr 查詢任務產生。`,
               )
               .catch(() => {});
           await this.line.notify(

@@ -184,7 +184,7 @@ async function withSqlServer<T>(
         connectTimeout: 15000,
         requestTimeout: 60000,
         useColumnNames: true,
-        appName: "LINE-AgentFlow schema snapshot",
+        appName: "chat2pr schema snapshot",
       },
     });
     const active = connection;

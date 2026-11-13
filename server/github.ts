@@ -401,7 +401,7 @@ export class GitHub {
     const api = await this.client(project.repo),
       p = this.parts(project.repo),
       marker = `<!-- agentflow:${task.id} -->`;
-    const body = `${marker}\n\n${task.summary}\n\n目標分支：${task.target_branch ?? project.base_branch}\n\n## 驗收條件\n${task.acceptance.map((x) => `- [ ] ${x}`).join("\n")}\n\n由 LINE-AgentFlow 整理；需求版本 ${task.version}。`;
+    const body = `${marker}\n\n${task.summary}\n\n目標分支：${task.target_branch ?? project.base_branch}\n\n## 驗收條件\n${task.acceptance.map((x) => `- [ ] ${x}`).join("\n")}\n\n由 chat2pr 整理；需求版本 ${task.version}。`;
     const update = async (number: number) => {
       const issue = (
         await api.issues.update({
@@ -544,7 +544,7 @@ export class GitHub {
           publishedSha,
           files.filter((f) => f.content !== null).map((f) => f.path),
           project.sensitive_paths,
-        )}\n\nCloses #${task.issue_number}\n\n<!-- agentflow:${task.id}:${task.version} -->\n由 LINE-AgentFlow 建立，請人工檢視後合併。`,
+        )}\n\nCloses #${task.issue_number}\n\n<!-- agentflow:${task.id}:${task.version} -->\n由 chat2pr 建立，請人工檢視後合併。`,
       })
     ).data;
   }
@@ -629,7 +629,7 @@ export class GitHub {
         head: branch,
         base: project.base_branch,
         title: "更新 AGENTS.md：LINE 群組專案記憶",
-        body: `把 LINE 群組要求記住的開發規範與背景知識寫進 AGENTS.md，之後 Codex 每次修改此專案都會遵守。\n\n${items.map((i) => `- ${i.content}`).join("\n")}\n\n由 LINE-AgentFlow 建立，請人工檢視後合併；不需要的項目可直接在 PR 中刪除。`,
+        body: `把 LINE 群組要求記住的開發規範與背景知識寫進 AGENTS.md，之後 Codex 每次修改此專案都會遵守。\n\n${items.map((i) => `- ${i.content}`).join("\n")}\n\n由 chat2pr 建立，請人工檢視後合併；不需要的項目可直接在 PR 中刪除。`,
       })
     ).data;
   }
