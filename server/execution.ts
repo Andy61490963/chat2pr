@@ -278,6 +278,40 @@ export class Execution {
     }
     return provided;
   }
+  /**
+   * 追加修改能否接在上一題的 PR 上：上一題是同專案的修改、PR 仍開著、分支在本儲存庫、
+   * 目標分支相同。任一條件不符就回傳 undefined，改從目標分支另開 PR。
+   */
+  private async continuationOf(task: Task, project: Project) {
+    if (task.mode === "query" || !task.parent_id) return undefined;
+    const parent = await this.db.one<Task>("SELECT * FROM tasks WHERE id=$1", [
+      task.parent_id,
+    ]);
+    if (
+      !parent ||
+      parent.mode === "query" ||
+      parent.status !== "ready" ||
+      !parent.pr_number ||
+      !parent.branch ||
+      parent.project_id !== project.id
+    )
+      return undefined;
+    const pr = await this.github.pullHead(project, parent.pr_number);
+    if (
+      pr.state !== "open" ||
+      !pr.sameRepo ||
+      pr.headRef !== parent.branch ||
+      pr.base !== (task.target_branch ?? project.base_branch)
+    )
+      return undefined;
+    return {
+      prNumber: parent.pr_number,
+      prUrl: parent.pr_url,
+      branch: parent.branch,
+      headSha: pr.headSha,
+      parentTitle: parent.title,
+    };
+  }
   /** 有結構快照時交給執行器，之後每個階段唯讀掛載；回傳是否有快照。 */
   private provideSnapshot(project: Project, runId: string) {
     return provideSnapshot(
@@ -585,6 +619,20 @@ export class Execution {
         task.approved_version !== task.version
       )
         return;
+      // 追加修改要等原任務做完（開出 PR 或結束）再開始，才能接在同一個 PR 上；排程稍後會再試。
+      if (task.parent_id && task.mode !== "query") {
+        const parent = await this.db.one<{ status: string }>(
+          "SELECT status FROM tasks WHERE id=$1",
+          [task.parent_id],
+        );
+        if (
+          parent &&
+          ["queued", "running", "reviewing", "budget_wait"].includes(
+            parent.status,
+          )
+        )
+          return;
+      }
       const confirmation = await this.db.one<{ valid: boolean }>(
         "SELECT task_project_confirmed($1) AS valid",
         [task.id],
@@ -762,12 +810,26 @@ export class Execution {
       await stage("issue");
       const head = await this.github.base(project);
       await assertCurrent();
-      task.base_sha = task.base_sha ?? head;
+      // 追加修改：上一題的 PR 還開著，就接在那個 PR 的分支上繼續改，不另開 PR。
+      const continuation = await this.continuationOf(task, project);
+      task.base_sha = task.base_sha ?? continuation?.headSha ?? head;
       const issue = await this.syncIssue(task.id);
       task.issue_number = issue.number;
       task.issue_url = issue.url;
       task.branch =
-        task.branch ?? `agentflow/${task.id.slice(0, 8)}-v${task.version}`;
+        task.branch ??
+        continuation?.branch ??
+        `agentflow/${task.id.slice(0, 8)}-v${task.version}`;
+      // 重試時原 PR 可能已合併或關閉：不能再用那條分支（會誤把舊 PR 當成這次的結果）。
+      const continuing = !!continuation && task.branch === continuation.branch;
+      if (
+        !continuing &&
+        !task.branch.startsWith(`agentflow/${task.id.slice(0, 8)}-`)
+      )
+        throw new AppError(
+          409,
+          "要追加的 PR 已合併或關閉，請重新確認，改從目標分支另開 PR",
+        );
       await this.db.query(
         "UPDATE tasks SET issue_number=$2,issue_url=$3,base_sha=$4,branch=$5 WHERE id=$1 AND version=$6",
         [
@@ -977,6 +1039,13 @@ export class Execution {
             }
           : {}),
         ...(installNote ? { installStatus: installNote } : {}),
+        ...(continuing && continuation
+          ? {
+              continuation: {
+                note: `這次是在既有 PR #${continuation.prNumber}（「${continuation.parentTitle}」）上追加修改。/workspace 已是該 PR 目前的內容，包含先前的修改；只做這次要求的部分，不要重做或還原先前的修改。`,
+              },
+            }
+          : {}),
         ...(thread.length
           ? {
               conversation: {
@@ -1307,21 +1376,32 @@ ${querySummary(answer)}`,
       await stage("publish");
       await this.github.base(project);
       await assertCurrent();
-      const pr = await this.github.publish(
-        project,
-        task,
-        files,
-        prReport({
-          codexSummary,
-          testCommand: project.test_command,
-          verification: setup?.plan.verification,
-          reviewNotes: reviewNotes.map((n) => redact(n)),
-          dataSource: setup?.plan.dataSource,
-          limitations: setup?.plan.limitations,
-          testOutput: report,
-        }),
-        assertCurrent,
-      );
+      const prText = prReport({
+        codexSummary,
+        testCommand: project.test_command,
+        verification: setup?.plan.verification,
+        reviewNotes: reviewNotes.map((n) => redact(n)),
+        dataSource: setup?.plan.dataSource,
+        limitations: setup?.plan.limitations,
+        testOutput: report,
+      });
+      const pr =
+        continuing && continuation
+          ? await this.github.continuePr(
+              project,
+              task,
+              continuation.prNumber,
+              files,
+              prText,
+              assertCurrent,
+            )
+          : await this.github.publish(
+              project,
+              task,
+              files,
+              prText,
+              assertCurrent,
+            );
       const completed = await this.db.query(
         "UPDATE tasks SET status='ready',pr_number=$2,pr_url=$3,last_error=NULL,updated_at=now() WHERE id=$1 AND version=$4 AND status='reviewing' RETURNING id",
         [task.id, pr.number, pr.html_url, task.version],
@@ -1340,7 +1420,13 @@ ${querySummary(answer)}`,
         );
         return;
       }
-      await this.db.audit(task.id, "ready", `PR 已建立：${pr.html_url}`);
+      await this.db.audit(
+        task.id,
+        "ready",
+        continuing
+          ? `已追加到 PR #${pr.number}：${pr.html_url}`
+          : `PR 已建立：${pr.html_url}`,
+      );
       await this.db.query("UPDATE runs SET result=$2 WHERE id=$1", [
         runId,
         JSON.stringify({ prUrl: pr.html_url, report }),
@@ -1349,14 +1435,18 @@ ${querySummary(answer)}`,
         task.id,
         "ready",
         `ready:${task.id}:${task.version}`,
-        `PR 已完成，請檢視後合併：${task.title}\n${pr.html_url}`,
+        continuing
+          ? `已追加到同一個 PR，請檢視後合併：${task.title}\n${pr.html_url}`
+          : `PR 已完成，請檢視後合併：${task.title}\n${pr.html_url}`,
       );
       await notifyGroup(
         this.db,
         task.id,
         "ready",
         `ready:${task.id}:${task.version}`,
-        `「${task.title}」已修改完成，等管理者檢視後合併：\n${pr.html_url}`,
+        continuing
+          ? `「${task.title}」已追加到同一個 PR，等管理者檢視後合併：\n${pr.html_url}`
+          : `「${task.title}」已修改完成，等管理者檢視後合併：\n${pr.html_url}`,
       );
     } catch (e) {
       if (e instanceof NeedsProjectInput && runId) {

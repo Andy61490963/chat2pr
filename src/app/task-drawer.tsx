@@ -97,7 +97,11 @@ export function TaskDrawer({
   const [amendOpen, setAmendOpen] = useState(false);
   const [ask, setAsk] = useState("");
   useUnsaved("task-followup", ask.trim().length > 0);
-  const canFollowup = t.mode === "query" && t.status === "answered";
+  // 查詢回答後可以追問；修改開出 PR 或合併後可以追加修改。
+  const canFollowup =
+    (t.mode === "query" && t.status === "answered") ||
+    (t.mode !== "query" && ["ready", "merged", "closed"].includes(t.status));
+  const adding = t.mode !== "query";
   const thread = detail.thread;
   const [relinkTo, setRelinkTo] = useState("");
   const canRelink = [
@@ -465,19 +469,29 @@ export function TaskDrawer({
             </section>
           )}
           {canFollowup && (
-            <section aria-label="追問" className="flex flex-col gap-2">
-              <Label htmlFor="followup">接著問</Label>
+            <section
+              aria-label={adding ? "追加修改" : "追問"}
+              className="flex flex-col gap-2"
+            >
+              <Label htmlFor="followup">{adding ? "追加修改" : "接著問"}</Label>
               <Textarea
                 id="followup"
                 rows={3}
                 maxLength={2000}
                 value={ask}
-                placeholder="例如：那 ch3 呢？剛剛說的那張表有哪些欄位？"
+                placeholder={
+                  adding
+                    ? "例如：按鈕顏色再深一點；錯誤訊息也寫出欄位名稱"
+                    : "例如：那 ch3 呢？剛剛說的那張表有哪些欄位？"
+                }
                 onChange={(e) => setAsk(e.target.value)}
               />
               <p className="text-xs text-muted-foreground">
-                會建立新的一題，沿用這一題的專案與分支，並帶著前面的問答查詢；這裡的回答不會被取代。也可以在
-                LINE 用「回覆」引用機器人的回答接著問。
+                {adding
+                  ? t.status === "ready"
+                    ? "會建立一題追加，管理者確認後接在同一個 PR 上繼續改，不會另開 PR。"
+                    : "會建立一題追加，管理者確認後從目標分支另開 PR，並帶入這次需求的脈絡。"
+                  : "會建立新的一題，沿用這一題的專案與分支，並帶著前面的問答查詢；這裡的回答不會被取代。也可以在 LINE 用「回覆」引用機器人的回答接著問。"}
               </p>
               <div>
                 <Button
@@ -487,7 +501,7 @@ export function TaskDrawer({
                     setAsk("");
                   }}
                 >
-                  追問
+                  {adding ? "送出追加" : "追問"}
                 </Button>
               </div>
             </section>
@@ -942,11 +956,11 @@ export function TaskDrawer({
           <SheetFooter className="items-center">
             <span className="flex-1 text-sm text-muted-foreground">
               {t.status === "ready"
-                ? "PR 已建立，請到 GitHub 檢視與合併；合併或關閉後這裡會自動更新。要再調整，請在群組提出新需求。"
+                ? "PR 已建立，請到 GitHub 檢視與合併；合併或關閉後這裡會自動更新。要再調整，用上方的「追加修改」，會接在同一個 PR 上。"
                 : t.status === "merged"
-                  ? "PR 已合併，任務完成。要再調整，請在群組提出新需求。"
+                  ? "PR 已合併，任務完成。要再調整，用上方的「追加修改」。"
                   : t.status === "closed"
-                    ? "PR 沒有合併就關閉了（儲存庫被移除時也會這樣）。要重做，請在群組提出新需求。"
+                    ? "PR 沒有合併就關閉了（儲存庫被移除時也會這樣）。要重做，用上方的「追加修改」另開 PR。"
                     : "查詢已回覆。要接著問，請用上方的「接著問」；想換個問法整個重查，才用「修改問題重新查詢」，原回答會被取代。"}
             </span>
             {t.status === "answered" ? (

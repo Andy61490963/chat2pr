@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Database, DbClient } from "./db.js";
-import { AppError, queryRisk, redact } from "./policy.js";
+import { AppError, classifyRisk, queryRisk, redact } from "./policy.js";
 import { approvalNotice, saveProjectConfirmation } from "./project-routing.js";
 import { assertContextText } from "./project-context.js";
 import type { Task } from "../shared/types.js";
@@ -167,9 +167,91 @@ export async function createFollowup(
       ])
     ).rows[0];
     if (!parent) throw new AppError(404, "找不到任務");
-    const t = await createFollowupInTransaction(db, c, parent, question, actor);
+    const t =
+      parent.mode === "query"
+        ? await createFollowupInTransaction(db, c, parent, question, actor)
+        : await createChangeFollowup(db, c, parent, question, actor);
     return { id: t.id, status: t.status };
   });
+}
+
+/**
+ * 修改的追加：PR 還開著時，派工會接在同一個 PR 上；已合併就從目標分支另開 PR，並帶入原需求脈絡。
+ * 修改一律等管理者確認，這裡只建立待確認的新一題。
+ */
+async function createChangeFollowup(
+  db: Database,
+  c: DbClient,
+  parent: Task,
+  text: string,
+  actor: string,
+) {
+  if (!["ready", "merged", "closed"].includes(parent.status))
+    throw new AppError(
+      409,
+      "只有已開出 PR 或已合併的修改可以追加；還在處理中的需求請直接補充",
+    );
+  const usable = (
+    await c.query(
+      `SELECT g.binding_version FROM projects p JOIN group_projects gp ON gp.project_id=p.id JOIN groups g ON g.id=gp.group_id
+       WHERE p.id=$1 AND g.id=$2 AND p.enabled AND p.validated_at IS NOT NULL AND g.left_at IS NULL`,
+      [parent.project_id, parent.group_id],
+    )
+  ).rows[0] as { binding_version: number } | undefined;
+  if (!usable || !parent.target_branch)
+    throw new AppError(
+      409,
+      "這個專案已停用或不再綁定此群組，請另外提出需求並指定專案",
+    );
+  const risk = classifyRisk(text, []);
+  const t = (
+    await c.query<Task>(
+      `INSERT INTO tasks(project_id,group_id,title,summary,acceptance,risk_reasons,missing,source_ids,status,parent_id,dedupe_key,suggestions,mode)
+       VALUES($1,$2,$3,$4,$5,$6,'[]','{}','awaiting_approval',$7,$8,'[]','change') RETURNING *`,
+      [
+        parent.project_id,
+        parent.group_id,
+        `追加：${text.replace(/\s+/g, " ").slice(0, 60)}`,
+        text,
+        JSON.stringify([`完成追加：${text.slice(0, 500)}`]),
+        JSON.stringify(risk ? [risk] : []),
+        parent.id,
+        `followup:${parent.id}:${randomUUID()}`,
+      ],
+    )
+  ).rows[0];
+  const routing = {
+    status: "clear",
+    basis: "followup",
+    reason: `追加「${parent.title}」，沿用同一個專案與分支${parent.status === "ready" ? "，接在同一個 PR 上" : ""}`,
+    evidence: [],
+    bindingVersion: usable.binding_version,
+    followupOf: { id: parent.id, title: parent.title },
+  };
+  await c.query(
+    "UPDATE tasks SET project_routing=$2,target_branch=$3,branch_selection=$4 WHERE id=$1",
+    [
+      t.id,
+      JSON.stringify(routing),
+      parent.target_branch,
+      JSON.stringify({
+        basis: "followup",
+        reason: `延續上一題的目標分支「${parent.target_branch}」`,
+        sourceIds: [],
+      }),
+    ],
+  );
+  Object.assign(t, {
+    project_routing: routing,
+    target_branch: parent.target_branch,
+  });
+  await c.query(
+    "INSERT INTO task_versions(task_id,version,summary,acceptance) VALUES($1,1,$2,$3)",
+    [t.id, t.summary, JSON.stringify(t.acceptance)],
+  );
+  await db.audit(t.id, "followup", `${actor} 在看板追加「${parent.title}」`, c);
+  await approvalNotice(c, t);
+  return t;
 }
 
 /** 共用追問交易，修改假設時沿用對話串、風險與專案檢查，不覆寫已回答的原題。 */
