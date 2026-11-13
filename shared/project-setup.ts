@@ -13,6 +13,18 @@ export interface SetupPlan {
   limitations?: string;
   explanation: string;
   evidence: { path: string; quote: string }[];
+  /** 測試需要 SQL Server 時的映像與判斷依據；不需要時沒有這個欄位。 */
+  sqlServer?: SqlServerPlan;
+}
+
+/**
+ * 測試階段由系統在工作容器內啟動 SQL Server，並把 LocalDB 連線暫時導向它。
+ * source=detected 是從專案檔與 CI 判斷，admin 是管理者在進階設定選「一律提供」。
+ */
+export interface SqlServerPlan {
+  image: string;
+  source: "detected" | "admin";
+  reasons: { path: string; quote: string }[];
 }
 
 type Verified = Pick<SetupPlan, "verification" | "dataSource" | "limitations">;

@@ -67,6 +67,8 @@ const ProjectInput = z.object({
   base_branch: TargetBranch,
   image: z.string().min(1).max(200),
   setup_mode: z.enum(["auto", "manual"]).optional(),
+  // 測試用 SQL Server：自動判斷，或由管理者一律提供／不提供。省略時保留原設定。
+  sql_server: z.enum(["auto", "always", "never"]).optional(),
   install_command: z.string().trim().max(8000).default(""),
   test_command: z.string().trim().max(8000).default(""),
   sensitive_paths: z.array(z.string().min(1)).max(100),
@@ -744,7 +746,7 @@ export async function buildApp(
     // 只查此儲存庫的安裝，不逐一列出所有組織的儲存庫。
     await github.installation(p.repo);
     return db.one(
-      "INSERT INTO projects(name,repo,base_branch,image,install_command,test_command,sensitive_paths,description,index_paths,setup_mode) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *",
+      "INSERT INTO projects(name,repo,base_branch,image,install_command,test_command,sensitive_paths,description,index_paths,setup_mode,sql_server) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *",
       [
         p.name,
         p.repo,
@@ -756,6 +758,7 @@ export async function buildApp(
         p.description,
         p.index_paths ?? [],
         p.setup_mode ?? "auto",
+        p.sql_server ?? "auto",
       ],
     );
   });
@@ -786,11 +789,13 @@ export async function buildApp(
     // 舊版呼叫端省略時保留管理者設定；只有明確空陣列才恢復全專案。
     p.index_paths ??= old.index_paths ?? [];
     p.setup_mode ??= old.setup_mode ?? "manual";
+    p.sql_server ??= old.sql_server ?? "auto";
     const changed =
       !!repointed ||
       [
         "base_branch",
         "setup_mode",
+        "sql_server",
         "image",
         "install_command",
         "test_command",
@@ -806,7 +811,7 @@ export async function buildApp(
     const saved = await db.transaction(async (c) => {
       const row = (
         await c.query(
-          "UPDATE projects SET name=$2,base_branch=$3,image=$4,install_command=$5,test_command=$6,sensitive_paths=$7,enabled=$8,validated_at=CASE WHEN $9 THEN NULL ELSE validated_at END,config_version=config_version+CASE WHEN $9 THEN 1 ELSE 0 END,description=$11,index_paths=$12,setup_mode=$13,setup_plan=CASE WHEN $9 THEN NULL ELSE setup_plan END,setup_status=CASE WHEN $9 THEN NULL ELSE setup_status END,setup_input=CASE WHEN $9 THEN NULL ELSE setup_input END WHERE id=$1 AND config_version=$10 RETURNING *",
+          "UPDATE projects SET name=$2,base_branch=$3,image=$4,install_command=$5,test_command=$6,sensitive_paths=$7,enabled=$8,validated_at=CASE WHEN $9 THEN NULL ELSE validated_at END,config_version=config_version+CASE WHEN $9 THEN 1 ELSE 0 END,description=$11,index_paths=$12,setup_mode=$13,sql_server=$14,setup_plan=CASE WHEN $9 THEN NULL ELSE setup_plan END,setup_status=CASE WHEN $9 THEN NULL ELSE setup_status END,setup_input=CASE WHEN $9 THEN NULL ELSE setup_input END WHERE id=$1 AND config_version=$10 RETURNING *",
           [
             id,
             p.name,
@@ -821,6 +826,7 @@ export async function buildApp(
             p.description,
             p.index_paths,
             p.setup_mode,
+            p.sql_server,
           ],
         )
       ).rows[0] as Project | undefined;

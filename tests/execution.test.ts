@@ -1769,3 +1769,121 @@ it("專案已登記資料庫連線：不提醒", async () => {
   expect(task.answer).toContain("已擬好定期檢查");
   expect(task.answer).not.toContain(noConnectionHint);
 });
+
+it.each([false, true])(
+  "測試需要 SQL Server 時派工全程用 SQL Server 映像並導向 LocalDB；SQL Server 起不來時標示為測試環境問題（起不來：%s）",
+  async (broken) => {
+    const s = await scenario();
+    await db.query(
+      "UPDATE settings SET value=jsonb_set(value,'{ai_mode}','\"subscription\"')",
+    );
+    await db.query("DELETE FROM service_health WHERE name=$1", [
+      subscriptionGateName,
+    ]);
+    await db.query(
+      "UPDATE projects SET setup_mode='auto',validated_at=NULL,enabled=false,install_command='',test_command=''",
+    );
+    const csproj =
+      '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" /><PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" /></ItemGroup></Project>';
+    s.github.setupContext = async () => ({
+      files: { "tests/Orders.Tests/Orders.Tests.csproj": csproj },
+      locks: [],
+    });
+    s.runner.account = async () => ({
+      allowed: true,
+      checkedAt: new Date().toISOString(),
+    });
+    let report = "";
+    const publish = s.github.publish;
+    s.github.publish = async (p, t, files, text, guard) => {
+      report = text;
+      return publish(p, t, files, text, guard);
+    };
+    const phases: { phase: string; image: string; command?: string }[] = [];
+    let prompt = "",
+      coded = false;
+    const original = s.runner.call;
+    s.runner.call = async <T>(path: string, raw: unknown): Promise<T> => {
+      const body = raw as {
+        phase?: string;
+        image?: string;
+        command?: string;
+        job?: { prompt?: string };
+      };
+      if (path === "ai")
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout: JSON.stringify({
+            final: JSON.stringify({
+              install: "dotnet restore",
+              test: "dotnet test --no-restore",
+              verification: "tests",
+              explanation: "依測試專案執行",
+              evidence: [
+                {
+                  path: "tests/Orders.Tests/Orders.Tests.csproj",
+                  quote: "Microsoft.NET.Test.Sdk",
+                },
+              ],
+            }),
+          }),
+        } as T;
+      if (path === "phase") {
+        phases.push({
+          phase: body.phase!,
+          image: body.image!,
+          command: body.command,
+        });
+        if (body.phase === "code") {
+          coded = true;
+          prompt = body.job?.prompt ?? "";
+        }
+        if (body.phase === "collect" && !coded)
+          return { exitCode: 0, stdout: '{"files":[]}', stderr: "" } as T;
+        if (body.phase === "test" && broken && coded)
+          return {
+            exitCode: 86,
+            stdout:
+              'AGENTFLOW_TEST_ENVIRONMENT {"ok":false,"stage":"start","reason":"SQL Server 在 150 秒內沒有就緒。"}\n',
+            stderr: "",
+          } as T;
+        if (body.phase === "test")
+          return {
+            exitCode: 0,
+            stdout: "Passed!  - Failed: 0, Passed: 3",
+            stderr: "",
+          } as T;
+      }
+      return original<T>(path, raw);
+    };
+    const execution = new Execution(db, s.github, s.line, s.budget, s.runner);
+    await execution.validate(await db.one<Project>("SELECT * FROM projects"));
+    await confirmTask(s.task.id);
+    phases.length = 0;
+    await execution.execute(s.task.id);
+    // 原始碼準備之後的所有階段都使用含 SQL Server 的映像。
+    expect(new Set(phases.map((p) => p.image))).toEqual(
+      new Set(["line-agentflow-worker-mssql:local"]),
+    );
+    const tests = phases.filter((p) => p.phase === "test");
+    expect(tests.length).toBeGreaterThan(0);
+    for (const t of tests)
+      expect(t.command).toContain(
+        "agentflow-sqlserver run -- sh -c 'dotnet test --no-restore'",
+      );
+    expect(prompt).toContain("agentflow-sqlserver run --");
+    const task = await db.one<Task>("SELECT * FROM tasks");
+    if (broken) {
+      expect(task.status).toBe("failed");
+      expect(task.last_error).toContain("測試環境問題（不是程式沒過）");
+      expect(task.last_error).toContain("整個沒有執行");
+      // 測試環境問題不交給 Codex 修程式。
+      expect(phases.filter((p) => p.phase === "code")).toHaveLength(1);
+      expect(s.counts().published).toBe(0);
+    } else {
+      expect(task.status).toBe("ready");
+      expect(report).toContain("系統在測試容器內啟動 SQL Server");
+    }
+  },
+);

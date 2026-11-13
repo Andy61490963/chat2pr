@@ -71,6 +71,8 @@ GRANT VIEW DEFINITION TO agentflow_schema;
 
 每次環境驗證與任務執行，快照都以唯讀資料卷掛在工作容器的 `/agentflow/env/database`（`schema.sql`、`foreign-keys.sql`、有參考資料時的 `reference-data.sql`，以及說明套用順序的 `README.md`）。AI 在同一個容器內啟動本機資料庫、套用快照、補上測試需要的虛構資料。環境規劃只會看到物件數量與資料表名稱，不會看到連線資訊。
 
+測試需要 SQL Server 時，系統會自動改用含 SQL Server 的工作映像，在測試容器內啟動資料庫，並把專案寫死的 LocalDB 連線暫時導向它（不修改專案檔案）；判斷依據與覆寫方式見 [`docs/agents/project-environment.md`](agents/project-environment.md)〈自動選用與 LocalDB 導向〉。
+
 測試用資料庫的來源依序是：
 
 1. 儲存庫內的建庫、migration 或種子腳本。

@@ -58,6 +58,8 @@ export function prReport(o: {
   dataSource?: "project" | "snapshot" | "inferred" | "none";
   limitations?: string;
   reviewNotes?: string[];
+  /** 測試在容器內的 SQL Server 執行，LocalDB 連線由系統暫時導向。 */
+  sqlServer?: boolean;
 }) {
   const summary =
     o.codexSummary.trim().slice(0, 4000) || "（Codex 未提供說明）";
@@ -68,6 +70,10 @@ export function prReport(o: {
       `- ${verificationLine(o)}（\`${o.testCommand.trim().slice(0, 200)}\`）${headline.length ? `\n  - ${headline.join("\n  - ")}` : ""}`,
       "- 獨立審查：通過",
     );
+    if (o.sqlServer)
+      lines.push(
+        "- 測試環境：系統在測試容器內啟動 SQL Server，LocalDB 連線只在容器內暫時導向，未修改專案檔案",
+      );
     if (tail.length)
       lines.push(
         "",

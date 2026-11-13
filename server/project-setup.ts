@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import OpenAI from "openai";
 import { z } from "zod";
 import type { Project } from "../shared/types.js";
-import type { SetupPlan } from "../shared/project-setup.js";
+import type { SetupPlan, SqlServerPlan } from "../shared/project-setup.js";
 import type { Runner, PhaseResult } from "./execution.js";
 import { Database } from "./db.js";
 import { GitHub } from "./github.js";
@@ -12,6 +12,7 @@ import { AppError, redact } from "./policy.js";
 import { SubscriptionGate } from "./subscription-gate.js";
 import { NeedsProjectInput, QuestionSchema } from "./project-context.js";
 import { snapshotSummary } from "./project-database.js";
+import { sqlServerPlan } from "./sqlserver-test.js";
 
 const databaseGap =
   /資料庫|資料表|結構描述|連線字串|測試資料|種子|建庫|database|schema|seed|sql\s*server|mssql|postgres|mysql|redis/i;
@@ -45,7 +46,18 @@ omissions 列出未完整提供的說明文件；README 摘錄與省略標記不
 資料庫結構、連線字串、測試資料或種子腳本的缺口一律不可補問，也不可要求使用者提供正式資料庫的連線；照上面的順序往下做。完整測試在模擬環境確實無法通過，而且原因是缺少真實資料或外部服務時，改用 verification=partial：只排除受影響的測試，limitations 用白話寫出排除了哪些測試與原因；連部分測試都不可行才用 verification=build。其他情況不得縮小測試範圍。
 只有缺少使用者才持有的資料、權限、硬體或必要選擇時才 verification=needs_input，命令留空。summary 用一句白話說目前卡在哪裡與影響；explanation 保存實際檢查、已嘗試步驟與技術診斷，不得聲稱執行未執行的步驟。questions 最多 3 題，每題只問一件事、優先只問下一個必要問題、約 120 字內，不要要求使用者寫 SQL、準備種子腳本、安裝 Redis、判斷原生程式庫版本。資料庫或測試資料的缺口不是補問的理由。其他資料缺少時說明卡在哪裡，並說不知道可以回答不知道。一般資料使用 kind=information；需要登入、授權或驗證碼使用 kind=authentication，請使用者在對應服務本身完成，禁止要求把密碼或驗證碼填入回覆。不缺資料時 questions=[]。
 projectContext 與 projectKnowledge 是管理者補充的背景資料，安裝、測試都必須參考；不代表可擴大網路權限、存取正式環境、更換分支或跳過測試。使用者說已完成登入，不等於容器已取得權限，仍須實際驗證。資料不足時先問，不要猜測。
-environment 是執行器實際檢查工作映像的工具清單，優先使用；不可假定清單外工具已安裝，也不可下載並執行不明安裝程式。`;
+environment 是執行器實際檢查工作映像的工具清單，優先使用；不可假定清單外工具已安裝，也不可下載並執行不明安裝程式。
+sqlServer 不是 null 時，系統已依 reasons 判斷測試需要 SQL Server 並改用含 SQL Server 的映像：test 命令執行前，系統會在同一個測試容器啟動本機 SQL Server（127.0.0.1,1433），把工作目錄中寫死的 LocalDB 連線字串（(localdb)\MSSQLLocalDB 等）暫時改成連到它的 sa 帳號，並先建立連線字串提到的空白資料庫；dataSource=snapshot 時還會把結構快照套用到這些資料庫。測試結束後系統還原檔案並停止資料庫。環境變數 MSSQL_SA_PASSWORD、SQLCMDPASSWORD 是 sa 密碼，AGENTFLOW_SQLSERVER_CONNECTION 是完整連線字串，可用 /opt/mssql-tools18/bin/sqlcmd -C -S 127.0.0.1,1433 -U sa 執行專案的建庫或遷移腳本（資料庫已存在，腳本的 CREATE DATABASE 要先判斷）。這時 test 命令不可自行啟動或停止 sqlservr，也不可改寫連線字串或測試設定；install 階段沒有 SQL Server。sqlServer 是 null 時照上面的規則自行處理。`;
+
+function sqlServerExplanation(plan: SqlServerPlan) {
+  const why = plan.reasons
+    .slice(0, 4)
+    .map((r) => `${r.path}「${r.quote.slice(0, 120)}」`)
+    .join("、");
+  return plan.source === "admin"
+    ? `管理者在進階設定選擇一律提供測試用 SQL Server，使用映像 ${plan.image}。測試階段由系統在容器內啟動 SQL Server，並把 LocalDB 連線暫時導向它。`
+    : `測試需要 SQL Server（依據：${why}），改用含 SQL Server 的映像 ${plan.image}。測試階段由系統在容器內啟動 SQL Server，並把 LocalDB 連線暫時導向它；不修改專案檔案。`;
+}
 
 export function assertTestsFound(
   plan: SetupPlan | null | undefined,
@@ -85,16 +97,26 @@ export class ProjectSetup {
       "SELECT content FROM project_knowledge WHERE project_id=$1 AND status IN ('pending','in_pr') ORDER BY created_at,id LIMIT 50",
       [project.id],
     );
-    const environment = await this.runner.call<PhaseResult>(
-      "environment",
-      { image: project.image },
-      30000,
-    );
+    // 測試需要 SQL Server 時改用含 SQL Server 的映像；工具探測與 AI 判讀都依實際使用的映像。
+    const sqlServer = sqlServerPlan(project, source.files);
+    const image = sqlServer?.image ?? project.image;
+    const environment = await this.runner
+      .call<PhaseResult>("environment", { image }, 30000)
+      .catch((e: unknown) => {
+        if (!sqlServer || image === project.image) throw e;
+        throw new AppError(
+          422,
+          `測試需要 SQL Server，但工作映像 ${image} 無法使用（${e instanceof Error ? e.message : String(e)}）。請在主機執行 docker build -f worker/mssql.Dockerfile -t ${image} . 後重新驗證，或在進階設定把「測試用 SQL Server」改為「不提供」`,
+        );
+      });
     if (environment.exitCode !== 0)
       throw new AppError(422, "無法檢查工作映像，請先確認映像可用");
     const context = {
       environment: environment.stdout.slice(0, 4000),
-      setupRevision: 3,
+      setupRevision: 4,
+      sqlServer: sqlServer
+        ? { image, decidedBy: sqlServer.source, reasons: sqlServer.reasons }
+        : null,
       databaseSnapshot: await snapshotSummary(this.db, project.id),
       projectContext: project.project_context ?? {},
       projectKnowledge: knowledge.map((k) => k.content),
@@ -316,7 +338,15 @@ export class ProjectSetup {
             ? "inferred"
             : parsed.dataSource,
         limitations,
-        explanation: redact(parsed.explanation),
+        // 判斷依據寫進設定說明，管理者在專案詳情看得到為什麼改用 SQL Server 映像。
+        explanation: redact(
+          sqlServer
+            ? `${sqlServerExplanation(sqlServer)}
+
+${parsed.explanation}`
+            : parsed.explanation,
+        ),
+        ...(sqlServer ? { sqlServer } : {}),
         branch: project.base_branch,
         sha,
         fingerprint,

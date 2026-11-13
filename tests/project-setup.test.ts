@@ -1047,3 +1047,120 @@ it("沒有快照卻回報使用快照時，如實標示為 AI 推測", async () 
   expect(s.calls.some((c) => c.path === "environment-files")).toBe(false);
   expect((await s.project()).setup_plan?.dataSource).toBe("inferred");
 });
+
+const sqlFiles = {
+  "tests/Orders.Tests/Orders.Tests.csproj":
+    '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" /><PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" /></ItemGroup></Project>',
+};
+const sqlAnswer = {
+  install: "dotnet restore",
+  test: "dotnet test --no-restore",
+  explanation: "依測試專案還原並執行測試",
+  evidence: [
+    {
+      path: "tests/Orders.Tests/Orders.Tests.csproj",
+      quote: "Microsoft.NET.Test.Sdk",
+    },
+  ],
+};
+
+it("測試需要 SQL Server 時自動改用 SQL Server 映像，依據寫進設定說明，測試命令由系統導向 LocalDB", async () => {
+  const s = await scenario();
+  s.github.setupContext = vi.fn(async () => ({ files: sqlFiles, locks: [] }));
+  s.change(sqlAnswer);
+  expect((await s.validate()).statusCode).toBe(202);
+  const environment = s.calls.find((c) => c.path === "environment");
+  expect(environment?.body.image).toBe("line-agentflow-worker-mssql:local");
+  const prompt = JSON.stringify(s.calls.find((c) => c.path === "ai")?.body);
+  expect(prompt).toContain("Microsoft.Data.SqlClient");
+  expect(prompt).toContain("sqlServer 不是 null 時");
+  const phases = s.calls.filter((c) => c.path === "phase");
+  expect(phases.map((c) => c.body.image)).toEqual([
+    "line-agentflow-worker-mssql:local",
+    "line-agentflow-worker-mssql:local",
+    "line-agentflow-worker-mssql:local",
+  ]);
+  expect(phases[0].body.command).toBe("dotnet restore");
+  expect(phases[1].body.command).toContain(
+    "exec agentflow-sqlserver run -- sh -c 'dotnet test --no-restore'",
+  );
+  const p = await s.project();
+  expect(p.enabled).toBe(true);
+  expect(p.image).toBe("line-agentflow-worker:local");
+  expect(p.setup_plan?.sqlServer).toMatchObject({
+    image: "line-agentflow-worker-mssql:local",
+    source: "detected",
+  });
+  expect(p.setup_plan?.explanation).toContain(
+    "測試需要 SQL Server（依據：tests/Orders.Tests/Orders.Tests.csproj",
+  );
+});
+
+it("不需要 SQL Server 的專案維持預設映像，測試命令不外包", async () => {
+  const s = await scenario();
+  await s.validate();
+  expect(s.calls.find((c) => c.path === "environment")?.body.image).toBe(
+    "line-agentflow-worker:local",
+  );
+  const test = s.calls.find(
+    (c) => c.path === "phase" && c.body.phase === "test",
+  );
+  expect(test?.body).toMatchObject({
+    image: "line-agentflow-worker:local",
+    command: "npm test",
+  });
+  expect((await s.project()).setup_plan?.sqlServer).toBeUndefined();
+});
+
+it("管理者在進階設定選「不提供」時不改映像", async () => {
+  const s = await scenario();
+  await db.query("UPDATE projects SET sql_server='never' WHERE id=$1", [s.id]);
+  s.github.setupContext = vi.fn(async () => ({ files: sqlFiles, locks: [] }));
+  s.change(sqlAnswer);
+  await s.validate();
+  expect(s.calls.find((c) => c.path === "environment")?.body.image).toBe(
+    "line-agentflow-worker:local",
+  );
+  expect((await s.project()).setup_plan?.sqlServer).toBeUndefined();
+});
+
+it("SQL Server 起不來時標示為測試環境問題，不交給 AI 改命令重試", async () => {
+  const s = await scenario();
+  s.github.setupContext = vi.fn(async () => ({ files: sqlFiles, locks: [] }));
+  s.change(sqlAnswer);
+  const call = s.runner.call;
+  s.runner.call = async <T>(path: string, raw: unknown): Promise<T> => {
+    const body = raw as Record<string, unknown>;
+    if (path === "phase" && body.phase === "test") {
+      s.calls.push({ path, body });
+      return {
+        exitCode: 86,
+        stdout:
+          'AGENTFLOW_TEST_ENVIRONMENT {"ok":false,"stage":"start","reason":"SQL Server 程序啟動後結束。"}\n',
+        stderr: "",
+      } as T;
+    }
+    return call<T>(path, raw);
+  };
+  expect((await s.validate()).statusCode).toBeGreaterThanOrEqual(400);
+  const p = await s.project();
+  expect(p.enabled).toBe(false);
+  expect(p.validation_error).toContain("測試環境問題（不是程式沒過）");
+  expect(p.validation_error).toContain(
+    "已跳過的測試：測試命令「dotnet test --no-restore」整個沒有執行",
+  );
+  expect(s.calls.filter((c) => c.path === "ai")).toHaveLength(1);
+  expect(s.calls.at(-1)?.path).toBe("dispose");
+});
+
+it("PR 說明註明測試在容器內的 SQL Server 執行、未修改專案檔案", () => {
+  expect(
+    prReport({
+      codexSummary: "調整訂單匯入",
+      testCommand: "dotnet test",
+      testOutput: "Passed!  - Failed: 0, Passed: 3",
+      verification: "tests",
+      sqlServer: true,
+    }),
+  ).toContain("LocalDB 連線只在容器內暫時導向，未修改專案檔案");
+});

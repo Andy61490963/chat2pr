@@ -1,0 +1,27 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{B7BA2045-73BC-4525-8C09-8C415B71F048}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Fictional.Orders.IntegrationTests", "tests\Fictional.Orders.IntegrationTests\Fictional.Orders.IntegrationTests.csproj", "{032521B5-2FAA-4956-8A30-D2AF5909A81D}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{032521B5-2FAA-4956-8A30-D2AF5909A81D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{032521B5-2FAA-4956-8A30-D2AF5909A81D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{032521B5-2FAA-4956-8A30-D2AF5909A81D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{032521B5-2FAA-4956-8A30-D2AF5909A81D}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{032521B5-2FAA-4956-8A30-D2AF5909A81D} = {B7BA2045-73BC-4525-8C09-8C415B71F048}
+	EndGlobalSection
+EndGlobal

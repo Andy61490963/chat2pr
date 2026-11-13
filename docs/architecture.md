@@ -218,16 +218,16 @@ flowchart LR
 | ripgrep、jq、sqlite3、unzip                               | 程式碼搜尋與常見資料處理                                   |
 | .NET 8 SDK 8.0.416（`dotnet`）                            | C# 專案建置與單元測試；NuGet 快取在 `/workspace/obj/nuget` |
 
-C# 專案可讓 AI 根據實際方案與 CI 決定 `dotnet restore`、`dotnet test`。需要 SQL Server 時選用含 SQL Server 的工作映像（`line-agentflow-worker-mssql:local`），並在專案詳情的「資料庫連線」擷取結構快照；沒有快照時 AI 會從程式碼推測結構。AI 縮小測試範圍時必須說明排除了什麼，系統會如實標示。進階設定仍可由管理者明確指定既有的測試範圍。若專案的 `.gitignore` 沒有忽略 `obj/`，建置產物會被當成變更，應先修正專案設定。
+C# 專案可讓 AI 根據實際方案與 CI 決定 `dotnet restore`、`dotnet test`。AI 自動設定時，系統從專案檔、套件與 CI 判斷測試是否需要 SQL Server，需要就自動改用含 SQL Server 的工作映像（`line-agentflow-worker-mssql:local`），測試階段在容器內啟動 SQL Server，並把寫死的 LocalDB 連線（`(localdb)MSSQLLocalDB`）暫時導向它，結束時還原；判斷依據寫在環境設定說明，管理者可在進階設定改為「一律提供」或「不提供」。SQL Server 起不來時標示為「測試環境問題」而不是程式沒過。細節見 `docs/agents/project-environment.md`。結構可在專案詳情的「資料庫連線」擷取快照；沒有快照時由專案的遷移或建庫腳本建立，再不行由 AI 從程式碼推測結構。AI 縮小測試範圍時必須說明排除了什麼，系統會如實標示。進階設定仍可由管理者明確指定既有的測試範圍。若專案的 `.gitignore` 沒有忽略 `obj/`，建置產物會被當成變更，應先修正專案設定。
 
 尚未預裝、需要時再加入（加入前先評估映像大小）：
 
-| 可能需要                               | 適用專案                     | 說明                                                                                                                      |
-| -------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| .NET Framework 4.x（ASP.NET MVC、IIS） | 舊版 MES 後端等舊專案        | Linux 容器無法建置，只能修改前端靜態檔或改用 Windows 容器                                                                 |
-| SQL Server 測試資料庫                  | 讀寫 SQL Server 的 Loader    | 已提供衍生映像 `line-agentflow-worker-mssql:local`（見 `docs/agents/project-environment.md`）；結構來自專案詳情擷取的快照 |
-| PyTorch CPU 版                         | 需要實際跑模型推論的視覺專案 | 檔案很大，且需把 `download.pytorch.org` 加入安裝階段白名單                                                                |
-| 專案相依快取                           | npm／pip 專案                | 後續可為 npm／pip 加入跨任務快取；NuGet 已支援主機維護的唯讀套件來源                                                      |
+| 可能需要                               | 適用專案                     | 說明                                                                                                                         |
+| -------------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| .NET Framework 4.x（ASP.NET MVC、IIS） | 舊版 MES 後端等舊專案        | Linux 容器無法建置，只能修改前端靜態檔或改用 Windows 容器                                                                    |
+| SQL Server 測試資料庫                  | 讀寫 SQL Server 的 Loader    | 已提供衍生映像 `line-agentflow-worker-mssql:local`，AI 自動設定判斷需要時自動選用（見 `docs/agents/project-environment.md`） |
+| PyTorch CPU 版                         | 需要實際跑模型推論的視覺專案 | 檔案很大，且需把 `download.pytorch.org` 加入安裝階段白名單                                                                   |
+| 專案相依快取                           | npm／pip 專案                | 後續可為 npm／pip 加入跨任務快取；NuGet 已支援主機維護的唯讀套件來源                                                         |
 
 ## 專案原始碼快取
 

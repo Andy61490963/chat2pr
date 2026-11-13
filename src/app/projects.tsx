@@ -53,6 +53,7 @@ export const emptyProject: Partial<Project> = {
   base_branch: "main",
   image: "line-agentflow-worker:local",
   setup_mode: "auto",
+  sql_server: "auto",
   install_command: "",
   test_command: "",
   sensitive_paths: [],
@@ -310,7 +311,18 @@ export function ProjectsView({
                       {verificationLabel(open.setup_plan).caution}
                     </p>
                   )}
-                  <p>{open.setup_plan.explanation}</p>
+                  {open.setup_plan.sqlServer && (
+                    <p>
+                      測試用 SQL Server：
+                      {open.setup_plan.sqlServer.source === "admin"
+                        ? "管理者設定一律提供"
+                        : "依專案判斷需要"}
+                      ，使用映像 {open.setup_plan.sqlServer.image}
+                    </p>
+                  )}
+                  <p className="whitespace-pre-line">
+                    {open.setup_plan.explanation}
+                  </p>
                   <details className="text-xs text-muted-foreground">
                     <summary className="cursor-pointer">
                       查看 AI 設定依據
@@ -698,6 +710,7 @@ export function ProjectForm({
     base_branch: p.base_branch ?? "main",
     image: p.image ?? "line-agentflow-worker:local",
     setup_mode: p.setup_mode ?? (p.id ? "manual" : "auto"),
+    sql_server: p.sql_server ?? "auto",
     install_command: p.install_command ?? "",
     test_command: p.test_command ?? "",
     sensitive_paths: p.sensitive_paths?.join("\n") ?? "",
@@ -741,6 +754,7 @@ export function ProjectForm({
       form.base_branch !== p.base_branch ||
       form.image !== p.image ||
       form.setup_mode !== (p.setup_mode ?? "manual") ||
+      form.sql_server !== (p.sql_server ?? "auto") ||
       form.install_command !== p.install_command ||
       form.test_command !== p.test_command ||
       form.sensitive_paths !== (p.sensitive_paths?.join("\n") ?? "") ||
@@ -914,6 +928,27 @@ export function ProjectForm({
               <option value="manual">手動指定指令</option>
             </select>
           </div>
+          {form.setup_mode === "auto" && (
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="pf-sql-server">測試用 SQL Server</Label>
+              <select
+                id="pf-sql-server"
+                className="h-9 rounded-md border bg-background px-2 text-sm"
+                value={form.sql_server}
+                onChange={(e) => set("sql_server", e.target.value)}
+              >
+                <option value="auto">自動判斷（建議）</option>
+                <option value="always">一律提供</option>
+                <option value="never">不提供</option>
+              </select>
+              <p className="text-xs text-muted-foreground">
+                自動判斷：專案檔或 CI 顯示測試需要 SQL Server 時，改用含 SQL
+                Server
+                的映像（line-agentflow-worker-mssql:local），測試階段在容器內啟動資料庫並把
+                LocalDB 連線暫時導向它。工作容器映像填自訂映像時不自動更換。
+              </p>
+            </div>
+          )}
           {form.setup_mode === "manual" && (
             <>
               <div className="flex flex-col gap-2">
