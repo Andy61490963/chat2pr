@@ -389,6 +389,116 @@ export class GitHub {
     ).data;
     return { state: pr.state, merged: pr.merged };
   }
+  /** 追加修改用：PR 目前的分支、最新 commit 與目標分支。 */
+  async pullHead(project: Project, number: number) {
+    const api = await this.client(project.repo);
+    const pr = (
+      await api.pulls.get({ ...this.parts(project.repo), pull_number: number })
+    ).data;
+    return {
+      state: pr.state,
+      merged: pr.merged,
+      headRef: pr.head.ref,
+      headSha: pr.head.sha,
+      base: pr.base.ref,
+      sameRepo: pr.head.repo?.full_name === project.repo,
+    };
+  }
+  /**
+   * 追加修改：在 PR 分支目前的 commit（task.base_sha）上提交這次的變更，快轉分支並在 PR 說明附上這次追加。
+   * 分支在這段期間被別人推進時拒絕，不覆寫他人的提交；重試時若分支已是同一份內容則視為完成。
+   */
+  async continuePr(
+    project: Project,
+    task: Task,
+    prNumber: number,
+    files: Array<{
+      path: string;
+      content: string | null;
+      mode: "100644" | "100755";
+    }>,
+    report: string,
+    assertCurrent: () => Promise<void> = async () => {},
+  ) {
+    const api = await this.client(project.repo),
+      p = this.parts(project.repo),
+      branch = task.branch!;
+    const base = (await api.git.getCommit({ ...p, commit_sha: task.base_sha! }))
+      .data;
+    const tree = [];
+    for (const f of files) {
+      await assertCurrent();
+      if (f.content === null)
+        tree.push({
+          path: f.path,
+          mode: f.mode,
+          type: "blob" as const,
+          sha: null,
+        });
+      else {
+        const blob = await api.git.createBlob({
+          ...p,
+          content: f.content,
+          encoding: "base64",
+        });
+        tree.push({
+          path: f.path,
+          mode: f.mode,
+          type: "blob" as const,
+          sha: blob.data.sha,
+        });
+      }
+    }
+    if (!tree.length) throw new AppError(409, "沒有可提交的程式變更");
+    await assertCurrent();
+    const createdTree = (
+      await api.git.createTree({ ...p, base_tree: base.tree.sha, tree })
+    ).data;
+    const current = (await api.git.getRef({ ...p, ref: `heads/${branch}` }))
+      .data.object.sha;
+    let publishedSha = current;
+    if (current === task.base_sha) {
+      await assertCurrent();
+      const commit = (
+        await api.git.createCommit({
+          ...p,
+          message: `追加：${task.title}\n\n關聯 #${task.issue_number}`,
+          tree: createdTree.sha,
+          parents: [task.base_sha!],
+        })
+      ).data;
+      await api.git.updateRef({
+        ...p,
+        ref: `heads/${branch}`,
+        sha: commit.sha,
+        force: false,
+      });
+      publishedSha = commit.sha;
+    } else {
+      const head = (await api.git.getCommit({ ...p, commit_sha: current }))
+        .data;
+      if (head.tree.sha !== createdTree.sha)
+        throw new AppError(
+          409,
+          "PR 分支在這段期間有新的提交，為避免覆寫，請重新確認後以最新內容為基底再追加",
+        );
+    }
+    await assertCurrent();
+    const pr = (await api.pulls.get({ ...p, pull_number: prNumber })).data;
+    const marker = `<!-- agentflow:${task.id}:${task.version} -->`;
+    if (!pr.body?.includes(marker))
+      await api.pulls.update({
+        ...p,
+        pull_number: prNumber,
+        body: `${pr.body ?? ""}\n\n---\n\n## 追加：${task.title}\n${task.summary}\n\n${report}\n\n${prEvidence(
+          project.repo,
+          publishedSha,
+          files.filter((f) => f.content !== null).map((f) => f.path),
+          project.sensitive_paths,
+        )}\n\nCloses #${task.issue_number}\n\n${marker}`.slice(0, 65000),
+      });
+    return pr;
+  }
   async commentIssue(project: Project, issueNumber: number, body: string) {
     const api = await this.client(project.repo);
     await api.issues.createComment({
