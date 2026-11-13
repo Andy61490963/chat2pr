@@ -24,6 +24,8 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS project_context jsonb NOT NULL DEF
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS context_updated_at timestamptz;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS context_updated_by text;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS setup_input jsonb;
+-- 收集差異時對預設建置產物排除清單的增減（「名稱/」加入、「!名稱/」移除）；空陣列即沿用預設。
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS collect_excludes text[] NOT NULL DEFAULT '{}';
 CREATE OR REPLACE FUNCTION valid_repo_index_paths(paths text[]) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
  SELECT cardinality(paths)<=50 AND COALESCE(bool_and(
    value IS NOT NULL AND length(value) BETWEEN 1 AND 1024 AND value=btrim(value)
