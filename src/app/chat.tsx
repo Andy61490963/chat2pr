@@ -90,7 +90,7 @@ export function ChatView({
               {!group.enabled
                 ? "派工已停用"
                 : group.trigger_mode === "command"
-                  ? "只用 /任務 觸發"
+                  ? "指令與引用追問"
                   : "自動辨識"}
             </Badge>
             <Button variant="ghost" size="sm" onClick={settings}>

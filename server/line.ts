@@ -5,7 +5,12 @@ import { hash } from "./auth.js";
 import { AppError, redact } from "./policy.js";
 import { isTaskCommand } from "../shared/chat.js";
 import { notificationView } from "../shared/notifications.js";
-import { commandAck, disabledAck, groupRepliesOn } from "./group-replies.js";
+import {
+  commandAck,
+  disabledAck,
+  followupAck,
+  groupRepliesOn,
+} from "./group-replies.js";
 const Event = z
   .object({
     webhookEventId: z.string(),
@@ -171,10 +176,20 @@ export class Line {
         if (e.type === "message" && e.message) {
           const command =
             e.message.type === "text" && isTaskCommand(e.message.text);
+          const botReply =
+            e.message.type === "text" &&
+            !!e.message.quotedMessageId &&
+            !!(
+              await c.query(
+                "SELECT 1 FROM notifications n JOIN tasks t ON t.id=n.task_id WHERE n.sent_message_id=$1 AND n.group_id=$2 AND t.group_id=$2 LIMIT 1",
+                [e.message.quotedMessageId, group],
+              )
+            ).rowCount;
           const eligible =
-            settings.enabled && (settings.trigger_mode === "auto" || command);
+            settings.enabled &&
+            (settings.trigger_mode === "auto" || command || botReply);
           const saved = await c.query(
-            "INSERT INTO messages(id,group_id,user_id,type,text,quoted_id,trigger_mode,processed) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING RETURNING id",
+            "INSERT INTO messages(id,group_id,user_id,type,text,quoted_id,trigger_mode,processed,bot_reply) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING RETURNING id",
             [
               e.message.id,
               group,
@@ -182,12 +197,13 @@ export class Line {
               e.message.type,
               e.message.text ?? null,
               e.message.quotedMessageId ?? null,
-              eligible ? (command ? "command" : "auto") : "chat",
+              eligible ? (command || botReply ? "command" : "auto") : "chat",
               !eligible,
+              botReply,
             ],
           );
           if (
-            command &&
+            (command || botReply) &&
             saved.rowCount &&
             e.replyToken &&
             settings.reply_mode !== "off" &&
@@ -195,7 +211,11 @@ export class Line {
           )
             acks.push({
               token: e.replyToken,
-              text: eligible ? commandAck : disabledAck,
+              text: eligible
+                ? botReply
+                  ? followupAck
+                  : commandAck
+                : disabledAck,
             });
           if (eligible && saved.rowCount)
             await c.query(

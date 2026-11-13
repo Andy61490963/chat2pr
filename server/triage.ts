@@ -1,4 +1,5 @@
 import { scheduleRepoIndex } from "./repo-index.js";
+import { dueTriageGroups, isFollowupBatch } from "./triage-window.js";
 import { BranchChoice, assessBranch } from "./task-branch.js";
 import type { BranchCatalog } from "../shared/task-branch.js";
 import {
@@ -395,7 +396,7 @@ export class Triage {
     private budget: Budget,
     private retrieval = new Retrieval(db),
   ) {}
-  async process(groupId: string) {
+  async process(groupId: string, scheduled = false) {
     const snapshot = await this.db.one<{ value: Settings; revision: string }>(
       "SELECT value,revision FROM settings WHERE id=1",
     );
@@ -421,6 +422,10 @@ export class Triage {
         )
       ).rows[0].locked;
       if (!acquired) return;
+      // 排程後可能又收到一般需求，取得鎖後重新確認彙整時間。
+      if (scheduled && !(await dueTriageGroups(this.db, groupId)).length)
+        return;
+      const followupBatch = await isFollowupBatch(this.db, groupId);
       const messages = await this.db.query<Message>(
         "SELECT * FROM messages WHERE group_id=$1 AND NOT processed AND NOT revoked AND received_at>message_retention_cutoff() AND trigger_mode<>'chat' AND ($2='auto' OR trigger_mode='command') ORDER BY received_at,id LIMIT 100",
         [groupId, group.trigger_mode],
@@ -700,6 +705,7 @@ export class Triage {
         // 首批可短暫等候正確版本的檔案；模型離線或收訊已滿五分鐘時直接判讀。
         if (
           s.rag_enabled &&
+          !followupBatch &&
           !lookup.reason &&
           group.first_pending_at &&
           Date.now() - new Date(group.first_pending_at).getTime() < 300000 &&
@@ -829,7 +835,10 @@ export class Triage {
           );
           if (
             commands.some(
-              (m) => m.quoted_id && !messages.some((a) => a.id === m.quoted_id),
+              (m) =>
+                m.quoted_id &&
+                !messages.some((a) => a.id === m.quoted_id) &&
+                !quotedBotMessages.some((n) => n.id === m.quoted_id),
             )
           ) {
             d.kind = "clarification";

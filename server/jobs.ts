@@ -12,6 +12,7 @@ import { secretsPath } from "./config.js";
 import { Budget } from "./budget.js";
 import { GitHub } from "./github.js";
 import { Line } from "./line.js";
+import { dueTriageGroups } from "./triage-window.js";
 import {
   Triage,
   OpenAIClassifier,
@@ -112,7 +113,10 @@ export async function startJobs(
   const work = <T>(
     name: string,
     handler: WorkHandler<T>,
-    options: { localConcurrency?: number } = {},
+    options: {
+      localConcurrency?: number;
+      pollingIntervalSeconds?: number;
+    } = {},
   ) => boss.work<T>(name, options, safeQueueHandler(handler));
   const budget = new Budget(db),
     github = adapters.github ?? new GitHub(),
@@ -139,7 +143,7 @@ export async function startJobs(
     async (jobs) => {
       for (const j of jobs)
         try {
-          await triage.process(j.data.groupId);
+          await triage.process(j.data.groupId, true);
           // 成功也要記錄，否則設定頁永遠「未檢查」，失敗過一次後也一直停在「需處理」。
           await db.query(
             "INSERT INTO service_health(name,ok,detail) VALUES('triage',true,'最近一次判讀成功') ON CONFLICT(name) DO UPDATE SET ok=true,detail=EXCLUDED.detail,checked_at=now()",
@@ -157,7 +161,7 @@ export async function startJobs(
           throw e;
         }
     },
-    { localConcurrency: 1 },
+    { localConcurrency: 1, pollingIntervalSeconds: 1 },
   );
   await work<{ taskId: string }>(
     "execute",
@@ -366,17 +370,6 @@ export async function startJobs(
           { taskId: t.id },
           { singletonKey: t.id, singletonSeconds: 300 },
         );
-      const groups = s.triage_paused
-        ? []
-        : await db.query<{ id: string }>(
-            "SELECT g.id FROM groups g WHERE EXISTS(SELECT 1 FROM settings WHERE id=1 AND NOT COALESCE((value->>'triage_paused')::boolean,false) AND NOT (value->>'paused')::boolean) AND g.enabled AND g.triage_failures<3 AND EXISTS(SELECT 1 FROM group_projects gp JOIN projects p ON p.id=gp.project_id WHERE gp.group_id=g.id AND p.enabled AND p.validated_at IS NOT NULL) AND g.first_pending_at IS NOT NULL AND (g.last_pending_at<now()-interval '60 seconds' OR g.first_pending_at<now()-interval '300 seconds')",
-          );
-      for (const g of groups)
-        await boss.send(
-          "triage",
-          { groupId: g.id },
-          { singletonKey: g.id, singletonSeconds: 60 },
-        );
       const tasks = await db.query<{ id: string }>(
         "SELECT id FROM tasks WHERE status='queued' ORDER BY created_at LIMIT 20",
       );
@@ -401,6 +394,35 @@ export async function startJobs(
   };
   const timer = setInterval(() => void tick(), 10000);
   await tick();
+  // 判讀獨立每秒檢查，不增加其他維運工作的頻率，也不被其網路等待拖慢。
+  let triageBusy: Promise<void> | undefined;
+  const scheduleTriage = async () => {
+    try {
+      const groups = await dueTriageGroups(db);
+      if (!groups.length) return;
+      if ((await db.settings()).ai_mode !== "api")
+        await subscriptionGate.ensure();
+      for (const g of groups)
+        await boss.send(
+          "triage",
+          { groupId: g.id },
+          {
+            singletonKey: g.id,
+            singletonSeconds: 5,
+          },
+        );
+    } catch (e) {
+      if (!(e instanceof SubscriptionBlocked))
+        console.error("判讀排程：", redact(String(e)));
+    }
+  };
+  const triageTimer = setInterval(() => {
+    if (!triageBusy)
+      triageBusy = scheduleTriage().finally(() => {
+        triageBusy = undefined;
+      });
+  }, 1000);
+  await scheduleTriage();
   return {
     boss,
     enqueueValidation: async (id: string) => {
@@ -416,6 +438,8 @@ export async function startJobs(
     },
     stop: async () => {
       clearInterval(timer);
+      clearInterval(triageTimer);
+      await triageBusy;
       await boss.stop({ graceful: true, timeout: 10000 });
     },
   };

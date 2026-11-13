@@ -254,7 +254,7 @@ export function GroupsView({
                     </span>
                   </span>
                   <span className="hidden text-sm md:block">
-                    {g.trigger_mode === "auto" ? "自動辨識" : "只用 /任務"}
+                    {g.trigger_mode === "auto" ? "自動辨識" : "指令與引用追問"}
                   </span>
                   <span
                     className={cn(
@@ -438,13 +438,13 @@ function GroupCard({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="command">只用 /任務 觸發</SelectItem>
+            <SelectItem value="command">指令與引用追問</SelectItem>
             <SelectItem value="auto">自動辨識</SelectItem>
           </SelectContent>
         </Select>
         <p className="text-xs leading-relaxed text-muted-foreground">
           {triggerMode === "command"
-            ? "一般聊天只保存、不辨識。請以 /任務 開頭提出需求；附圖時，先傳圖片，再引用該圖片輸入 /任務 與說明。"
+            ? "一般聊天只保存、不辨識。請以 /任務 開頭提出新需求；引用機器人的任務回答可直接追問。附圖時，先傳圖片，再引用該圖片輸入 /任務 與說明。"
             : "AI 會辨識新訊息並略過閒聊；修改先確認專案，明確且有依據的查詢可自動執行。不希望自動辨識時請選指令模式。"}{" "}
           切換只套用到之後的新訊息。
         </p>

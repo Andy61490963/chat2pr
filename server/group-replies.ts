@@ -45,5 +45,6 @@ export function groupText(text: string, max = 4500) {
 
 export const commandAck =
   "收到，我會把這則需求整理好交給管理者確認，處理完會在這裡回報。";
+export const followupAck = "收到，我接著上一題處理。";
 export const disabledAck =
   "這個群組目前沒有啟用，這則需求不會被處理。請管理者到看板的群組頁啟用。";
