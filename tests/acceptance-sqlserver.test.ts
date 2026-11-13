@@ -108,6 +108,69 @@ describe.skipIf(!image)(
       }
     }, 1800000);
 
+    it("同時執行的兩個工作各自啟動 SQL Server，不搶連接埠與資料檔，也只聽本機", async () => {
+      const c = new Containers();
+      const ids = [randomUUID(), randomUUID()];
+      // 列出容器內監聽 1433（0x0599）的位址；只聽本機時是 0100007F。
+      const listening =
+        'awk \'NR>1 && $4=="0A" && $2 ~ /:0599$/ {print "LISTEN " $2}\' /proc/net/tcp';
+      try {
+        await Promise.all(
+          ids.map(async (id) => {
+            await c.prepare(
+              id,
+              image!,
+              execFileSync("tar", [
+                "-cf",
+                "-",
+                "-C",
+                "tests/fixtures",
+                "localdb-project",
+              ]),
+            );
+            const restore = await c.phase(
+              id,
+              image!,
+              ["sh", "-c", "dotnet restore Fictional.Orders.sln"],
+              "line-agentflow_install",
+              undefined,
+              600000,
+            );
+            expect(restore.exitCode, restore.stderr).toBe(0);
+          }),
+        );
+        // 「完全開放」網路模式下測試容器接在共用網路上，最容易互相干擾。
+        const results = await Promise.all(
+          ids.map((id) =>
+            c.phase(
+              id,
+              image!,
+              [
+                "sh",
+                "-c",
+                sqlServerTestCommand(
+                  { sqlServer, dataSource: "none" },
+                  `dotnet test Fictional.Orders.sln --no-restore && ${listening}`,
+                ),
+              ],
+              "line-agentflow_open",
+              undefined,
+              900000,
+            ),
+          ),
+        );
+        for (const result of results) {
+          const output = result.stdout + result.stderr;
+          expect(result.exitCode, output.slice(-3000)).toBe(0);
+          expect(output).toMatch(/Passed!\s+-\s+Failed:\s+0,\s+Passed:\s+3/);
+          expect(result.stdout).toContain("LISTEN 0100007F:0599");
+          expect(result.stdout).not.toContain("LISTEN 00000000:0599");
+        }
+      } finally {
+        await Promise.all(ids.map((id) => c.dispose(id)));
+      }
+    }, 1800000);
+
     it("SQL Server 沒有就緒時不執行測試，標示為測試環境問題並列出跳過的測試", async () => {
       const c = new Containers(),
         id = randomUUID();

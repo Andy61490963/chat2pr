@@ -198,6 +198,9 @@ async function startServer(password, log, timeoutMs) {
       MSSQL_PID: "Developer",
       MSSQL_SA_PASSWORD: password,
       MSSQL_TCP_PORT: "1433",
+      // 只聽本機：測試容器在「完全開放」網路模式下會接上共用網路，不能讓其他容器連進來。
+      // 每個容器有自己的網路命名空間與工作卷，同時執行的任務不會搶同一個連接埠或資料檔。
+      MSSQL_IP_ADDRESS: "127.0.0.1",
       // 工作容器只有 2 GiB；留一半給建置與測試程序。
       MSSQL_MEMORY_LIMIT_MB:
         process.env.AGENTFLOW_SQLSERVER_MEMORY_MB ?? "1024",

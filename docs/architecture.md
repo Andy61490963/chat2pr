@@ -80,7 +80,7 @@ flowchart LR
 | `embedder-init`      | 同上（設定檔 `init`）                     | 一次性工作：下載並驗證模型權重                                                          | —                |
 | `db-test`            | `pgvector/pgvector:pg17`（設定檔 `test`） | 自動測試專用資料庫，資料放在記憶體                                                      | `127.0.0.1:5439` |
 
-工作容器不在 Compose 裡，由執行器逐次建立、用完即丟：映像 `line-agentflow-worker:local`（`worker/Dockerfile`，約 4.6 GB）執行 Codex、安裝與測試；`line-agentflow-source:local`（`infra/source/Dockerfile`，約 0.5 GB）準備原始碼。每個工作容器上限 2 GB 記憶體、2 顆 CPU、256 個程序，全系統一次只開發一個任務。
+工作容器不在 Compose 裡，由執行器逐次建立、用完即丟：映像 `line-agentflow-worker:local`（`worker/Dockerfile`，約 4.6 GB）執行 Codex、安裝與測試；`line-agentflow-source:local`（`infra/source/Dockerfile`，約 0.5 GB）準備原始碼。每個工作容器上限 2 GB 記憶體、2 顆 CPU、256 個程序；同時執行幾個任務見〈[同時執行](#同時執行)〉。
 
 **主機上的 Node 程序**（不在容器裡，因為要操作 Docker 與持有訂閱登入）
 
@@ -133,6 +133,16 @@ flowchart LR
 | `.local/setup-url.txt`                   | 設定頁的一次性開啟連結，內含權杖，不要印出來                                                                                                                                                                   |
 
 **資源用量**：常駐服務閒置時約占 3.5 GB 記憶體（其中向量模型約 2.7 GB），執行任務時再加一個最多 2 GB 的工作容器。映像與模型合計約 11 GB，另需保留工作資料卷與原始碼快取的空間。建議至少 16 GB 記憶體、40 GB 可用磁碟。
+
+## 同時執行
+
+全系統同時執行的任務數由看板「系統」頁的「同時執行」設定（`settings.max_runs`，預設 2，最多 8），頁面依執行器回報的 CPU 與記憶體建議上限，並列出正在執行的任務與排隊順序。
+
+- **搶位置**：派工在一個交易鎖內一次判斷全系統計數、同專案修改鎖與訂閱模式的每日執行次數（`server/capacity.ts`、`server/execution.ts`）。搶不到就保持排隊，下一輪再派，不記錯誤、不通知管理者；排隊超過一分鐘會在群組說明排第幾、大約多久開始（同一群組每 6 小時最多一則）。
+- **同專案的修改一次一個**：修改任務的執行紀錄填 `runs.change_project_id`，唯一索引 `runs_one_change_per_project` 是最後一道保護；查詢唯讀，可以和同專案的修改並行。同一任務也只能有一個未完成的執行（`runs_one_active_per_task`）。
+- **每個執行一把鎖**：執行期間持有 `pg_try_advisory_lock(73462, hashtext(task_id))`。回收中斷執行只處理沒有程序持有這把鎖的紀錄，不會取消其他正在跑的任務。
+- **額度**：API 模式的預留沿用 `budget.reserve` 的交易鎖；訂閱模式的每日執行次數在搶位置的交易內再算一次，並行時不會超過上限。
+- **資源保護**：每個工作容器仍有記憶體、CPU 與程序數上限。排程器每輪向執行器讀主機資源，可用記憶體低於 2 GB 時暫停派新工作（執行中的不受影響），原因顯示在系統頁並通知管理者；讀不到資源時不擋派工。Docker 磁碟嚴重不足且開啟「空間不足暫停派工」時（見〈Docker 磁碟〉相關說明，`diskPaused`），所有派工一起停，「同時執行」卡片顯示「暫停派工中」。
 
 ## AI 執行模式
 

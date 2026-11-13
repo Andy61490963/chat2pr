@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { z } from "zod";
 import { Containers } from "./containers.js";
 import { systemStatus } from "./system-status.js";
+import { hostResources } from "./host-resources.js";
 import { SourceCache, SourceAccess } from "./source-cache.js";
 import { readCodexAccount, type CodexAccount } from "./codex-account.js";
 import {
@@ -122,6 +123,8 @@ app.get("/health", async () => {
 app.get("/system", async () =>
   systemStatus(containers.docker, containers.instance),
 );
+// 派工前的主機資源檢查與系統頁的同時執行數建議（#21）。
+app.post("/resources", async () => hostResources(containers.docker));
 app.get("/codex/status", async () => {
   if (!existsSync(authFile)) return { loggedIn: false };
   const auth = JSON.parse(readFileSync(authFile, "utf8"));

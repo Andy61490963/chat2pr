@@ -8,6 +8,14 @@ import {
   requireProjectConfirmation,
 } from "./project-routing.js";
 import { Database } from "./db.js";
+import {
+  CLAIM_LOCK,
+  RUN_LOCK,
+  busyFor,
+  hostHold,
+  maxRuns,
+  queueEstimate,
+} from "./capacity.js";
 import { Budget } from "./budget.js";
 import { Retrieval } from "./retrieval.js";
 import {
@@ -617,6 +625,19 @@ export class Execution {
     await scheduleRepoIndex(this.db, project, sha);
     return { ok: true };
   }
+  /**
+   * 排隊超過一分鐘還沒輪到時，告訴群組排第幾、大約多久開始；
+   * 沿用 #12 的保留通知，同一群組每 6 小時最多一則。
+   */
+  private async tellQueued(task: Task, limit: number) {
+    const waited = await this.db.one<{ long: boolean }>(
+      "SELECT updated_at<now()-interval '1 minute' AS long FROM tasks WHERE id=$1 AND status='queued'",
+      [task.id],
+    );
+    if (!waited?.long) return;
+    const q = await queueEstimate(this.db.pool, task.id, limit);
+    await tellGroupWaiting(this.db, task.id, "busy", q);
+  }
   async execute(taskId: string) {
     const snapshot = await this.db.one<{ value: Settings; revision: string }>(
       "SELECT value,revision FROM settings WHERE id=1",
@@ -691,8 +712,12 @@ export class Execution {
       await record("phase");
     };
     try {
+      // 每個任務各自一把鎖：同一任務不會被兩個工作同時執行，不同任務可以並行（#21）。
       locked = (
-        await lock.query("SELECT pg_try_advisory_lock(73462) AS locked")
+        await lock.query(
+          "SELECT pg_try_advisory_lock($1,hashtext($2)) AS locked",
+          [RUN_LOCK, taskId],
+        )
       ).rows[0].locked;
       if (!locked) return;
       const task = await this.db.one<Task>("SELECT * FROM tasks WHERE id=$1", [
@@ -768,6 +793,36 @@ export class Execution {
         }
       }
       const subscription = s.ai_mode !== "api";
+      const limit = maxRuns(s);
+      // 主機資源不足或沒有空位：不預留額度，保持排隊等下一輪，不算失敗也不記錯誤。
+      // 資源不足的原因由系統頁與管理者通知說明，不另外推播群組。
+      if (await hostHold(this.db.pool)) return;
+      if (await busyFor(this.db.pool, task, limit)) {
+        await this.tellQueued(task, limit);
+        return;
+      }
+      const hold = async (e: AppError) => {
+        const retained = await this.db.query(
+          `UPDATE tasks SET status='budget_wait',last_error=$2,updated_at=now() WHERE id=$1 AND status='queued' AND version=$3 AND approved_version=$3
+             AND EXISTS(SELECT 1 FROM settings WHERE id=1 AND revision=$4 AND NOT (value->>'paused')::boolean) RETURNING id`,
+          [task.id, e.message, task.version, snapshot.revision],
+        );
+        if (retained.length) {
+          await this.line.notify(
+            task.id,
+            "budget",
+            `budget:${task.id}:${task.version}`,
+            `額度不足，工作已保留：${task.title}`,
+          );
+          await tellGroupWaiting(
+            this.db,
+            task.id,
+            e.message.includes("今日執行次數") ? "daily" : "quota",
+          );
+        }
+      };
+      const dailyLimit = () =>
+        new AppError(429, "今日執行次數已達上限，工作已保留");
       try {
         if (subscription) {
           await this.subscriptionGate.ensure();
@@ -775,29 +830,11 @@ export class Execution {
           const today = await this.db.one<{ count: number }>(
             "SELECT count(*)::int AS count FROM runs WHERE (started_at AT TIME ZONE 'Asia/Taipei')::date=(now() AT TIME ZONE 'Asia/Taipei')::date",
           );
-          if (today.count >= s.daily_runs)
-            throw new AppError(429, "今日執行次數已達上限，工作已保留");
+          if (today.count >= s.daily_runs) throw dailyLimit();
         } else reservation = await this.budget.reserve(s.task_budget, task.id);
       } catch (e) {
         if (e instanceof AppError && e.statusCode === 429) {
-          const retained = await this.db.query(
-            `UPDATE tasks SET status='budget_wait',last_error=$2,updated_at=now() WHERE id=$1 AND status='queued' AND version=$3 AND approved_version=$3
-             AND EXISTS(SELECT 1 FROM settings WHERE id=1 AND revision=$4 AND NOT (value->>'paused')::boolean) RETURNING id`,
-            [task.id, e.message, task.version, snapshot.revision],
-          );
-          if (retained.length) {
-            await this.line.notify(
-              task.id,
-              "budget",
-              `budget:${task.id}:${task.version}`,
-              `額度不足，工作已保留：${task.title}`,
-            );
-            await tellGroupWaiting(
-              this.db,
-              task.id,
-              e.message.includes("今日執行次數") ? "daily" : "quota",
-            );
-          }
+          await hold(e);
           return;
         }
         throw e;
@@ -806,13 +843,17 @@ export class Execution {
       runId = randomUUID();
       const deadline = Date.now() + s.task_minutes * 60000;
       const claimed = await this.db
-        .transaction(async (c) => {
-          // 另一個工作仍佔用唯一的執行位置（例如重啟後尚未回收的舊紀錄）：
-          // 保持排隊等下一輪，不算失敗，也不通知。
-          const busy = await c.query(
-            "SELECT 1 FROM runs WHERE completed_at IS NULL LIMIT 1",
-          );
-          if (busy.rowCount) return false;
+        .transaction(async (c): Promise<boolean | "busy" | "daily"> => {
+          // 搶位置一次一個：全系統計數、同專案修改鎖與每日執行次數在同一把鎖內判斷，
+          // 並行時不會兩個都以為還有空位。沒有空位（含重啟後尚未回收的舊紀錄）就保持排隊等下一輪。
+          await c.query("SELECT pg_advisory_xact_lock($1)", [CLAIM_LOCK]);
+          if (await busyFor(c, task, limit)) return "busy";
+          if (subscription) {
+            const today = await c.query<{ count: number }>(
+              "SELECT count(*)::int AS count FROM runs WHERE (started_at AT TIME ZONE 'Asia/Taipei')::date=(now() AT TIME ZONE 'Asia/Taipei')::date",
+            );
+            if (today.rows[0].count >= s.daily_runs) return "daily";
+          }
           const change = await c.query(
             `UPDATE tasks SET status='running',review_note=NULL,updated_at=now() WHERE id=$1 AND status='queued' AND version=$2 AND approved_version=$2 AND task_project_confirmed(id)
            AND EXISTS(SELECT 1 FROM settings WHERE id=1 AND revision=$3 AND NOT (value->>'paused')::boolean) RETURNING id`,
@@ -820,7 +861,7 @@ export class Execution {
           );
           if (!change.rowCount) return false;
           await c.query(
-            "INSERT INTO runs(id,task_id,version,reservation_id,token_hash,model,deadline,workspace) VALUES($1,$2,$3,$4,$5,$6,$7,$8)",
+            "INSERT INTO runs(id,task_id,version,reservation_id,token_hash,model,deadline,workspace,change_project_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)",
             [
               runId,
               task.id,
@@ -834,18 +875,25 @@ export class Execution {
               config().instance === "production"
                 ? `agentflow-job-${runId}`
                 : `agentflow-${config().instance}-job-${runId}`,
+              task.mode === "query" ? null : task.project_id,
             ],
           );
           return true;
         })
         .catch((e: unknown) => {
-          // 兩個程序同時搶到最後一刻：唯一索引擋下第二個，同樣視為稍後再派。
-          if ((e as { constraint?: string }).constraint === "runs_one_active")
-            return false;
+          // 唯一索引是最後一道保護（例如舊版程序仍在執行）：同樣視為稍後再派，不記錯誤。
+          const constraint = (e as { constraint?: string }).constraint;
+          if (
+            constraint === "runs_one_change_per_project" ||
+            constraint === "runs_one_active_per_task"
+          )
+            return "busy" as const;
           throw e;
         });
-      if (!claimed) {
+      if (claimed !== true) {
         runId = undefined;
+        if (claimed === "busy") await this.tellQueued(task, limit);
+        if (claimed === "daily") await hold(dailyLimit());
         return;
       }
       await this.db.query("UPDATE runs SET observed=true WHERE id=$1", [runId]);
@@ -1749,7 +1797,11 @@ ${querySummary(answer)}`,
         // 清理未成功時保留未完成紀錄，禁止重新確認；既有回收工作會再次取消。
       }
       if (reservation) await this.budget.release(reservation);
-      if (locked) await lock.query("SELECT pg_advisory_unlock(73462)");
+      if (locked)
+        await lock.query("SELECT pg_advisory_unlock($1,hashtext($2))", [
+          RUN_LOCK,
+          taskId,
+        ]);
       lock.release();
     }
   }

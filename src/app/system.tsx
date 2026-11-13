@@ -26,6 +26,7 @@ import {
 import { cn } from "@/lib/utils";
 import { type Request, type State, ago, date, message } from "./shared";
 import { FrictionCard } from "./friction";
+import { CapacityCard } from "./capacity";
 import { DockerDiskCard } from "./docker-disk";
 
 type ContainerStatus = {
@@ -94,6 +95,7 @@ export function SystemView({
   }, [load]);
   return (
     <div className="flex flex-col gap-6">
+      <CapacityCard request={request} />
       <FrictionCard state={state} request={request} />
       <Card>
         <CardHeader className="flex flex-row items-start justify-between gap-3">
