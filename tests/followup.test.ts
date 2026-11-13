@@ -21,6 +21,7 @@ import { Line } from "../server/line.js";
 import { Triage } from "../server/triage.js";
 import { GitHub } from "../server/github.js";
 import { Budget } from "../server/budget.js";
+import { keyPointsOf, threadHistory } from "../server/followup.js";
 import type {
   Group,
   Message,
@@ -217,9 +218,9 @@ describe("在 LINE 追問", () => {
     expect(t.project_routing?.basis).toBe("followup");
     expect(t.status).toBe("awaiting_approval");
   });
-  it("一串已經 10 題時，不再自動接續", async () => {
+  it("沒有題數上限：第 15 題追問仍自動接續", async () => {
     let last = parent;
-    for (let i = 0; i < 9; i++) {
+    for (let i = 0; i < 13; i++) {
       last = await db.one<Task>(
         `INSERT INTO tasks(project_id,group_id,title,summary,acceptance,status,mode,answer,approved_version,dedupe_key,parent_id)
          VALUES($1,'group-a',$2,$2,'["回答"]','answered','query','答',1,$3,$4) RETURNING *`,
@@ -229,8 +230,101 @@ describe("在 LINE 追問", () => {
     await botAnswered(last);
     const id = await receive("那下一個呢？", "bot-msg-1");
     const t = await triage(id);
-    expect(t.status).toBe("awaiting_approval");
-    expect(t.missing.join("")).toContain("10 題");
+    expect(t.parent_id).toBe(last.id);
+    expect(t.status).toBe("queued");
+    expect(t.missing).toEqual([]);
+  });
+});
+
+describe("提示中的對話串", () => {
+  it("最近 5 題給完整問答，更早的只給問題與「先看重點」", async () => {
+    let last = parent;
+    for (let i = 0; i < 7; i++) {
+      last = await db.one<Task>(
+        `INSERT INTO tasks(project_id,group_id,title,summary,acceptance,status,mode,answer,approved_version,dedupe_key,parent_id)
+         VALUES($1,'group-a',$2,$2,'["回答"]','answered','query',$3,1,$4,$5) RETURNING *`,
+        [
+          project,
+          `第 ${i + 2} 題`,
+          `查詢專案：測試專案（test/repo）\n\n## 先看重點\n\n第 ${i + 2} 題的結論。\n\n## 詳細資訊\n\n很長的細節${"。".repeat(50)}`,
+          randomUUID(),
+          last.id,
+        ],
+      );
+    }
+    const rounds = await threadHistory(db, { parent_id: last.id });
+    expect(rounds).toHaveLength(8);
+    expect(rounds.filter((r) => r.condensed)).toHaveLength(3);
+    expect(rounds[1]).toMatchObject({
+      condensed: true,
+      keyPoints: "第 2 題的結論。",
+    });
+    expect(rounds[1].answer).toBeUndefined();
+    expect(rounds[7].answer).toContain("很長的細節");
+    expect(rounds[7].condensed).toBeUndefined();
+  });
+  it("回答沒有「先看重點」時，取去掉標頭的前段文字", () => {
+    expect(
+      keyPointsOf("查詢專案：X（a/b）\n基底分支：main\n\n結論是 A。".repeat(1)),
+    ).toBe("結論是 A。");
+    expect(keyPointsOf("字".repeat(400))).toHaveLength(301);
+  });
+});
+
+describe("接錯題時改正", () => {
+  let app: Awaited<ReturnType<typeof buildApp>>;
+  let headers: Awaited<ReturnType<typeof session>>;
+  beforeEach(async () => {
+    app = await buildApp(db);
+    headers = await session();
+  });
+  afterEach(() => app.close());
+  const relink = (t: Task, parentId: string | null, version = t.version) =>
+    app.inject({
+      method: "POST",
+      url: `/api/tasks/${t.id}/relink`,
+      headers,
+      payload: { parent_id: parentId, version },
+    });
+  /** 一題接錯的追問（接在 parent 後面）。 */
+  const wrong = () =>
+    db.one<Task>(
+      `INSERT INTO tasks(project_id,group_id,title,summary,acceptance,status,mode,answer,approved_version,dedupe_key,parent_id)
+       VALUES($1,'group-a','那 ch3 呢','那 ch3 呢','["回答"]','answered','query','答',1,$2,$3) RETURNING *`,
+      [project, randomUUID(), parent.id],
+    );
+
+  it("改接到另一題：沿用它的專案與分支並重新排程", async () => {
+    const right = await answered("查詢 PLC 欄位", "PLC 的回答");
+    const t = await wrong();
+    const r = await relink(t, right.id);
+    expect(r.statusCode).toBe(200);
+    expect(r.json().status).toBe("queued");
+    const after = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [t.id]);
+    expect(after.parent_id).toBe(right.id);
+    expect(after.version).toBe(t.version + 1);
+    expect(after.project_routing?.followupOf?.id).toBe(right.id);
+  });
+  it("改成新話題：不再接續，等待確認專案", async () => {
+    const t = await wrong();
+    const r = await relink(t, null);
+    expect(r.json().status).toBe("awaiting_approval");
+    const after = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [t.id]);
+    expect(after.parent_id).toBeNull();
+    expect(after.project_routing?.status).toBe("uncertain");
+  });
+  it("不能接到自己後面的追問、處理中不能改、版本過期拒絕", async () => {
+    const t = await wrong();
+    const child = await db.one<Task>(
+      `INSERT INTO tasks(project_id,group_id,title,summary,acceptance,status,mode,approved_version,dedupe_key,parent_id)
+       VALUES($1,'group-a','再追問','再追問','["回答"]','answered','query',1,$2,$3) RETURNING *`,
+      [project, randomUUID(), t.id],
+    );
+    expect((await relink(parent, child.id)).statusCode).toBe(422);
+    expect((await relink(t, parent.id, t.version + 3)).statusCode).toBe(409);
+    await db.query("UPDATE tasks SET status='running' WHERE id=$1", [t.id]);
+    const other = await answered("其他", "答");
+    expect((await relink(t, other.id)).statusCode).toBe(409);
   });
 });
 
