@@ -30,6 +30,12 @@ import { syncProjectRepos } from "./repo-missing.js";
 import { redact } from "./policy.js";
 import { SubscriptionGate, SubscriptionBlocked } from "./subscription-gate.js";
 import { dailyDockerCleanup } from "./docker-cleanup.js";
+import {
+  MAX_RUNS_CAP,
+  RECOVER_LOCK,
+  RUN_LOCK,
+  checkHostResources,
+} from "./capacity.js";
 import type { Project, Settings, Task } from "../shared/types.js";
 export async function recoverInterrupted(
   db: Database,
@@ -38,39 +44,66 @@ export async function recoverInterrupted(
   line: Line,
 ) {
   const lock = await db.pool.connect();
+  let locked = false;
   try {
-    if (
-      !(await lock.query("SELECT pg_try_advisory_lock(73462) AS locked"))
-        .rows[0].locked
-    )
-      return;
+    locked = (
+      await lock.query("SELECT pg_try_advisory_lock($1) AS locked", [
+        RECOVER_LOCK,
+      ])
+    ).rows[0].locked;
+    if (!locked) return;
     const interrupted = await db.query<{
       id: string;
       task_id: string;
       reservation_id: string;
     }>("SELECT * FROM runs WHERE completed_at IS NULL");
     for (const r of interrupted) {
-      await runner.call("cancel", { runId: r.id });
-      await db.query(
-        "UPDATE runs SET completed_at=now(),proxy_active=false,token_hash=NULL,outcome='interrupted' WHERE id=$1",
-        [r.id],
-      );
-      await budget.recoverExpired(r.reservation_id);
-      await db.query(
-        "UPDATE tasks SET status='failed',last_error='服務曾中斷；重試前會先核對 GitHub PR',updated_at=now() WHERE id=$1 AND status IN ('running','reviewing')",
-        [r.task_id],
-      );
-      await line.notify(
-        r.task_id,
-        "interrupted",
-        `interrupted:${r.id}`,
-        "執行曾中斷，請檢視並重試；系統會先核對遠端結果。",
-      );
+      // 同時有多個執行：只回收沒有程序持有任務鎖的紀錄（程序結束或連線中斷時鎖會自動釋放）。
+      const owned = (
+        await lock.query(
+          "SELECT pg_try_advisory_lock($1,hashtext($2)) AS locked",
+          [RUN_LOCK, r.task_id],
+        )
+      ).rows[0].locked;
+      if (!owned) continue;
+      try {
+        await recoverRun(db, runner, budget, line, r);
+      } finally {
+        await lock.query("SELECT pg_advisory_unlock($1,hashtext($2))", [
+          RUN_LOCK,
+          r.task_id,
+        ]);
+      }
     }
   } finally {
-    await lock.query("SELECT pg_advisory_unlock(73462)");
+    if (locked)
+      await lock.query("SELECT pg_advisory_unlock($1)", [RECOVER_LOCK]);
     lock.release();
   }
+}
+async function recoverRun(
+  db: Database,
+  runner: Runner,
+  budget: Budget,
+  line: Line,
+  r: { id: string; task_id: string; reservation_id: string },
+) {
+  await runner.call("cancel", { runId: r.id });
+  await db.query(
+    "UPDATE runs SET completed_at=now(),proxy_active=false,token_hash=NULL,outcome='interrupted' WHERE id=$1",
+    [r.id],
+  );
+  await budget.recoverExpired(r.reservation_id);
+  await db.query(
+    "UPDATE tasks SET status='failed',last_error='服務曾中斷；重試前會先核對 GitHub PR',updated_at=now() WHERE id=$1 AND status IN ('running','reviewing')",
+    [r.task_id],
+  );
+  await line.notify(
+    r.task_id,
+    "interrupted",
+    `interrupted:${r.id}`,
+    "執行曾中斷，請檢視並重試；系統會先核對遠端結果。",
+  );
 }
 export async function startJobs(
   db: Database,
@@ -170,7 +203,8 @@ export async function startJobs(
     async (jobs) => {
       for (const j of jobs) await execution.execute(j.data.taskId);
     },
-    { localConcurrency: 1 },
+    // 實際同時執行數由派工時的資料庫計數控制（系統頁可調）；這裡只要不少於可設定的上限。
+    { localConcurrency: MAX_RUNS_CAP },
   );
   await work<{ id: string }>("validate", async (jobs) => {
     for (const j of jobs) {
@@ -394,9 +428,15 @@ export async function startJobs(
           { taskId: t.id },
           { singletonKey: t.id, singletonSeconds: 300 },
         );
-      const tasks = await db.query<{ id: string }>(
+      const queued = await db.query<{ id: string }>(
         "SELECT id FROM tasks WHERE status='queued' ORDER BY created_at LIMIT 20",
       );
+      // 有工作要派時才讀主機資源：可用記憶體不足就暫停派新工作（執行中的不受影響），原因顯示在系統頁。
+      const tasks =
+        queued.length &&
+        (await checkHostResources(db, () => runner.call("resources", {}, 5000)))
+          ? []
+          : queued;
       for (const t of tasks)
         await boss.send(
           "execute",

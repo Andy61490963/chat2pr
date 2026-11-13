@@ -85,7 +85,13 @@ CREATE TABLE IF NOT EXISTS runs (
  deadline timestamptz NOT NULL, heartbeat_at timestamptz NOT NULL DEFAULT now(), proxy_active boolean NOT NULL DEFAULT false,
  started_at timestamptz NOT NULL DEFAULT now(), completed_at timestamptz, workspace text, result jsonb
 );
-CREATE UNIQUE INDEX IF NOT EXISTS runs_one_active ON runs((true)) WHERE completed_at IS NULL;
+-- 同時執行多個任務（#21）：不再限制全系統只有一個未完成的執行，改由派工時的「全系統計數＋每專案修改鎖」控制。
+-- change_project_id 只在修改任務填入，資料庫層保證同一專案同時只有一個修改；同一任務也只能有一個未完成的執行。
+DROP INDEX IF EXISTS runs_one_active;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS change_project_id uuid;
+CREATE UNIQUE INDEX IF NOT EXISTS runs_one_change_per_project ON runs(change_project_id) WHERE completed_at IS NULL AND change_project_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS runs_one_active_per_task ON runs(task_id) WHERE completed_at IS NULL;
+UPDATE settings SET value='{"max_runs":2}'::jsonb || value WHERE id=1;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS outcome text;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS observed boolean NOT NULL DEFAULT false;
 CREATE TABLE IF NOT EXISTS run_events(

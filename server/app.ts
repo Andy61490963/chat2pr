@@ -26,6 +26,7 @@ import { Database } from "./db.js";
 import { config, secrets, token } from "./config.js";
 import { registerAuth, requireAdmin, requireUser, hash } from "./auth.js";
 import { registerMembers } from "./members.js";
+import { registerCapacity } from "./capacity-api.js";
 import { checkIntegrations } from "./integrations.js";
 import { registerChat } from "./chat.js";
 import { registerProjectContext } from "./project-context.js";
@@ -1171,6 +1172,8 @@ export async function buildApp(
     });
     return { code, expiresIn: 600 };
   });
+  // 錯誤處理器設定之後才註冊，輸入格式錯誤才會回 400。
+  registerCapacity(app, db, () => runner.call("resources", {}, 5000));
   // 訂閱額度、重置時間與可用模型，由主機執行器以服務登入向 Codex 查詢。
   app.get("/api/system", async (req) => {
     await requireAdmin(db, req);

@@ -51,9 +51,22 @@ export const answerHeldAck = "收到你的回答，已交給管理者確認。";
 export const disabledAck =
   "這個群組目前沒有啟用，這則需求不會被處理。請管理者到看板的群組頁啟用。";
 
-/** 等待原因：每日執行次數用完、Codex 額度用完、系統暫停。 */
-export type WaitReason = "daily" | "quota" | "paused";
+/** 等待原因：每日執行次數用完、Codex 額度用完、系統暫停、執行位置已滿（排隊）。 */
+export type WaitReason = "daily" | "quota" | "paused" | "busy";
+/** 排隊時的位置與預估：沒有歷史耗時就不寫時間。 */
+export interface QueuePlace {
+  position: number;
+  running: number;
+  minutes: number | null;
+}
+export function queuedText(q: QueuePlace) {
+  const when = q.minutes
+    ? `，預估大約 ${q.minutes} 分鐘後開始`
+    : "，輪到時會自動開始";
+  return `目前有 ${q.running} 件工作在處理，這件事排在第 ${q.position} 位${when}，不用重新提出。`;
+}
 const waitText: Record<WaitReason, string> = {
+  busy: "目前有其他工作在處理，這件事正在排隊，輪到時會自動開始，不用重新提出。",
   daily:
     "今天的執行次數用完了，這件事已經保留，明天凌晨會自動繼續處理，不用重新提出。",
   quota:
@@ -66,14 +79,17 @@ export async function tellGroupWaiting(
   c: Queryable,
   taskId: string,
   reason: WaitReason,
+  place?: QueuePlace,
 ) {
   const bucket = Math.floor(Date.now() / (6 * 3600 * 1000));
+  const text =
+    reason === "busy" && place ? queuedText(place) : waitText[reason];
   await c.query(
     `INSERT INTO notifications(task_id,kind,dedupe_key,text,group_id)
      SELECT t.id,'group_waiting','group:waiting:'||g.id||':'||$3::text,$2,g.id FROM tasks t JOIN groups g ON g.id=t.group_id
      WHERE t.id=$1 AND g.left_at IS NULL AND ${groupRepliesOn} AND g.reply_mode IN ('results','all')
      ON CONFLICT DO NOTHING`,
-    [taskId, waitText[reason], String(bucket)],
+    [taskId, text, String(bucket)],
   );
 }
 
