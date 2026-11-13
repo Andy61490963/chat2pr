@@ -22,7 +22,13 @@ import {
   runCheckQuery,
   testConnection,
 } from "./database-capture.js";
-import { cleanupDocker } from "./docker-cleanup.js";
+import {
+  cleanupDocker,
+  diskSpace,
+  dockerDataPath,
+  dockerDiskInventory,
+  removeDiskItems,
+} from "./docker-cleanup.js";
 import { httpProbe, tcpProbe } from "./check-probes.js";
 import {
   MAX_COLLECT_EXCLUDES,
@@ -238,6 +244,34 @@ app.post("/maintenance/docker", async (req) => {
     .parse(req.body);
   if (containers.instance !== "production") return { skipped: true };
   return cleanupDocker(containers.docker, { keep });
+});
+// 每小時的空間提醒只需要可用空間，不跑 docker system df。
+app.post("/maintenance/disk/space", async () => ({
+  space: await diskSpace(dockerDataPath(), "主機磁碟（Docker 資料所在）"),
+}));
+// 看板「系統」頁的 Docker 磁碟盤點；任何實例都可以讀。
+app.post("/maintenance/disk/inventory", async () =>
+  dockerDiskInventory(containers.docker, containers.instance),
+);
+// 依應用程式算出的清單刪除，但每一項都在這裡重新核對歸屬；驗收實例共用 Docker 時不動手。
+app.post("/maintenance/disk/remove", async (req) => {
+  const b = z
+    .object({
+      keep: z.array(z.string().min(1).max(200)).max(200),
+      items: z
+        .array(
+          z.object({
+            kind: z.enum(["image", "container", "volume", "build_cache"]),
+            target: z.string().min(1).max(300),
+            runId: z.string().uuid().optional(),
+          }),
+        )
+        .max(1000),
+    })
+    .parse(req.body);
+  if (containers.instance !== "production")
+    return { skipped: true, removed: [], failed: [], cacheBytes: 0 };
+  return removeDiskItems(containers, b.items, b.keep);
 });
 app.post("/observations", async (req) => {
   const b = z

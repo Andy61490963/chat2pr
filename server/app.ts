@@ -30,6 +30,7 @@ import { checkIntegrations } from "./integrations.js";
 import { registerChat } from "./chat.js";
 import { registerProjectContext } from "./project-context.js";
 import { registerProjectDatabase } from "./project-database.js";
+import { registerDockerDisk } from "./docker-disk.js";
 import { notifyGroup } from "./group-replies.js";
 import { HttpRunner, type Runner } from "./execution.js";
 import { clientAddress } from "./client-address.js";
@@ -1192,6 +1193,8 @@ export async function buildApp(
     });
     return { code, expiresIn: 600 };
   });
+  // Docker 磁碟用量、空間提醒與清理規則；清理一律先預覽、由管理者確認。
+  registerDockerDisk(app, db, runnerCall);
   // 訂閱額度、重置時間與可用模型，由主機執行器以服務登入向 Codex 查詢。
   app.get("/api/system", async (req) => {
     await requireAdmin(db, req);

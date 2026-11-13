@@ -1,4 +1,5 @@
 import { saveEvents, safeDetail, connectionFailure } from "./observation.js";
+import { diskPaused } from "./docker-disk.js";
 import type { RunEvent } from "../shared/observation.js";
 import { phaseLabels } from "../shared/observation.js";
 import { randomUUID } from "node:crypto";
@@ -612,7 +613,8 @@ export class Execution {
       "SELECT value,revision FROM settings WHERE id=1",
     );
     const s = snapshot.value;
-    if (s.paused) return;
+    // Docker 磁碟嚴重不足、且管理者開啟了暫停派工：任務留在佇列，空間回升後再執行。
+    if (s.paused || (await diskPaused(this.db))) return;
     const lock = await this.db.pool.connect();
     let locked = false,
       reservation: string | undefined,

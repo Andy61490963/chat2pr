@@ -134,6 +134,10 @@ export class Containers {
     active.add(deadline);
     return deadline;
   }
+  /** 此執行器正在建立或執行這個 run 的容器；磁碟清理不得碰它。 */
+  isActive(runId: string) {
+    return this.active.has(runId) || this.creations.has(runId);
+  }
   private stopRun(runId: string) {
     for (const deadline of this.active.get(runId) ?? [])
       deadline.stop(new AppError(409, "工作已取消"));
