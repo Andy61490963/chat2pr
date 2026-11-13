@@ -1,3 +1,4 @@
+import { assertReadOnlySelect } from "../shared/checks.js";
 import { createHash } from "node:crypto";
 import { createServer, type AddressInfo, type Server } from "node:net";
 import { Client } from "ssh2";
@@ -258,4 +259,39 @@ export async function captureSnapshot(input: CaptureInput) {
     5 * 60 * 1000,
   );
   return { ...value, ...(hostKey ? { hostKey } : {}) };
+}
+
+/**
+ * 定期檢查：在一定回滾的交易中執行單一唯讀 SELECT（另有唯讀連線意圖），
+ * 最多回傳 100 列、每格 200 字；只有主機執行器會呼叫，工作容器拿不到連線資料。
+ */
+export async function runCheckQuery(input: CaptureInput, sql: string) {
+  const problem = assertReadOnlySelect(sql);
+  if (problem) throw fail(problem);
+  const { value } = await withSqlServer(
+    input,
+    async (query) => {
+      await query("SET NOCOUNT ON; SET LOCK_TIMEOUT 5000; BEGIN TRANSACTION");
+      try {
+        return await query(sql);
+      } finally {
+        await query("IF @@TRANCOUNT>0 ROLLBACK TRANSACTION").catch(() => {});
+      }
+    },
+    30000,
+  );
+  return value
+    .slice(0, 100)
+    .map((row) =>
+      Object.fromEntries(
+        Object.entries(row).map(([k, v]) => [
+          k,
+          typeof v === "string"
+            ? v.slice(0, 200)
+            : v instanceof Date
+              ? v.toISOString()
+              : v,
+        ]),
+      ),
+    );
 }

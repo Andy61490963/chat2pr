@@ -19,9 +19,11 @@ import { subscriptionIdentity } from "./subscription-identity.js";
 import {
   CaptureInput,
   captureSnapshot,
+  runCheckQuery,
   testConnection,
 } from "./database-capture.js";
 import { cleanupDocker } from "./docker-cleanup.js";
+import { httpProbe, tcpProbe } from "./check-probes.js";
 // 必須在任何 Docker 操作（尤其啟動清理）以前拒絕不完整的隔離設定。
 validateRunnerEnvironment();
 const app = Fastify({ logger: false, bodyLimit: 80 * 1024 * 1024 });
@@ -200,6 +202,31 @@ app.post("/database/test", async (req) =>
 app.post("/database/snapshot", async (req) =>
   captureSnapshot(CaptureInput.parse(req.body)),
 );
+// 定期檢查：唯讀 SQL、HTTP 與 TCP 探測只在主機執行；結果回給應用程式判定。
+app.post("/checks/sql", async (req) => {
+  const b = z
+    .object({ connection: CaptureInput, sql: z.string().min(1).max(4000) })
+    .parse(req.body);
+  return { rows: await runCheckQuery(b.connection, b.sql) };
+});
+app.post("/checks/http", async (req) => {
+  const b = z
+    .object({
+      url: z.string().url().max(2000),
+      contains: z.string().max(200).optional(),
+    })
+    .parse(req.body);
+  return httpProbe(b.url, b.contains);
+});
+app.post("/checks/tcp", async (req) => {
+  const b = z
+    .object({
+      host: z.string().min(1).max(255),
+      port: z.number().int().min(1).max(65535),
+    })
+    .parse(req.body);
+  return tcpProbe(b.host, b.port);
+});
 // 每天由應用程式的維護工作呼叫；只有正式實例清理，驗收實例共用同一個 Docker 時不動手。
 app.post("/maintenance/docker", async (req) => {
   const { keep } = z
