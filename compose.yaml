@@ -1,0 +1,106 @@
+name: line-agentflow
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: agentflow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?請先執行 npm run init}
+      POSTGRES_DB: agentflow
+    volumes: ["database:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentflow"]
+      interval: 5s
+      retries: 20
+  app:
+    build: .
+    restart: unless-stopped
+    profiles: ["full"]
+    ports: ["127.0.0.1:4310:4310"]
+    environment:
+      DATABASE_URL: postgres://agentflow:${POSTGRES_PASSWORD}@db:5432/agentflow
+      AGENTFLOW_INSTANCE: production
+      # 看板擁有者的 GitHub 數字 ID；每台伺服器在 .env 指定。沒有預設值，缺少時 app 拒絕啟動。
+      ADMIN_GITHUB_ID: ${ADMIN_GITHUB_ID:-}
+      HOST: 0.0.0.0
+      SECRETS_FILE: /config/secrets.json
+      DATA_DIR: /data
+      EMBEDDER_URL: http://embedder:80
+      RUNNER_URL: http://host.docker.internal:4312
+    volumes: ["./.local:/config:ro", "data:/data"]
+    networks: ["default", "workers", "embed"]
+    depends_on:
+      db: { condition: service_healthy }
+  egress:
+    build: infra/egress
+    restart: unless-stopped
+    profiles: ["full"]
+    networks: ["default", "install"]
+  egress-ai:
+    build: infra/egress
+    restart: unless-stopped
+    profiles: ["full"]
+    command: ["squid", "-N", "-f", "/etc/squid/squid-ai.conf"]
+    networks: ["default", "ai"]
+  subscription-relay:
+    image: line-agentflow-subscription-relay:local
+    build: infra/subscription-relay
+    restart: unless-stopped
+    profiles: ["full"]
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    networks: ["default", "subscription"]
+  embedder-init:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
+    profiles: ["init"]
+    entrypoint: ["sh", "/init-model.sh"]
+    volumes:
+      - embed-models:/models
+      - ./infra/init-model.sh:/init-model.sh:ro
+      - ./infra/bge-m3.sha256:/bge-m3.sha256:ro
+  embedder:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
+    profiles: ["full"]
+    restart: unless-stopped
+    environment:
+      HF_HUB_OFFLINE: "1"
+      OMP_NUM_THREADS: "4"
+      MKL_NUM_THREADS: "4"
+      RAYON_NUM_THREADS: "4"
+    command: ["--model-id", "/models/bge-m3", "--pooling", "cls", "--dtype", "float32", "--port", "80", "--max-client-batch-size", "16", "--max-batch-tokens", "2048", "--tokenization-workers", "2"]
+    volumes: ["embed-models:/models:ro"]
+    networks: ["embed"]
+  db-test:
+    image: pgvector/pgvector:pg17
+    profiles: ["test"]
+    environment:
+      POSTGRES_USER: agentflowtest
+      POSTGRES_PASSWORD: test-only-password
+      POSTGRES_DB: agentflow_test
+    ports: ["127.0.0.1:5439:5432"]
+    tmpfs: ["/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentflowtest"]
+      interval: 2s
+      retries: 20
+volumes:
+  embed-models:
+  database:
+  data:
+networks:
+  subscription:
+    name: line-agentflow_subscription
+    internal: true
+  embed:
+    name: line-agentflow_embed
+    internal: true
+  workers:
+    name: line-agentflow_workers
+    internal: true
+  install:
+    name: line-agentflow_install
+    internal: true
+  ai:
+    name: line-agentflow_ai
+    internal: true

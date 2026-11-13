@@ -1,0 +1,103 @@
+.query-report {
+  font-size: 0.875rem;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+.query-report h1,
+.query-report h2,
+.query-report h3,
+.query-report h4 {
+  font-weight: 650;
+  line-height: 1.5;
+  margin: 1.4em 0 0.65em;
+}
+.query-report h1 {
+  font-size: 1.3rem;
+}
+.query-report h2 {
+  font-size: 1.1rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.4em;
+}
+.query-report h3 {
+  font-size: 1rem;
+}
+.query-report > :first-child {
+  margin-top: 0;
+}
+.query-report .report-paragraph {
+  margin: 0.7em 0;
+  white-space: pre-line;
+}
+.query-report ul,
+.query-report ol {
+  padding-left: 1.5em;
+  margin: 0.65em 0;
+}
+.query-report ul {
+  list-style: disc;
+}
+.query-report ol {
+  list-style: decimal;
+}
+.query-report li {
+  margin: 0.3em 0;
+}
+.query-report a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.query-report pre {
+  white-space: pre;
+  overflow: auto;
+  padding: 0.8rem;
+  background: var(--muted);
+  border-radius: 0.4rem;
+  margin: 0.8em 0;
+}
+.query-report code {
+  font-size: 0.8rem;
+  background: var(--muted);
+  padding: 0.1em 0.25em;
+  border-radius: 0.2em;
+}
+.query-report pre code {
+  padding: 0;
+}
+.query-report table {
+  border-collapse: collapse;
+  min-width: 100%;
+  margin: 0.8em 0;
+}
+.query-report th,
+.query-report td {
+  padding: 0.5em 0.75em;
+  border: 1px solid var(--border);
+  text-align: left;
+}
+.query-report th {
+  background: var(--muted);
+  white-space: nowrap;
+}
+.query-report blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 1em;
+  color: var(--muted-foreground);
+}
+.query-report summary {
+  cursor: pointer;
+}
+.query-report .report-details {
+  border-top: 1px solid var(--border);
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+}
+.query-report .report-details > summary {
+  font-weight: 600;
+  padding: 0.5rem 0;
+}
+.query-report .report-details > summary:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 0.25rem;
+}

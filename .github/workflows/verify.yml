@@ -1,0 +1,29 @@
+name: 驗證第一版工作流程
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: 安裝依賴與準備隔離環境
+        run: |
+          npm ci
+          npm run init
+          docker build -f worker/Dockerfile -t line-agentflow-worker:local .
+          docker build -f infra/source/Dockerfile -t line-agentflow-source:local .
+          docker compose --profile full --profile test up -d --build --wait db-test egress
+      - name: 檢查型別、整合測試與建置
+        run: |
+          npm run typecheck
+          npm test
+          npm run build
+      - name: 清理測試容器
+        if: always()
+        run: docker compose --profile full --profile test down

@@ -1,0 +1,12 @@
+node_modules/
+dist/
+coverage/
+.env
+.env.*
+!.env.example
+.local/
+data/
+*.log
+playwright-report/
+test-results/
+.codex-service/

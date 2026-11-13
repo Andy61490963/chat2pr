@@ -1,0 +1,84 @@
+name: 外部健康監控
+
+# 從主機以外的地方定時檢查各伺服器的 /health：主機、Docker 或通道整個斷線時，
+# app 自己發不出 LINE 通知，這裡會開一張 Issue（GitHub 會寄信給關注儲存庫的人）。
+#
+# 啟用：在儲存庫 Settings → Secrets and variables → Actions → Variables
+# 新增 HEALTH_URLS，內容是各伺服器的公開網址，以空白或換行分隔。
+# 沒有設定這個變數時工作會直接略過，不會佔用 Actions 分鐘數。
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: health-monitor
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: 檢查 /health
+    if: vars.HEALTH_URLS != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 檢查各伺服器並更新 Issue
+        env:
+          HEALTH_URLS: ${{ vars.HEALTH_URLS }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -u
+          label="health-monitor"
+          failed=""
+          for url in $HEALTH_URLS; do
+            url="${url%/}"
+            case "$url" in
+              https://*) ;;
+              *) echo "略過不是 https 的項目"; continue ;;
+            esac
+            # 連續三次都失敗才算異常，避免部署重啟的幾十秒誤報。
+            ok=""
+            for attempt in 1 2 3; do
+              if curl --fail --silent --show-error --max-time 20 --output /dev/null "$url/health"; then
+                ok=1
+                break
+              fi
+              sleep 30
+            done
+            if [ -n "$ok" ]; then
+              echo "正常：$url"
+            else
+              echo "異常：$url"
+              failed="$failed
+          - $url"
+            fi
+          done
+
+          gh label create "$label" --color B60205 --description "外部健康監控開立的告警" 2>/dev/null || true
+          open=$(gh issue list --state open --label "$label" --json number --jq '.[0].number // empty')
+
+          if [ -n "$failed" ]; then
+            if [ -z "$open" ]; then
+              gh issue create --label "$label" \
+                --title "外部健康監控：伺服器沒有回應" \
+                --body "以下伺服器的 /health 連續三次沒有回應：
+          $failed
+
+          請依 README〈疑難排解〉檢查主機是否開機並已登入、Docker Desktop、排程工作 LINE-AgentFlow 與通道。恢復後這張 Issue 會自動關閉。
+
+          檢查紀錄：$RUN_URL"
+            else
+              echo "告警 Issue #$open 仍開著，不重複開立。"
+            fi
+            exit 1
+          fi
+
+          if [ -n "$open" ]; then
+            gh issue close "$open" --comment "所有伺服器的 /health 已恢復正常。檢查紀錄：$RUN_URL"
+          fi

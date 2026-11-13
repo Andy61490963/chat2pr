@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RAG 流程驗收</title>
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; background: #f3f6f9; color: #183345; font-family: system-ui, sans-serif; line-height: 1.7; }
+main { max-width: 1160px; margin: auto; padding: 48px 20px; }
+header { margin-bottom: 32px; }
+.tag { color: #087568; font-weight: 700; letter-spacing: .12em; }
+h1 { font-size: clamp(28px, 5vw, 44px); margin: 8px 0; }
+.intro { color: #526574; margin: 0; }
+ol { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 16px; }
+li { padding: 24px 20px; background: white; border: 1px solid #d7e2e8; border-radius: 16px; }
+.number { display: inline-grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: #dff4ed; color: #086252; font-weight: 700; }
+h2 { font-size: 22px; margin: 16px 0 8px; }
+li p { margin: 0; color: #526574; }
+footer { margin-top: 28px; color: #526574; font-size: 14px; }
+@media (max-width: 760px) { main { padding: 28px 20px; } ol { grid-template-columns: 1fr; gap: 12px; } li { padding: 18px 20px; } h2 { display: inline; margin-left: 12px; } li p { margin-top: 10px; } }
+</style>
+</head>
+<body>
+<main>
+<header><div class="tag">從訊息到可審閱的成果</div><h1>RAG 流程驗收</h1><p class="intro">收訊 → 檢索 → 開發 → 審查 → PR</p></header>
+<ol aria-label="RAG 五步驟">
+<li><span class="number">01</span><h2>收訊</h2><p>收到群組訊息，整理這次需要完成的事情。</p></li>
+<li><span class="number">02</span><h2>檢索</h2><p>查找專案文件與過往經驗，作為本次工作的參考。可參考同群組歷史討論、專案檔案與過往任務結果。</p></li>
+<li><span class="number">03</span><h2>開發</h2><p>依照本次核准範圍修改程式，並執行測試。</p></li>
+<li><span class="number">04</span><h2>審查</h2><p>檢查變更與驗證結果，確認符合本次需求。</p></li>
+<li><span class="number">05</span><h2>PR</h2><p>整理變更說明並提出合併請求，交由人工確認。</p></li>
+</ol>
+<footer>靜態流程展示・過往經驗僅供參考，執行以本次核准需求為準。<div>正式群組可追溯需求來源，PR 完成後由管理者確認合併。</div></footer>
+</main>
+</body>
+</html>

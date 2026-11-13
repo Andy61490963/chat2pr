@@ -1,0 +1,9 @@
+node_modules
+.git
+.env*
+.local
+data
+coverage
+test-results
+dist
+.codex-service

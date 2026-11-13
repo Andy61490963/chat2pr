@@ -1,0 +1,120 @@
+# 執行前先驗證 AGENTFLOW_INSTANCE=verify-<suiteId>；不得用正式 compose 做故障注入。
+name: ${AGENTFLOW_INSTANCE:?請指定 verify-<suiteId>}
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: agentflowtest
+      POSTGRES_PASSWORD: test-only-password
+      POSTGRES_DB: ${ACCEPTANCE_DB_NAME:?請指定獨立的 *_test 資料庫}
+    ports: ["127.0.0.1:${ACCEPTANCE_DB_PORT:-15439}:5432"]
+    volumes: ["database:/var/lib/postgresql/data"]
+    labels:
+      io.agentflow.instance: ${AGENTFLOW_INSTANCE}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agentflowtest"]
+      interval: 2s
+      retries: 20
+  egress:
+    build: ../../infra/egress
+    networks: ["default", "install"]
+    labels:
+      io.agentflow.instance: ${AGENTFLOW_INSTANCE}
+  egress-ai:
+    build: ../../infra/egress
+    command: ["squid", "-N", "-f", "/etc/squid/squid-ai.conf"]
+    networks: ["default", "ai"]
+    labels:
+      io.agentflow.instance: ${AGENTFLOW_INSTANCE}
+  subscription-relay:
+    image: ${ACCEPTANCE_SUBSCRIPTION_RELAY_IMAGE:?請指定固定的訂閱轉送映像}
+    environment:
+      BROKER_PORT: ${ACCEPTANCE_SUBSCRIPTION_BROKER_PORT:-14313}
+    networks: ["default", "subscription"]
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    labels:
+      io.agentflow.instance: ${AGENTFLOW_INSTANCE}
+  embedder:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.9
+    profiles: ["model"]
+    environment:
+      HF_HUB_OFFLINE: "1"
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+      RAYON_NUM_THREADS: "2"
+    command:
+      [
+        "--model-id",
+        "/models/bge-m3",
+        "--pooling",
+        "cls",
+        "--dtype",
+        "float32",
+        "--port",
+        "80",
+        "--max-client-batch-size",
+        "16",
+        "--max-batch-tokens",
+        "2048",
+        "--tokenization-workers",
+        "2",
+      ]
+    volumes: ["models:/models:ro"]
+    networks: ["embed"]
+    labels:
+      io.agentflow.instance: ${AGENTFLOW_INSTANCE}
+  model-relay:
+    image: ${ACCEPTANCE_WORKER_IMAGE:-line-agentflow-worker:local}
+    profiles: ["model"]
+    entrypoint: ["node", "/relay.mjs"]
+    user: "1000:1000"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    pids_limit: 32
+    volumes: ["./model-relay.mjs:/relay.mjs:ro"]
+    ports: ["127.0.0.1:${ACCEPTANCE_MODEL_PORT:-15440}:8080"]
+    networks: ["default", "embed"]
+    labels:
+      io.agentflow.instance: ${AGENTFLOW_INSTANCE}
+volumes:
+  database:
+    name: ${AGENTFLOW_INSTANCE}_database
+    labels:
+      io.agentflow.instance: ${AGENTFLOW_INSTANCE}
+  models:
+    external: true
+    name: ${ACCEPTANCE_MODEL_VOLUME:?請指定已驗證的唯讀模型資料卷}
+networks:
+  subscription:
+    name: ${AGENTFLOW_INSTANCE}_subscription
+    internal: true
+    labels:
+      io.agentflow.instance: ${AGENTFLOW_INSTANCE}
+  workers:
+    name: ${AGENTFLOW_INSTANCE}_workers
+    internal: true
+    labels:
+      io.agentflow.instance: ${AGENTFLOW_INSTANCE}
+  install:
+    name: ${AGENTFLOW_INSTANCE}_install
+    internal: true
+    labels:
+      io.agentflow.instance: ${AGENTFLOW_INSTANCE}
+  ai:
+    name: ${AGENTFLOW_INSTANCE}_ai
+    internal: true
+    labels:
+      io.agentflow.instance: ${AGENTFLOW_INSTANCE}
+  embed:
+    name: ${AGENTFLOW_INSTANCE}_embed
+    internal: true
+    labels:
+      io.agentflow.instance: ${AGENTFLOW_INSTANCE}
+  source:
+    name: ${AGENTFLOW_INSTANCE}_source
+    labels:
+      io.agentflow.instance: ${AGENTFLOW_INSTANCE}
