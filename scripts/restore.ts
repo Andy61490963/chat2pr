@@ -4,7 +4,7 @@ import { decodeBackup, backupTables } from "../server/maintenance.js";
 const file = process.argv[2];
 if (!file) throw Error("請指定加密備份路徑；還原只接受空白資料庫。");
 const snapshot = await decodeBackup(file);
-if (![1, 2, 3].includes(snapshot.version) || !snapshot.tables)
+if (![1, 2, 3, 4].includes(snapshot.version) || !snapshot.tables)
   throw Error("不支援的備份格式");
 const optionalInLegacy = new Set([
   "rag_references",
@@ -14,6 +14,7 @@ const optionalInLegacy = new Set([
 ]);
 // 第 3 版起才備份成員名單；更早的備份沒有這張表，還原後只有擁有者能登入。
 const withoutMembers = snapshot.version < 3 && !("members" in snapshot.tables);
+const withoutClarification = snapshot.version < 4;
 const db = new Database(config().databaseUrl);
 try {
   await db.migrate();
@@ -80,6 +81,10 @@ try {
   if (withoutMembers)
     console.log(
       "這份備份沒有成員名單，目前只有擁有者能登入；請到看板重新加入其他管理者與成員。",
+    );
+  if (withoutClarification)
+    console.log(
+      "這份舊備份沒有結構化的補問與假設；原需求摘要仍保留，請在任務詳情核對。",
     );
 } finally {
   await db.close();

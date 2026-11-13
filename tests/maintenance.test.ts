@@ -39,6 +39,14 @@ it("到期原文與圖片清除；加密備份保留摘要而不納入來源或�
       "INSERT INTO tasks(project_id,group_id,title,summary,dedupe_key) VALUES($1,'group-a','需求摘要','保留的驗收摘要','retention')",
       [project],
     );
+    const question = {
+      text: "要保留哪個日期格式？",
+      choices: ["西元年", "民國年"],
+    };
+    await db.query("UPDATE tasks SET question=$1,assumptions=$2", [
+      JSON.stringify(question),
+      JSON.stringify(["保留原有欄位順序"]),
+    ]);
     await db.query(
       "INSERT INTO group_memories(group_id,project_id,content,source) VALUES('group-a',$1,'報工指向本專案','manual')",
       [project],
@@ -66,6 +74,9 @@ it("到期原文與圖片清除；加密備份保留摘要而不納入來源或�
     const file = join(dir, "backups", await backup(db));
     expect((await readFile(file)).toString()).not.toContain("保留的驗收摘要");
     const decoded = await decodeBackup(file);
+    expect(decoded.version).toBe(4);
+    expect(decoded.tables.tasks[0].question).toEqual(question);
+    expect(decoded.tables.tasks[0].assumptions).toEqual(["保留原有欄位順序"]);
     expect(decoded.tables.tasks[0].summary).toBe("保留的驗收摘要");
     expect(decoded.tables.embeddings).toBeUndefined();
     expect(decoded.tables.messages).toBeUndefined();
@@ -96,6 +107,10 @@ it("到期原文與圖片清除；加密備份保留摘要而不納入來源或�
     };
     await emptyDestination();
     await restore(file);
+    expect(await db.one("SELECT question,assumptions FROM tasks")).toEqual({
+      question,
+      assumptions: ["保留原有欄位順序"],
+    });
     expect(
       await db.query("SELECT group_id,project_id FROM group_projects"),
     ).toEqual([{ group_id: "group-a", project_id: project }]);
@@ -158,12 +173,19 @@ it("到期原文與圖片清除；加密備份保留摘要而不納入來源或�
     // 納入成員名單之前產生的備份仍可還原：其餘資料照舊，成員名單留空並提示重新加入。
     const previous = structuredClone(decoded);
     previous.version = 2;
+    delete previous.tables.tasks[0].question;
+    delete previous.tables.tasks[0].assumptions;
     delete previous.tables.members;
     await emptyDestination();
     const { stdout } = await restore(
       await encrypt("previous.afbackup", previous),
     );
     expect(stdout).toContain("這份備份沒有成員名單");
+    expect(stdout).toContain("沒有結構化的補問與假設");
+    expect(await db.one("SELECT question,assumptions FROM tasks")).toEqual({
+      question: null,
+      assumptions: [],
+    });
     expect(await db.query("SELECT github_id FROM members")).toHaveLength(0);
     expect(await db.one("SELECT summary FROM tasks")).toEqual({
       summary: "保留的驗收摘要",

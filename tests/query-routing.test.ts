@@ -62,6 +62,8 @@ async function propose(
     missing: [],
     relatedTaskId: null,
     suggestions: [],
+    question: null,
+    assumptions: [],
     ...overrides,
   };
   if (d.routing?.basis === "explicit" && !d.routing.evidence.length)

@@ -529,6 +529,7 @@ export async function buildApp(
           "cancel",
           "retry",
           "amend",
+          "assumption",
           "assign",
           "adopt",
           "mode",
@@ -545,6 +546,7 @@ export async function buildApp(
         target_branch: z.string().max(200).optional(),
         remember: z.string().optional(),
         index: z.number().int().optional(),
+        value: z.string().trim().min(1).max(500).optional(),
       })
       .parse(req.body);
     return tasks.action(

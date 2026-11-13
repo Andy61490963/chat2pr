@@ -3,6 +3,7 @@ import { TaskContextEvidence } from "./context-evidence";
 import { RunObserver } from "./run-observer";
 import { QueryReport } from "./query-report";
 import { TaskBranchPicker } from "./task-branch-picker";
+import { TaskClarification } from "./task-clarification";
 import {
   AlertCircle,
   Check,
@@ -73,7 +74,7 @@ export function TaskDrawer({
   followup: (t: Detail["task"], text: string) => unknown;
 }) {
   const t = detail.task;
-  const notes = [...t.risk_reasons, ...t.missing];
+  const notes = [...t.risk_reasons, ...(t.question ? [] : t.missing)];
   const editable = [
     "awaiting_approval",
     "queued",
@@ -143,7 +144,8 @@ export function TaskDrawer({
     !!review?.config_version &&
     !!review?.binding_version;
   const deciding = t.status === "awaiting_approval" && !!t.project_id;
-  const options = deciding && t.suggestions.length > 0;
+  const options =
+    deciding && t.mode === "change" && !t.question && t.suggestions.length > 0;
   const sensitive = t.risk_reasons.length > 0;
   const hasEvidence =
     detail.contextEvidence.length > 0 ||
@@ -483,6 +485,14 @@ export function TaskDrawer({
               </ul>
             </section>
           )}
+          <TaskClarification
+            key={t.id}
+            task={t}
+            editable={canAmend}
+            busy={busy}
+            act={act}
+            amend={openAmend}
+          />
           {options && (
             <section className="flex flex-col gap-2">
               <h3 className="text-xs font-medium text-muted-foreground">
@@ -511,7 +521,16 @@ export function TaskDrawer({
                       {pick === i && <Check className="size-3" />}
                     </span>
                     <span className="flex min-w-0 flex-col gap-0.5">
-                      <span className="text-sm font-medium">{o.label}</span>
+                      <span className="flex items-center gap-2 text-sm font-medium">
+                        {o.label}
+                        {o.recommended && <Badge variant="info">推薦</Badge>}
+                      </span>
+                      {o.reason && (
+                        <span className="text-xs text-muted-foreground">
+                          {o.recommended ? "推薦理由：" : "適合情況："}
+                          {o.reason}
+                        </span>
+                      )}
                       <span className="text-sm text-muted-foreground">
                         {o.summary}
                       </span>

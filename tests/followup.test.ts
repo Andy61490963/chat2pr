@@ -116,6 +116,8 @@ async function triage(
         missing: [],
         relatedTaskId: null,
         suggestions: [],
+    question: null,
+    assumptions: [],
         routing: {
           status: "uncertain",
           basis: "none",

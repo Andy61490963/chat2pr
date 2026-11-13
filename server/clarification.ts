@@ -1,0 +1,49 @@
+import { z } from "zod";
+import type { TriageDecision } from "../shared/types.js";
+import { withAssumptions } from "../shared/clarification.js";
+import { redact } from "./policy.js";
+
+export const Question = z
+  .object({
+    text: z.string().trim().min(1).max(240),
+    choices: z.array(z.string().trim().min(1).max(120)).max(3),
+  })
+  .strict();
+export const Assumptions = z.array(z.string().trim().min(1).max(500)).max(8);
+
+/** 所有判讀入口共用，避免模型仍輸出舊版開發方案或有問題卻自動派工。 */
+export function clarifyDecision(d: TriageDecision) {
+  d.assumptions = [...new Set((d.assumptions ?? []).map(redact))];
+  d.question = d.question
+    ? {
+        text: redact(d.question.text),
+        choices: d.question.choices.map(redact),
+      }
+    : null;
+  if (!["request", "clarification"].includes(d.kind)) {
+    d.question = null;
+    d.assumptions = [];
+    d.suggestions = [];
+    return;
+  }
+  const discardedOptions = d.taskType === "query" && d.suggestions.length > 0;
+  if (d.taskType === "query" || d.question) d.suggestions = [];
+  if (
+    !d.question &&
+    !d.suggestions.length &&
+    (d.kind === "clarification" || d.missing.length || discardedOptions)
+  ) {
+    d.question = {
+      text: redact(d.missing[0] || "你希望這次處理的具體問題是什麼？").slice(
+        0,
+        240,
+      ),
+      choices: [],
+    };
+  }
+  if (d.question) {
+    d.kind = "clarification";
+    d.missing = [...new Set([...d.missing, d.question.text])];
+  }
+  d.summary = withAssumptions(d.summary, d.assumptions, d.assumptions);
+}

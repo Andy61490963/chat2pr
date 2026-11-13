@@ -107,6 +107,13 @@ export function assertTransition(status: TaskStatus, action: Action) {
     ],
     retry: ["failed", "budget_wait"],
     amend: ["awaiting_approval", "queued", "failed", "budget_wait", "answered"],
+    assumption: [
+      "awaiting_approval",
+      "queued",
+      "failed",
+      "budget_wait",
+      "answered",
+    ],
     assign: ["awaiting_approval", "queued", "failed", "budget_wait"],
     adopt: ["awaiting_approval"],
     mode: ["awaiting_approval", "queued", "failed", "budget_wait"],
