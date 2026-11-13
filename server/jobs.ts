@@ -30,6 +30,7 @@ import { syncProjectRepos } from "./repo-missing.js";
 import { redact } from "./policy.js";
 import { SubscriptionGate, SubscriptionBlocked } from "./subscription-gate.js";
 import { dailyDockerCleanup } from "./docker-cleanup.js";
+import { diskMaintenance } from "./docker-disk.js";
 import type { Project, Settings, Task } from "../shared/types.js";
 export async function recoverInterrupted(
   db: Database,
@@ -224,6 +225,10 @@ export async function startJobs(
     await dailyDockerCleanup(db, (path, body, timeoutMs) =>
       runner.call(path, body, timeoutMs),
     ).catch((e) => console.warn("Docker 清理失敗：", redact(String(e))));
+    // Docker 磁碟盤點與空間提醒；清理規則預設全部關閉，開啟的規則每天執行一次。
+    await diskMaintenance(db, (path, body, timeoutMs) =>
+      runner.call(path, body, timeoutMs),
+    ).catch((e) => console.warn("Docker 磁碟檢查失敗：", redact(String(e))));
     // 每小時重新確認外部服務，設定頁的連線狀態不會停在上次手動檢查。
     await checkIntegrations(
       db,

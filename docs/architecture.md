@@ -116,7 +116,9 @@ flowchart LR
 | `line-agentflow_embed-models`           | BGE-M3 權重，約 2.3 GB                   | 重新執行 `embedder-init` 即可  |
 | `agentflow-job-<執行 ID>`、`…-baseline` | 單次工作的工作目錄與比較基底             | 由執行器建立，保留期滿自動清理 |
 | `agentflow-source-v1-*`                 | 專案原始碼快取                           | 下次派工重新下載               |
-| `agentflow-production-nuget-feed-v1`    | 選用的唯讀 NuGet 套件來源                | 回到一般下載流程               |
+
+看板「系統」頁的 Docker 磁碟清理只會刪除名稱、`io.agentflow.*` 標籤與執行紀錄都對得上的任務工作區（`agentflow-job-*`）；上表其他資料卷一律只列出不刪，判斷寫在 `shared/docker-disk.ts` 的 `protectedVolumeReason`，執行器刪除前會再核對一次。
+| `agentflow-production-nuget-feed-v1` | 選用的唯讀 NuGet 套件來源 | 回到一般下載流程 |
 
 **主機上的檔案**（全部被 Git 忽略；除了搬機，不要從別台複製）
 
