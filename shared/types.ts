@@ -59,6 +59,8 @@ export interface Project {
   test_command: string;
   sensitive_paths: string[];
   index_paths?: string[];
+  /** 收集差異時對預設建置產物排除清單的增減，見 shared/build-output.ts。 */
+  collect_excludes?: string[];
   enabled: boolean;
   validated_at: string | null;
   validation_error: string | null;

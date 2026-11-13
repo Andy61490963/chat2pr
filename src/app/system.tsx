@@ -27,6 +27,7 @@ import { cn } from "@/lib/utils";
 import { type Request, type State, ago, date, message } from "./shared";
 import { FrictionCard } from "./friction";
 import { CapacityCard } from "./capacity";
+import { DockerDiskCard } from "./docker-disk";
 
 type ContainerStatus = {
   name: string;
@@ -213,7 +214,9 @@ export function SystemView({
                     </dd>
                   </dl>
                   <p className="text-xs text-muted-foreground">
-                    任務工作區保留 30 天後由每小時的維護工作清除。
+                    任務工作區保留 30
+                    天後由每小時的維護工作清除；可在下方「Docker
+                    磁碟」開啟較短的保留規則。
                   </p>
                 </div>
               </section>
@@ -221,6 +224,7 @@ export function SystemView({
           )}
         </CardContent>
       </Card>
+      <DockerDiskCard request={request} />
       <MemoryOverview state={state} go={go} />
       <Architecture state={state} />
     </div>

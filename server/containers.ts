@@ -84,7 +84,7 @@ export class ContainerDeadline {
   }
 }
 /** 執行器接受的最低工作映像版本；與 worker/Dockerfile 的 io.agentflow.worker-rev 同步。 */
-export const WORKER_REV = "2026-11-13.1";
+export const WORKER_REV = "2026-11-13.2";
 export const containerPolicy = (
   volume: string,
   network: string,
@@ -133,6 +133,10 @@ export class Containers {
     });
     active.add(deadline);
     return deadline;
+  }
+  /** 此執行器正在建立或執行這個 run 的容器；磁碟清理不得碰它。 */
+  isActive(runId: string) {
+    return this.active.has(runId) || this.creations.has(runId);
   }
   private stopRun(runId: string) {
     for (const deadline of this.active.get(runId) ?? [])
@@ -420,6 +424,8 @@ export class Containers {
       output?: "collect";
       extraNetworks?: string[];
       nugetFeed?: boolean;
+      /** 收集差異時排除的建置產物規則（已套用專案增減）。 */
+      collectExclude?: string[];
     },
   ) {
     const volume = this.volume(runId);
@@ -476,6 +482,10 @@ export class Containers {
         env.push(`RestoreAdditionalProjectSources=${nugetFeedPath}`);
       const environment = mount && this.provided.has(runId);
       if (environment) env.push(`AGENTFLOW_ENV_DIR=${environmentPath}`);
+      if (options?.collectExclude?.length)
+        env.push(
+          `AGENTFLOW_COLLECT_EXCLUDE=${JSON.stringify(options.collectExclude)}`,
+        );
       const container = await this.createOwnedContainer(
         runId,
         {

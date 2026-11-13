@@ -353,6 +353,49 @@ it("主機可用記憶體不足時暫停派新工作，恢復後照常派工", a
   expect(await status(t.id)).toBe("answered");
 });
 
+it("磁碟空間不足的暫停派工（#28）開啟時，並行派工也一起停，看板顯示原因", async () => {
+  const h = await harness(2);
+  const a = await task(h.projects[0]),
+    b = await task(h.projects[1], "query");
+  await db.query(
+    "UPDATE docker_disk SET settings='{\"pause_enabled\":true}',level='critical',checked_at=now() WHERE id=1",
+  );
+  try {
+    await Promise.all([h.execution.execute(a.id), h.execution.execute(b.id)]);
+    expect(await activeRuns()).toHaveLength(0);
+    expect([await status(a.id), await status(b.id)]).toEqual([
+      "queued",
+      "queued",
+    ]);
+    const { buildApp } = await import("../server/app.js");
+    const app = await buildApp(db, undefined, undefined, undefined, {
+      call: async <T>() => ({}) as T,
+    });
+    try {
+      const view = (
+        await app.inject({ url: "/api/capacity", headers: await session() })
+      ).json<Capacity>();
+      expect(view.hold).toContain("磁碟空間嚴重不足");
+      expect(view.queued.map((q) => q.reason)).toEqual([
+        "暫停派工中",
+        "暫停派工中",
+      ]);
+    } finally {
+      await app.close();
+    }
+  } finally {
+    await db.query(
+      "UPDATE docker_disk SET settings='{}',level='unknown',checked_at=NULL WHERE id=1",
+    );
+  }
+  h.release();
+  await Promise.all([h.execution.execute(a.id), h.execution.execute(b.id)]);
+  expect([await status(a.id), await status(b.id)]).toEqual([
+    "ready",
+    "answered",
+  ]);
+});
+
 it("依主機 CPU 與記憶體建議同時執行數", () => {
   expect(suggestedMaxRuns({ cpus: 8, memTotalMb: 16384, memFreeMb: 0 })).toBe(
     4,

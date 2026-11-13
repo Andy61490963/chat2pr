@@ -11,6 +11,7 @@ import {
   parseResources,
   suggestedMaxRuns,
 } from "./capacity.js";
+import { diskPaused } from "./docker-disk.js";
 import type {
   Capacity,
   CapacityQueued,
@@ -50,7 +51,13 @@ export function registerCapacity(
     const changing = new Set(
       running.filter((r) => r.mode !== "query").map((r) => r.project_id),
     );
-    let free = limit - running.length;
+    // 主機記憶體不足（#21）或 Docker 磁碟嚴重不足且開啟暫停（#28）時都不派新工作。
+    const hold =
+      (await hostHold(db.pool)) ??
+      ((await diskPaused(db))
+        ? "Docker 磁碟空間嚴重不足，已暫停派新工作；空間回升後自動恢復，詳見下方磁碟用量"
+        : null);
+    let free = hold ? 0 : limit - running.length;
     return {
       maxRuns: limit,
       cap: MAX_RUNS_CAP,
@@ -58,11 +65,11 @@ export function registerCapacity(
       memoryFloorMb: MEMORY_FLOOR_MB,
       suggested: host ? suggestedMaxRuns(host) : null,
       host,
-      hold: await hostHold(db.pool),
+      hold,
       running: running.map(({ project_id: _, ...r }) => r),
       queued: queued.map(
         ({ project_id, parent_active, ...t }): CapacityQueued => {
-          let reason = "等待空位";
+          let reason = hold ? "暫停派工中" : "等待空位";
           if (parent_active) reason = "等上一題完成";
           else if (t.mode !== "query" && changing.has(project_id))
             reason = "同專案的修改進行中";

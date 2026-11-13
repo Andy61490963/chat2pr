@@ -2,7 +2,12 @@ import { Octokit } from "@octokit/rest";
 import { createAppAuth } from "@octokit/auth-app";
 import { downloadArchive } from "./archive-download.js";
 import { githubHttpFetch } from "./github-http.js";
-import { setupReadmeExcerpt } from "./setup-readme.js";
+import {
+  buildExcerptReason,
+  buildFileKind,
+  setupBuildExcerpt,
+  setupReadmeExcerpt,
+} from "./setup-excerpt.js";
 import { secrets } from "./config.js";
 import {
   containsRepositoryCredential,
@@ -213,14 +218,14 @@ export class GitHub {
       token: auth.token,
     };
   }
-  /** 只取固定版本的建置設定；排除機密、符號連結與大型檔案。 */
+  /** 只取固定版本的建置設定；排除機密與符號連結，大型檔案改用原文摘錄或略過並註記原因。 */
   async setupContext(
     project: Project,
     sha: string,
   ): Promise<{
     files: Record<string, string>;
     locks: { path: string; sha: string }[];
-    omissions?: { path: string; sha: string; reason: string }[];
+    omissions?: { path: string; sha?: string; reason: string }[];
   }> {
     const api = await this.client(project.repo),
       p = this.parts(project.repo);
@@ -228,7 +233,9 @@ export class GitHub {
       await api.git.getTree({ ...p, tree_sha: sha, recursive: "1" })
     ).data;
     const isReadme = (path: string) => /(^|\/)README[^/]*$/i.test(path);
-    const selected = tree.tree
+    const depth = (path: string) => path.split("/").length;
+    // 優先順序：建置設定先於說明文件，淺層先於深層；超過份數上限時捨棄排在後面的。
+    const candidates = tree.tree
       .filter(
         (x) =>
           x.type === "blob" &&
@@ -248,66 +255,124 @@ export class GitHub {
       .sort(
         (a, b) =>
           Number(isReadme(a.path!)) - Number(isReadme(b.path!)) ||
+          depth(a.path!) - depth(b.path!) ||
           a.path!.localeCompare(b.path!),
       );
-    if (tree.truncated || selected.length > 60)
-      throw new Error(
-        "專案建置設定超過自動判讀範圍；請在進階設定指定安裝與測試指令",
-      );
+    const maxFiles = 60,
+      maxFile = 24000,
+      maxTotal = 100000,
+      // 大型建置設定仍下載完整內容做機密掃描，因此限制單檔與累計下載量。
+      maxDownload = 1000000,
+      maxLargeDownload = 4000000;
+    const selected = candidates.slice(0, maxFiles);
+    const omissions: { path: string; sha?: string; reason: string }[] = [];
+    if (tree.truncated)
+      omissions.push({
+        path: "（檔案清單）",
+        reason:
+          "儲存庫檔案過多，GitHub 只回傳部分檔案清單；未列入的建置設定沒有提供",
+      });
+    const dropped = candidates.slice(maxFiles);
+    for (const entry of dropped.slice(0, 10))
+      omissions.push({
+        path: entry.path!,
+        sha: entry.sha!,
+        reason: `超過 ${maxFiles} 份檔案上限，未讀取`,
+      });
+    if (dropped.length > 10)
+      omissions.push({
+        path: `（另外 ${dropped.length - 10} 份）`,
+        reason: `超過 ${maxFiles} 份檔案上限，未讀取`,
+      });
     const files: Record<string, string> = {};
-    const omissions: { path: string; sha: string; reason: string }[] = [];
     let total = 0,
-      readmeBytes = 0;
+      readmeBytes = 0,
+      largeBytes = 0;
     for (const entry of selected) {
       const readme = isReadme(entry.path!),
-        maxSize = readme ? 256000 : 24000;
+        size = entry.size ?? 0;
       const omit = (reason: string) =>
         omissions.push({ path: entry.path!, sha: entry.sha!, reason });
       if (
         readme &&
-        ((entry.size ?? 0) > maxSize ||
-          total >= 100000 ||
-          readmeBytes + (entry.size ?? maxSize) > 1000000)
+        (size > 256000 ||
+          total >= maxTotal ||
+          readmeBytes + (entry.size ?? 256000) > 1000000)
       ) {
         omit("說明文件超過讀取或上下文上限，未提供內容；請依其他建置設定判讀");
         continue;
       }
-      if ((entry.size ?? 0) > maxSize)
-        throw new Error(`建置設定 ${entry.path} 過大，請使用進階設定`);
+      if (!readme) {
+        if (total >= maxTotal) {
+          omit("建置設定總量超過上限，未提供內容");
+          continue;
+        }
+        if (size > maxDownload) {
+          omit("檔案超過 1 MB，未下載內容");
+          continue;
+        }
+        if (size > maxFile && largeBytes + size > maxLargeDownload) {
+          omit("大型建置設定累計超過下載上限，未下載內容");
+          continue;
+        }
+      }
       const r = (
         await api.repos.getContent({ ...p, path: entry.path!, ref: sha })
       ).data;
-      if (!Array.isArray(r) && "content" in r) {
-        const source = Buffer.from(r.content, "base64").toString("utf8");
-        const size = Buffer.byteLength(source);
-        if (readme) readmeBytes += size;
-        if (size > maxSize) {
-          if (!readme)
-            throw new Error(`建置設定 ${entry.path} 過大，請使用進階設定`);
-          omit("說明文件超過讀取上限，未提供內容");
-          continue;
-        }
-        // 必須檢查完整已讀內容後才摘錄，避免漏掉省略段落中的憑證。
-        if (
-          !containsRepositoryCredential(source) &&
-          !/<packageSourceCredentials\b|(?:password|api[_-]?key|token)\s*[:=]\s*["'][^$\s{][^"']{7,}["']/i.test(
-            source,
-          )
-        ) {
-          const content = readme
-            ? setupReadmeExcerpt(source, Math.min(24000, 100000 - total))
-            : source;
-          total += Buffer.byteLength(content);
-          if (total > 100000)
-            throw new Error("專案建置設定過大，請使用進階設定");
-          if (content !== source)
-            omit("僅提供安裝、測試與環境相關原文摘錄，其餘內容已省略");
-          if (content) files[entry.path!] = content;
-        }
+      if (Array.isArray(r) || !("content" in r)) continue;
+      const source = Buffer.from(r.content, "base64").toString("utf8");
+      const bytes = Buffer.byteLength(source);
+      if (readme) readmeBytes += bytes;
+      else if (bytes > maxFile) largeBytes += bytes;
+      if (bytes > (readme ? 256000 : maxDownload)) {
+        omit(
+          readme
+            ? "說明文件超過讀取上限，未提供內容"
+            : "檔案超過 1 MB，未提供內容",
+        );
+        continue;
       }
+      // 必須檢查完整已讀內容後才摘錄，避免漏掉省略段落中的憑證。
+      if (
+        containsRepositoryCredential(source) ||
+        /<packageSourceCredentials\b|(?:password|api[_-]?key|token)\s*[:=]\s*["'][^$\s{][^"']{7,}["']/i.test(
+          source,
+        )
+      )
+        continue;
+      const limit = Math.min(maxFile, maxTotal - total);
+      const content = readme
+        ? setupReadmeExcerpt(source, limit)
+        : setupBuildExcerpt(entry.path!, source, limit);
+      if (!content) {
+        omit(
+          readme
+            ? "說明文件超過讀取或上下文上限，未提供內容；請依其他建置設定判讀"
+            : "超過單檔或總量上限，且無法依行摘錄，未提供內容",
+        );
+        continue;
+      }
+      total += Buffer.byteLength(content);
+      if (content !== source)
+        omit(
+          readme
+            ? "僅提供安裝、測試與環境相關原文摘錄，其餘內容已省略"
+            : buildExcerptReason[buildFileKind(entry.path!)],
+        );
+      files[entry.path!] = content;
     }
+    // 只有完全沒有可用內容時才停下來，並說明是哪些檔案、為什麼不夠。
+    if (!Object.keys(files).length && omissions.length)
+      throw new Error(
+        `沒有可用的建置設定，請在進階設定指定安裝與測試指令。原因：${omissions
+          .slice(0, 5)
+          .map((o) => `${o.path}（${o.reason}）`)
+          .join(
+            "、",
+          )}${omissions.length > 5 ? `，另有 ${omissions.length - 5} 項` : ""}`,
+      );
     // 鎖定檔只提供路徑與 Git blob 雜湊，避免將大型依賴清單送入 AI。
-    const locks = tree.tree
+    const lockEntries = tree.tree
       .filter(
         (x) =>
           x.type === "blob" &&
@@ -319,8 +384,15 @@ export class GitHub {
           !privateRepoPath(x.path!, project.sensitive_paths) &&
           !/(^|\/)node_modules\//.test(x.path!),
       )
-      .map((x) => ({ path: x.path!, sha: x.sha! }))
-      .sort((a, b) => a.path.localeCompare(b.path));
+      .sort((a, b) => a.path!.localeCompare(b.path!));
+    for (const x of lockEntries)
+      if ((x.size ?? 0) > maxFile)
+        omissions.push({
+          path: x.path!,
+          sha: x.sha!,
+          reason: "鎖定檔過大，只提供路徑與雜湊，未提供內容",
+        });
+    const locks = lockEntries.map((x) => ({ path: x.path!, sha: x.sha! }));
     return { files, locks, ...(omissions.length ? { omissions } : {}) };
   }
   async context(project: Project, limit = { paths: 1500, chars: 15000 }) {

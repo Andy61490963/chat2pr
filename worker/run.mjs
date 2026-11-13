@@ -71,7 +71,10 @@ if (triage) {
   prompt = job.prompt;
   options.outputSchema = job.schema;
 } else if (job.review) {
-  const evidence = await prepareReviewEvidence(job.changeManifest);
+  // 與收集階段使用同一份排除清單，重算的變更清單才會一致。
+  const evidence = await prepareReviewEvidence(job.changeManifest, {
+    exclude: job.collectExclude ?? [],
+  });
   prompt = reviewPrompt(job, evidence);
   options.outputSchema = {
     type: "object",
