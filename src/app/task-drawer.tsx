@@ -60,6 +60,7 @@ export function TaskDrawer({
   act,
   open,
   followup,
+  answer,
 }: {
   detail: Detail;
   state: State;
@@ -72,6 +73,8 @@ export function TaskDrawer({
   open: (id: string) => void;
   /** 對已回答的查詢追問，建立新的一題。 */
   followup: (t: Detail["task"], text: string) => unknown;
+  /** 直接回答補問。 */
+  answer: (t: Detail["task"], text: string) => Promise<unknown>;
 }) {
   const t = detail.task;
   const notes = [...t.risk_reasons, ...(t.question ? [] : t.missing)];
@@ -492,6 +495,7 @@ export function TaskDrawer({
             busy={busy}
             act={act}
             amend={openAmend}
+            answer={answer}
           />
           {options && (
             <section className="flex flex-col gap-2">
