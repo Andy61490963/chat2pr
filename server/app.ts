@@ -1,4 +1,4 @@
-import { createFollowup } from "./followup.js";
+import { createFollowup, relinkTask } from "./followup.js";
 import { answerFromDashboard } from "./answers.js";
 import { requestBackfill } from "./retrieval.js";
 import Fastify from "fastify";
@@ -579,6 +579,26 @@ export async function buildApp(
         .parse((req.params as { id: string }).id),
       b.version,
       b.text,
+      actor.login,
+    );
+  });
+  // 接錯題時改正：改接到同群組另一題，或改成新話題。
+  app.post("/api/tasks/:id/relink", async (req) => {
+    const actor = await requireUser(db, req);
+    const b = z
+      .object({
+        parent_id: z.string().uuid().nullable(),
+        version: z.number().int().positive(),
+      })
+      .parse(req.body);
+    return relinkTask(
+      db,
+      z
+        .string()
+        .uuid()
+        .parse((req.params as { id: string }).id),
+      b.version,
+      b.parent_id,
       actor.login,
     );
   });

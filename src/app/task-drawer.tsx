@@ -61,6 +61,7 @@ export function TaskDrawer({
   open,
   followup,
   answer,
+  relink,
 }: {
   detail: Detail;
   state: State;
@@ -75,6 +76,8 @@ export function TaskDrawer({
   followup: (t: Detail["task"], text: string) => unknown;
   /** 直接回答補問。 */
   answer: (t: Detail["task"], text: string) => Promise<unknown>;
+  /** 接錯題時改接到另一題，或改成新話題（null）。 */
+  relink: (t: Detail["task"], parentId: string | null) => unknown;
 }) {
   const t = detail.task;
   const notes = [...t.risk_reasons, ...(t.question ? [] : t.missing)];
@@ -96,6 +99,27 @@ export function TaskDrawer({
   useUnsaved("task-followup", ask.trim().length > 0);
   const canFollowup = t.mode === "query" && t.status === "answered";
   const thread = detail.thread;
+  const [relinkTo, setRelinkTo] = useState("");
+  const canRelink = [
+    "awaiting_approval",
+    "queued",
+    "failed",
+    "budget_wait",
+    "answered",
+  ].includes(t.status);
+  // 改接候選：同群組已回答的查詢，排除自己與自己的後續題，最近的在前。
+  const after = new Set((thread?.after ?? []).map((x) => x.id));
+  const relinkOptions = state.tasks
+    .filter(
+      (x) =>
+        x.group_id === t.group_id &&
+        x.id !== t.id &&
+        x.id !== t.parent_id &&
+        !after.has(x.id) &&
+        x.mode === "query" &&
+        x.status === "answered",
+    )
+    .slice(0, 15);
   const lines = (v: string) =>
     v
       .split("\n")
@@ -244,6 +268,44 @@ export function TaskDrawer({
                 ))}
               </ol>
             </section>
+          )}
+          {canRelink && (relinkOptions.length > 0 || t.parent_id) && (
+            <details className="rounded-lg border px-3 py-2 text-sm">
+              <summary className="cursor-pointer text-muted-foreground">
+                接錯題了？
+              </summary>
+              <div className="mt-2 flex flex-col gap-2">
+                <p className="text-xs text-muted-foreground">
+                  改接到正確的上一題後，會沿用那一題的專案與分支重新處理；改成新話題則要重新確認專案。
+                </p>
+                <select
+                  aria-label="改接到"
+                  className="rounded-md border bg-background px-2 py-1.5"
+                  value={relinkTo}
+                  onChange={(e) => setRelinkTo(e.target.value)}
+                >
+                  <option value="">選擇正確的上一題…</option>
+                  {t.parent_id && <option value="new">改成新話題</option>}
+                  {relinkOptions.map((x) => (
+                    <option key={x.id} value={x.id}>
+                      {x.title}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="self-start"
+                  disabled={busy || !relinkTo}
+                  onClick={() => {
+                    relink(t, relinkTo === "new" ? null : relinkTo);
+                    setRelinkTo("");
+                  }}
+                >
+                  改接
+                </Button>
+              </div>
+            </details>
           )}
           <section
             aria-label="處理專案"
