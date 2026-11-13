@@ -1528,3 +1528,86 @@ it("沒有上一題時不帶對話串", async () => {
   await s.execution.execute(s.task.id);
   expect(JSON.parse(s.prompts[0]).conversation).toBeUndefined();
 });
+async function changeFollowup(parentStatus: string) {
+  const s = await scenario();
+  const parent = await db.one<{ id: string }>(
+    `INSERT INTO tasks(project_id,group_id,title,summary,acceptance,status,approved_version,dedupe_key,pr_number,pr_url,branch,base_sha,target_branch)
+     SELECT project_id,group_id,'按鈕改綠色','按鈕改綠色','["綠色"]',$1,1,'parent',2,'https://github.com/test/repo/pull/2','agentflow/parent-v1','old-base','main' FROM tasks LIMIT 1 RETURNING id`,
+    [parentStatus],
+  );
+  await db.query(
+    "UPDATE tasks SET parent_id=$2,target_branch='main' WHERE id=$1",
+    [s.task.id, parent.id],
+  );
+  await confirmTask(s.task.id);
+  const calls: string[] = [];
+  const prompts: string[] = [];
+  s.github.pullHead = async () => ({
+    state: parentStatus === "ready" ? "open" : "closed",
+    merged: parentStatus === "merged",
+    headRef: "agentflow/parent-v1",
+    headSha: "pr-head-sha",
+    base: "main",
+    sameRepo: true,
+  });
+  s.github.continuePr = async (_p, task) => {
+    calls.push(`continue:${task.branch}:${task.base_sha}`);
+    return {
+      number: 2,
+      html_url: "https://github.com/test/repo/pull/2",
+    } as Awaited<ReturnType<GitHub["continuePr"]>>;
+  };
+  const publish = s.github.publish.bind(s.github);
+  s.github.publish = async (...args) => {
+    calls.push(`publish:${args[1].branch}`);
+    return publish(...args);
+  };
+  const call = s.runner.call.bind(s.runner);
+  s.runner.call = async <T>(path: string, raw: unknown): Promise<T> => {
+    const body = raw as { phase?: string; job?: { prompt: string } };
+    if (path === "phase" && body.phase === "code")
+      prompts.push(body.job!.prompt);
+    return call<T>(path, raw);
+  };
+  return { ...s, parent, calls, prompts };
+}
+it("追加修改：上一題的 PR 還開著，接在同一個 PR 分支上繼續改", async () => {
+  const s = await changeFollowup("ready");
+  await s.execution.execute(s.task.id);
+  const task = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [
+    s.task.id,
+  ]);
+  expect(s.calls).toEqual(["continue:agentflow/parent-v1:pr-head-sha"]);
+  expect(task.status).toBe("ready");
+  expect(task.pr_number).toBe(2);
+  expect(task.base_sha).toBe("pr-head-sha");
+  expect(JSON.parse(s.prompts[0]).continuation.note).toContain("PR #2");
+});
+it("追加修改：上一題已合併，從目標分支另開 PR", async () => {
+  const s = await changeFollowup("merged");
+  await s.execution.execute(s.task.id);
+  expect(s.calls).toEqual([`publish:agentflow/${s.task.id.slice(0, 8)}-v1`]);
+  expect(JSON.parse(s.prompts[0]).continuation).toBeUndefined();
+});
+it("追加修改：上一題還在處理中就先等，不開始執行", async () => {
+  const s = await changeFollowup("running");
+  await s.execution.execute(s.task.id);
+  expect(s.calls).toEqual([]);
+  expect(s.prompts).toEqual([]);
+  expect(
+    (await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [s.task.id])).status,
+  ).toBe("queued");
+});
+it("追加修改重試時原 PR 已合併：不沿用舊分支，停下來請人確認", async () => {
+  const s = await changeFollowup("merged");
+  await db.query(
+    "UPDATE tasks SET branch='agentflow/parent-v1',base_sha='pr-head-sha' WHERE id=$1",
+    [s.task.id],
+  );
+  await s.execution.execute(s.task.id);
+  const task = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [
+    s.task.id,
+  ]);
+  expect(s.calls).toEqual([]);
+  expect(task.last_error).toContain("已合併或關閉");
+});

@@ -116,8 +116,8 @@ async function triage(
         missing: [],
         relatedTaskId: null,
         suggestions: [],
-    question: null,
-    assumptions: [],
+        question: null,
+        assumptions: [],
         routing: {
           status: "uncertain",
           basis: "none",
@@ -288,5 +288,63 @@ describe("在看板追問", () => {
   it("專案已停用時不能追問", async () => {
     await db.query("UPDATE projects SET enabled=false WHERE id=$1", [project]);
     expect((await ask(parent.id, "那 ch3 呢？")).statusCode).toBe(409);
+  });
+});
+
+describe("在看板追加修改", () => {
+  let app: Awaited<ReturnType<typeof buildApp>>;
+  let headers: Awaited<ReturnType<typeof session>>;
+  beforeEach(async () => {
+    app = await buildApp(db);
+    headers = await session();
+  });
+  afterEach(() => app.close());
+  const change = (status: string) =>
+    db.one<Task>(
+      `INSERT INTO tasks(project_id,group_id,title,summary,acceptance,status,mode,approved_version,dedupe_key,pr_number,branch)
+       VALUES($1,'group-a','按鈕改綠色','按鈕改綠色','["綠色"]',$2,'change',1,$3,2,'agentflow/x-v1') RETURNING *`,
+      [project, status, randomUUID()],
+    );
+  const add = (id: string, text: string) =>
+    app.inject({
+      method: "POST",
+      url: `/api/tasks/${id}/followup`,
+      headers,
+      payload: { text },
+    });
+
+  it("PR 開著時：建立待確認的追加，沿用專案與分支並說明會接在同一個 PR", async () => {
+    const parentTask = await change("ready");
+    const r = await add(parentTask.id, "按鈕顏色再深一點");
+    expect(r.statusCode).toBe(200);
+    expect(r.json().status).toBe("awaiting_approval");
+    const child = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [
+      r.json().id,
+    ]);
+    expect(child.mode).toBe("change");
+    expect(child.parent_id).toBe(parentTask.id);
+    expect(child.project_routing?.basis).toBe("followup");
+    expect(child.project_routing?.reason).toContain("同一個 PR");
+    expect(
+      await db.query(
+        "SELECT 1 FROM notifications WHERE task_id=$1 AND kind='approval'",
+        [child.id],
+      ),
+    ).toHaveLength(1);
+  });
+  it("已合併也能追加；處理中的修改不能追加", async () => {
+    expect(
+      (await add((await change("merged")).id, "再改一點")).statusCode,
+    ).toBe(200);
+    expect(
+      (await add((await change("running")).id, "再改一點")).statusCode,
+    ).toBe(409);
+  });
+  it("涉及敏感功能的追加帶上風險理由", async () => {
+    const r = await add((await change("ready")).id, "順便把登入權限檢查拿掉");
+    const child = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [
+      r.json().id,
+    ]);
+    expect(child.risk_reasons.join("")).toContain("敏感");
   });
 });
