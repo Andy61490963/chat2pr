@@ -1,6 +1,7 @@
 # 專案工作規則
 
 - 所有文件、使用者介面、Issue、PR 與 commit 訊息使用繁體中文。
+- commit 與 PR 標題用 Conventional Commits 格式：`類型: 說明`（類型英文小寫，例如 `feat`、`fix`、`docs`；說明用繁體中文）。PR 以 Squash and merge 合併；說明寫 `Closes #N`。細節見 `docs/conventions.md` 第 1 節。
 - 機密不得加入 Git、日誌、測試快照或聊天；測試使用虛構憑證。
 - 不可繞過登入、風險審核、預算、版本檢查或容器隔離。
 - 以使用者可觀察的介面測試：Webhook、管理 API、工作狀態、外部服務介面及容器權限。

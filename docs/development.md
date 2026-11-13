@@ -49,8 +49,8 @@ CI（`.github/workflows/`）在每個 PR 執行同樣的檢查。
 1. 在 GitHub Issue 寫規格（繁體中文）。
 2. 在開發目錄開分支實作，修改後執行 `npm run typecheck` 與相關測試。
 3. 交付前執行 `npm test`、`npm run build`。
-4. 開 PR 關聯 Issue，說明分「改了什麼」「驗證」「待人工確認」。
-5. CI 通過後以合併提交合併，標題「合併 #N：…」。
+4. commit 與 PR 標題用 `類型: 說明` 格式（例如 `feat: 新增跨專案查詢`，見 [慣例第 1 節](conventions.md#1-語言與協作)）。PR 說明寫 `Closes #N`，分「改了什麼」「驗證」「待人工確認」。
+5. CI 通過後以 Squash and merge 合併。
 6. 在部署目錄執行 `npm run deploy`（見 [部署手冊的〈升級〉](deployment.md#升級)）。
 
 ## 真實服務驗收
