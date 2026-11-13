@@ -636,3 +636,47 @@ ALTER TABLE service_health ADD COLUMN IF NOT EXISTS notified_ok boolean;
 -- 機器人送出的 LINE 訊息 ID：群組成員用「回覆」引用機器人的回答時，據此判斷是在接續哪一題。
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS sent_message_id text;
 CREATE INDEX IF NOT EXISTS notifications_sent_message ON notifications(sent_message_id) WHERE sent_message_id IS NOT NULL;
+-- 定期檢查：AI 或管理者寫好檢查定義，人核准後由系統依排程執行，不再呼叫 AI；狀態改變時才通知。
+CREATE TABLE IF NOT EXISTS scheduled_checks (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ group_id text NOT NULL REFERENCES groups(id),
+ project_id uuid REFERENCES projects(id),
+ name text NOT NULL,
+ kind text NOT NULL CHECK(kind IN ('sql','http','tcp')),
+ target text NOT NULL,
+ condition jsonb NOT NULL DEFAULT '{}',
+ interval_minutes int CHECK(interval_minutes IS NULL OR interval_minutes>=15),
+ daily_at text CHECK(daily_at IS NULL OR daily_at ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'),
+ notify text NOT NULL DEFAULT 'both' CHECK(notify IN ('group','admin','both')),
+ quiet_from text, quiet_to text,
+ alert_text text NOT NULL DEFAULT '',
+ recovered_text text NOT NULL DEFAULT '',
+ rationale text NOT NULL DEFAULT '',
+ investigate boolean NOT NULL DEFAULT true,
+ status text NOT NULL DEFAULT 'awaiting_approval' CHECK(status IN ('awaiting_approval','active','paused','failed')),
+ version int NOT NULL DEFAULT 1,
+ approved_version int,
+ approved_by text,
+ state text NOT NULL DEFAULT 'unknown' CHECK(state IN ('unknown','ok','alert')),
+ consecutive_errors int NOT NULL DEFAULT 0,
+ last_run_at timestamptz,
+ next_run_at timestamptz,
+ last_investigated_at timestamptz,
+ source_task_id uuid REFERENCES tasks(id),
+ created_by text,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ updated_at timestamptz NOT NULL DEFAULT now(),
+ CHECK((interval_minutes IS NULL) <> (daily_at IS NULL))
+);
+CREATE INDEX IF NOT EXISTS scheduled_checks_due ON scheduled_checks(next_run_at) WHERE status='active';
+-- 每次執行的結果保留 30 天，不進每日備份。
+CREATE TABLE IF NOT EXISTS scheduled_check_runs (
+ id bigserial PRIMARY KEY,
+ check_id uuid NOT NULL REFERENCES scheduled_checks(id) ON DELETE CASCADE,
+ version int NOT NULL,
+ started_at timestamptz NOT NULL DEFAULT now(),
+ duration_ms int NOT NULL DEFAULT 0,
+ outcome text NOT NULL CHECK(outcome IN ('ok','alert','error')),
+ summary text NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS scheduled_check_runs_recent ON scheduled_check_runs(check_id,started_at DESC);

@@ -21,6 +21,7 @@ import {
 } from "./triage.js";
 import { Execution, HttpRunner, type Runner } from "./execution.js";
 import { cleanup, backup, downloadPendingImages } from "./maintenance.js";
+import { runDueChecks } from "./checks.js";
 import { announceNewGroups, syncGroupNames } from "./line-groups.js";
 import { recordHealth } from "./health.js";
 import { syncOpenPullRequests } from "./pr-sync.js";
@@ -214,6 +215,10 @@ export async function startJobs(
   });
   await work("maintenance", async () => {
     await cleanup(db);
+    // 定期檢查的執行紀錄只保留 30 天。
+    await db.query(
+      "DELETE FROM scheduled_check_runs WHERE started_at<now()-interval '30 days'",
+    );
     // 每天清理一次這個系統用不到的舊映像與建置快取；失敗不影響其他維護。
     await dailyDockerCleanup(db, (path, body, timeoutMs) =>
       runner.call(path, body, timeoutMs),
@@ -257,6 +262,10 @@ export async function startJobs(
     busy = true;
     try {
       await recoverInterrupted(db, runner, budget, line);
+      // 定期檢查不呼叫 AI；失敗只影響該次檢查，不中斷其他排程。
+      await runDueChecks(db, (path, body, timeoutMs) =>
+        runner.call(path, body, timeoutMs),
+      ).catch((e) => console.warn("定期檢查：", redact(String(e))));
       await budget.recoverExpired();
       // 新群組第一次收到訊息後很快換成 LINE 上的名稱；之後每小時最多查一次。
       await syncGroupNames(db);

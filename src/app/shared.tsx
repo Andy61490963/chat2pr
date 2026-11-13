@@ -35,6 +35,7 @@ export type View =
   | "groups"
   | "projects"
   | "system"
+  | "checks"
   | "members"
   | "settings";
 export type Health = {

@@ -1,4 +1,14 @@
 import { createFollowup } from "./followup.js";
+import {
+  approveCheck,
+  checkDetail,
+  createCheck,
+  deleteCheck,
+  listChecks,
+  setCheckPaused,
+  testCheck,
+  updateCheck,
+} from "./checks.js";
 import { requestBackfill } from "./retrieval.js";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
@@ -488,6 +498,59 @@ export async function buildApp(
         .catch(() => reply.raw.end());
     }, 5000);
     reply.raw.on("close", () => clearInterval(timer));
+  });
+  // 定期檢查：成員可以看；建立、修改、試跑、核准、暫停與刪除需要管理者。
+  const checkId = (req: { params: unknown }) =>
+    z
+      .string()
+      .uuid()
+      .parse((req.params as { id: string }).id);
+  const runnerCall = <T>(path: string, body: unknown, timeoutMs?: number) =>
+    runner.call<T>(path, body, timeoutMs);
+  app.get("/api/checks", async (req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    await requireUser(db, req);
+    return listChecks(db);
+  });
+  app.get("/api/checks/:id", async (req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    await requireUser(db, req);
+    return checkDetail(db, checkId(req));
+  });
+  app.post("/api/checks", async (req) => {
+    const actor = await requireAdmin(db, req);
+    return createCheck(db, req.body, actor.login);
+  });
+  app.put("/api/checks/:id", async (req) => {
+    const actor = await requireAdmin(db, req);
+    const { version, ...input } = z
+      .object({ version: z.number().int().positive() })
+      .passthrough()
+      .parse(req.body);
+    return updateCheck(db, checkId(req), version, input, actor.login);
+  });
+  app.post("/api/checks/:id/test", async (req) => {
+    await requireAdmin(db, req);
+    return testCheck(db, runnerCall, checkId(req));
+  });
+  app.post("/api/checks/:id/approve", async (req) => {
+    const actor = await requireAdmin(db, req);
+    const { version } = z
+      .object({ version: z.number().int().positive() })
+      .parse(req.body);
+    return approveCheck(db, checkId(req), version, actor.login);
+  });
+  app.post("/api/checks/:id/pause", async (req) => {
+    const actor = await requireAdmin(db, req);
+    return setCheckPaused(db, checkId(req), true, actor.login);
+  });
+  app.post("/api/checks/:id/resume", async (req) => {
+    const actor = await requireAdmin(db, req);
+    return setCheckPaused(db, checkId(req), false, actor.login);
+  });
+  app.delete("/api/checks/:id", async (req) => {
+    const actor = await requireAdmin(db, req);
+    return deleteCheck(db, checkId(req), actor.login);
   });
   app.get("/api/tasks/:id", async (req, reply) => {
     reply.header("Cache-Control", "no-store");

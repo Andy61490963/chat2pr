@@ -34,7 +34,7 @@ type Secret = {
   sshPassphrase?: string;
   sshPassword?: string;
 };
-interface ConnectionRow {
+export interface ConnectionRow {
   project_id: string;
   engine: "sqlserver";
   host: string;
@@ -260,7 +260,7 @@ export async function provideSnapshot(
   return files.length > 0;
 }
 
-function captureInput(row: ConnectionRow): CaptureInput {
+export function captureInput(row: ConnectionRow): CaptureInput {
   const secret = unseal(row.secret);
   return {
     engine: row.engine,

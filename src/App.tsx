@@ -17,6 +17,7 @@ import {
   MessageSquare,
   RefreshCw,
   Server,
+  Activity,
   UserCog,
   Settings2,
   Unplug,
@@ -62,6 +63,7 @@ import {
 import { TaskDrawer } from "./app/task-drawer";
 import { TasksView } from "./app/tasks";
 import { SystemView } from "./app/system";
+import { ChecksView } from "./app/checks";
 import { MembersView } from "./app/members";
 import { AlertBell } from "./app/alerts";
 import { readApiResponse } from "./app/api-response";
@@ -105,6 +107,13 @@ const views = [
     hint: "每個專案對應一個 GitHub 儲存庫，說明寫清楚能讓 AI 正確分派",
   },
   {
+    id: "checks",
+    label: "定期檢查",
+    icon: Activity,
+    section: "管理",
+    hint: "定期檢查設備、服務或資料，狀態改變時在群組通知",
+  },
+  {
     id: "system",
     label: "系統",
     icon: Server,
@@ -135,6 +144,7 @@ const viewPaths: Record<View, string> = {
   groups: "/groups",
   projects: "/projects",
   system: "/system",
+  checks: "/checks",
   members: "/members",
   settings: "/settings",
 };
@@ -143,7 +153,7 @@ const viewFromPath = (path: string): View =>
     ([, p]) => p === (path.replace(/\/+$/, "") || "/"),
   )?.[0] ?? "inbox";
 // 手機底部列放不下的頁面收進「更多」。
-const mobileMore: readonly View[] = ["system", "members"];
+const mobileMore: readonly View[] = ["checks", "system", "members"];
 const writeUrl = (view: View, task: string | null, push = true) => {
   // 同一頁開關任務詳情時保留篩選等參數；換頁就清掉。
   const q = new URLSearchParams(
@@ -846,6 +856,9 @@ export function App() {
                 request={request}
                 edit={setProject}
               />
+            )}
+            {current.id === "checks" && (
+              <ChecksView state={state} request={request} admin={admin} />
             )}
             {current.id === "system" && (
               <SystemView state={state} request={request} go={go} />
