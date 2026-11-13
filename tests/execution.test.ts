@@ -1667,3 +1667,73 @@ it("追加修改重試時原 PR 已合併：不沿用舊分支，停下來請人
   expect(s.calls).toEqual([]);
   expect(task.last_error).toContain("已合併或關閉");
 });
+async function draftScenario(final: string) {
+  const s = await queryScenario();
+  await db.query(
+    `UPDATE tasks SET check_draft='{"intervalMinutes":60,"dailyAt":null}' WHERE id=$1`,
+    [s.task.id],
+  );
+  const call = s.runner.call.bind(s.runner);
+  s.runner.call = async <T>(path: string, raw: unknown): Promise<T> => {
+    if (path === "phase" && (raw as { phase?: string }).phase === "code")
+      return {
+        exitCode: 0,
+        stdout: JSON.stringify({ final }),
+        stderr: "",
+      } as T;
+    if (path === "checks/http") return { ok: true, status: 200, ms: 8 } as T;
+    return call<T>(path, raw);
+  };
+  await s.execution.execute(s.task.id);
+  return s;
+}
+it("從 LINE 要求定期檢查：Codex 擬好定義後建立待核准的檢查並試跑", async () => {
+  const s = await draftScenario(
+    `選用設備服務的健康檢查網址，回應非 2xx 就算異常。\nAGENTFLOW_CHECK: ${JSON.stringify(
+      {
+        name: "設備服務",
+        kind: "http",
+        target: "http://10.0.0.5/health",
+        condition: {},
+        rationale: "設備服務提供健康檢查",
+        alertText: "設備服務沒有回應",
+      },
+    )}`,
+  );
+  const check = await db.one<{
+    status: string;
+    interval_minutes: number;
+    source_task_id: string;
+    name: string;
+  }>(
+    "SELECT status,interval_minutes,source_task_id,name FROM scheduled_checks",
+  );
+  expect(check).toEqual({
+    status: "awaiting_approval",
+    interval_minutes: 60,
+    source_task_id: s.task.id,
+    name: "設備服務",
+  });
+  const task = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [
+    s.task.id,
+  ]);
+  expect(task.status).toBe("answered");
+  expect(task.answer).toContain("已擬好定期檢查「設備服務」（每 60 分鐘）");
+  expect(task.answer).toContain("試跑：目前正常");
+  expect(task.answer).not.toContain("AGENTFLOW_CHECK");
+});
+it("擬出的定義不符合規則時不建立檢查，回答說明原因", async () => {
+  const s = await draftScenario(
+    `AGENTFLOW_CHECK: ${JSON.stringify({
+      name: "壞的",
+      kind: "sql",
+      target: "DELETE FROM EQM",
+      condition: { column: "a", op: ">", value: 0 },
+    })}`,
+  );
+  expect(await db.query("SELECT 1 FROM scheduled_checks")).toHaveLength(0);
+  const task = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [
+    s.task.id,
+  ]);
+  expect(task.answer).toContain("不符合規則");
+});

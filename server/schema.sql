@@ -680,3 +680,5 @@ CREATE TABLE IF NOT EXISTS scheduled_check_runs (
  summary text NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS scheduled_check_runs_recent ON scheduled_check_runs(check_id,started_at DESC);
+-- 從 LINE 提出的定期檢查：先建立「草擬定期檢查」的查詢任務，記下要求的排程；Codex 寫好定義後建立待核准的檢查。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS check_draft jsonb;
