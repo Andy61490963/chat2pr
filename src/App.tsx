@@ -899,6 +899,17 @@ export function App() {
           close={() => guard(closeTask, { prefixes: ["task"] })}
           go={go}
           act={act}
+          open={showTask}
+          followup={(task, text) =>
+            run(async () => {
+              const created = await request<{ id: string; status: string }>(
+                `/api/tasks/${task.id}/followup`,
+                "POST",
+                { text },
+              );
+              await openTask(created.id);
+            }, "已送出追問")
+          }
         />
       )}
       {project && (

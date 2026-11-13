@@ -126,6 +126,18 @@ export type Detail = {
     tasks: { id: string; title: string }[];
   }[];
   runs: RunView[];
+  /** 對話串：這一題之前的各題（由舊到新）與之後的追問。 */
+  thread?: {
+    before: ThreadItem[];
+    after: ThreadItem[];
+  };
+};
+export type ThreadItem = {
+  id: string;
+  title: string;
+  mode: string;
+  status: Task["status"];
+  created_at: string;
 };
 export type Account = {
   plan: string | null;

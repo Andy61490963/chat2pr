@@ -353,9 +353,15 @@ export class Line {
           )
         )
           throw new Error(`LINE 通知失敗（${response.status}）`);
+        // 記下 LINE 給這則訊息的 ID：之後有人「回覆」引用它，就知道是在接續哪個任務。
+        const sent = response.ok
+          ? ((await response.json().catch(() => null)) as {
+              sentMessages?: { id?: string }[];
+            } | null)
+          : null;
         await this.db.query(
-          "UPDATE notifications SET sent_at=now(),attempts=attempts+1,last_error=NULL WHERE id=$1",
-          [n.id],
+          "UPDATE notifications SET sent_at=now(),attempts=attempts+1,last_error=NULL,sent_message_id=$2 WHERE id=$1",
+          [n.id, sent?.sentMessages?.[0]?.id ?? null],
         );
         await this.db.query(
           "INSERT INTO service_health(name,ok,detail) VALUES('notifications',true,'最近一次 LINE 通知已送達') ON CONFLICT(name) DO UPDATE SET ok=true,detail=EXCLUDED.detail,checked_at=now()",
