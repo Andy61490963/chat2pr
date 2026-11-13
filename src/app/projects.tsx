@@ -45,6 +45,12 @@ import { useUnsaved, useGuard } from "./unsaved";
 import { ProjectContextEditor } from "./project-context";
 import { ProjectDatabase } from "./project-database";
 import { verificationLabel } from "../../shared/project-setup.js";
+import {
+  DEFAULT_COLLECT_EXCLUDES,
+  MAX_COLLECT_EXCLUDES,
+  effectiveCollectExcludes,
+  validCollectExclude,
+} from "../../shared/build-output.js";
 
 export const emptyProject: Partial<Project> = {
   name: "",
@@ -58,6 +64,7 @@ export const emptyProject: Partial<Project> = {
   test_command: "",
   sensitive_paths: [],
   index_paths: [],
+  collect_excludes: [],
   enabled: false,
 };
 
@@ -323,6 +330,18 @@ export function ProjectsView({
                   <p className="whitespace-pre-line">
                     {open.setup_plan.explanation}
                   </p>
+                  {!!open.setup_plan.omissions?.length && (
+                    <div className="text-xs text-muted-foreground">
+                      <p>以下檔案只提供摘錄或未讀取：</p>
+                      <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                        {open.setup_plan.omissions.map((o, i) => (
+                          <li key={i} className="break-all">
+                            {o.path}：{o.reason}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                   <details className="text-xs text-muted-foreground">
                     <summary className="cursor-pointer">
                       查看 AI 設定依據
@@ -703,6 +722,7 @@ export function ProjectForm({
     { full_name: string; default_branch: string; description: string }[] | null
   >(null);
   const [scopeError, setScopeError] = useState("");
+  const [excludeError, setExcludeError] = useState("");
   const [form, setForm] = useState({
     repo: p.repo ?? "",
     name: p.name ?? "",
@@ -715,6 +735,7 @@ export function ProjectForm({
     test_command: p.test_command ?? "",
     sensitive_paths: p.sensitive_paths?.join("\n") ?? "",
     index_paths: p.index_paths?.join("\n") ?? "",
+    collect_excludes: p.collect_excludes?.join("\n") ?? "",
     enabled: !!p.enabled,
   });
   const set = (k: keyof typeof form, v: string | boolean) =>
@@ -747,6 +768,10 @@ export function ProjectForm({
       }));
   }, [repos]);
   const indexPaths = indexPathsFromForm(form.index_paths);
+  const collectExcludes = form.collect_excludes
+    .split("\n")
+    .map((x) => x.trim())
+    .filter(Boolean);
   // 變更執行設定或索引範圍需要重新驗證，存檔時自動改為未啟用。
   const configChanged =
     !!p.id &&
@@ -783,6 +808,16 @@ export function ProjectForm({
           return;
         }
         setScopeError("");
+        if (
+          collectExcludes.length > MAX_COLLECT_EXCLUDES ||
+          !collectExcludes.every(validCollectExclude)
+        ) {
+          setExcludeError(
+            `請填寫最多 ${MAX_COLLECT_EXCLUDES} 條規則：儲存庫內的相對路徑或檔名，可用 * 與結尾 /，開頭 ! 表示移除預設；不能包含 ..、絕對路徑或反斜線。`,
+          );
+          return;
+        }
+        setExcludeError("");
         save({
           ...form,
           sensitive_paths: form.sensitive_paths
@@ -790,6 +825,7 @@ export function ProjectForm({
             .map((x) => x.trim())
             .filter(Boolean),
           index_paths: indexPaths,
+          collect_excludes: collectExcludes,
           enabled: form.enabled && !configChanged && !!p.validated_at,
         });
       }}
@@ -984,6 +1020,61 @@ export function ProjectForm({
               </div>
             </>
           )}
+        </div>
+      </details>
+      <details
+        className="rounded-md border p-3"
+        open={collectExcludes.length ? true : undefined}
+      >
+        <summary className="cursor-pointer text-sm font-medium">
+          進階設定：收集時排除的建置產物
+        </summary>
+        <div className="mt-3 flex flex-col gap-2">
+          <p className="text-xs text-muted-foreground">
+            收集 AI 的修改時，版本控制原本沒有追蹤的新檔案若符合下列規則就不放進
+            PR，並在 PR
+            說明與任務紀錄列出。原本就追蹤的檔案、以及基底已有追蹤檔案的目錄照常收集。預設：
+            {DEFAULT_COLLECT_EXCLUDES.map((rule) => (
+              <code key={rule} className="mx-0.5 rounded bg-muted px-1">
+                {rule}
+              </code>
+            ))}
+          </p>
+          <Label htmlFor="pf-collect-excludes">
+            增減規則{" "}
+            <span className="font-normal text-muted-foreground">
+              每行一條；「名稱/」任何層的目錄、「a/b/」從根目錄起、「*.ext」檔名，開頭
+              ! 移除預設
+            </span>
+          </Label>
+          <Textarea
+            id="pf-collect-excludes"
+            value={form.collect_excludes}
+            onChange={(e) => {
+              set("collect_excludes", e.target.value);
+              setExcludeError("");
+            }}
+            aria-invalid={!!excludeError}
+            aria-describedby={excludeError ? "pf-exclude-error" : undefined}
+            placeholder={"out/\n!dist/"}
+          />
+          {excludeError && (
+            <p
+              id="pf-exclude-error"
+              role="alert"
+              className="text-sm text-danger"
+            >
+              {excludeError}
+            </p>
+          )}
+          {collectExcludes.length > 0 &&
+            collectExcludes.every(validCollectExclude) && (
+              <p className="text-xs text-muted-foreground">
+                實際排除：
+                {effectiveCollectExcludes(collectExcludes).join("、") ||
+                  "（不排除任何檔案）"}
+              </p>
+            )}
         </div>
       </details>
       <div className="flex flex-col gap-2">

@@ -12,6 +12,8 @@ export interface SetupPlan {
   /** 部分測試或推測結構時，沒有涵蓋到的範圍。 */
   limitations?: string;
   explanation: string;
+  /** 只提供摘錄或略過的檔案與原因（系統記錄）；舊設定沒有這個欄位。 */
+  omissions?: { path: string; reason: string }[];
   evidence: { path: string; quote: string }[];
   /** 測試需要 SQL Server 時的映像與判斷依據；不需要時沒有這個欄位。 */
   sqlServer?: SqlServerPlan;

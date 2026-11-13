@@ -588,7 +588,11 @@ it("讀取固定 commit 的真實 CI 與套件設定，排除機密、符號連�
   expect(context.locks).toEqual([{ path: "pnpm-lock.yaml", sha: "blob" }]);
 });
 
-function setupFiles(github: GitHub, source: Record<string, string>) {
+function setupFiles(
+  github: GitHub,
+  source: Record<string, string>,
+  truncated = false,
+) {
   const fetched: string[] = [];
   github.client = async () =>
     new Octokit({
@@ -598,7 +602,7 @@ function setupFiles(github: GitHub, source: Record<string, string>) {
           if (u.pathname.includes("/git/trees/")) {
             expect(u.pathname.endsWith("/fixed-commit")).toBe(true);
             return Response.json({
-              truncated: false,
+              truncated,
               tree: Object.entries(source).map(([path, content]) => ({
                 path,
                 sha: `blob-${path}`,
@@ -688,7 +692,7 @@ it("多份長說明不會擠掉建置設定，UTF-8 原文與總量上限保持�
   expect(context.omissions?.length).toBe(8);
 });
 
-it("超大 README 不下載；實際建置設定過大仍停止，不假裝讀取完整設定", async () => {
+it("超大 README 不下載；建置設定全都無法使用時才請人改用進階設定並附原因", async () => {
   const s = await scenario();
   const fetched = setupFiles(s.github, {
     ...files,
@@ -700,10 +704,267 @@ it("超大 README 不下載；實際建置設定過大仍停止，不假裝讀�
   );
   expect(fetched).toEqual(["package.json"]);
   expect(context.omissions?.[0].reason).toContain("未提供內容");
-  setupFiles(s.github, { "package.json": " ".repeat(24001) });
-  await expect(
-    s.github.setupContext(await s.project(), "fixed-commit"),
-  ).rejects.toThrow("建置設定 package.json 過大");
+  // 單行過長的設定無法依行摘錄；加上略過的 README，已沒有任何可用內容。
+  setupFiles(s.github, {
+    "package.json": " ".repeat(24001),
+    "README.md": "大量說明".repeat(100000),
+  });
+  await s.validate();
+  const project = await s.project();
+  expect(project.enabled).toBe(false);
+  expect(project.validation_error).toContain("沒有可用的建置設定");
+  expect(project.validation_error).toContain("請在進階設定指定安裝與測試指令");
+  expect(project.validation_error).toMatch(/package\.json（[^）]*無法依行摘錄/);
+  expect(project.validation_error).toMatch(/README\.md（[^）]*未提供內容/);
+  expect(s.calls.some((c) => c.path === "ai")).toBe(false);
+});
+
+it("300 KB 的 package-lock.json 不下載也不中斷，自動設定成功並在說明列出該檔已摘要", async () => {
+  const s = await scenario();
+  const lock = JSON.stringify(
+    {
+      name: "fictional-shop",
+      lockfileVersion: 3,
+      packages: Object.fromEntries(
+        Array.from({ length: 2500 }, (_, i) => [
+          `node_modules/fictional-pkg-${i}`,
+          {
+            version: "1.0.0",
+            resolved: `https://registry.example.test/fictional-pkg-${i}.tgz`,
+          },
+        ]),
+      ),
+    },
+    null,
+    2,
+  );
+  expect(Buffer.byteLength(lock)).toBeGreaterThan(300000);
+  const fetched = setupFiles(s.github, {
+    ...files,
+    "package-lock.json": lock,
+  });
+  expect((await s.validate()).statusCode).toBe(202);
+  const project = await s.project();
+  expect(project.enabled).toBe(true);
+  expect(project.validation_error).toBeNull();
+  expect(fetched).not.toContain("package-lock.json");
+  expect(project.setup_plan?.omissions).toEqual([
+    {
+      path: "package-lock.json",
+      reason: expect.stringContaining("只提供路徑與雜湊"),
+    },
+  ]);
+  const prompt = (
+    s.calls.find((c) => c.path === "ai")!.body.job as { prompt: string }
+  ).prompt;
+  expect(prompt).toContain("blob-package-lock.json");
+  expect(prompt).not.toContain("fictional-pkg-1");
+  const detail = await app.inject({
+    method: "GET",
+    url: "/api/state",
+    headers: s.headers,
+  });
+  expect(detail.body).toContain("鎖定檔過大，只提供路徑與雜湊");
+});
+
+it("大型 .sln 與 Directory.Packages.props 改用原文摘錄，仍找出測試專案並設定 dotnet test", async () => {
+  const s = await scenario();
+  const type = "{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}";
+  const guid = (i: number) =>
+    `{00000000-0000-0000-0000-${String(i).padStart(12, "0")}}`;
+  const names = [
+    ...Array.from({ length: 180 }, (_, i) => `Fictional.Module${i}`),
+    "Fictional.Shop.Tests",
+  ];
+  const sln = [
+    "Microsoft Visual Studio Solution File, Format Version 12.00",
+    "VisualStudioVersion = 17.8.34330.188",
+    ...names.flatMap((name, i) => [
+      `Project("${type}") = "${name}", "${name.endsWith("Tests") ? "tests" : "src"}\\${name}\\${name}.csproj", "${guid(i)}"`,
+      "EndProject",
+    ]),
+    "Global",
+    "\tGlobalSection(ProjectConfigurationPlatforms) = postSolution",
+    ...names.flatMap((_, i) =>
+      ["Debug", "Release", "Staging", "Production"].flatMap((c) => [
+        `\t\t${guid(i)}.${c}|Any CPU.ActiveCfg = ${c}|Any CPU`,
+        `\t\t${guid(i)}.${c}|Any CPU.Build.0 = ${c}|Any CPU`,
+      ]),
+    ),
+    "\tEndGlobalSection",
+    "EndGlobal",
+  ].join("\r\n");
+  const props = [
+    "<Project>",
+    "  <PropertyGroup>",
+    "    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>",
+    "  </PropertyGroup>",
+    ...Array.from(
+      { length: 400 },
+      (_, i) =>
+        `  <!-- 虛構套件 ${i} 的升級紀錄：沿用既有版本，等待相依套件釋出相容版本後再調整 -->`,
+    ),
+    "  <ItemGroup>",
+    '    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />',
+    '    <PackageVersion Include="xunit" Version="2.9.2" />',
+    "  </ItemGroup>",
+    "</Project>",
+  ].join("\n");
+  const testProject = [
+    '<Project Sdk="Microsoft.NET.Sdk">',
+    "  <PropertyGroup><TargetFramework>net8.0</TargetFramework><IsTestProject>true</IsTestProject></PropertyGroup>",
+    '  <ItemGroup><PackageReference Include="Microsoft.NET.Test.Sdk" /><PackageReference Include="xunit" /></ItemGroup>',
+    "</Project>",
+  ].join("\n");
+  const testPath = "tests/Fictional.Shop.Tests/Fictional.Shop.Tests.csproj";
+  const source = {
+    "Fictional.Shop.sln": sln,
+    "Directory.Packages.props": props,
+    [testPath]: testProject,
+  };
+  expect(Buffer.byteLength(sln)).toBeGreaterThan(100000);
+  expect(Buffer.byteLength(props)).toBeGreaterThan(24000);
+  setupFiles(s.github, source);
+  const context = await s.github.setupContext(
+    await s.project(),
+    "fixed-commit",
+  );
+  const excerpt = context.files["Fictional.Shop.sln"];
+  expect(Buffer.byteLength(excerpt)).toBeLessThanOrEqual(24000);
+  expect(excerpt).toContain('"Fictional.Shop.Tests"');
+  expect(excerpt).toContain("[此處省略建置設定內容]");
+  // 摘錄只保留原文行，不改寫。
+  const original = new Set(sln.split("\n"));
+  for (const line of excerpt.split("\n"))
+    if (line && !line.startsWith("[")) expect(original.has(line)).toBe(true);
+  expect(context.files["Directory.Packages.props"]).toContain(
+    '<PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />',
+  );
+  expect(context.files[testPath]).toBe(testProject);
+  const testLine = `Project("${type}") = "Fictional.Shop.Tests"`;
+  s.change({
+    install: "dotnet restore Fictional.Shop.sln",
+    test: "dotnet test Fictional.Shop.sln --no-restore",
+    explanation: "方案包含 xunit 測試專案，先還原再執行測試",
+    evidence: [
+      { path: "Fictional.Shop.sln", quote: testLine },
+      { path: testPath, quote: "<IsTestProject>true</IsTestProject>" },
+    ],
+  });
+  expect((await s.validate()).statusCode).toBe(202);
+  const project = await s.project();
+  expect(project.enabled).toBe(true);
+  expect(project.setup_plan?.test).toBe(
+    "dotnet test Fictional.Shop.sln --no-restore",
+  );
+  expect(project.setup_plan?.omissions).toEqual([
+    {
+      path: "Directory.Packages.props",
+      reason: expect.stringContaining("專案檔過大"),
+    },
+    {
+      path: "Fictional.Shop.sln",
+      reason: expect.stringContaining("方案檔過大"),
+    },
+  ]);
+  expect(s.calls.find((c) => c.body.phase === "test")?.body.command).toContain(
+    "dotnet test",
+  );
+});
+
+it("大型 CI 保留尾端測試步驟；其他大型檔案取開頭並註記截斷；機密仍先看完整內容", async () => {
+  const s = await scenario();
+  const ci = [
+    "name: ci",
+    "on: [push]",
+    ...Array.from(
+      { length: 600 },
+      (_, i) =>
+        `# 第 ${i} 次調整的歷史紀錄：說明為何保留舊的分支規則與通知對象`,
+    ),
+    "jobs:",
+    "  verify:",
+    "    runs-on: ubuntu-latest",
+    "    steps:",
+    "      - run: npm ci",
+    "      - run: npm test",
+  ].join("\n");
+  const makefile = Array.from(
+    { length: 2000 },
+    (_, i) => `target${i}:\n\t@printf "虛構目標 ${i}"`,
+  ).join("\n");
+  const dockerfile =
+    "FROM node:22\n" +
+    "RUN printf 'build'\n".repeat(3000) +
+    'ENV token = "fictional-only-secret-value"\n';
+  setupFiles(s.github, {
+    ...files,
+    ".github/workflows/ci.yml": ci,
+    Makefile: makefile,
+    Dockerfile: dockerfile,
+  });
+  const context = await s.github.setupContext(
+    await s.project(),
+    "fixed-commit",
+  );
+  const kept = context.files[".github/workflows/ci.yml"];
+  expect(Buffer.byteLength(kept)).toBeLessThanOrEqual(24000);
+  expect(kept).toContain("      - run: npm test");
+  expect(kept).toContain("name: ci");
+  expect(context.files.Makefile.startsWith("target0:")).toBe(true);
+  expect(context.files.Makefile).toMatch(/\[以下建置設定內容已截斷\]$/);
+  expect(context.files.Dockerfile).toBeUndefined();
+  expect(context.omissions).toEqual([
+    {
+      path: "Makefile",
+      sha: "blob-Makefile",
+      reason: expect.stringContaining("開頭一段"),
+    },
+    {
+      path: ".github/workflows/ci.yml",
+      sha: "blob-.github/workflows/ci.yml",
+      reason: expect.stringContaining("CI 設定過大"),
+    },
+  ]);
+});
+
+it("超過 60 份、檔案清單截斷或總量超過上限時仍提供可用部分，並註記略過原因", async () => {
+  const s = await scenario();
+  const source: Record<string, string> = { ...files };
+  for (let i = 0; i < 70; i++)
+    source[`src/Module${String(i).padStart(2, "0")}/Module.csproj`] =
+      '<Project Sdk="Microsoft.NET.Sdk"></Project>';
+  setupFiles(s.github, source, true);
+  const context = await s.github.setupContext(
+    await s.project(),
+    "fixed-commit",
+  );
+  expect(Object.keys(context.files)).toHaveLength(60);
+  expect(context.files["package.json"]).toBe(files["package.json"]);
+  expect(context.omissions?.[0]).toEqual({
+    path: "（檔案清單）",
+    reason: expect.stringContaining("部分檔案清單"),
+  });
+  expect(context.omissions?.[1].path).toBe("src/Module59/Module.csproj");
+  expect(context.omissions?.at(-1)).toEqual({
+    path: "（另外 1 份）",
+    reason: "超過 60 份檔案上限，未讀取",
+  });
+
+  const many: Record<string, string> = {};
+  for (let i = 0; i < 6; i++)
+    many[`scripts/step${i}.sh`] = `echo 第 ${i} 段準備步驟\n`.repeat(740);
+  expect(Buffer.byteLength(many["scripts/step0.sh"])).toBeLessThan(24000);
+  setupFiles(s.github, many);
+  const limited = await s.github.setupContext(
+    await s.project(),
+    "fixed-commit",
+  );
+  const sizes = Object.values(limited.files).map((t) => Buffer.byteLength(t));
+  expect(sizes.reduce((a, b) => a + b, 0)).toBeLessThanOrEqual(100000);
+  expect(limited.files["scripts/step0.sh"]).toBe(many["scripts/step0.sh"]);
+  expect(limited.files["scripts/step5.sh"]).toContain("已截斷");
+  expect(limited.omissions?.map((o) => o.path)).toEqual(["scripts/step5.sh"]);
 });
 
 it("補問只通知一次、不重開容器，回覆後帶入資訊重新驗證", async () => {

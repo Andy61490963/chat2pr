@@ -17,7 +17,7 @@ AI 先讀取固定版本的專案說明、建置設定及 `scripts`／`tests/env
 AI 自動設定的專案不必手動選這個映像。系統從固定版本的專案檔、套件設定與 CI 判斷測試是否需要 SQL Server（`server/sqlserver-test.ts` 的 `detectSqlServer`）：
 
 - 測試專案（引用 `Microsoft.NET.Test.Sdk`、xUnit、NUnit、MSTest 或標記 `IsTestProject`）本身或它參照的專案使用 `Microsoft.Data.SqlClient`、`System.Data.SqlClient`、`Microsoft.EntityFrameworkCore.SqlServer`。
-- CI 準備 SQL Server 服務（`mcr.microsoft.com/mssql/server`）或 LocalDB（`sqllocaldb`、`(localdb)MSSQLLocalDB`）。
+- CI 準備 SQL Server 服務（`mcr.microsoft.com/mssql/server`）或 LocalDB（`sqllocaldb`、`(localdb)\MSSQLLocalDB`）。
 
 判斷需要、而且專案的工作容器映像是預設的 `line-agentflow-worker:local` 時，安裝、測試、開發與審查都改用 `line-agentflow-worker-mssql:local`；判斷依據寫在環境設定說明的開頭，專案詳情看得到。專案的「工作容器映像」欄位不會被改寫。不需要 SQL Server 的專案維持較小的預設映像。
 
@@ -26,7 +26,7 @@ AI 自動設定的專案不必手動選這個映像。系統從固定版本的�
 需要 SQL Server 時，系統把 AI 規劃的測試命令包在 `agentflow-sqlserver run -- sh -c '<測試命令>'` 裡執行（`worker/mssql/sqlserver.mjs`，裝在衍生映像的 `/usr/local/bin/agentflow-sqlserver`）：
 
 1. 在同一個測試容器啟動 SQL Server（`127.0.0.1,1433`，記憶體上限 1 GiB，最多等 150 秒；第一次失敗會清掉資料檔重試一次）。sa 密碼每次隨機產生，只放在這個容器的環境變數 `MSSQL_SA_PASSWORD`、`SQLCMDPASSWORD`、`AGENTFLOW_SQLSERVER_CONNECTION`。
-2. 掃描工作目錄中的文字檔（`.cs`、`.json`、`.config`、`.runsettings` 等，略過 `bin`、`obj`、`node_modules`、`.git`），把 LocalDB 連線（`(localdb)執行個體`）改成連到容器內 SQL Server 的 sa 帳號，Windows 整合驗證改為關閉；`AttachDbFilename` 改用同名資料庫。改寫前先把原檔備份到 `/workspace/obj/agentflow-sqlserver`。
+2. 掃描工作目錄中的文字檔（`.cs`、`.json`、`.config`、`.runsettings` 等，略過 `bin`、`obj`、`node_modules`、`.git`），把 LocalDB 連線（`(localdb)\執行個體`）改成連到容器內 SQL Server 的 sa 帳號，Windows 整合驗證改為關閉；`AttachDbFilename` 改用同名資料庫。改寫前先把原檔備份到 `/workspace/obj/agentflow-sqlserver`。
 3. 建立連線字串提到的空白資料庫；規劃的資料來源是結構快照時，再依序套用 `schema.sql`、`reference-data.sql`。沒有快照時由專案自己的遷移或建庫腳本建立資料表（在測試命令中執行）。
 4. 執行測試命令，結束後把檔案還原成原本的位元組、停止 SQL Server、刪除資料檔。上一次在測試途中被強制結束時，下一次執行會先還原。
 

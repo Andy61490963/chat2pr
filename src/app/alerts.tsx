@@ -9,6 +9,7 @@ import {
   FolderCheck,
   FolderX,
   GitPullRequest,
+  HardDrive,
   Hourglass,
   MessageSquareText,
   PlugZap,
@@ -80,6 +81,16 @@ const kinds: Record<
   group_new: { icon: UserPlus, tone: "text-warn", label: "群組等你啟用" },
   service_down: { icon: Unplug, tone: "text-danger", label: "服務異常" },
   service_up: { icon: PlugZap, tone: "text-good", label: "服務已恢復" },
+  disk_low: {
+    icon: HardDrive,
+    tone: "text-danger",
+    label: "Docker 磁碟空間不足",
+  },
+  disk_ok: {
+    icon: HardDrive,
+    tone: "text-good",
+    label: "Docker 磁碟空間已恢復",
+  },
 };
 const kindOf = (k: string) =>
   kinds[k] ?? { icon: Bell, tone: "text-muted-foreground", label: "通知" };

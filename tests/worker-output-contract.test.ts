@@ -71,16 +71,16 @@ it("真收集器接受剛好 10 MiB，base64 完整可還原且不改候選", ()
   expect(result.candidatesUnchanged).toBe(true);
 }, 30000);
 
-it("真收集器先統計全部超限檔案，診斷有總量及最多五個大檔且不刪圖", () => {
+it("真收集器先統計全部超限檔案，診斷有總量及最多十個大檔且不刪圖", () => {
   const result = collectFixture("size");
   expect(result.status).not.toBe(0);
   expect(result.stdoutBytes).toBe(0);
   expect(result.stderr).toContain("12582912 bytes");
   expect(result.stderr).toContain("6 個檔案");
   expect(result.stderr).toContain("10 MiB（10485760 bytes）");
-  expect(result.stderr).toContain("最大 5 個檔案");
+  expect(result.stderr).toContain("最大 6 個檔案");
   expect(result.stderr).toContain('"large-0.png"：2097152 bytes');
-  expect(result.stderr).not.toContain('"large-5.png"：');
+  expect(result.stderr).toContain('"large-5.png"：2097152 bytes');
   expect(result.stderr).toContain("未刪除任何檔案、未發布");
   expect(result.stderr.length).toBeLessThan(2500);
   expect(result.candidatesUnchanged).toBe(true);

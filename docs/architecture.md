@@ -116,7 +116,9 @@ flowchart LR
 | `line-agentflow_embed-models`           | BGE-M3 權重，約 2.3 GB                   | 重新執行 `embedder-init` 即可  |
 | `agentflow-job-<執行 ID>`、`…-baseline` | 單次工作的工作目錄與比較基底             | 由執行器建立，保留期滿自動清理 |
 | `agentflow-source-v1-*`                 | 專案原始碼快取                           | 下次派工重新下載               |
-| `agentflow-production-nuget-feed-v1`    | 選用的唯讀 NuGet 套件來源                | 回到一般下載流程               |
+
+看板「系統」頁的 Docker 磁碟清理只會刪除名稱、`io.agentflow.*` 標籤與執行紀錄都對得上的任務工作區（`agentflow-job-*`）；上表其他資料卷一律只列出不刪，判斷寫在 `shared/docker-disk.ts` 的 `protectedVolumeReason`，執行器刪除前會再核對一次。
+| `agentflow-production-nuget-feed-v1` | 選用的唯讀 NuGet 套件來源 | 回到一般下載流程 |
 
 **主機上的檔案**（全部被 Git 忽略；除了搬機，不要從別台複製）
 
@@ -218,7 +220,7 @@ flowchart LR
 | ripgrep、jq、sqlite3、unzip                               | 程式碼搜尋與常見資料處理                                   |
 | .NET 8 SDK 8.0.416（`dotnet`）                            | C# 專案建置與單元測試；NuGet 快取在 `/workspace/obj/nuget` |
 
-C# 專案可讓 AI 根據實際方案與 CI 決定 `dotnet restore`、`dotnet test`。AI 自動設定時，系統從專案檔、套件與 CI 判斷測試是否需要 SQL Server，需要就自動改用含 SQL Server 的工作映像（`line-agentflow-worker-mssql:local`），測試階段在容器內啟動 SQL Server，並把寫死的 LocalDB 連線（`(localdb)MSSQLLocalDB`）暫時導向它，結束時還原；判斷依據寫在環境設定說明，管理者可在進階設定改為「一律提供」或「不提供」。SQL Server 起不來時標示為「測試環境問題」而不是程式沒過。細節見 `docs/agents/project-environment.md`。結構可在專案詳情的「資料庫連線」擷取快照；沒有快照時由專案的遷移或建庫腳本建立，再不行由 AI 從程式碼推測結構。AI 縮小測試範圍時必須說明排除了什麼，系統會如實標示。進階設定仍可由管理者明確指定既有的測試範圍。若專案的 `.gitignore` 沒有忽略 `obj/`，建置產物會被當成變更，應先修正專案設定。
+C# 專案可讓 AI 根據實際方案與 CI 決定 `dotnet restore`、`dotnet test`。AI 自動設定時，系統從專案檔、套件與 CI 判斷測試是否需要 SQL Server，需要就自動改用含 SQL Server 的工作映像（`line-agentflow-worker-mssql:local`），測試階段在容器內啟動 SQL Server，並把寫死的 LocalDB 連線（`(localdb)\MSSQLLocalDB`）暫時導向它，結束時還原；判斷依據寫在環境設定說明，管理者可在進階設定改為「一律提供」或「不提供」。SQL Server 起不來時標示為「測試環境問題」而不是程式沒過。細節見 `docs/agents/project-environment.md`。結構可在專案詳情的「資料庫連線」擷取快照；沒有快照時由專案的遷移或建庫腳本建立，再不行由 AI 從程式碼推測結構。AI 縮小測試範圍時必須說明排除了什麼，系統會如實標示。進階設定仍可由管理者明確指定既有的測試範圍。專案的 `.gitignore` 沒有忽略 `bin/`、`obj/` 也沒關係：收集差異時會自動排除這次新產生的建置產物，見下方「收集差異時排除建置產物」。
 
 尚未預裝、需要時再加入（加入前先評估映像大小）：
 
@@ -261,9 +263,26 @@ docker run --rm --user 0:0 --network none --mount "type=bind,source=$package,tar
 
 部署時更新主機執行器。套件由主機管理者加入，容器在驗證中下載的套件只保留於各自的工作卷。驗收實例使用獨立資料卷 `agentflow-verify-<suiteId>-nuget-feed-v1`，並將 `io.agentflow.instance` 標成同一個 `verify-<suiteId>`。沒有設定資料卷時沿用現有的下載流程。
 
+## 收集差異時排除建置產物
+
+收集 AI 的修改時，先排除常見的建置輸出，避免它們被當成修改送進 PR 或撐爆 10 MiB 上限：
+
+| 類別   | 預設規則                                                  |
+| ------ | --------------------------------------------------------- |
+| .NET   | `bin/`、`obj/`、`TestResults/`                            |
+| 前端   | `node_modules/`、`dist/`、`build/`、`.next/`、`coverage/` |
+| Python | `__pycache__/`、`.pytest_cache/`、`*.pyc`                 |
+
+- **只排除新檔案**：版本控制原本沒有追蹤的檔案才會被排除；原本就追蹤的檔案（例如專案自己提交的 `dist/app.js`）修改、刪除都照常收集。基底已經有追蹤檔案的目錄，裡面的新檔案也照常收集，因為那代表專案本來就提交建置結果。
+- **規則寫法**：`名稱/` 是任何層的同名目錄；`a/b/` 是從儲存庫根目錄起的目錄；不含 `/` 的是任何層的檔名，含 `/` 的是從根目錄起的路徑；`*` 比對同一層內的任意字元。
+- **專案增減**：看板專案頁「進階設定：收集時排除的建置產物」每行一條，`out/` 加入、`!dist/` 移除預設。調整不影響環境，不需要重新驗證。清單由伺服器算好後交給收集器（`shared/build-output.ts`），比對實作在 `worker/change-policy.mjs`；獨立審查重算變更時使用同一份清單。
+- **回報**：被排除的路徑依目錄彙總（檔案數、大小、套用的規則），寫在 PR 說明的「收集時排除的建置產物」段落與任務紀錄，誤排除真正的修改時看得出來。
+
+真的超過上限時，錯誤訊息列出最大的 10 個檔案與大小，標出看起來像建置產物的新檔案（例如在 `out/`、`target/` 底下，或是 `.dll`、`.pdb`），並建議把對應規則加入「收集時排除」；不像建置產物時則建議把中介產物移出交付。收集器不會因此刪除任何檔案。
+
 ## PR 圖片與驗收附件
 
-每次提交上限為 200 個變更檔案、內容合計 10 MiB。畫面驗收請提交必要的前後代表圖與完整精簡結果報告，不把整套中介截圖目錄放入 Git。全流程驗收工具另保留完整矩陣證據。工作容器本機 Git SHA 與來源遠端 SHA 可能不同，報告應使用需求中的可信 `sourceVersion.baseCommit` 標明來源，不能將本機識別冒充遠端提交。
+每次提交上限為 200 個變更檔案、內容合計 10 MiB（自動排除的建置產物不計入）。畫面驗收請提交必要的前後代表圖與完整精簡結果報告，不把整套中介截圖目錄放入 Git。全流程驗收工具另保留完整矩陣證據。工作容器本機 Git SHA 與來源遠端 SHA 可能不同，報告應使用需求中的可信 `sourceVersion.baseCommit` 標明來源，不能將本機識別冒充遠端提交。
 
 獨立審查會取得全部變更的可信差異與原始檔，不只依賴可能截斷的預覽。若完整證據超限、不一致或必要截圖缺失，工作會停止並顯示原因。審查先確認候選可以發布，PR 圖片及合併後畫面再由後續驗收確認；建立 PR 不等於畫面已部署。執行器連線可等待至工作期限，不再被五分鐘的標頭等待期限提早中斷，原有每任務三十分鐘上限不變。
 

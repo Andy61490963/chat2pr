@@ -26,6 +26,8 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS project_context jsonb NOT NULL DEF
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS context_updated_at timestamptz;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS context_updated_by text;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS setup_input jsonb;
+-- 收集差異時對預設建置產物排除清單的增減（「名稱/」加入、「!名稱/」移除）；空陣列即沿用預設。
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS collect_excludes text[] NOT NULL DEFAULT '{}';
 CREATE OR REPLACE FUNCTION valid_repo_index_paths(paths text[]) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
  SELECT cardinality(paths)<=50 AND COALESCE(bool_and(
    value IS NOT NULL AND length(value) BETWEEN 1 AND 1024 AND value=btrim(value)
@@ -684,3 +686,6 @@ CREATE TABLE IF NOT EXISTS scheduled_check_runs (
 CREATE INDEX IF NOT EXISTS scheduled_check_runs_recent ON scheduled_check_runs(check_id,started_at DESC);
 -- 從 LINE 提出的定期檢查：先建立「草擬定期檢查」的查詢任務，記下要求的排程；Codex 寫好定義後建立待核准的檢查。
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS check_draft jsonb;
+-- Docker 磁碟管理：清理規則設定與最近一次空間檢查。清理規則預設全部關閉，只盤點與提醒；不進備份，還原後回到預設。
+CREATE TABLE IF NOT EXISTS docker_disk (id integer PRIMARY KEY CHECK(id=1), settings jsonb NOT NULL DEFAULT '{}', level text NOT NULL DEFAULT 'unknown', free_percent numeric, detail text, checked_at timestamptz);
+INSERT INTO docker_disk(id) VALUES(1) ON CONFLICT DO NOTHING;

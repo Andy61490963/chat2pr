@@ -22,8 +22,18 @@ import {
   runCheckQuery,
   testConnection,
 } from "./database-capture.js";
-import { cleanupDocker } from "./docker-cleanup.js";
+import {
+  cleanupDocker,
+  diskSpace,
+  dockerDataPath,
+  dockerDiskInventory,
+  removeDiskItems,
+} from "./docker-cleanup.js";
 import { httpProbe, tcpProbe } from "./check-probes.js";
+import {
+  MAX_COLLECT_EXCLUDES,
+  validCollectExclude,
+} from "../shared/build-output.js";
 // 必須在任何 Docker 操作（尤其啟動清理）以前拒絕不完整的隔離設定。
 validateRunnerEnvironment();
 const app = Fastify({ logger: false, bodyLimit: 80 * 1024 * 1024 });
@@ -235,6 +245,34 @@ app.post("/maintenance/docker", async (req) => {
   if (containers.instance !== "production") return { skipped: true };
   return cleanupDocker(containers.docker, { keep });
 });
+// 每小時的空間提醒只需要可用空間，不跑 docker system df。
+app.post("/maintenance/disk/space", async () => ({
+  space: await diskSpace(dockerDataPath(), "主機磁碟（Docker 資料所在）"),
+}));
+// 看板「系統」頁的 Docker 磁碟盤點；任何實例都可以讀。
+app.post("/maintenance/disk/inventory", async () =>
+  dockerDiskInventory(containers.docker, containers.instance),
+);
+// 依應用程式算出的清單刪除，但每一項都在這裡重新核對歸屬；驗收實例共用 Docker 時不動手。
+app.post("/maintenance/disk/remove", async (req) => {
+  const b = z
+    .object({
+      keep: z.array(z.string().min(1).max(200)).max(200),
+      items: z
+        .array(
+          z.object({
+            kind: z.enum(["image", "container", "volume", "build_cache"]),
+            target: z.string().min(1).max(300),
+            runId: z.string().uuid().optional(),
+          }),
+        )
+        .max(1000),
+    })
+    .parse(req.body);
+  if (containers.instance !== "production")
+    return { skipped: true, removed: [], failed: [], cacheBytes: 0 };
+  return removeDiskItems(containers, b.items, b.keep);
+});
 app.post("/observations", async (req) => {
   const b = z
     .object({
@@ -251,6 +289,13 @@ app.post("/phase", async (req) => {
     open: z.boolean().optional(),
     job: z.record(z.string(), z.unknown()).optional(),
     timeoutMs: z.number().int().min(1000).max(1800000),
+    // 收集差異時排除的建置產物；伺服器已套用專案增減，這裡只接受完整規則。
+    exclude: z
+      .array(
+        z.string().refine((e) => !e.startsWith("!") && validCollectExclude(e)),
+      )
+      .max(MAX_COLLECT_EXCLUDES + 20)
+      .optional(),
   }).parse(req.body);
   const observe = (e: Parameters<ObservationBuffer["add"]>[2]) =>
     observations.add(b.runId, b.phase, e);
@@ -289,6 +334,9 @@ app.post("/phase", async (req) => {
               ? { output: "collect" as const }
               : {}),
             ...(b.phase === "install" ? { nugetFeed: true } : {}),
+            ...(b.phase === "collect" && b.exclude
+              ? { collectExclude: b.exclude }
+              : {}),
             ...(ai && b.open === true
               ? { extraNetworks: ["line-agentflow_open"] }
               : b.phase === "code" && b.job?.packages === true
