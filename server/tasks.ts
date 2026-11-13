@@ -1,4 +1,4 @@
-import { threadOf } from "./followup.js";
+import { createFollowupInTransaction, threadOf } from "./followup.js";
 import { withAssumptions } from "../shared/clarification.js";
 import { referencedSources } from "./retrieval.js";
 import { taskImageEvidence } from "./image-context.js";
@@ -242,6 +242,29 @@ export class Tasks {
         const summary = withAssumptions(t.summary, assumptions, previous);
         if (summary.length > 15000)
           throw new AppError(422, "需求內容過長，請縮短假設內容");
+        if (t.mode === "query" && t.status === "answered") {
+          const child = await createFollowupInTransaction(
+            this.db,
+            c,
+            t,
+            summary,
+            actor,
+            {
+              assumptions,
+              acceptance: t.acceptance,
+              riskText: a.value,
+              // 新題沿用整份需求，原本需人工確認的風險不能因只改假設而消失。
+              retainedRisk: t.risk_reasons[0],
+            },
+          );
+          await this.db.audit(
+            child.id,
+            "assumption_changed",
+            `${actor} 將假設「${previous[a.index]}」改為「${a.value}」，建立追問並保留原回答`,
+            c,
+          );
+          return child;
+        }
         await c.query(
           "UPDATE tasks SET summary=$2,assumptions=$3,suggestions='[]',version=version+1,approved_version=NULL,approved_paths='{}',pending_paths='{}',base_sha=NULL,branch=NULL,status='awaiting_approval',last_error=NULL,updated_at=now() WHERE id=$1",
           [id, summary, JSON.stringify(assumptions)],

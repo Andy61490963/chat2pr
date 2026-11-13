@@ -15,7 +15,8 @@ vi.mock("../server/config.js", async (original) => ({
 }));
 import { db, reset, fixture, session, dashboardAction } from "./helpers.js";
 import { buildApp } from "../server/app.js";
-import { Decisions, Triage } from "../server/triage.js";
+import { CodexClassifier, Decisions, Triage } from "../server/triage.js";
+import type { Runner } from "../server/execution.js";
 import { GitHub } from "../server/github.js";
 import { Line } from "../server/line.js";
 import { Budget } from "../server/budget.js";
@@ -106,30 +107,50 @@ async function propose(
   await new Triage(
     db,
     {
-      classify: async () => [
-        {
-          kind: "request",
-          taskType: "query",
-          projectId: project.id,
-          title: "匯出需求",
-          summary: "確認匯出功能的運作方式",
-          acceptance: ["說明匯出功能"],
-          sourceIds: [id],
-          risks: [],
-          missing: [],
-          relatedTaskId: null,
-          suggestions: [],
-          question: null,
-          assumptions: [],
-          routing: {
-            status: "clear",
-            basis: "explicit",
-            reason: "本次指名專案",
-            evidence: [{ kind: "message", sourceId: id, quote: text }],
-          },
-          ...patch,
-        },
-      ],
+      classify: async (input) => {
+        const raw = {
+          decisions: [
+            {
+              kind: "request",
+              taskType: "query",
+              projectId: project.id,
+              title: "匯出需求",
+              summary: "確認匯出功能的運作方式",
+              acceptance: ["說明匯出功能"],
+              sourceIds: [id],
+              risks: [],
+              missing: [],
+              relatedTaskId: null,
+              suggestions: [],
+              question: null,
+              assumptions: [],
+              routing: {
+                status: "clear",
+                basis: "explicit",
+                reason: "本次指名專案",
+                evidence: [{ kind: "message", sourceId: id, quote: text }],
+              },
+              contextSourceIds: [],
+              targetBranch: {
+                name: "main",
+                basis: "default",
+                reason: "預設分支",
+                evidence: [],
+              },
+              ...patch,
+            },
+          ],
+        };
+        const runner = {
+          async upload() {},
+          call: async () => ({
+            exitCode: 0,
+            stderr: "",
+            stdout: JSON.stringify({ final: JSON.stringify(raw) }),
+          }),
+        } as Runner;
+        return new CodexClassifier(runner).classify(input);
+      },
     },
     github,
     new Line(db),
@@ -149,6 +170,174 @@ const action = (
     headers: requestHeaders,
     payload: { action: name, version: t.version, ...body },
   });
+
+describe.each(["command", "auto"] as const)(
+  "%s 模式容錯修正模型輸出",
+  (mode) => {
+    it.each([
+      "查詢方案",
+      "問題與方案",
+      "單一方案",
+      "超過三項",
+      "沒有推薦",
+      "多個推薦",
+      "缺少理由",
+    ])("%s 仍成功判讀，不累加失敗並留下稽核", async (kind) => {
+      const patch: Partial<TriageDecision> = {
+        taskType: "change",
+        kind: "clarification",
+        suggestions: structuredClone(directions),
+      };
+      if (kind === "查詢方案") patch.taskType = "query";
+      if (kind === "問題與方案") patch.question = question;
+      if (kind === "單一方案") patch.suggestions = [directions[0]];
+      if (kind === "超過三項")
+        patch.suggestions = [
+          ...directions,
+          { ...directions[1], label: "第三項" },
+          { ...directions[1], label: "第四項" },
+        ];
+      if (kind === "沒有推薦")
+        patch.suggestions = directions.map((s) => ({
+          ...s,
+          recommended: false,
+        }));
+      if (kind === "多個推薦")
+        patch.suggestions = [
+          ...directions.map((s) => ({ ...s, recommended: true })),
+        ].reverse();
+      if (kind === "缺少理由")
+        patch.suggestions = directions.map(({ reason, ...s }) => s);
+      await db.query("UPDATE groups SET triage_failures=1");
+      const t = await propose(mode, patch);
+      expect(
+        (await db.one("SELECT triage_failures FROM groups WHERE id='group-a'"))
+          .triage_failures,
+      ).toBe(0);
+      expect(
+        (
+          await db.one("SELECT processed FROM messages WHERE id=$1", [
+            t.source_ids[0],
+          ])
+        ).processed,
+      ).toBe(true);
+      const audits = await db.query(
+        "SELECT detail FROM audit WHERE task_id=$1 AND kind='ai_output_adjusted'",
+        [t.id],
+      );
+      expect(audits).toHaveLength(1);
+      expect(audits[0].detail).toContain("已調整 AI 輸出");
+      if (["查詢方案", "問題與方案", "單一方案"].includes(kind)) {
+        expect(t.suggestions).toEqual([]);
+        expect(t.question).not.toBeNull();
+        if (kind === "問題與方案") expect(t.question).toEqual(question);
+        if (kind === "單一方案")
+          expect(t.question?.text).toBe("是否照這個方向處理：保留現有匯出？");
+      } else {
+        expect(t.suggestions).toHaveLength(kind === "超過三項" ? 3 : 2);
+        expect(t.suggestions.filter((s) => s.recommended)).toHaveLength(1);
+        expect(t.suggestions[0].recommended).toBe(true);
+        if (kind === "超過三項") expect(t.suggestions[2].label).toBe("第三項");
+        if (kind === "多個推薦")
+          expect(t.suggestions[0].label).toBe(directions[1].label);
+        if (kind === "缺少理由")
+          expect(t.suggestions.every((s) => s.reason === "AI 未說明理由")).toBe(
+            true,
+          );
+      }
+    });
+  },
+);
+
+it("已回答查詢修改假設建立追問，保留原回答與版本並沿用對話串", async () => {
+  const t = await propose("command", {
+    assumptions: ["日期使用西元年", "沿用欄位順序"],
+  });
+  await db.query(
+    "UPDATE tasks SET status='answered',answer='原回答內容' WHERE id=$1",
+    [t.id],
+  );
+  const response = await action(t, "assumption", {
+    index: 0,
+    value: "日期使用民國年",
+  });
+  expect(response.statusCode).toBe(200);
+  const child = response.json() as Task;
+  expect(child.id).not.toBe(t.id);
+  expect(child).toMatchObject({
+    parent_id: t.id,
+    mode: "query",
+    status: "queued",
+    version: 1,
+    assumptions: ["日期使用民國年", "沿用欄位順序"],
+    project_id: t.project_id,
+    target_branch: t.target_branch,
+  });
+  expect(child.summary).toContain("確認匯出功能");
+  expect(child.summary).not.toContain("日期使用西元年");
+  expect(
+    await db.one(
+      "SELECT status,answer,version,assumptions FROM tasks WHERE id=$1",
+      [t.id],
+    ),
+  ).toEqual({
+    status: "answered",
+    answer: "原回答內容",
+    version: 1,
+    assumptions: t.assumptions,
+  });
+  expect((await threadHistory(db, child))[0].answer).toBe("原回答內容");
+  expect(
+    (
+      await db.one("SELECT summary FROM task_versions WHERE task_id=$1", [
+        child.id,
+      ])
+    ).summary,
+  ).toBe(child.summary);
+  expect(
+    (await app.inject({ url: `/api/tasks/${child.id}`, headers })).json().thread
+      .before[0].id,
+  ).toBe(t.id);
+});
+
+it("假設追問維持舊版本與專案可用性檢查，索取機密實際值仍待確認", async () => {
+  const t = await propose("command", { assumptions: ["沿用既有格式"] });
+  await db.query(
+    "UPDATE tasks SET status='answered',answer='原回答' WHERE id=$1",
+    [t.id],
+  );
+  expect(
+    (
+      await action({ ...t, version: 2 }, "assumption", {
+        index: 0,
+        value: "改用其他格式",
+      })
+    ).statusCode,
+  ).toBe(409);
+  await db.query("UPDATE projects SET enabled=false WHERE id=$1", [
+    t.project_id,
+  ]);
+  expect(
+    (await action(t, "assumption", { index: 0, value: "改用其他格式" }))
+      .statusCode,
+  ).toBe(409);
+  await db.query("UPDATE projects SET enabled=true WHERE id=$1", [
+    t.project_id,
+  ]);
+  const response = await action(t, "assumption", {
+    index: 0,
+    value: "請提供資料庫密碼的實際值",
+  });
+  expect(response.statusCode).toBe(200);
+  expect(response.json()).toMatchObject({
+    parent_id: t.id,
+    status: "awaiting_approval",
+    approved_version: null,
+  });
+  expect(
+    (await db.one("SELECT answer FROM tasks WHERE id=$1", [t.id])).answer,
+  ).toBe("原回答");
+});
 
 describe.each(["command", "auto"] as const)("%s 模式的資訊缺口", (mode) => {
   it("模糊查詢只留下單一問題與常見答案，不接受開發方案", async () => {
@@ -316,6 +505,24 @@ it("修改單一假設保留其餘需求，產生新版本並作廢舊核准", a
   const thread = await threadHistory(db, { parent_id: t.id });
   expect(thread[0].question).toContain("日期使用民國年");
 });
+it("重新查詢整份需求時，修改假設不會移除原題的人工審核風險", async () => {
+  const t = await propose("command", { assumptions: ["沿用既有格式"] });
+  await db.query(
+    "UPDATE tasks SET status='answered',answer='原回答',risk_reasons='[\"索取機密實際值\"]' WHERE id=$1",
+    [t.id],
+  );
+  const result = await action(t, "assumption", {
+    index: 0,
+    value: "改用表格整理",
+  });
+  expect(result.statusCode).toBe(200);
+  expect(result.json()).toMatchObject({
+    parent_id: t.id,
+    status: "awaiting_approval",
+    approved_version: null,
+    risk_reasons: ["索取機密實際值"],
+  });
+});
 it("修改假設不會順便清除待回答的問題", async () => {
   const t = await propose("command", {
     question,
@@ -442,7 +649,7 @@ it("模型契約明確要求單一問題與假設，拒絕多個問題物件或�
   expect(
     Decisions.safeParse({ decisions: [{ ...d, suggestions: directions }] })
       .success,
-  ).toBe(false);
+  ).toBe(true);
   expect(
     Decisions.safeParse({
       decisions: [
@@ -454,7 +661,7 @@ it("模型契約明確要求單一問題與假設，拒絕多個問題物件或�
         },
       ],
     }).success,
-  ).toBe(false);
+  ).toBe(true);
   expect(
     Decisions.safeParse({
       decisions: [{ ...d, question: [question, question] }],

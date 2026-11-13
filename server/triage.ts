@@ -69,19 +69,17 @@ const BaseDecision = z
     risks: z.array(z.string()).max(20),
     missing: z.array(z.string()).max(20),
     relatedTaskId: z.string().nullable(),
-    suggestions: z
-      .array(
-        z
-          .object({
-            label: z.string().max(40),
-            summary: z.string().max(3000),
-            acceptance: z.array(z.string().max(500)).max(10),
-            recommended: z.boolean().default(false),
-            reason: z.string().max(500).default(""),
-          })
-          .strict(),
-      )
-      .max(3),
+    suggestions: z.array(
+      z
+        .object({
+          label: z.string().max(40),
+          summary: z.string().max(3000),
+          acceptance: z.array(z.string().max(500)).max(10),
+          recommended: z.boolean().default(false),
+          reason: z.string().max(500).default(""),
+        })
+        .strict(),
+    ),
   })
   .strict();
 const contextSelection = { contextSourceIds: z.array(z.string()).max(20) };
@@ -96,24 +94,8 @@ const ContextDecision = BaseDecision.extend({
   ...contextSelection,
   ...typeSelection,
 });
-const ModelDecision = ContextDecision.superRefine((d, context) => {
-  if (
-    d.suggestions.length &&
-    (d.taskType === "query" ||
-      d.question ||
-      d.suggestions.length < 2 ||
-      d.suggestions.filter((s) => s.recommended).length !== 1 ||
-      d.suggestions.some((s) => !s.reason.trim()))
-  )
-    context.addIssue({
-      code: "custom",
-      path: ["suggestions"],
-      message:
-        "只有修改的產品方向可提供二到三個方案，須有唯一推薦與理由，且不得同時補問",
-    });
-});
 export const Decisions = z
-  .object({ decisions: z.array(ModelDecision).max(20) })
+  .object({ decisions: z.array(ContextDecision).max(20) })
   .strict();
 const imageSelection = {
   imageSourceIds: z.array(z.string()).max(6),
@@ -131,7 +113,7 @@ export const Decision = BaseDecision.extend({
 });
 const VisionDecisions = z
   .object({
-    decisions: z.array(ModelDecision.safeExtend(imageSelection)).max(20),
+    decisions: z.array(ContextDecision.extend(imageSelection)).max(20),
     imageObservations: z.array(ImageObservation).max(100),
   })
   .strict();
@@ -1065,6 +1047,7 @@ export class Triage {
         for (const m of quotedBot)
           if (m.quoted_id === r.sent_message_id)
             quotedTask.set(m.id, r.task_id);
+    const adjustments = new Map<TriageDecision, string[]>();
     for (const d of decisions) {
       // 寫入 AGENTS.md 也會修改儲存庫，聊天中的知識要求同樣先確認專案。
       if (d.kind === "knowledge") {
@@ -1076,7 +1059,7 @@ export class Triage {
         ];
       }
       Decision.parse(d);
-      clarifyDecision(d);
+      adjustments.set(d, clarifyDecision(d));
       if (d.sourceIds.some((id) => !allowed.has(id)))
         throw new AppError(422, "AI 引用了不屬於此批次的來源");
       if (
@@ -1446,6 +1429,13 @@ export class Triage {
             c,
           );
           reviewedTasks.add(t.id);
+          if (adjustments.get(d)?.length)
+            await this.db.audit(
+              t.id,
+              "ai_output_adjusted",
+              `已調整 AI 輸出：${adjustments.get(d)!.join("；")}`,
+              c,
+            );
           selectedSources.set(t.id, [
             ...(d.contextSourceIds ?? []),
             ...(d.imageSourceIds ?? []),
@@ -1503,6 +1493,13 @@ export class Triage {
           if (!manual)
             await saveProjectConfirmation(c, t, "evidence", "系統證據檢查");
           reviewedTasks.add(t.id);
+          if (adjustments.get(d)?.length)
+            await this.db.audit(
+              t.id,
+              "ai_output_adjusted",
+              `已調整 AI 輸出：${adjustments.get(d)!.join("；")}`,
+              c,
+            );
           selectedSources.set(t.id, [
             ...(d.contextSourceIds ?? []),
             ...(d.imageSourceIds ?? []),

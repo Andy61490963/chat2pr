@@ -294,6 +294,15 @@ it("採用方案需要同時確認專案，不能由舊請求直接核准", asyn
         label: "方案一",
         summary: "調整機台欄位提示文字",
         acceptance: ["提示文字清楚"],
+        recommended: true,
+        reason: "沿用既有欄位",
+      },
+      {
+        label: "獨立說明頁",
+        summary: "新增機台欄位說明頁",
+        acceptance: ["可從欄位連到說明頁"],
+        recommended: false,
+        reason: "適合較長的說明",
       },
     ],
   });

@@ -25,6 +25,7 @@ export function TaskClarification({
     version: number;
   } | null>(null);
   const assumptions = task.assumptions ?? [];
+  const createsFollowup = task.mode === "query" && task.status === "answered";
   // 成功儲存後由伺服器版本與內容確認；失敗時保留輸入，背景更新時禁止覆寫新版本。
   const saved =
     editing &&
@@ -74,7 +75,9 @@ export function TaskClarification({
         >
           <h3 className="text-sm font-medium">我先這樣假設</h3>
           <p className="text-xs text-muted-foreground">
-            可以直接修改其中一項；儲存後會更新需求，請重新確認。
+            {createsFollowup
+              ? "修改假設會建立一題追問，保留目前的回答。"
+              : "可以直接修改其中一項；儲存後會更新需求，請重新確認。"}
           </p>
           <ul className="flex flex-col gap-3">
             {assumptions.map((assumption, index) => (
@@ -89,7 +92,9 @@ export function TaskClarification({
                           task,
                           "assumption",
                           { index, value: draft.value.trim() },
-                          "假設已更新，請重新確認需求",
+                          createsFollowup
+                            ? "已依新假設建立追問，原回答保留"
+                            : "假設已更新，請重新確認需求",
                         );
                     }}
                   >
@@ -121,7 +126,7 @@ export function TaskClarification({
                           draft.value.trim() === assumption
                         }
                       >
-                        儲存假設
+                        {createsFollowup ? "依新假設接著問" : "儲存假設"}
                       </Button>
                       <Button
                         type="button"
