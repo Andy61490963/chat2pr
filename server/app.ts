@@ -966,7 +966,7 @@ export async function buildApp(
   app.post("/api/groups/:id/retry", async (req) => {
     await requireAdmin(db, req);
     await db.query(
-      "UPDATE groups SET triage_failures=0,triage_error=NULL,first_pending_at=(SELECT min(received_at) FROM messages WHERE group_id=$1 AND NOT processed AND NOT revoked),last_pending_at=(SELECT max(received_at) FROM messages WHERE group_id=$1 AND NOT processed AND NOT revoked) WHERE id=$1",
+      "UPDATE groups SET triage_failures=0,triage_error=NULL,triage_retry_at=NULL,first_pending_at=(SELECT min(received_at) FROM messages WHERE group_id=$1 AND NOT processed AND NOT revoked),last_pending_at=(SELECT max(received_at) FROM messages WHERE group_id=$1 AND NOT processed AND NOT revoked) WHERE id=$1",
       [(req.params as { id: string }).id],
     );
     await db.audit(null, "triage_retry", "管理者重新啟動群組需求辨識");

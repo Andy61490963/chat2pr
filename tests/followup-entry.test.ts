@@ -243,6 +243,60 @@ it("純追問等安靜五秒，連續追問重新計時", async () => {
   await receive("那 ch4 呢？");
   expect(await dueTriageGroups(db)).toEqual([]);
 });
+it.each([false, true])(
+  "連續判讀失敗會退避六十秒，不因引用=%s或新訊息快速停用群組",
+  async (quoted) => {
+    await receive(
+      quoted ? "那 ch3 呢？" : "/任務 查詢欄位",
+      quoted ? "bot-answer" : "unrelated",
+    );
+    await age(301);
+    const { service, classify } = processor();
+    classify.mockRejectedValue(new Error("虛構模型暫時故障"));
+    await expect(service.process("group-a", true)).rejects.toThrow("暫時故障");
+    const failed = await db.one<{ wait: number }>(
+      "SELECT extract(epoch FROM triage_retry_at-now())::float AS wait FROM groups WHERE id='group-a'",
+    );
+    expect(failed.wait).toBeGreaterThan(58);
+    expect(failed.wait).toBeLessThanOrEqual(60);
+    // 以資料庫期限模擬第 5、30、59 秒，涵蓋排程與 pg-boss 重試；不等待真實一分鐘。
+    for (const elapsed of [5, 30, 59]) {
+      await db.query(
+        "UPDATE groups SET triage_retry_at=now()+make_interval(secs=>$1) WHERE id='group-a'",
+        [60 - elapsed],
+      );
+      await receive("/任務 補充欄位用途", quoted ? "bot-answer" : "unrelated");
+      await age(301);
+      expect(await dueTriageGroups(db)).toEqual([]);
+      await service.process("group-a", true);
+    }
+    expect(classify).toHaveBeenCalledTimes(1);
+    expect(
+      (await db.one("SELECT triage_failures FROM groups WHERE id='group-a'"))
+        .triage_failures,
+    ).toBe(1);
+    await db.query(
+      "UPDATE groups SET triage_retry_at=now()-interval '1 second' WHERE id='group-a'",
+    );
+    await expect(service.process("group-a", true)).rejects.toThrow("暫時故障");
+    expect(classify).toHaveBeenCalledTimes(2);
+  },
+);
+it("首次純引用追問在五秒開始判讀且成功清除退避期限", async () => {
+  await receive();
+  const { service, classify } = processor();
+  await age(4);
+  await service.process("group-a", true);
+  expect(classify).not.toHaveBeenCalled();
+  await age(5.1);
+  await service.process("group-a", true);
+  expect(classify).toHaveBeenCalledOnce();
+  expect(
+    await db.one(
+      "SELECT triage_failures,triage_retry_at FROM groups WHERE id='group-a'",
+    ),
+  ).toEqual({ triage_failures: 0, triage_retry_at: null });
+});
 it.each(["指令需求", "一般文字", "圖片", "第一百零一則"])(
   "混有%s維持六十秒及五分鐘上限",
   async (kind) => {

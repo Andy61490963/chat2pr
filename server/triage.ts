@@ -966,7 +966,7 @@ export class Triage {
           ),
         );
         await this.db.query(
-          "UPDATE groups SET triage_failures=0,triage_error=NULL WHERE id=$1",
+          "UPDATE groups SET triage_failures=0,triage_error=NULL,triage_retry_at=NULL WHERE id=$1",
           [groupId],
         );
       } finally {
@@ -974,8 +974,9 @@ export class Triage {
       }
     } catch (e) {
       if (!(e instanceof AppError && [409, 429].includes(e.statusCode))) {
+        // 失敗後至少等 60 秒；排程與佇列重試都會重查此期限，避免五秒追問加速耗盡三次容錯。
         const failure = await this.db.one<{ triage_failures: number }>(
-          "UPDATE groups SET triage_failures=triage_failures+1,triage_error=$2 WHERE id=$1 RETURNING triage_failures",
+          "UPDATE groups SET triage_failures=triage_failures+1,triage_error=$2,triage_retry_at=now()+interval '60 seconds' WHERE id=$1 RETURNING triage_failures",
           [groupId, "需求辨識失敗，請檢查服務狀態後重試"],
         );
         if (failure.triage_failures === 3)

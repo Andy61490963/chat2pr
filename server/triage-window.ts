@@ -15,6 +15,7 @@ export async function dueTriageGroups(
      WHERE ($1::text IS NULL OR g.id=$1) AND b.count>0
      AND EXISTS(SELECT 1 FROM settings WHERE id=1 AND NOT COALESCE((value->>'triage_paused')::boolean,false) AND NOT (value->>'paused')::boolean)
      AND g.enabled AND g.triage_failures<3
+     AND (g.triage_retry_at IS NULL OR g.triage_retry_at<=now())
      AND EXISTS(SELECT 1 FROM group_projects gp JOIN projects p ON p.id=gp.project_id WHERE gp.group_id=g.id AND p.enabled AND p.validated_at IS NOT NULL)
      AND g.first_pending_at IS NOT NULL
      AND (g.last_pending_at<=now()-CASE WHEN b.fast THEN interval '5 seconds' ELSE interval '60 seconds' END OR g.first_pending_at<=now()-interval '300 seconds')`,
