@@ -318,6 +318,18 @@ export function ProjectsView({
                     </p>
                   )}
                   <p>{open.setup_plan.explanation}</p>
+                  {!!open.setup_plan.omissions?.length && (
+                    <div className="text-xs text-muted-foreground">
+                      <p>以下檔案只提供摘錄或未讀取：</p>
+                      <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                        {open.setup_plan.omissions.map((o, i) => (
+                          <li key={i} className="break-all">
+                            {o.path}：{o.reason}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
                   <details className="text-xs text-muted-foreground">
                     <summary className="cursor-pointer">
                       查看 AI 設定依據
