@@ -53,7 +53,11 @@ DO $$ BEGIN
  END IF;
 END $$;
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS trigger_version integer NOT NULL DEFAULT 1;
+-- 獨立於收訊時間，避免新訊息或五分鐘彙整上限跳過判讀失敗退避。
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS triage_retry_at timestamptz;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS trigger_mode text NOT NULL DEFAULT 'auto' CHECK(trigger_mode IN ('auto','command','chat'));
+-- 保存收訊當下驗證過的引用，避免通知清理後改變等待時間；舊訊息維持一般等待。
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS bot_reply boolean NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS messages_chat_timeline ON messages(group_id,received_at DESC,id DESC);
 CREATE TABLE IF NOT EXISTS tasks (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), project_id uuid NOT NULL REFERENCES projects(id), group_id text NOT NULL REFERENCES groups(id),

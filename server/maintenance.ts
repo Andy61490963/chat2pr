@@ -84,8 +84,13 @@ export async function backup(db: Database) {
   const snapshot = await db.transaction(async (c) => {
     await c.query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ");
     const data: Record<string, unknown> = {};
-    for (const table of backupTables)
+    for (const table of backupTables) {
       data[table] = (await c.query(`SELECT * FROM ${table}`)).rows;
+      // 退避只屬於目前執行中的判讀；還原備份不應帶回舊的重試期限，備份格式維持相容。
+      if (table === "groups")
+        for (const group of data[table] as Record<string, unknown>[])
+          delete group.triage_retry_at;
+    }
     return data;
   });
   const iv = randomBytes(12),
