@@ -12,6 +12,7 @@ import { secretsPath } from "./config.js";
 import { Budget } from "./budget.js";
 import { GitHub } from "./github.js";
 import { Line } from "./line.js";
+import { tellGroupWaiting } from "./group-replies.js";
 import { dueTriageGroups } from "./triage-window.js";
 import {
   Triage,
@@ -342,17 +343,31 @@ export async function startJobs(
             { singletonKey: id, singletonSeconds: 120 },
           );
       }
-      if (s.paused) return;
+      if (s.paused) {
+        // 暫停期間有排隊的工作就告訴群組一聲；同一群組每 6 小時最多一則。
+        for (const t of await db.query<{ id: string }>(
+          "SELECT DISTINCT ON (group_id) id FROM tasks WHERE status='queued' ORDER BY group_id,created_at",
+        ))
+          await tellGroupWaiting(db, t.id, "paused");
+        return;
+      }
       if (s.ai_mode !== "api") {
         try {
           await subscriptionGate.ensure();
         } catch (error) {
           if (!(error instanceof SubscriptionBlocked)) throw error;
-          await db.query(
+          const held = await db.query<{ id: string; group_id: string }>(
             `UPDATE tasks SET status='budget_wait',last_error=$1,updated_at=now() WHERE status='queued'
-             AND EXISTS(SELECT 1 FROM settings WHERE id=1 AND revision=$2 AND value->>'ai_mode'<>'api' AND NOT (value->>'paused')::boolean)`,
+             AND EXISTS(SELECT 1 FROM settings WHERE id=1 AND revision=$2 AND value->>'ai_mode'<>'api' AND NOT (value->>'paused')::boolean)
+             RETURNING id,group_id`,
             [error.message, snapshot.revision],
           );
+          const told = new Set<string>();
+          for (const t of held)
+            if (!told.has(t.group_id)) {
+              told.add(t.group_id);
+              await tellGroupWaiting(db, t.id, "quota");
+            }
           return;
         }
         // 真正重新確認訂閱額度恢復，且尚未達每日執行上限，才重新排隊。

@@ -1,4 +1,6 @@
-import { createFollowup } from "./followup.js";
+import { createFollowup, relinkTask } from "./followup.js";
+import { answerFromDashboard } from "./answers.js";
+import { frictionMetrics } from "./friction.js";
 import {
   approveCheck,
   checkDetail,
@@ -499,6 +501,18 @@ export async function buildApp(
     }, 5000);
     reply.raw.on("close", () => clearInterval(timer));
   });
+  // 使用摩擦指標：每件任務需要人回應幾次、要切到看板幾次、等多久。
+  app.get("/api/metrics/friction", async (req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    await requireUser(db, req);
+    const q = z
+      .object({
+        days: z.coerce.number().int().min(1).max(90).default(7),
+        group_id: z.string().max(100).optional(),
+      })
+      .parse(req.query);
+    return frictionMetrics(db, q.days, q.group_id || null);
+  });
   // 定期檢查：成員可以看；建立、修改、試跑、核准、暫停與刪除需要管理者。
   const checkId = (req: { params: unknown }) =>
     z
@@ -622,6 +636,46 @@ export async function buildApp(
       actor.login,
       b,
       "dashboard",
+    );
+  });
+  // 直接回答補問：系統把回答併進需求，不用編輯整份需求。
+  app.post("/api/tasks/:id/answer", async (req) => {
+    const actor = await requireUser(db, req);
+    const b = z
+      .object({
+        text: z.string().min(1).max(2000),
+        version: z.number().int().positive(),
+      })
+      .parse(req.body);
+    return answerFromDashboard(
+      db,
+      z
+        .string()
+        .uuid()
+        .parse((req.params as { id: string }).id),
+      b.version,
+      b.text,
+      actor.login,
+    );
+  });
+  // 接錯題時改正：改接到同群組另一題，或改成新話題。
+  app.post("/api/tasks/:id/relink", async (req) => {
+    const actor = await requireUser(db, req);
+    const b = z
+      .object({
+        parent_id: z.string().uuid().nullable(),
+        version: z.number().int().positive(),
+      })
+      .parse(req.body);
+    return relinkTask(
+      db,
+      z
+        .string()
+        .uuid()
+        .parse((req.params as { id: string }).id),
+      b.version,
+      b.parent_id,
+      actor.login,
     );
   });
   // 對已回答的查詢追問：建立新的一題，原回答保留。

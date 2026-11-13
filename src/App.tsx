@@ -920,14 +920,35 @@ export function App() {
           act={act}
           open={showTask}
           followup={(task, text) =>
+            run(
+              async () => {
+                const created = await request<{ id: string; status: string }>(
+                  `/api/tasks/${task.id}/followup`,
+                  "POST",
+                  { text },
+                );
+                await openTask(created.id);
+              },
+              task.mode === "query" ? "已送出追問" : "已送出追加，等待確認",
+            )
+          }
+          answer={(task, text) =>
             run(async () => {
-              const created = await request<{ id: string; status: string }>(
-                `/api/tasks/${task.id}/followup`,
-                "POST",
-                { text },
-              );
-              await openTask(created.id);
-            }, "已送出追問")
+              await request(`/api/tasks/${task.id}/answer`, "POST", {
+                text,
+                version: task.version,
+              });
+              await openTask(task.id, false);
+            }, "已收到回答")
+          }
+          relink={(task, parentId) =>
+            run(async () => {
+              await request(`/api/tasks/${task.id}/relink`, "POST", {
+                parent_id: parentId,
+                version: task.version,
+              });
+              await openTask(task.id, false);
+            }, "已改接")
           }
         />
       )}
