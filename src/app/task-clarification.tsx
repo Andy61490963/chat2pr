@@ -12,13 +12,18 @@ export function TaskClarification({
   busy,
   act,
   amend,
+  answer,
 }: {
   task: Task;
   editable: boolean;
   busy: boolean;
   act: Act;
   amend: () => void;
+  /** 直接回答補問；系統把回答併進需求。 */
+  answer: (task: Task, text: string) => Promise<unknown>;
 }) {
+  const [reply, setReply] = useState("");
+  useUnsaved("task-answer", reply.trim().length > 0);
   const [editing, setEditing] = useState<{
     index: number;
     value: string;
@@ -45,26 +50,66 @@ export function TaskClarification({
           <p className="text-sm">{task.question.text}</p>
           {task.question.choices.length > 0 && (
             <div className="flex flex-wrap gap-2" aria-label="常見答案">
-              {task.question.choices.map((choice) => (
-                <Badge key={choice} variant="secondary">
-                  {choice}
-                </Badge>
-              ))}
+              {task.question.choices.map((choice) =>
+                editable ? (
+                  <Button
+                    key={choice}
+                    type="button"
+                    variant="secondary"
+                    size="xs"
+                    onClick={() => setReply(choice)}
+                  >
+                    {choice}
+                  </Button>
+                ) : (
+                  <Badge key={choice} variant="secondary">
+                    {choice}
+                  </Badge>
+                ),
+              )}
             </div>
           )}
-          <p className="text-xs text-muted-foreground">
-            常見答案僅供參考，也可以補充其他情況。
-          </p>
           {editable && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="self-start"
-              disabled={busy}
-              onClick={amend}
+            <form
+              className="flex flex-col gap-2"
+              onSubmit={async (event) => {
+                event.preventDefault();
+                await answer(task, reply.trim());
+                setReply("");
+              }}
             >
-              補充需求
-            </Button>
+              <Label htmlFor="question-answer">回答這個問題</Label>
+              <Textarea
+                id="question-answer"
+                rows={2}
+                maxLength={2000}
+                value={reply}
+                placeholder="點上方的常見答案，或直接輸入"
+                onChange={(e) => setReply(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                系統會把回答併進需求。查詢會直接繼續；修改需求會再請管理者確認。群組成員也可以在
+                LINE「回覆」機器人的提問來回答。
+              </p>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={busy || !reply.trim()}
+                >
+                  送出回答
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={busy}
+                  onClick={amend}
+                >
+                  改成編輯整份需求
+                </Button>
+              </div>
+            </form>
           )}
         </section>
       )}

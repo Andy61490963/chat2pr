@@ -9,10 +9,13 @@ import {
   commandAck,
   disabledAck,
   followupAck,
+  answerAck,
+  answerHeldAck,
   detailRequest,
   lineChunks,
   groupRepliesOn,
 } from "./group-replies.js";
+import { applyAnswer, questionByQuote } from "./answers.js";
 const Event = z
   .object({
     webhookEventId: z.string(),
@@ -185,6 +188,50 @@ export class Line {
           return;
         }
         if (e.type === "message" && e.message) {
+          // 「回覆」機器人的補問就是回答：直接併進需求，不用等判讀，也不再呼叫模型。
+          // 含常見憑證格式的回答不收，改走一般流程，避免機密寫進需求。
+          const answerText = e.message.text?.trim() ?? "";
+          const asked =
+            settings.enabled &&
+            group &&
+            e.message.type === "text" &&
+            e.message.quotedMessageId &&
+            answerText &&
+            redact(answerText) === answerText
+              ? await questionByQuote(c, group, e.message.quotedMessageId)
+              : undefined;
+          if (asked && group) {
+            const saved = await c.query(
+              "INSERT INTO messages(id,group_id,user_id,type,text,quoted_id,trigger_mode,processed,bot_reply) VALUES($1,$2,$3,'text',$4,$5,'command',true,true) ON CONFLICT DO NOTHING RETURNING id",
+              [
+                e.message.id,
+                group,
+                e.source?.userId ?? null,
+                e.message.text,
+                e.message.quotedMessageId,
+              ],
+            );
+            if (!saved.rowCount) return;
+            const t = await applyAnswer(
+              this.db,
+              c,
+              asked,
+              answerText,
+              "群組成員（LINE）",
+              false,
+              e.message.id,
+            );
+            if (
+              e.replyToken &&
+              settings.reply_mode !== "off" &&
+              settings.replies
+            )
+              acks.push({
+                token: e.replyToken,
+                text: t.status === "queued" ? answerAck : answerHeldAck,
+              });
+            return;
+          }
           // 引用機器人的查詢回答打「詳細」：用 reply token 分段送出完整內容，不建任務、不呼叫模型。
           if (
             group &&
