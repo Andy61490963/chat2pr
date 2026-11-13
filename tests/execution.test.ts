@@ -1528,3 +1528,38 @@ it("沒有上一題時不帶對話串", async () => {
   await s.execution.execute(s.task.id);
   expect(JSON.parse(s.prompts[0]).conversation).toBeUndefined();
 });
+it("Codex 執行中缺資訊：問題結構化成補問，並在群組發問", async () => {
+  const s = await queryScenario();
+  const call = s.runner.call.bind(s.runner);
+  s.runner.call = async <T>(path: string, raw: unknown): Promise<T> =>
+    path === "phase" && (raw as { phase?: string }).phase === "code"
+      ? ({
+          exitCode: 0,
+          stdout: JSON.stringify({
+            final: `AGENTFLOW_NEEDS_INPUT: ${JSON.stringify({
+              questions: [
+                {
+                  kind: "information",
+                  question: "要查正式機還是測試機的設定？",
+                },
+              ],
+            })}`,
+          }),
+          stderr: "",
+        } as T)
+      : call<T>(path, raw);
+  await s.execution.execute(s.task.id);
+  const task = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [
+    s.task.id,
+  ]);
+  expect(task.status).toBe("awaiting_approval");
+  expect(task.question).toEqual({
+    text: "要查正式機還是測試機的設定？",
+    choices: [],
+  });
+  const n = await db.one<{ text: string }>(
+    "SELECT text FROM notifications WHERE task_id=$1 AND kind='group_question'",
+    [s.task.id],
+  );
+  expect(n.text).toContain("要查正式機還是測試機的設定？");
+});
