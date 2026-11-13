@@ -9,6 +9,7 @@ const critical: Record<string, string> = {
   openai: "OpenAI API",
   runner: "隔離執行器",
   tunnel: "HTTPS 入口",
+  host_resources: "主機資源",
 };
 
 /**

@@ -156,6 +156,8 @@ export interface Settings {
   container_network: "isolated" | "open";
   ai_mode: AiMode;
   daily_runs: number;
+  /** 全系統同時執行的任務數（系統頁設定，預設 2）；同一專案的修改仍一次一個。 */
+  max_runs?: number;
   codex_model: string | null;
   triage_effort: Effort;
   coding_effort: Effort;
