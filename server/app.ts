@@ -1,5 +1,6 @@
 import { createFollowup, relinkTask } from "./followup.js";
 import { answerFromDashboard } from "./answers.js";
+import { frictionMetrics } from "./friction.js";
 import { requestBackfill } from "./retrieval.js";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
@@ -489,6 +490,18 @@ export async function buildApp(
         .catch(() => reply.raw.end());
     }, 5000);
     reply.raw.on("close", () => clearInterval(timer));
+  });
+  // 使用摩擦指標：每件任務需要人回應幾次、要切到看板幾次、等多久。
+  app.get("/api/metrics/friction", async (req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    await requireUser(db, req);
+    const q = z
+      .object({
+        days: z.coerce.number().int().min(1).max(90).default(7),
+        group_id: z.string().max(100).optional(),
+      })
+      .parse(req.query);
+    return frictionMetrics(db, q.days, q.group_id || null);
   });
   app.get("/api/tasks/:id", async (req, reply) => {
     reply.header("Cache-Control", "no-store");
