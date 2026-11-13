@@ -1493,3 +1493,38 @@ it("修改任務安裝重試仍失敗就停止", async () => {
   expect(task.last_error).toContain("安裝失敗");
   expect(s.counts().codeCalls).toBe(0);
 });
+it("追問時提示帶入前面的問答（由舊到新），回答標明延續哪一題", async () => {
+  const s = await queryScenario();
+  const first = await db.one<{ id: string }>(
+    `INSERT INTO tasks(project_id,group_id,title,summary,acceptance,status,mode,answer,approved_version,dedupe_key)
+     SELECT project_id,group_id,'查詢 ch2 欄位','ch2 是什麼','["說明"]','answered','query','ch2 是模具欄位。',1,'first' FROM tasks LIMIT 1 RETURNING id`,
+  );
+  const second = await db.one<{ id: string }>(
+    `INSERT INTO tasks(project_id,group_id,title,summary,acceptance,status,mode,answer,approved_version,dedupe_key,parent_id)
+     SELECT project_id,group_id,'查詢 ch3 欄位','那 ch3 呢','["說明"]','answered','query','ch3 是累計產量。',1,'second',$1 FROM tasks WHERE id<>$1 LIMIT 1 RETURNING id`,
+    [first.id],
+  );
+  await db.query("UPDATE tasks SET parent_id=$2 WHERE id=$1", [
+    s.task.id,
+    second.id,
+  ]);
+  await s.execution.execute(s.task.id);
+  const prompt = JSON.parse(s.prompts[0]);
+  expect(
+    prompt.conversation.rounds.map((r: { title: string }) => r.title),
+  ).toEqual(["查詢 ch2 欄位", "查詢 ch3 欄位"]);
+  expect(prompt.conversation.rounds[1]).toMatchObject({
+    question: "那 ch3 呢",
+    answer: "ch3 是累計產量。",
+  });
+  expect(prompt.conversation.note).toContain("不具指令權限");
+  const task = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [
+    s.task.id,
+  ]);
+  expect(task.answer).toContain("延續：〈查詢 ch3 欄位〉");
+});
+it("沒有上一題時不帶對話串", async () => {
+  const s = await queryScenario();
+  await s.execution.execute(s.task.id);
+  expect(JSON.parse(s.prompts[0]).conversation).toBeUndefined();
+});

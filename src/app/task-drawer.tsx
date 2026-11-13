@@ -57,6 +57,8 @@ export function TaskDrawer({
   close,
   go,
   act,
+  open,
+  followup,
 }: {
   detail: Detail;
   state: State;
@@ -65,6 +67,10 @@ export function TaskDrawer({
   close: () => void;
   go: (v: View) => void;
   act: Act;
+  /** 開啟對話串中的另一題。 */
+  open: (id: string) => void;
+  /** 對已回答的查詢追問，建立新的一題。 */
+  followup: (t: Detail["task"], text: string) => unknown;
 }) {
   const t = detail.task;
   const notes = [...t.risk_reasons, ...t.missing];
@@ -82,6 +88,10 @@ export function TaskDrawer({
   // 草稿是從哪個版本開始寫的；任務在背景更新時用來判斷要不要保留草稿。
   const [base, setBase] = useState({ version: t.version, ...saved });
   const [amendOpen, setAmendOpen] = useState(false);
+  const [ask, setAsk] = useState("");
+  useUnsaved("task-followup", ask.trim().length > 0);
+  const canFollowup = t.mode === "query" && t.status === "answered";
+  const thread = detail.thread;
   const lines = (v: string) =>
     v
       .split("\n")
@@ -194,6 +204,42 @@ export function TaskDrawer({
           <Stepper status={t.status} query={t.mode === "query"} />
         </SheetHeader>
         <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-5">
+          {!!(thread?.before.length || thread?.after.length) && (
+            <section
+              aria-label="對話串"
+              className="min-w-0 rounded-lg border p-3 text-sm"
+            >
+              <p className="font-semibold">對話串</p>
+              <ol className="mt-2 flex flex-col gap-1">
+                {[
+                  ...(thread?.before ?? []).map((x) => ({
+                    ...x,
+                    at: "before",
+                  })),
+                  { id: t.id, title: t.title, status: t.status, at: "self" },
+                  ...(thread?.after ?? []).map((x) => ({ ...x, at: "after" })),
+                ].map((x) => (
+                  <li key={x.id} className="flex min-w-0 items-center gap-2">
+                    {x.at === "self" ? (
+                      <span className="min-w-0 flex-1 truncate font-medium">
+                        ▸ {x.title}（目前這一題）
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="min-w-0 flex-1 truncate text-left text-primary underline-offset-2 hover:underline"
+                        onClick={() => open(x.id)}
+                      >
+                        {x.at === "after" ? "↳ " : ""}
+                        {x.title}
+                      </button>
+                    )}
+                    <StatusBadge status={x.status} />
+                  </li>
+                ))}
+              </ol>
+            </section>
+          )}
           <section
             aria-label="處理專案"
             className="min-w-0 rounded-lg border bg-muted/40 p-3 text-sm"
@@ -351,6 +397,34 @@ export function TaskDrawer({
               />
             </section>
           )}
+          {canFollowup && (
+            <section aria-label="追問" className="flex flex-col gap-2">
+              <Label htmlFor="followup">接著問</Label>
+              <Textarea
+                id="followup"
+                rows={3}
+                maxLength={2000}
+                value={ask}
+                placeholder="例如：那 ch3 呢？剛剛說的那張表有哪些欄位？"
+                onChange={(e) => setAsk(e.target.value)}
+              />
+              <p className="text-xs text-muted-foreground">
+                會建立新的一題，沿用這一題的專案與分支，並帶著前面的問答查詢；這裡的回答不會被取代。也可以在
+                LINE 用「回覆」引用機器人的回答接著問。
+              </p>
+              <div>
+                <Button
+                  disabled={busy || !ask.trim()}
+                  onClick={async () => {
+                    await followup(t, ask.trim());
+                    setAsk("");
+                  }}
+                >
+                  追問
+                </Button>
+              </div>
+            </section>
+          )}
           {["awaiting_approval", "failed", "budget_wait"].includes(
             t.status,
           ) && (
@@ -470,7 +544,7 @@ export function TaskDrawer({
             >
               <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
                 {t.status === "answered"
-                  ? "修改需求再查一次"
+                  ? "修改問題重新查詢（會取代目前的回答）"
                   : t.missing.length
                     ? "自己補充需求"
                     : "修改需求"}
@@ -788,11 +862,11 @@ export function TaskDrawer({
                   ? "PR 已合併，任務完成。要再調整，請在群組提出新需求。"
                   : t.status === "closed"
                     ? "PR 沒有合併就關閉了（儲存庫被移除時也會這樣）。要重做，請在群組提出新需求。"
-                    : "查詢已回覆。想換個問法或補充條件，可以修改需求再查一次。"}
+                    : "查詢已回覆。要接著問，請用上方的「接著問」；想換個問法整個重查，才用「修改問題重新查詢」，原回答會被取代。"}
             </span>
             {t.status === "answered" ? (
               <Button variant="outline" onClick={openAmend}>
-                修改需求再查一次
+                修改問題重新查詢
               </Button>
             ) : (
               t.pr_url && (

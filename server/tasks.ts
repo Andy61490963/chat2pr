@@ -1,3 +1,4 @@
+import { threadOf } from "./followup.js";
 import { referencedSources } from "./retrieval.js";
 import { taskImageEvidence } from "./image-context.js";
 import { readReportImages } from "./query-report.js";
@@ -377,6 +378,7 @@ export class Tasks {
       reportImages: await readReportImages(this.db, id),
       contextEvidence: await readTaskContextEvidence(this.db, id),
       references: await referencedSources(this.db, id, task.group_id),
+      thread: await threadOf(this.db, task),
     };
   }
   async runEvents(taskId: string, runId: string, before?: number) {

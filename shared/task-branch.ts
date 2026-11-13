@@ -32,7 +32,8 @@ export interface BranchDecision {
   evidence: { sourceId: string; quote: string }[];
 }
 export interface TaskBranchSelection {
-  basis: "default" | "explicit" | "uncertain" | "manual";
+  /** followup：接續上一題時沿用它已確認的分支。 */
+  basis: "default" | "explicit" | "uncertain" | "manual" | "followup";
   reason: string;
   sourceIds: string[];
 }

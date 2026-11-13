@@ -1,3 +1,4 @@
+import { createFollowup } from "./followup.js";
 import { requestBackfill } from "./retrieval.js";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
@@ -556,6 +557,22 @@ export async function buildApp(
       actor.login,
       b,
       "dashboard",
+    );
+  });
+  // 對已回答的查詢追問：建立新的一題，原回答保留。
+  app.post("/api/tasks/:id/followup", async (req) => {
+    const actor = await requireUser(db, req);
+    const { text } = z
+      .object({ text: z.string().min(1).max(2000) })
+      .parse(req.body);
+    return createFollowup(
+      db,
+      z
+        .string()
+        .uuid()
+        .parse((req.params as { id: string }).id),
+      text,
+      actor.login,
     );
   });
   app.get("/api/messages/:id/image", async (req, reply) => {

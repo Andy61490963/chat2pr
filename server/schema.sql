@@ -626,3 +626,6 @@ CREATE TABLE IF NOT EXISTS project_schema_snapshots (
 );
 -- 最近一次告知管理者的服務狀態；正常與異常互換時才通知，持續異常不重複通知。
 ALTER TABLE service_health ADD COLUMN IF NOT EXISTS notified_ok boolean;
+-- 機器人送出的 LINE 訊息 ID：群組成員用「回覆」引用機器人的回答時，據此判斷是在接續哪一題。
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS sent_message_id text;
+CREATE INDEX IF NOT EXISTS notifications_sent_message ON notifications(sent_message_id) WHERE sent_message_id IS NOT NULL;
