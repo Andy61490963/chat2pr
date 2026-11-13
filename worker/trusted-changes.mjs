@@ -11,7 +11,11 @@ import {
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
-import { assertChangeLimits } from "./change-policy.mjs";
+import {
+  assertChangeLimits,
+  compileExcludes,
+  matchExclude,
+} from "./change-policy.mjs";
 
 const PREVIEW_BYTES = 150000;
 export const REVIEW_EVIDENCE_BYTES = 64 * 1024 * 1024;
@@ -46,10 +50,11 @@ async function candidate(options = {}) {
     "-c",
     "core.fsmonitor=false",
   ];
-  const git = (more, encoding = "utf8") =>
+  const git = (more, encoding = "utf8", input = undefined) =>
     execFileSync("git", [...args, ...more], {
       cwd: workspace,
       encoding,
+      input,
       maxBuffer: BASE_FILE_BYTES,
       windowsHide: true,
       env: {
@@ -65,16 +70,29 @@ async function candidate(options = {}) {
     git(["read-tree", "--empty"]);
     git(["read-tree", "HEAD"]);
     git(["add", "-A"]);
-    const names = git([
+    const status = git([
       "diff",
       "--cached",
-      "--name-only",
+      "--name-status",
       "--no-renames",
       "-z",
       "--",
     ])
       .split("\0")
       .filter(Boolean);
+    const changed = [];
+    for (let i = 0; i + 1 < status.length; i += 2)
+      changed.push({ name: status[i + 1], added: status[i] === "A" });
+    const excluded = await excludeBuildOutput(
+      git,
+      workspace,
+      changed,
+      compileExcludes(options.exclude ?? []),
+    );
+    const names = changed
+      .filter((c) => !excluded.paths.has(c.name))
+      .map((c) => c.name);
+    const added = new Set(changed.filter((c) => c.added).map((c) => c.name));
     const sizes = [];
     for (const name of names) {
       if (
@@ -102,10 +120,11 @@ async function candidate(options = {}) {
         path: name,
         bytes: stat?.size ?? 0,
         deleted: !stat,
+        added: added.has(name),
         mode: stat && stat.mode & 0o111 ? "100755" : "100644",
       });
     }
-    assertChangeLimits(sizes);
+    assertChangeLimits(sizes, excluded.summary);
     const entries = [];
     let originalBytes = 0;
     for (const item of sizes) {
@@ -146,12 +165,76 @@ async function candidate(options = {}) {
       args,
       git,
       entries,
+      excluded: excluded.summary,
       close: () => rm(gitDir, { recursive: true, force: true }),
     };
   } catch (e) {
     await rm(gitDir, { recursive: true, force: true });
     throw e;
   }
+}
+
+/**
+ * 建置產物不算 AI 的修改：只排除基底沒有的新檔案；原本就追蹤的檔案、
+ * 以及基底已有追蹤檔案的目錄（專案本來就提交建置結果）照常收集。
+ * 排除的檔案從可信索引移除，差異統計與預覽也不會出現；摘要交給 PR 說明與任務紀錄。
+ */
+async function excludeBuildOutput(git, workspace, changed, rules) {
+  const paths = new Set(),
+    groups = new Map(),
+    tracked = new Map();
+  let files = 0,
+    bytes = 0;
+  const trackedDirectory = (dir) => {
+    if (!tracked.has(dir))
+      tracked.set(
+        dir,
+        git(["ls-tree", "--name-only", "HEAD", "--", dir.slice(0, -1)]).length >
+          0,
+      );
+    return tracked.get(dir);
+  };
+  for (const change of rules.length ? changed : []) {
+    if (!change.added) continue;
+    const hit = matchExclude(change.name, rules);
+    if (!hit || (hit.directory && trackedDirectory(hit.group))) continue;
+    let size = 0;
+    try {
+      size = (await lstat(path.join(workspace, change.name))).size;
+    } catch (e) {
+      if (e.code !== "ENOENT") throw e;
+    }
+    paths.add(change.name);
+    files++;
+    bytes += size;
+    const group = groups.get(hit.group) ?? {
+      path: hit.group,
+      rule: hit.rule,
+      files: 0,
+      bytes: 0,
+    };
+    group.files++;
+    group.bytes += size;
+    groups.set(hit.group, group);
+  }
+  if (paths.size)
+    git(
+      ["update-index", "--force-remove", "-z", "--stdin"],
+      "utf8",
+      `${[...paths].join("\0")}\0`,
+    );
+  const list = [...groups.values()].sort(
+    (a, b) => b.files - a.files || a.path.localeCompare(b.path),
+  );
+  return {
+    paths,
+    summary: {
+      files,
+      bytes,
+      totalGroups: list.length,
+      groups: list.slice(0, 30),
+    },
+  };
 }
 
 /** 預覽只保留有界 bytes，但完整性狀態及全部候選雜湊永遠保留。 */
@@ -170,6 +253,7 @@ export async function collectCandidate(options = {}) {
       diff: preview.text,
       diffBytes: preview.bytes,
       diffTruncated: preview.truncated,
+      excluded: current.excluded,
     };
   } finally {
     await current.close();

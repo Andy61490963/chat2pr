@@ -13,6 +13,20 @@ export interface CandidateOptions {
   baseline?: string;
   scratchRoot?: string;
   maxEvidenceBytes?: number;
+  /** 已套用專案增減的完整排除清單，語意見 shared/build-output.ts。 */
+  exclude?: string[];
+}
+export interface ExcludedGroup {
+  path: string;
+  rule: string;
+  files: number;
+  bytes: number;
+}
+export interface ExcludedSummary {
+  files: number;
+  bytes: number;
+  totalGroups: number;
+  groups: ExcludedGroup[];
 }
 export const REVIEW_EVIDENCE_BYTES: number;
 export function collectCandidate(options?: CandidateOptions): Promise<{
@@ -22,6 +36,7 @@ export function collectCandidate(options?: CandidateOptions): Promise<{
   diff: string;
   diffBytes: number;
   diffTruncated: boolean;
+  excluded: ExcludedSummary;
 }>;
 export function prepareReviewEvidence(
   expected: ChangeEntry[] | undefined,

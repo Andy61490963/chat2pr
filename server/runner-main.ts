@@ -24,6 +24,10 @@ import {
 } from "./database-capture.js";
 import { cleanupDocker } from "./docker-cleanup.js";
 import { httpProbe, tcpProbe } from "./check-probes.js";
+import {
+  MAX_COLLECT_EXCLUDES,
+  validCollectExclude,
+} from "../shared/build-output.js";
 // 必須在任何 Docker 操作（尤其啟動清理）以前拒絕不完整的隔離設定。
 validateRunnerEnvironment();
 const app = Fastify({ logger: false, bodyLimit: 80 * 1024 * 1024 });
@@ -251,6 +255,13 @@ app.post("/phase", async (req) => {
     open: z.boolean().optional(),
     job: z.record(z.string(), z.unknown()).optional(),
     timeoutMs: z.number().int().min(1000).max(1800000),
+    // 收集差異時排除的建置產物；伺服器已套用專案增減，這裡只接受完整規則。
+    exclude: z
+      .array(
+        z.string().refine((e) => !e.startsWith("!") && validCollectExclude(e)),
+      )
+      .max(MAX_COLLECT_EXCLUDES + 20)
+      .optional(),
   }).parse(req.body);
   const observe = (e: Parameters<ObservationBuffer["add"]>[2]) =>
     observations.add(b.runId, b.phase, e);
@@ -289,6 +300,9 @@ app.post("/phase", async (req) => {
               ? { output: "collect" as const }
               : {}),
             ...(b.phase === "install" ? { nugetFeed: true } : {}),
+            ...(b.phase === "collect" && b.exclude
+              ? { collectExclude: b.exclude }
+              : {}),
             ...(ai && b.open === true
               ? { extraNetworks: ["line-agentflow_open"] }
               : b.phase === "code" && b.job?.packages === true

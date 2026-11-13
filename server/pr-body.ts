@@ -1,3 +1,5 @@
+import { formatBytes, type ExcludedSummary } from "../shared/build-output.js";
+
 // 組成給人閱讀的 PR 說明：先說做了什麼，再用一行交代測試結果，
 // 完整測試輸出收進可展開區塊並略過編譯警告，避免警告洗版蓋掉重點。
 const noise = /\bwarning\b|^\s+at\s|^npm (notice|warn)\b|^\s*$/i;
@@ -58,6 +60,7 @@ export function prReport(o: {
   dataSource?: "project" | "snapshot" | "inferred" | "none";
   limitations?: string;
   reviewNotes?: string[];
+  excluded?: ExcludedSummary;
 }) {
   const summary =
     o.codexSummary.trim().slice(0, 4000) || "（Codex 未提供說明）";
@@ -84,6 +87,7 @@ export function prReport(o: {
       "- 測試：此專案未設定測試命令，未執行自動測試",
       "- 獨立審查：通過",
     );
+  if (o.excluded?.files) lines.push("", ...excludedSection(o.excluded));
   const notes = (o.reviewNotes ?? [])
     .map((n) => n.trim())
     .filter(Boolean)
@@ -98,6 +102,26 @@ export function prReport(o: {
       ...notes.map((n) => `- [ ] ${clip(n.replace(/\s+/g, " "), 400)}`),
     );
   return lines.join("\n");
+}
+
+// 被排除的路徑一定列在 PR 說明，誤排除真正的修改時審查者看得到。
+function excludedSection(e: ExcludedSummary) {
+  // 路徑放在表格的程式碼格內：拿掉會破壞格式的反引號、直線與換行。
+  const cell = (text: string) => text.replace(/[|`\r\n]/g, "_");
+  const rest = e.totalGroups - e.groups.length;
+  return [
+    "## 收集時排除的建置產物",
+    "",
+    `這次新產生、版本控制原本沒有追蹤的 ${e.files} 個檔案（${formatBytes(e.bytes)}）看起來是建置產物，沒有放進這個 PR。若其中有真正的修改，請到看板專案頁進階設定的「收集時排除」移除對應規則後重試。`,
+    "",
+    "| 路徑 | 檔案數 | 大小 | 規則 |",
+    "| --- | ---: | ---: | --- |",
+    ...e.groups.map(
+      (g) =>
+        `| \`${cell(g.path)}\` | ${g.files} | ${formatBytes(g.bytes)} | \`${cell(g.rule)}\` |`,
+    ),
+    ...(rest > 0 ? ["", `另有 ${rest} 組未列出。`] : []),
+  ];
 }
 
 const noDefect =

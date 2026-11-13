@@ -20,7 +20,7 @@ RUN npm install -g --save-exact playwright@1.52.0 && playwright install --with-d
 COPY worker/*.mjs ./
 # worker-rev：worker/*.mjs 或工具鏈有變更時更新，並同步 server/containers.ts 的 WORKER_REV；
 # 執行器會拒絕較舊的映像，避免專案默默使用舊的工作程式。
-LABEL io.agentflow.worker="v1" io.agentflow.worker-rev="2026-11-13.1"
+LABEL io.agentflow.worker="v1" io.agentflow.worker-rev="2026-11-13.2"
 USER 1000:1000
 WORKDIR /workspace
 ENV HOME=/tmp/home

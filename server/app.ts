@@ -49,6 +49,10 @@ import {
 } from "./repo-missing.js";
 import type { Action, Project } from "../shared/types.js";
 import { efforts } from "../shared/types.js";
+import {
+  MAX_COLLECT_EXCLUDES,
+  validCollectExclude,
+} from "../shared/build-output.js";
 declare module "fastify" {
   interface FastifyRequest {
     rawBody: Buffer;
@@ -83,6 +87,20 @@ const ProjectInput = z.object({
     )
     .max(50)
     .transform((values) => [...new Set(values)].sort())
+    .optional(),
+  // 對預設建置產物排除清單的增減；省略時保留原設定。
+  collect_excludes: z
+    .array(
+      z
+        .string()
+        .trim()
+        .refine(
+          validCollectExclude,
+          "排除規則須為儲存庫內相對路徑或檔名，可用 * 與結尾 /，開頭 ! 表示移除預設，不可跳層或使用反斜線",
+        ),
+    )
+    .max(MAX_COLLECT_EXCLUDES)
+    .transform((values) => [...new Set(values)])
     .optional(),
   enabled: z.boolean(),
 });
@@ -744,7 +762,7 @@ export async function buildApp(
     // 只查此儲存庫的安裝，不逐一列出所有組織的儲存庫。
     await github.installation(p.repo);
     return db.one(
-      "INSERT INTO projects(name,repo,base_branch,image,install_command,test_command,sensitive_paths,description,index_paths,setup_mode) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *",
+      "INSERT INTO projects(name,repo,base_branch,image,install_command,test_command,sensitive_paths,description,index_paths,setup_mode,collect_excludes) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *",
       [
         p.name,
         p.repo,
@@ -756,6 +774,7 @@ export async function buildApp(
         p.description,
         p.index_paths ?? [],
         p.setup_mode ?? "auto",
+        p.collect_excludes ?? [],
       ],
     );
   });
@@ -786,6 +805,7 @@ export async function buildApp(
     // 舊版呼叫端省略時保留管理者設定；只有明確空陣列才恢復全專案。
     p.index_paths ??= old.index_paths ?? [];
     p.setup_mode ??= old.setup_mode ?? "manual";
+    p.collect_excludes ??= old.collect_excludes ?? [];
     const changed =
       !!repointed ||
       [
@@ -806,7 +826,7 @@ export async function buildApp(
     const saved = await db.transaction(async (c) => {
       const row = (
         await c.query(
-          "UPDATE projects SET name=$2,base_branch=$3,image=$4,install_command=$5,test_command=$6,sensitive_paths=$7,enabled=$8,validated_at=CASE WHEN $9 THEN NULL ELSE validated_at END,config_version=config_version+CASE WHEN $9 THEN 1 ELSE 0 END,description=$11,index_paths=$12,setup_mode=$13,setup_plan=CASE WHEN $9 THEN NULL ELSE setup_plan END,setup_status=CASE WHEN $9 THEN NULL ELSE setup_status END,setup_input=CASE WHEN $9 THEN NULL ELSE setup_input END WHERE id=$1 AND config_version=$10 RETURNING *",
+          "UPDATE projects SET name=$2,base_branch=$3,image=$4,install_command=$5,test_command=$6,sensitive_paths=$7,enabled=$8,validated_at=CASE WHEN $9 THEN NULL ELSE validated_at END,config_version=config_version+CASE WHEN $9 THEN 1 ELSE 0 END,description=$11,index_paths=$12,setup_mode=$13,setup_plan=CASE WHEN $9 THEN NULL ELSE setup_plan END,setup_status=CASE WHEN $9 THEN NULL ELSE setup_status END,setup_input=CASE WHEN $9 THEN NULL ELSE setup_input END,collect_excludes=$14 WHERE id=$1 AND config_version=$10 RETURNING *",
           [
             id,
             p.name,
@@ -821,6 +841,7 @@ export async function buildApp(
             p.description,
             p.index_paths,
             p.setup_mode,
+            p.collect_excludes,
           ],
         )
       ).rows[0] as Project | undefined;
