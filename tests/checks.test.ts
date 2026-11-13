@@ -26,10 +26,12 @@ import {
   type RunnerCall,
 } from "../server/checks.js";
 import {
+  asksForSchedule,
   assertReadOnlySelect,
   evaluateSql,
   inQuietHours,
   nextRunAt,
+  parseSchedule,
   type ScheduledCheck,
 } from "../shared/checks.js";
 
@@ -367,5 +369,37 @@ describe("執行器的位址限制", () => {
     const { httpProbe } = await import("../server/check-probes.js");
     await expect(httpProbe("ftp://10.0.0.5/x")).rejects.toThrow();
     await expect(httpProbe("http://u:p@10.0.0.5/x")).rejects.toThrow();
+  });
+});
+
+describe("從回答讀出排程", () => {
+  const every = (intervalMinutes: number) => ({
+    intervalMinutes,
+    dailyAt: null,
+  });
+  const daily = (dailyAt: string) => ({ intervalMinutes: null, dailyAt });
+  it.each([
+    ["每 15 分鐘查一次", every(15)],
+    ["每隔30分鐘", every(30)],
+    ["每十五分鐘", every(15)],
+    ["每半小時", every(30)],
+    ["每小時", every(60)],
+    ["每個小時檢查", every(60)],
+    ["每兩小時", every(120)],
+    ["每 3 個小時", every(180)],
+    ["每天 08:30", daily("08:30")],
+    ["每天早上八點", daily("08:00")],
+    ["每天下午三點半", daily("15:30")],
+    ["每日晚上 9 點 15 分", daily("21:15")],
+    ["每 5 分鐘", null],
+    ["盡快", null],
+    ["每天下午", null],
+  ])("%s", (text, expected) => {
+    expect(parseSchedule(text)).toEqual(expected);
+  });
+  it("只把問頻率的補問當成排程問題", () => {
+    expect(asksForSchedule("希望多久檢查一次？")).toBe(true);
+    expect(asksForSchedule("每天幾點檢查？")).toBe(true);
+    expect(asksForSchedule("要監看哪個專案？")).toBe(false);
   });
 });

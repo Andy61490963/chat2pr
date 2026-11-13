@@ -4,6 +4,7 @@ import { notifyGroup } from "./group-replies.js";
 import { approvalNotice, saveProjectConfirmation } from "./project-routing.js";
 import { withAssumptions } from "../shared/clarification.js";
 import type { Task } from "../shared/types.js";
+import { asksForSchedule, parseSchedule } from "../shared/checks.js";
 import { assertContextText } from "./project-context.js";
 
 /**
@@ -76,6 +77,11 @@ export async function applyAnswer(
   const missing = task.missing.filter((m) => !question.text.includes(m));
   const risk = task.mode === "query" ? queryRisk(text) : classifyRisk(text, []);
   const risks = [...new Set([...task.risk_reasons, ...(risk ? [risk] : [])])];
+  // 判讀先問了「多久檢查一次」：回答讀得出排程就記下來，這一題才會擬出定期檢查，而不是只回答一份方案。
+  const schedule =
+    task.mode === "query" && !task.check_draft && asksForSchedule(question.text)
+      ? parseSchedule(text)
+      : null;
   const auto =
     task.mode === "query" &&
     !missing.length &&
@@ -88,7 +94,8 @@ export async function applyAnswer(
       `UPDATE tasks SET summary=$3,missing=$4,risk_reasons=$5,question=NULL,suggestions='[]',version=version+1,
          approved_version=CASE WHEN $6 THEN version+1 ELSE NULL END,approved_paths='{}',pending_paths='{}',base_sha=NULL,branch=NULL,
          status=CASE WHEN $6 THEN 'queued' ELSE 'awaiting_approval' END,last_error=NULL,updated_at=now(),
-         source_ids=CASE WHEN $7::text IS NULL THEN source_ids ELSE array_append(source_ids,$7) END
+         source_ids=CASE WHEN $7::text IS NULL THEN source_ids ELSE array_append(source_ids,$7) END,
+         check_draft=COALESCE($8::jsonb,check_draft)
        WHERE id=$1 AND version=$2 AND status='awaiting_approval' RETURNING *`,
       [
         task.id,
@@ -98,6 +105,7 @@ export async function applyAnswer(
         JSON.stringify(risks),
         auto,
         sourceId ?? null,
+        schedule ? JSON.stringify(schedule) : null,
       ],
     )
   ).rows[0];

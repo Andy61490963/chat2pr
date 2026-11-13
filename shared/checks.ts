@@ -95,6 +95,80 @@ export function assertReadOnlySelect(sql: string): string | null {
 const hhmm = /^([01]\d|2[0-3]):([0-5]\d)$/;
 export const isTime = (v: string) => hhmm.test(v);
 
+/** 簡單的中文數字（一～九十九）或阿拉伯數字轉成整數。 */
+function toNumber(v: string): number | null {
+  if (/^\d+$/.test(v)) return Number(v);
+  const digit: Record<string, number> = {
+    一: 1,
+    二: 2,
+    兩: 2,
+    三: 3,
+    四: 4,
+    五: 5,
+    六: 6,
+    七: 7,
+    八: 8,
+    九: 9,
+  };
+  const m = /^([一二兩三四五六七八九])?(十)?([一二三四五六七八九])?$/.exec(v);
+  if (!m || !v) return null;
+  if (!m[2]) return m[3] || !m[1] ? null : digit[m[1]];
+  return (m[1] ? digit[m[1]] : 1) * 10 + (m[3] ? digit[m[3]] : 0);
+}
+
+/**
+ * 從回答補問的文字讀出排程，例如「每 15 分鐘」「每兩小時」「每天 08:30」「每天下午三點半」。
+ * 讀不出來或短於最短間隔時回傳 null，交由管理者在看板設定。
+ */
+export function parseSchedule(
+  text: string,
+): { intervalMinutes: number | null; dailyAt: string | null } | null {
+  const s = text.replace(/\s+/g, "");
+  const num = "(\\d+|[一二兩三四五六七八九十]+)";
+  const interval = (minutes: number | null) =>
+    minutes !== null && minutes >= minIntervalMinutes && minutes <= 10080
+      ? { intervalMinutes: minutes, dailyAt: null }
+      : null;
+  if (/每(個)?半(個)?(小時|鐘頭)/.test(s)) return interval(30);
+  let m = new RegExp(`每(?:隔)?${num}(?:個)?(分鐘|分|小時|鐘頭)`).exec(s);
+  if (m) {
+    const n = toNumber(m[1]);
+    return interval(n === null ? null : m[2].startsWith("分") ? n : n * 60);
+  }
+  if (/每(個)?(小時|鐘頭)/.test(s)) return interval(60);
+  m =
+    /每(?:天|日)(?:的)?(凌晨|早上|上午|中午|下午|晚上)?(\d{1,2}):(\d{2})/.exec(
+      s,
+    );
+  const daily = (period: string | undefined, h: number | null, min: number) => {
+    if (h === null || h > 23 || min > 59) return null;
+    const hour =
+      (period === "下午" || period === "晚上") && h < 12
+        ? h + 12
+        : period === "中午" && h < 11
+          ? h + 12
+          : h;
+    if (hour > 23) return null;
+    return {
+      intervalMinutes: null,
+      dailyAt: `${String(hour).padStart(2, "0")}:${String(min).padStart(2, "0")}`,
+    };
+  };
+  if (m) return daily(m[1], Number(m[2]), Number(m[3]));
+  m = new RegExp(
+    `每(?:天|日)(?:的)?(凌晨|早上|上午|中午|下午|晚上)?${num}點(半|${num}分)?`,
+  ).exec(s);
+  if (m) {
+    const min = !m[3] ? 0 : m[3] === "半" ? 30 : toNumber(m[4]);
+    return min === null ? null : daily(m[1], toNumber(m[2]), min);
+  }
+  return null;
+}
+
+/** 補問是不是在問檢查頻率（多久一次、幾點檢查）。 */
+export const asksForSchedule = (question: string) =>
+  /多久|頻率|間隔|每隔|幾分鐘|幾小時|什麼時間|什麼時候|幾點/.test(question);
+
 /** 臺北時間的分鐘數（0～1439）。 */
 function taipeiMinutes(d: Date) {
   const t = new Date(d.getTime() + 8 * 3600000);

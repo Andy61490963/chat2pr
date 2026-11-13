@@ -238,6 +238,24 @@ describe("在看板回答", () => {
     expect(detail.projectReview.confirmed).toBe(true);
     expect(detail.projectReview.confirmation.kind).toBe("manual");
   });
+  it("定期檢查先問了頻率：回答讀得出排程就記下，這一題改成擬定定期檢查", async () => {
+    const t = await waiting("query");
+    await db.query(
+      `UPDATE tasks SET question='{"text":"希望多久檢查一次機台的運作狀況？","choices":[]}',missing='[]' WHERE id=$1`,
+      [t.id],
+    );
+    const r = await answer(await reload(t.id), "每 15 分鐘查一次");
+    expect(r.statusCode).toBe(200);
+    expect((await reload(t.id)).check_draft).toEqual({
+      intervalMinutes: 15,
+      dailyAt: null,
+    });
+  });
+  it("問的不是頻率，回答裡剛好有時間也不會變成定期檢查", async () => {
+    const t = await waiting("query");
+    await answer(t, "每天 08:00 按了都沒下載");
+    expect((await reload(t.id)).check_draft).toBeNull();
+  });
   it("舊版本、沒有問題或含密碼時拒絕", async () => {
     const t = await waiting("query");
     expect((await answer(t, "沒有下載", t.version + 5)).statusCode).toBe(409);

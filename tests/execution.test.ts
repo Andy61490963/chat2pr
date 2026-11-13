@@ -4,6 +4,7 @@ import { transientFailure } from "../server/execution.js";
 import { db, reset, fixture, confirmTask } from "./helpers.js";
 import {
   Execution,
+  noConnectionHint,
   type Runner,
   type PhaseResult,
 } from "../server/execution.js";
@@ -1667,8 +1668,12 @@ it("追加修改重試時原 PR 已合併：不沿用舊分支，停下來請人
   expect(s.calls).toEqual([]);
   expect(task.last_error).toContain("已合併或關閉");
 });
-async function draftScenario(final: string) {
+async function draftScenario(
+  final: string,
+  before?: (projectId: string) => Promise<unknown>,
+) {
   const s = await queryScenario();
+  await before?.(s.task.project_id!);
   await db.query(
     `UPDATE tasks SET check_draft='{"intervalMinutes":60,"dailyAt":null}' WHERE id=$1`,
     [s.task.id],
@@ -1736,4 +1741,31 @@ it("擬出的定義不符合規則時不建立檢查，回答說明原因", asyn
     s.task.id,
   ]);
   expect(task.answer).toContain("不符合規則");
+});
+const httpDraft = `AGENTFLOW_CHECK: ${JSON.stringify({
+  name: "設備服務",
+  kind: "http",
+  target: "http://10.0.0.5/health",
+  condition: {},
+})}`;
+it("擬定檢查時專案沒有資料庫連線：回答提醒到看板設定", async () => {
+  const s = await draftScenario(httpDraft);
+  const task = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [
+    s.task.id,
+  ]);
+  expect(task.answer).toContain(noConnectionHint);
+});
+it("專案已登記資料庫連線：不提醒", async () => {
+  const s = await draftScenario(httpDraft, (projectId) =>
+    db.query(
+      "INSERT INTO project_connections(project_id,engine,host,port,database_name,username,secret) VALUES($1,'sqlserver','db.example.test',1433,'mes','reader',$2)",
+      // 提醒只看有沒有登記連線，這裡不需要真的能解開的機密。
+      [projectId, Buffer.from("fictional-sealed-secret")],
+    ),
+  );
+  const task = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [
+    s.task.id,
+  ]);
+  expect(task.answer).toContain("已擬好定期檢查");
+  expect(task.answer).not.toContain(noConnectionHint);
 });

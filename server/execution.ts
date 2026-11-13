@@ -188,6 +188,9 @@ export class HttpRunner implements Runner {
     return data;
   }
 }
+/** 擬定定期檢查時專案沒有資料庫連線的提醒：帳密請到看板設定。 */
+export const noConnectionHint =
+  "這個專案還沒有登記資料庫連線，SQL 檢查無法執行。請管理者到看板專案頁「資料庫連線」填寫主機、連接埠、資料庫名稱與帳密（密碼會加密保存），再到「定期檢查」試跑。";
 export class Execution {
   private subscriptionGate: SubscriptionGate;
   constructor(
@@ -321,8 +324,17 @@ export class Execution {
   private async draftCheck(task: Task, final: string) {
     const m = /AGENTFLOW_CHECK:\s*(\{[\s\S]*\})\s*$/.exec(final);
     const body = (m ? final.slice(0, m.index) : final).trim();
+    // 專案沒有登記資料庫連線時 SQL 檢查跑不了：每種結果都提醒管理者去看板設定。
+    const hint =
+      task.project_id &&
+      !(await this.db.one(
+        "SELECT 1 FROM project_connections WHERE project_id=$1",
+        [task.project_id],
+      ))
+        ? `\n\n${noConnectionHint}`
+        : "";
     if (!m)
-      return `${body}\n\n（這次沒有產生可用的檢查定義，請管理者到看板「定期檢查」手動建立。）`;
+      return `${body}\n\n（這次沒有產生可用的檢查定義，請管理者到看板「定期檢查」手動建立。）${hint}`;
     const schedule = task.check_draft!;
     let created: ScheduledCheck | undefined;
     let problem = "";
@@ -350,7 +362,7 @@ export class Execution {
       problem = e instanceof Error ? e.message : String(e);
     }
     if (!created)
-      return `${body}\n\n（擬出的檢查定義不符合規則：${redact(problem).slice(0, 200)}。請管理者到看板「定期檢查」修改後建立。）`;
+      return `${body}\n\n（擬出的檢查定義不符合規則：${redact(problem).slice(0, 200)}。請管理者到看板「定期檢查」修改後建立。）${hint}`;
     const trial = await testCheck(
       this.db,
       (path, b, timeoutMs) => this.runner.call(path, b, timeoutMs),
@@ -364,9 +376,9 @@ export class Execution {
       null,
       "check",
       `check:${created.id}:draft`,
-      `已擬好定期檢查「${created.name}」（${when}），試跑：${result}。請到看板「定期檢查」核准後啟用。`,
+      `已擬好定期檢查「${created.name}」（${when}），試跑：${result}。請到看板「定期檢查」核准後啟用。${hint}`,
     );
-    return `${body}\n\n已擬好定期檢查「${created.name}」（${when}），等管理者在看板「定期檢查」核准後才會開始執行。\n試跑：${result}`;
+    return `${body}\n\n已擬好定期檢查「${created.name}」（${when}），等管理者在看板「定期檢查」核准後才會開始執行。\n試跑：${result}${hint}`;
   }
   /** 有結構快照時交給執行器，之後每個階段唯讀掛載；回傳是否有快照。 */
   private provideSnapshot(project: Project, runId: string) {
