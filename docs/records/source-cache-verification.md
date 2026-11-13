@@ -1,10 +1,10 @@
 # 專案原始碼快取實測
 
-日期：2026-11-05，Windows 主機與 Docker Desktop。關聯 Issue #32。
+日期：2026-11-05，Windows 主機與 Docker Desktop。
 
 ## 真實 範例前端專案 量測
 
-使用 `example-org/test`，基底 `979d2c63d90a3310b00486c755c18e7a25aaba5c`，新版本為既有 PR #3 的 `d50ecfa41a7383bfaba6d5279a950eac55168ae7`。僅讀取遠端；沒有新增 commit、推送、建立 PR、消耗 AI 額度或發送 LINE 訊息。
+使用 `example-org/test`，基底 `979d2c63d90a3310b00486c755c18e7a25aaba5c`，新版本為既有 PR 的 `d50ecfa41a7383bfaba6d5279a950eac55168ae7`。僅讀取遠端；沒有新增 commit、推送、建立 PR、消耗 AI 額度或發送 LINE 訊息。
 
 | 情境                   | 下載與準備總耗時 |   Git 抓取 |  建立快照 | 複製副本 |  新增 Git 物件大小 |
 | ---------------------- | ---------------: | ---------: | --------: | -------: | -----------------: |

@@ -1,4 +1,4 @@
-# LINE-AgentFlow 第一版規格
+# chat2pr 第一版規格
 
 ## 已確認需求
 

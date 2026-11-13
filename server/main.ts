@@ -13,7 +13,7 @@ await db.migrate();
 const jobs = await startJobs(db);
 const app = await buildApp(db, jobs.enqueueValidation);
 await app.listen({ port: config().port, host: config().host });
-console.log(`LINE-AgentFlow 已啟動：http://${config().host}:${config().port}`);
+console.log(`chat2pr 已啟動：http://${config().host}:${config().port}`);
 for (const signal of ["SIGINT", "SIGTERM"])
   process.on(signal, () => {
     void (async () => {

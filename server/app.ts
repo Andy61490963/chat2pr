@@ -168,7 +168,7 @@ export async function buildApp(
   app.get("/api/public/status", async () => {
     const s = secrets();
     return {
-      name: "LINE-AgentFlow",
+      name: "chat2pr",
       githubConfigured: !!s.githubClientId,
       setupRequired: !s.githubClientId,
     };

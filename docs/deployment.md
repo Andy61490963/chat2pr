@@ -8,7 +8,7 @@
 2. **機密只由人輸入。** 標示「需要人」的步驟（設定頁、Codex 登入、Windows 自動登入、LINE／GitHub／ngrok／Cloudflare 後台）請使用者自己操作；你負責其餘指令與結果核對。不要請使用者把金鑰貼進對話。
 3. **不讀出機密檔。** 不要顯示 `.env`、`.local/secrets.json`、`.local/setup-url.txt`、`.codex-service/` 的內容；需要用到時只在指令裡引用，像本手冊的範例那樣。
 4. **不刪資料卷。** 不執行 `docker compose down -v`、`docker volume prune`、`docker system prune --volumes`。
-5. **部署目錄只用來部署，不在裡面開發。** 監督程序每 30 秒用這個目錄的 `compose.yaml` 執行 `up -d`；在這裡切到改過 `compose.yaml` 的分支，正式容器會被重建。部署目錄只由 `npm run deploy` 更新，它固定切到 `origin/main`（分離 HEAD，不需要本機的 `main` 分支）。要開發請另外 clone 一份，或用 `git worktree add ..\LINE-AgentFlow-dev -b 分支名稱 origin/main` 開一個工作目錄。開發目錄沒有 `.local/secrets.json`，`npm run deploy` 會拒絕執行；和正式服務同一台主機時，也不要在開發目錄執行 `docker compose up`（Compose 專案名稱是固定的，會動到正式容器）。
+5. **部署目錄只用來部署，不在裡面開發。** 監督程序每 30 秒用這個目錄的 `compose.yaml` 執行 `up -d`；在這裡切到改過 `compose.yaml` 的分支，正式容器會被重建。部署目錄只由 `npm run deploy` 更新，它固定切到 `origin/main`（分離 HEAD，不需要本機的 `main` 分支）。要開發請另外 clone 一份，或用 `git worktree add ..\chat2pr-dev -b 分支名稱 origin/main` 開一個工作目錄。開發目錄沒有 `.local/secrets.json`，`npm run deploy` 會拒絕執行；和正式服務同一台主機時，也不要在開發目錄執行 `docker compose up`（Compose 專案名稱是固定的，會動到正式容器）。
 6. **升級一律用 `npm run deploy`。** 它會先確認沒有執行中的任務，並在結束時執行冒煙測試；需要手動重啟時也要先做同樣的確認（指令見〈[升級](#升級)〉）。
 7. **新實例預設全域暫停。** 在〈[步驟 10](#步驟-10看板驗收並開始使用)〉驗收完成前不要開啟自動派工。
 
