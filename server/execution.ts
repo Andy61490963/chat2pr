@@ -44,6 +44,8 @@ import {
 import { verificationLabel, type SetupPlan } from "../shared/project-setup.js";
 import { clip, failureSummary, prReport, reviewVerdict } from "./pr-body.js";
 import { threadHistory } from "./followup.js";
+import { createCheck, testCheck } from "./checks.js";
+import type { ScheduledCheck } from "../shared/checks.js";
 import {
   prepareReportImages,
   querySummary,
@@ -271,6 +273,60 @@ export class Execution {
       });
     }
     return provided;
+  }
+  /**
+   * 從 LINE 要求定期檢查：Codex 回覆的最後一行是 AGENTFLOW_CHECK: {定義}。
+   * 依需求記下的排程建立「待核准」的檢查並試跑一次；回答改成給人看的說明，不含 JSON。
+   */
+  private async draftCheck(task: Task, final: string) {
+    const m = /AGENTFLOW_CHECK:\s*(\{[\s\S]*\})\s*$/.exec(final);
+    const body = (m ? final.slice(0, m.index) : final).trim();
+    if (!m)
+      return `${body}\n\n（這次沒有產生可用的檢查定義，請管理者到看板「定期檢查」手動建立。）`;
+    const schedule = task.check_draft!;
+    let created: ScheduledCheck | undefined;
+    let problem = "";
+    try {
+      const draft = JSON.parse(m[1]) as Record<string, unknown>;
+      created = await createCheck(
+        this.db,
+        {
+          group_id: task.group_id,
+          project_id: task.project_id,
+          name: String(draft.name ?? task.title).slice(0, 80),
+          kind: draft.kind,
+          target: draft.target,
+          condition: draft.condition ?? {},
+          interval_minutes: schedule.intervalMinutes,
+          daily_at: schedule.dailyAt,
+          alert_text: String(draft.alertText ?? "").slice(0, 500),
+          recovered_text: String(draft.recoveredText ?? "").slice(0, 500),
+          rationale: String(draft.rationale ?? "").slice(0, 2000),
+        },
+        "AI 草擬",
+        task.id,
+      );
+    } catch (e) {
+      problem = e instanceof Error ? e.message : String(e);
+    }
+    if (!created)
+      return `${body}\n\n（擬出的檢查定義不符合規則：${redact(problem).slice(0, 200)}。請管理者到看板「定期檢查」修改後建立。）`;
+    const trial = await testCheck(
+      this.db,
+      (path, b, timeoutMs) => this.runner.call(path, b, timeoutMs),
+      created.id,
+    );
+    const result = `${trial.outcome === "ok" ? "目前正常" : trial.outcome === "alert" ? "目前判定異常" : "試跑失敗"}・${trial.summary}`;
+    const when = schedule.intervalMinutes
+      ? `每 ${schedule.intervalMinutes} 分鐘`
+      : `每天 ${schedule.dailyAt}`;
+    await this.line.notify(
+      null,
+      "check",
+      `check:${created.id}:draft`,
+      `已擬好定期檢查「${created.name}」（${when}），試跑：${result}。請到看板「定期檢查」核准後啟用。`,
+    );
+    return `${body}\n\n已擬好定期檢查「${created.name}」（${when}），等管理者在看板「定期檢查」核准後才會開始執行。\n試跑：${result}`;
   }
   /** 有結構快照時交給執行器，之後每個階段唯讀掛載；回傳是否有快照。 */
   private provideSnapshot(project: Project, runId: string) {
@@ -965,6 +1021,14 @@ export class Execution {
             }
           : {}),
         ...(installNote ? { installStatus: installNote } : {}),
+        ...(task.check_draft
+          ? {
+              checkDraft: {
+                note: '這一題是擬定定期檢查。請依需求、專案程式碼、文件與資料庫結構快照（若有），設計一個最能直接反映狀態的檢查，三選一：sql（對專案資料庫執行單一唯讀 SELECT）、http（服務的健康檢查網址，GET）、tcp（設備或服務的「主機:連接埠」）。先用白話寫出你選的方式、怎樣算異常、門檻的依據；最後一行輸出「AGENTFLOW_CHECK: 」再接一個 JSON：{"name":"20 字內的名稱","kind":"sql|http|tcp","target":"SELECT 查詢／網址／主機:連接埠","condition":sql 用 {"column":"第一列的欄位或 $rows","op":">","value":0,"listColumn":"異常時列出的欄位（可省略）"}、http 用 {"contains":"回應需包含的文字"} 或 {}、tcp 用 {},"rationale":"判斷依據","alertText":"異常時的一句話","recoveredText":"恢復時的一句話"}。SQL 只能讀取，不得寫入、執行程序或使用暫存表；不要在報告或 JSON 放入密碼、連線字串。排程由系統依需求設定，不用填。',
+                schedule: task.check_draft,
+              },
+            }
+          : {}),
         ...(thread.length
           ? {
               conversation: {
@@ -1047,6 +1111,8 @@ export class Execution {
             20000,
           );
           if (!answer) throw new Error("Codex 沒有產生調查結果");
+          // 草擬定期檢查：從回覆取出檢查定義，建立待核准的檢查並試跑一次。
+          if (task.check_draft) answer = await this.draftCheck(task, answer);
           await this.github.base(project);
           const relatedLine = relatedSources.length
             ? `\n一併查詢：${relatedSources.map((r) => `${r.name}（${r.repo}，${r.branch}，${r.commit.slice(0, 8)}）`).join("、")}`

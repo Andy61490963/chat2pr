@@ -295,3 +295,16 @@ describe("跨專案查詢", () => {
     expect(task.status).toBe("awaiting_approval");
   });
 });
+
+describe("要求定期檢查", () => {
+  it("判讀到排程時，建立草擬定期檢查的查詢並記下排程", async () => {
+    const { api } = await projects();
+    const task = await propose("OrderService 每小時檢查一次機台有沒有斷線", {
+      projectId: api.id,
+      routing: explicit(),
+      schedule: { intervalMinutes: 60, dailyAt: null },
+    });
+    expect(task.mode).toBe("query");
+    expect(task.check_draft).toEqual({ intervalMinutes: 60, dailyAt: null });
+  });
+});

@@ -88,7 +88,14 @@ export interface Group {
   first_pending_at: string | null;
   last_pending_at: string | null;
 }
+/** 從 LINE 提出定期檢查時要求的排程（二擇一）。 */
+export interface CheckSchedule {
+  intervalMinutes: number | null;
+  dailyAt: string | null;
+}
 export interface Task {
+  /** 草擬定期檢查的查詢任務：記下要求的排程。 */
+  check_draft?: CheckSchedule | null;
   question?: import("./clarification.js").ClarificationQuestion | null;
   assumptions?: string[];
   target_branch: string | null;
@@ -184,6 +191,8 @@ export interface Memory {
   created_at: string;
 }
 export interface TriageDecision {
+  /** 使用者要求定期、重複檢查時的排程；其他情況為 null。 */
+  schedule?: CheckSchedule | null;
   question?: import("./clarification.js").ClarificationQuestion | null;
   assumptions?: string[];
   targetBranch?: import("./task-branch.js").BranchDecision;
