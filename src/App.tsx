@@ -916,6 +916,15 @@ export function App() {
               await openTask(created.id);
             }, "已送出追問")
           }
+          answer={(task, text) =>
+            run(async () => {
+              await request(`/api/tasks/${task.id}/answer`, "POST", {
+                text,
+                version: task.version,
+              });
+              await openTask(task.id, false);
+            }, "已收到回答")
+          }
           relink={(task, parentId) =>
             run(async () => {
               await request(`/api/tasks/${task.id}/relink`, "POST", {

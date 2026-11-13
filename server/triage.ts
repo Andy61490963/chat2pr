@@ -1,4 +1,5 @@
 import { Assumptions, Question, clarifyDecision } from "./clarification.js";
+import { askInGroup } from "./answers.js";
 import { scheduleRepoIndex } from "./repo-index.js";
 import { dueTriageGroups, isFollowupBatch } from "./triage-window.js";
 import { BranchChoice, assessBranch } from "./task-branch.js";
@@ -1440,6 +1441,8 @@ export class Triage {
             ...(d.imageSourceIds ?? []),
           ]);
           if (hold) await approvalNotice(c, t);
+          // 缺一件事時直接在群組問，成員回覆那則訊息就是回答。
+          if (hold && t.question) await askInGroup(c, t);
           continue;
         }
         const manual =
@@ -1531,6 +1534,7 @@ export class Triage {
           );
           await saveTaskImageRefs(c, t, messages);
           if (manual) await approvalNotice(c, t);
+          if (manual && t.question) await askInGroup(c, t);
         }
       }
       if (lookup) {

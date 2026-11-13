@@ -1,4 +1,5 @@
 import { createFollowup, relinkTask } from "./followup.js";
+import { answerFromDashboard } from "./answers.js";
 import { requestBackfill } from "./retrieval.js";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
@@ -559,6 +560,26 @@ export async function buildApp(
       actor.login,
       b,
       "dashboard",
+    );
+  });
+  // 直接回答補問：系統把回答併進需求，不用編輯整份需求。
+  app.post("/api/tasks/:id/answer", async (req) => {
+    const actor = await requireUser(db, req);
+    const b = z
+      .object({
+        text: z.string().min(1).max(2000),
+        version: z.number().int().positive(),
+      })
+      .parse(req.body);
+    return answerFromDashboard(
+      db,
+      z
+        .string()
+        .uuid()
+        .parse((req.params as { id: string }).id),
+      b.version,
+      b.text,
+      actor.login,
     );
   });
   // 接錯題時改正：改接到同群組另一題，或改成新話題。

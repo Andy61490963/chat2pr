@@ -44,6 +44,7 @@ import {
 import { verificationLabel, type SetupPlan } from "../shared/project-setup.js";
 import { clip, failureSummary, prReport, reviewVerdict } from "./pr-body.js";
 import { threadHistory } from "./followup.js";
+import { askInGroup } from "./answers.js";
 import {
   prepareReportImages,
   querySummary,
@@ -1347,12 +1348,20 @@ ${querySummary(answer)}`,
           // 使用當次執行的版本；取消或更換設定後不可復活舊工作。
           const pending = (
             await c.query<Task>(
-              "UPDATE tasks SET status='awaiting_approval',version=version+1,approved_version=NULL,approved_paths='{}',pending_paths='{}',missing=$3,suggestions='[]',base_sha=NULL,branch=NULL,last_error=$4,updated_at=now() WHERE id=$1 AND status IN ('running','reviewing') AND version=(SELECT version FROM runs WHERE id=$2) RETURNING *",
+              "UPDATE tasks SET status='awaiting_approval',version=version+1,approved_version=NULL,approved_paths='{}',pending_paths='{}',missing=$3,question=$5,suggestions='[]',base_sha=NULL,branch=NULL,last_error=$4,updated_at=now() WHERE id=$1 AND status IN ('running','reviewing') AND version=(SELECT version FROM runs WHERE id=$2) RETURNING *",
               [
                 taskId,
                 runId,
                 JSON.stringify(questions),
-                `AI 等你回答：\n${questions.map((q, i) => `${i + 1}. ${q}`).join("\n")}\n請在「補充需求」回答後重新確認專案；驗證碼請在服務本身輸入。`,
+                `AI 等你回答：\n${questions.map((q, i) => `${i + 1}. ${q}`).join("\n")}\n可以在看板的「回答這個問題」作答，或在 LINE「回覆」機器人的提問；驗證碼請在服務本身輸入。`,
+                // 結構化成單一補問，讓 LINE 與看板都能直接作答；多題時一次列出。
+                JSON.stringify({
+                  text:
+                    questions.length === 1
+                      ? questions[0]
+                      : questions.map((q, i) => `${i + 1}. ${q}`).join("\n"),
+                  choices: [],
+                }),
               ],
             )
           ).rows[0];
@@ -1380,6 +1389,7 @@ ${querySummary(answer)}`,
             "AI 缺少必要資訊，已停止執行並等待補充",
             c,
           );
+          await askInGroup(c, pending);
         });
         return;
       }

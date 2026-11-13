@@ -60,6 +60,7 @@ export function TaskDrawer({
   act,
   open,
   followup,
+  answer,
   relink,
 }: {
   detail: Detail;
@@ -73,6 +74,8 @@ export function TaskDrawer({
   open: (id: string) => void;
   /** 對已回答的查詢追問，建立新的一題。 */
   followup: (t: Detail["task"], text: string) => unknown;
+  /** 直接回答補問。 */
+  answer: (t: Detail["task"], text: string) => Promise<unknown>;
   /** 接錯題時改接到另一題，或改成新話題（null）。 */
   relink: (t: Detail["task"], parentId: string | null) => unknown;
 }) {
@@ -554,6 +557,7 @@ export function TaskDrawer({
             busy={busy}
             act={act}
             amend={openAmend}
+            answer={answer}
           />
           {options && (
             <section className="flex flex-col gap-2">
