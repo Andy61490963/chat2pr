@@ -1,4 +1,5 @@
-import { threadOf } from "./followup.js";
+import { createFollowupInTransaction, threadOf } from "./followup.js";
+import { withAssumptions } from "../shared/clarification.js";
 import { referencedSources } from "./retrieval.js";
 import { taskImageEvidence } from "./image-context.js";
 import { readReportImages } from "./query-report.js";
@@ -31,6 +32,7 @@ export const actionLabels: Record<string, string> = {
   cancel: "取消",
   retry: "重試",
   amend: "補充需求",
+  assumption: "修改假設",
   assign: "指定專案",
   adopt: "採用方案",
   mode: "切換任務類型",
@@ -119,6 +121,7 @@ export class Tasks {
           "assign",
           "mode",
           "amend",
+          "assumption",
           "target",
           "reopen",
         ].includes(action) &&
@@ -133,7 +136,7 @@ export class Tasks {
       if (action === "approve") {
         if (!t.project_id)
           throw new AppError(409, "請先指定要修改的專案，再核准");
-        if (t.missing.length)
+        if (t.missing.length || t.question)
           throw new AppError(409, "請先補充缺漏資訊與驗收條件，再核准");
         await c.query(
           "UPDATE tasks SET status='queued',approved_version=version,approved_paths=pending_paths,last_error=NULL,updated_at=now() WHERE id=$1",
@@ -150,13 +153,19 @@ export class Tasks {
           .parse(body);
         const s = t.suggestions[index];
         if (!s) throw new AppError(404, "找不到這個建議方案");
+        if (t.mode === "query" || t.question)
+          throw new AppError(409, "請先補充必要資訊，查詢不採用開發方案");
         if (!t.project_id)
           throw new AppError(409, "請先指定要修改的專案，再採用方案");
         if (t.risk_reasons.length)
           throw new AppError(409, "此需求涉及敏感範圍，請在看板確認後核准");
         await c.query(
-          "UPDATE tasks SET summary=$2,acceptance=$3,missing='[]',suggestions='[]',version=version+1,approved_version=version+1,approved_paths='{}',pending_paths='{}',base_sha=NULL,branch=NULL,status='queued',last_error=NULL,updated_at=now() WHERE id=$1",
-          [id, `${s.label}：${s.summary}`, JSON.stringify(s.acceptance)],
+          "UPDATE tasks SET summary=$2,acceptance=$3,missing='[]',question=NULL,suggestions='[]',version=version+1,approved_version=version+1,approved_paths='{}',pending_paths='{}',base_sha=NULL,branch=NULL,status='queued',last_error=NULL,updated_at=now() WHERE id=$1",
+          [
+            id,
+            withAssumptions(`${s.label}：${s.summary}`, t.assumptions ?? []),
+            JSON.stringify(s.acceptance),
+          ],
         );
         await c.query(
           "INSERT INTO task_versions(task_id,version,summary,acceptance,approved_by) SELECT id,version,summary,acceptance,$2 FROM tasks WHERE id=$1 ON CONFLICT DO NOTHING",
@@ -214,6 +223,58 @@ export class Tasks {
           "UPDATE tasks SET mode=$2,version=version+1,approved_version=NULL,approved_paths='{}',pending_paths='{}',base_sha=NULL,branch=NULL,status='awaiting_approval',updated_at=now() WHERE id=$1",
           [id, mode],
         );
+      } else if (action === "assumption") {
+        const a = z
+          .object({
+            index: z.number().int().min(0),
+            value: z.string().trim().min(1).max(500),
+          })
+          .parse(body);
+        assertContextText(a.value);
+        const previous = t.assumptions ?? [];
+        if (a.index >= previous.length)
+          throw new AppError(409, "這項假設已不存在，請重新檢視");
+        if (previous[a.index] === a.value)
+          throw new AppError(422, "請先修改假設內容");
+        const assumptions = previous.map((value, index) =>
+          index === a.index ? a.value : value,
+        );
+        const summary = withAssumptions(t.summary, assumptions, previous);
+        if (summary.length > 15000)
+          throw new AppError(422, "需求內容過長，請縮短假設內容");
+        if (t.mode === "query" && t.status === "answered") {
+          const child = await createFollowupInTransaction(
+            this.db,
+            c,
+            t,
+            summary,
+            actor,
+            {
+              assumptions,
+              acceptance: t.acceptance,
+              riskText: a.value,
+              // 新題沿用整份需求，原本需人工確認的風險不能因只改假設而消失。
+              retainedRisk: t.risk_reasons[0],
+            },
+          );
+          await this.db.audit(
+            child.id,
+            "assumption_changed",
+            `${actor} 將假設「${previous[a.index]}」改為「${a.value}」，建立追問並保留原回答`,
+            c,
+          );
+          return child;
+        }
+        await c.query(
+          "UPDATE tasks SET summary=$2,assumptions=$3,suggestions='[]',version=version+1,approved_version=NULL,approved_paths='{}',pending_paths='{}',base_sha=NULL,branch=NULL,status='awaiting_approval',last_error=NULL,updated_at=now() WHERE id=$1",
+          [id, summary, JSON.stringify(assumptions)],
+        );
+        await this.db.audit(
+          id,
+          "assumption_changed",
+          `${actor} 將假設「${previous[a.index]}」改為「${a.value}」`,
+          c,
+        );
       } else if (action === "amend") {
         const a = Amendment.parse(body);
         if (t.last_error?.startsWith("AI 等你回答")) {
@@ -226,7 +287,7 @@ export class Tasks {
             throw new AppError(422, "請先在需求中補充回答，再重新確認");
         }
         await c.query(
-          "UPDATE tasks SET summary=$2,acceptance=$3,missing='[]',suggestions='[]',version=version+1,approved_version=NULL,approved_paths='{}',pending_paths='{}',base_sha=NULL,branch=NULL,status='awaiting_approval',last_error=NULL,updated_at=now() WHERE id=$1",
+          "UPDATE tasks SET summary=$2,acceptance=$3,missing='[]',question=NULL,assumptions='[]',suggestions='[]',version=version+1,approved_version=NULL,approved_paths='{}',pending_paths='{}',base_sha=NULL,branch=NULL,status='awaiting_approval',last_error=NULL,updated_at=now() WHERE id=$1",
           [id, a.summary, JSON.stringify(a.acceptance)],
         );
         await c.query(
@@ -291,7 +352,11 @@ export class Tasks {
         .rows[0] as Task;
       if (["approve", "adopt"].includes(action))
         await saveProjectConfirmation(c, result, "manual", actor);
-      if (["assign", "amend", "mode", "target", "reopen"].includes(action)) {
+      if (
+        ["assign", "amend", "assumption", "mode", "target", "reopen"].includes(
+          action,
+        )
+      ) {
         await c.query(
           "UPDATE tasks SET project_routing=jsonb_build_object('status','uncertain','basis','none','reason',$2::text,'evidence','[]'::jsonb,'bindingVersion',0) WHERE id=$1",
           [id, "需求或目標已調整，請重新確認本次處理專案"],

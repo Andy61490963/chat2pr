@@ -19,7 +19,7 @@ it("B07：分類器及 worker 明示 GIF 只有首幀，原圖與模型雜湊分
   let captured:{job:{prompt:string;images:Array<{id:string;mime:string;originalMime:string;sha256:string;modelSha256:string;data:string}>}}|undefined;
   const runner={call:async<T>(_path:string,body:unknown):Promise<T>=>{
     captured=body as typeof captured;
-    return {exitCode:0,stderr:"",stdout:JSON.stringify({final:JSON.stringify({decisions:[{kind:"ignore",targetBranch:{name:null,basis:"uncertain",reason:"僅為參考圖片",evidence:[]},routing:{status:"uncertain",basis:"none",reason:"僅為參考圖片",evidence:[]},projectId:null,title:"",summary:"參考圖",acceptance:[],sourceIds:["gif"],contextSourceIds:[],risks:[],missing:[],relatedTaskId:null,suggestions:[],imageSourceIds:[],imageReferenceResolution:"none"}],imageObservations:[{sourceId:"gif",summary:"首幀",text:"",uncertainties:["後續動畫未提供"],intent:"reference"}]})})} as T;
+    return {exitCode:0,stderr:"",stdout:JSON.stringify({final:JSON.stringify({decisions:[{kind:"ignore",targetBranch:{name:null,basis:"uncertain",reason:"僅為參考圖片",evidence:[]},routing:{status:"uncertain",basis:"none",reason:"僅為參考圖片",evidence:[]},projectId:null,title:"",summary:"參考圖",acceptance:[],sourceIds:["gif"],contextSourceIds:[],risks:[],missing:[],relatedTaskId:null,suggestions:[],question:null,assumptions:[],imageSourceIds:[],imageReferenceResolution:"none"}],imageObservations:[{sourceId:"gif",summary:"首幀",text:"",uncertainties:["後續動畫未提供"],intent:"reference"}]})})} as T;
   }} as Runner;
   await new CodexClassifier(runner).classify({messages:[{id:"gif",type:"image",group_id:"g",image:gif,image_mime:"image/gif",text:null} as Message],context:{},tasks:[],model:"gpt-6.1-sol",reservation:null});
   expect(captured!.job.prompt).toContain("GIF 首幀");

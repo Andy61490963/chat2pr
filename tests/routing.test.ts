@@ -26,6 +26,8 @@ const decision = (overrides: Partial<TriageDecision> = {}): TriageDecision => ({
   missing: [],
   relatedTaskId: null,
   suggestions: [],
+    question: null,
+    assumptions: [],
   ...overrides,
 });
 async function setup(projectCount = 2) {

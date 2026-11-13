@@ -424,13 +424,19 @@ export function App() {
   };
   const act = (task: Task, action: Action, body: object = {}, done?: string) =>
     run(async () => {
-      await request(`/api/tasks/${task.id}/actions`, "POST", {
-        action,
-        version: task.version,
-        ...body,
-      });
-      if (selected?.task.id === task.id)
-        setSelected(await request<Detail>(`/api/tasks/${task.id}`));
+      const updated = await request<Task>(
+        `/api/tasks/${task.id}/actions`,
+        "POST",
+        {
+          action,
+          version: task.version,
+          ...body,
+        },
+      );
+      if (selected?.task.id === task.id) {
+        if (updated.id !== task.id) await openTask(updated.id);
+        else setSelected(await request<Detail>(`/api/tasks/${task.id}`));
+      }
     }, done ?? "任務已更新");
   const leave = (v: View) => {
     setView(v);

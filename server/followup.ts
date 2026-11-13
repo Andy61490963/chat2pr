@@ -134,80 +134,107 @@ export async function createFollowup(
       ])
     ).rows[0];
     if (!parent) throw new AppError(404, "找不到任務");
-    if (parent.mode !== "query" || parent.status !== "answered")
-      throw new AppError(409, "只有已回答的查詢可以追問");
-    const usable = (
-      await c.query(
-        `SELECT g.binding_version FROM projects p JOIN group_projects gp ON gp.project_id=p.id JOIN groups g ON g.id=gp.group_id
-         WHERE p.id=$1 AND g.id=$2 AND p.enabled AND p.validated_at IS NOT NULL AND g.left_at IS NULL`,
-        [parent.project_id, parent.group_id],
-      )
-    ).rows[0] as { binding_version: number } | undefined;
-    if (!usable)
-      throw new AppError(
-        409,
-        "這個專案已停用或不再綁定此群組，請另外提出查詢並指定專案",
-      );
-    if ((await depthOf(c, parent.id)) >= maxThreadDepth)
-      throw new AppError(409, "這串追問已經 10 題，請另外提出新的查詢");
-    const risk = queryRisk(question);
-    const t = (
-      await c.query<Task>(
-        `INSERT INTO tasks(project_id,group_id,title,summary,acceptance,risk_reasons,missing,source_ids,status,approved_version,parent_id,dedupe_key,suggestions,mode)
-         VALUES($1,$2,$3,$4,$5,$6,'[]','{}',$7,$8,$9,$10,'[]','query') RETURNING *`,
-        [
-          parent.project_id,
-          parent.group_id,
-          `追問：${question.replace(/\s+/g, " ").slice(0, 60)}`,
-          question,
-          JSON.stringify([`回答追問：${question.slice(0, 500)}`]),
-          JSON.stringify(risk ? [risk] : []),
-          risk ? "awaiting_approval" : "queued",
-          risk ? null : 1,
-          parent.id,
-          `followup:${parent.id}:${randomUUID()}`,
-        ],
-      )
-    ).rows[0];
-    const routing = {
-      status: "clear",
-      basis: "followup",
-      reason: `延續上一題「${parent.title}」，沿用同一個專案與分支`,
-      evidence: [],
-      bindingVersion: usable.binding_version,
-      followupOf: { id: parent.id, title: parent.title },
-    };
-    const selection = {
-      basis: "followup",
-      reason: `延續上一題的目標分支「${parent.target_branch}」`,
-      sourceIds: [],
-    };
-    await c.query(
-      "UPDATE tasks SET project_routing=$2,target_branch=$3,branch_selection=$4 WHERE id=$1",
-      [
-        t.id,
-        JSON.stringify(routing),
-        parent.target_branch,
-        JSON.stringify(selection),
-      ],
-    );
-    Object.assign(t, {
-      project_routing: routing,
-      target_branch: parent.target_branch,
-      branch_selection: selection,
-    });
-    await c.query(
-      "INSERT INTO task_versions(task_id,version,summary,acceptance,approved_by) VALUES($1,1,$2,$3,$4)",
-      [t.id, t.summary, JSON.stringify(t.acceptance), risk ? null : actor],
-    );
-    await db.audit(
-      t.id,
-      "followup",
-      `${actor} 在看板追問「${parent.title}」${risk ? "，涉及機密實際值，等待審核" : "，已自動排程"}`,
-      c,
-    );
-    if (risk) await approvalNotice(c, t);
-    else await saveProjectConfirmation(c, t, "manual", actor);
+    const t = await createFollowupInTransaction(db, c, parent, question, actor);
     return { id: t.id, status: t.status };
   });
+}
+
+/** 共用追問交易，修改假設時沿用對話串、風險與專案檢查，不覆寫已回答的原題。 */
+export async function createFollowupInTransaction(
+  db: Database,
+  c: DbClient,
+  parent: Task,
+  question: string,
+  actor: string,
+  options: {
+    assumptions?: string[];
+    acceptance?: string[];
+    riskText?: string;
+    retainedRisk?: string;
+  } = {},
+) {
+  if (parent.mode !== "query" || parent.status !== "answered")
+    throw new AppError(409, "只有已回答的查詢可以追問");
+  const usable = (
+    await c.query(
+      `SELECT g.binding_version FROM projects p JOIN group_projects gp ON gp.project_id=p.id JOIN groups g ON g.id=gp.group_id
+         WHERE p.id=$1 AND g.id=$2 AND p.enabled AND p.validated_at IS NOT NULL AND g.left_at IS NULL`,
+      [parent.project_id, parent.group_id],
+    )
+  ).rows[0] as { binding_version: number } | undefined;
+  if (!usable)
+    throw new AppError(
+      409,
+      "這個專案已停用或不再綁定此群組，請另外提出查詢並指定專案",
+    );
+  if ((await depthOf(c, parent.id)) >= maxThreadDepth)
+    throw new AppError(409, "這串追問已經 10 題，請另外提出新的查詢");
+  const risk = queryRisk(options.riskText ?? question) || options.retainedRisk;
+  const t = (
+    await c.query<Task>(
+      `INSERT INTO tasks(project_id,group_id,title,summary,acceptance,risk_reasons,missing,source_ids,status,approved_version,parent_id,dedupe_key,suggestions,mode)
+         VALUES($1,$2,$3,$4,$5,$6,'[]','{}',$7,$8,$9,$10,'[]','query') RETURNING *`,
+      [
+        parent.project_id,
+        parent.group_id,
+        `追問：${question.replace(/\s+/g, " ").slice(0, 60)}`,
+        question,
+        JSON.stringify(
+          options.acceptance ?? [`回答追問：${question.slice(0, 500)}`],
+        ),
+        JSON.stringify(risk ? [risk] : []),
+        risk ? "awaiting_approval" : "queued",
+        risk ? null : 1,
+        parent.id,
+        `followup:${parent.id}:${randomUUID()}`,
+      ],
+    )
+  ).rows[0];
+  if (options.assumptions) {
+    await c.query("UPDATE tasks SET assumptions=$2 WHERE id=$1", [
+      t.id,
+      JSON.stringify(options.assumptions),
+    ]);
+    t.assumptions = options.assumptions;
+  }
+  const routing = {
+    status: "clear",
+    basis: "followup",
+    reason: `延續上一題「${parent.title}」，沿用同一個專案與分支`,
+    evidence: [],
+    bindingVersion: usable.binding_version,
+    followupOf: { id: parent.id, title: parent.title },
+  };
+  const selection = {
+    basis: "followup",
+    reason: `延續上一題的目標分支「${parent.target_branch}」`,
+    sourceIds: [],
+  };
+  await c.query(
+    "UPDATE tasks SET project_routing=$2,target_branch=$3,branch_selection=$4 WHERE id=$1",
+    [
+      t.id,
+      JSON.stringify(routing),
+      parent.target_branch,
+      JSON.stringify(selection),
+    ],
+  );
+  Object.assign(t, {
+    project_routing: routing,
+    target_branch: parent.target_branch,
+    branch_selection: selection,
+  });
+  await c.query(
+    "INSERT INTO task_versions(task_id,version,summary,acceptance,approved_by) VALUES($1,1,$2,$3,$4)",
+    [t.id, t.summary, JSON.stringify(t.acceptance), risk ? null : actor],
+  );
+  await db.audit(
+    t.id,
+    "followup",
+    `${actor} 在看板追問「${parent.title}」${risk ? "，涉及機密實際值，等待審核" : "，已自動排程"}`,
+    c,
+  );
+  if (risk) await approvalNotice(c, t);
+  else await saveProjectConfirmation(c, t, "manual", actor);
+  return t;
 }

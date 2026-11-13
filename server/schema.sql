@@ -68,6 +68,9 @@ CREATE TABLE IF NOT EXISTS tasks (
  created_at timestamptz NOT NULL DEFAULT now(), updated_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE TABLE IF NOT EXISTS task_versions (task_id uuid REFERENCES tasks(id), version integer NOT NULL, summary text NOT NULL, acceptance jsonb NOT NULL, approved_by text, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(task_id,version));
+-- 舊需求沒有結構化問題與假設；新假設同時寫入摘要，沿用既有需求版本保存歷史。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS question jsonb;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assumptions jsonb NOT NULL DEFAULT '[]';
 CREATE TABLE IF NOT EXISTS audit (id bigserial PRIMARY KEY, task_id uuid REFERENCES tasks(id), kind text NOT NULL, detail text NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS sessions (id_hash text PRIMARY KEY, user_id text NOT NULL, csrf text NOT NULL, expires_at timestamptz NOT NULL);
 CREATE TABLE IF NOT EXISTS oauth_states (id_hash text PRIMARY KEY, expires_at timestamptz NOT NULL);

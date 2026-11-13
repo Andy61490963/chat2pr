@@ -100,7 +100,7 @@ export async function backup(db: Database) {
       iv,
     );
   const encrypted = Buffer.concat([
-    cipher.update(JSON.stringify({ version: 3, tables: snapshot }), "utf8"),
+    cipher.update(JSON.stringify({ version: 4, tables: snapshot }), "utf8"),
     cipher.final(),
   ]);
   const name = `agentflow-${new Date().toISOString().slice(0, 10)}.afbackup`;

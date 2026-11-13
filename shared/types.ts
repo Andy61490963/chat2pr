@@ -17,6 +17,7 @@ export type Action =
   | "cancel"
   | "retry"
   | "amend"
+  | "assumption"
   | "assign"
   | "adopt"
   | "mode"
@@ -88,6 +89,8 @@ export interface Group {
   last_pending_at: string | null;
 }
 export interface Task {
+  question?: import("./clarification.js").ClarificationQuestion | null;
+  assumptions?: string[];
   target_branch: string | null;
   branch_selection?: import("./task-branch.js").TaskBranchSelection;
   project_routing?: import("./project-routing.js").ProjectRouting;
@@ -181,6 +184,8 @@ export interface Memory {
   created_at: string;
 }
 export interface TriageDecision {
+  question?: import("./clarification.js").ClarificationQuestion | null;
+  assumptions?: string[];
   targetBranch?: import("./task-branch.js").BranchDecision;
   routing?: import("./project-routing.js").RoutingDecision;
   /** request／clarification 的任務類型；未提供時視為修改程式。 */
@@ -208,6 +213,8 @@ export interface TriageDecision {
 }
 // 需求不明確時 AI 提出的具體方案，管理者可一鍵採用。
 export interface Suggestion {
+  recommended?: boolean;
+  reason?: string;
   label: string;
   summary: string;
   acceptance: string[];
