@@ -1563,3 +1563,24 @@ it("Codex 執行中缺資訊：問題結構化成補問，並在群組發問", a
   );
   expect(n.text).toContain("要查正式機還是測試機的設定？");
 });
+it.each([
+  [
+    "長回答",
+    `## 先看重點\n\n結論。\n\n## 詳細資訊\n\n${"細節。".repeat(200)}`,
+    true,
+  ],
+  ["短回答", "兩邊欄位一致。", false],
+])("群組回答：%s 是否提示回覆「詳細」", async (_label, final, hinted) => {
+  const s = await queryScenario();
+  const call = s.runner.call.bind(s.runner);
+  s.runner.call = async <T>(path: string, raw: unknown): Promise<T> =>
+    path === "phase" && (raw as { phase?: string }).phase === "code"
+      ? ({ exitCode: 0, stdout: JSON.stringify({ final }), stderr: "" } as T)
+      : call<T>(path, raw);
+  await s.execution.execute(s.task.id);
+  const n = await db.one<{ text: string }>(
+    "SELECT text FROM notifications WHERE task_id=$1 AND kind='group_answered'",
+    [s.task.id],
+  );
+  expect(n.text.includes("打「詳細」")).toBe(hinted);
+});

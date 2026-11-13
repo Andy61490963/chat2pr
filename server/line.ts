@@ -11,6 +11,8 @@ import {
   followupAck,
   answerAck,
   answerHeldAck,
+  detailRequest,
+  lineChunks,
   groupRepliesOn,
 } from "./group-replies.js";
 import { applyAnswer, questionByQuote } from "./answers.js";
@@ -34,6 +36,15 @@ const Event = z
         type: z.string(),
         text: z.string().optional(),
         quotedMessageId: z.string().optional(),
+        // 指令模式下 @機器人 也算提出需求；isSelf 表示提及的是本機器人。
+        mention: z
+          .object({
+            mentionees: z
+              .array(z.object({ isSelf: z.boolean().optional() }).passthrough())
+              .max(100),
+          })
+          .passthrough()
+          .optional(),
       })
       .optional(),
     unsend: z.object({ messageId: z.string() }).optional(),
@@ -48,7 +59,7 @@ export class Line {
     const adoptions: Array<{ task: string; version: number; index: number }> =
       [];
     // 「/任務」的立即回覆：交易完成後才送，失敗不影響收訊。
-    const acks: { token: string; text: string }[] = [];
+    const acks: { token: string; text: string | string[] }[] = [];
     for (const e of payload.events)
       await this.db.transaction(async (c) => {
         const inserted = await c.query(
@@ -221,8 +232,47 @@ export class Line {
               });
             return;
           }
+          // 引用機器人的查詢回答打「詳細」：用 reply token 分段送出完整內容，不建任務、不呼叫模型。
+          if (
+            group &&
+            e.message.type === "text" &&
+            e.message.quotedMessageId &&
+            detailRequest.test(e.message.text ?? "")
+          ) {
+            const full = (
+              await c.query<{ answer: string }>(
+                "SELECT t.answer FROM notifications n JOIN tasks t ON t.id=n.task_id WHERE n.sent_message_id=$1 AND n.group_id=$2 AND t.group_id=$2 AND n.kind='group_answered' AND t.answer IS NOT NULL LIMIT 1",
+                [e.message.quotedMessageId, group],
+              )
+            ).rows[0];
+            if (full) {
+              const saved = await c.query(
+                "INSERT INTO messages(id,group_id,user_id,type,text,quoted_id,trigger_mode,processed) VALUES($1,$2,$3,'text',$4,$5,'chat',true) ON CONFLICT DO NOTHING RETURNING id",
+                [
+                  e.message.id,
+                  group,
+                  e.source?.userId ?? null,
+                  e.message.text,
+                  e.message.quotedMessageId,
+                ],
+              );
+              if (
+                saved.rowCount &&
+                e.replyToken &&
+                settings.reply_mode !== "off" &&
+                settings.replies
+              )
+                acks.push({
+                  token: e.replyToken,
+                  text: lineChunks(full.answer),
+                });
+              return;
+            }
+          }
           const command =
-            e.message.type === "text" && isTaskCommand(e.message.text);
+            e.message.type === "text" &&
+            (isTaskCommand(e.message.text) ||
+              !!e.message.mention?.mentionees.some((m) => m.isSelf));
           const botReply =
             e.message.type === "text" &&
             !!e.message.quotedMessageId &&
@@ -260,7 +310,7 @@ export class Line {
               token: e.replyToken,
               text: eligible
                 ? botReply
-                  ? followupAck
+                  ? await this.followupAck(c, group, e.message.quotedMessageId)
                   : commandAck
                 : disabledAck,
             });
@@ -318,8 +368,35 @@ export class Line {
       [taskId, kind, key, text],
     );
   }
+  /**
+   * 引用追問的「收到」：上一題是查詢時，附上同專案最近 20 次查詢的耗時中位數；沒有紀錄就不寫時間。
+   */
+  private async followupAck(
+    c: { query: Database["pool"]["query"] },
+    group: string | undefined,
+    quotedId: string | undefined,
+  ) {
+    if (!group || !quotedId) return followupAck;
+    const r = (
+      await c.query(
+        `SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM r.completed_at-r.started_at)) AS seconds
+         FROM (SELECT r.completed_at,r.started_at FROM runs r JOIN tasks t ON t.id=r.task_id
+           WHERE t.mode='query' AND t.status='answered' AND r.completed_at IS NOT NULL AND t.project_id=(
+             SELECT q.project_id FROM notifications n JOIN tasks q ON q.id=n.task_id
+             WHERE n.sent_message_id=$1 AND n.group_id=$2 AND q.mode='query' LIMIT 1)
+           ORDER BY r.completed_at DESC LIMIT 20) r`,
+        [quotedId, group],
+      )
+    ).rows[0] as { seconds: number | null } | undefined;
+    if (!r?.seconds) return followupAck;
+    const minutes = Math.ceil(Number(r.seconds) / 60);
+    return followupAck.replace(
+      /。$/,
+      minutes <= 1 ? "，大約 1 分鐘。" : `，大約 ${minutes} 分鐘。`,
+    );
+  }
   /** 用 reply token 回覆群組；不計入推播額度，送不出去也不影響收訊。 */
-  private async reply(token: string, text: string) {
+  private async reply(token: string, text: string | string[]) {
     const access = secrets().lineToken;
     if (!access) return;
     await fetch("https://api.line.me/v2/bot/message/reply", {
@@ -330,7 +407,9 @@ export class Line {
       },
       body: JSON.stringify({
         replyToken: token,
-        messages: [{ type: "text", text }],
+        messages: (Array.isArray(text) ? text : [text])
+          .slice(0, 5)
+          .map((t) => ({ type: "text", text: t })),
       }),
       signal: AbortSignal.timeout(5000),
     }).catch(() => null);

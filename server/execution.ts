@@ -34,7 +34,12 @@ import { runnerRequest, type RunnerTransport } from "./runner-http.js";
 import { missingTestMessage, suggestStack } from "./stack.js";
 import { ProjectSetup, assertTestsFound } from "./project-setup.js";
 import { provideSnapshot } from "./project-database.js";
-import { groupText, notifyGroup } from "./group-replies.js";
+import {
+  detailHint,
+  groupText,
+  notifyGroup,
+  tellGroupWaiting,
+} from "./group-replies.js";
 import { snapshotDirectory } from "../shared/project-database.js";
 import {
   NeedsProjectInput,
@@ -647,13 +652,19 @@ export class Execution {
              AND EXISTS(SELECT 1 FROM settings WHERE id=1 AND revision=$4 AND NOT (value->>'paused')::boolean) RETURNING id`,
             [task.id, e.message, task.version, snapshot.revision],
           );
-          if (retained.length)
+          if (retained.length) {
             await this.line.notify(
               task.id,
               "budget",
               `budget:${task.id}:${task.version}`,
               `額度不足，工作已保留：${task.title}`,
             );
+            await tellGroupWaiting(
+              this.db,
+              task.id,
+              e.message.includes("今日執行次數") ? "daily" : "quota",
+            );
+          }
           return;
         }
         throw e;
@@ -1145,7 +1156,13 @@ ${querySummary(answer)}`,
             `answered:${task.id}:${task.version}`,
             groupText(
               `「${task.title}」的查詢結果：\n\n${querySummary(answer)}`,
-            ),
+              // 結尾要留給「詳細」提示，摘要部分少截一點。
+              4400,
+            ) +
+              // 群組成員沒有看板帳號；回答比摘要長時，告訴他們怎麼看全文。
+              (answer.length > querySummary(answer).length + 200
+                ? `\n\n${detailHint}`
+                : ""),
           );
           return;
         }
@@ -1432,6 +1449,7 @@ ${querySummary(answer)}`,
           `quota:${runId ?? taskId}`,
           `${e.message}，工作已保留，額度恢復後自動繼續。`,
         );
+        await tellGroupWaiting(this.db, taskId, "quota");
         return;
       }
       // 連線中斷、上游暫時無法服務這類錯誤重跑通常就會過：同一需求版本自動重新排隊最多兩次，不先通知失敗。
