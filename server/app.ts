@@ -4,13 +4,20 @@ import { frictionMetrics } from "./friction.js";
 import {
   approveCheck,
   checkDetail,
+  clearCheckEnvironment,
   createCheck,
   deleteCheck,
   listChecks,
   setCheckPaused,
+  syncCheckEnvironments,
   testCheck,
   updateCheck,
 } from "./checks.js";
+import {
+  checkEnvironmentLimits,
+  checkEnvironmentPolicy,
+  defaultCheckEnvironmentPolicy,
+} from "../shared/check-environment.js";
 import { requestBackfill } from "./retrieval.js";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
@@ -129,6 +136,27 @@ export async function buildApp(
     trustProxy: false,
   });
   await app.register(cookie);
+  // 檢查、專案（含資料庫連線與綁定）、群組或系統設定一有變更，立即請執行器清掉不再有效的檢查環境（#19）；
+  // 排程每分鐘也會再核對一次，這裡失敗不影響原本的操作。必須在註冊任何路由之前加上。
+  let checkSync: Promise<unknown> = Promise.resolve();
+  app.addHook("onResponse", async (req, reply) => {
+    if (
+      req.method === "GET" ||
+      reply.statusCode >= 400 ||
+      !/^\/api\/(checks|projects|groups|settings)(\/|\?|$)/.test(req.url)
+    )
+      return;
+    checkSync = checkSync
+      .then(() =>
+        syncCheckEnvironments(db, (path, body, timeoutMs) =>
+          runner.call(path, body, timeoutMs),
+        ),
+      )
+      .catch(() => {});
+  });
+  app.addHook("onClose", async () => {
+    await checkSync;
+  });
   registerChat(app, db);
   registerProjectContext(app, db, enqueueValidation);
   registerProjectDatabase(
@@ -546,7 +574,47 @@ export async function buildApp(
   app.get("/api/checks", async (req, reply) => {
     reply.header("Cache-Control", "no-store");
     await requireUser(db, req);
-    return listChecks(db);
+    return listChecks(db, runnerCall);
+  });
+  app.get("/api/check-environments/settings", async (req, reply) => {
+    reply.header("Cache-Control", "no-store");
+    await requireUser(db, req);
+    return {
+      ...checkEnvironmentPolicy(await db.settings()),
+      defaults: defaultCheckEnvironmentPolicy,
+      limits: checkEnvironmentLimits,
+    };
+  });
+  // 放在 /api/settings 之下，存檔後由 onResponse 立即套用到執行器。
+  app.put("/api/settings/check-environments", async (req) => {
+    await requireAdmin(db, req);
+    const l = checkEnvironmentLimits;
+    const b = z
+      .object({
+        idleMinutes: z
+          .number()
+          .int()
+          .min(l.idleMinutes.min)
+          .max(l.idleMinutes.max),
+        max: z.number().int().min(l.max.min).max(l.max.max),
+      })
+      .parse(req.body);
+    await db.query("UPDATE settings SET value=value || $1::jsonb WHERE id=1", [
+      JSON.stringify({
+        check_env_idle_minutes: b.idleMinutes,
+        check_env_max: b.max,
+      }),
+    ]);
+    await db.audit(
+      null,
+      "settings",
+      `定期檢查環境改為閒置 ${b.idleMinutes} 分鐘清除、最多保留 ${b.max} 個`,
+    );
+    return { ok: true };
+  });
+  app.post("/api/checks/:id/environment/clear", async (req) => {
+    const actor = await requireAdmin(db, req);
+    return clearCheckEnvironment(db, runnerCall, checkId(req), actor.login);
   });
   app.get("/api/checks/:id", async (req, reply) => {
     reply.header("Cache-Control", "no-store");

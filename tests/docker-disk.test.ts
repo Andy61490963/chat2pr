@@ -494,6 +494,33 @@ describe("清理規則", () => {
     expect(plan.map((i) => i.target)).toEqual(["c-stopped-job"]);
   });
 
+  it("定期檢查環境（#19）的容器認得歸屬，但只列出不清：由執行器依閒置逾時清除", () => {
+    const inv = inventory();
+    inv.containers.push({
+      id: "c-check-probe",
+      name: "agentflow-check-0b3a2d6e-1f00-4c1a-9a00-00000000000a-probe",
+      image: "line-agentflow-check:local",
+      imageId: "sha256:check",
+      state: "exited",
+      sizeRw: 1024,
+      created: sec(1),
+      labels: {
+        "io.agentflow.managed": "true",
+        "io.agentflow.instance": "production",
+        "io.agentflow.check": "0b3a2d6e-1f00-4c1a-9a00-00000000000a",
+        "io.agentflow.check-role": "probe",
+      },
+    });
+    const items = classifyDisk(inv, context());
+    const probe = items.find((i) => i.target === "c-check-probe")!;
+    expect(probe.owner).toBe("check_container");
+    expect(probe.protected).toContain("定期檢查環境");
+    expect(probe.rule).toBeUndefined();
+    expect(cleanupPlan(items, allOn, false).map((i) => i.target)).not.toContain(
+      "c-check-probe",
+    );
+  });
+
   it("映像：只清沒有專案、沒有容器在用、超過天數的本系統映像；:local 與其他專案的映像不動", () => {
     const items = classifyDisk(inventory(), context());
     const plan = cleanupPlan(items, allOn, true)

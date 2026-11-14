@@ -861,7 +861,12 @@ export function App() {
               <ChecksView state={state} request={request} admin={admin} />
             )}
             {current.id === "system" && (
-              <SystemView state={state} request={request} go={go} />
+              <SystemView
+                state={state}
+                request={request}
+                go={go}
+                admin={admin}
+              />
             )}
             {current.id === "members" && (
               <MembersView

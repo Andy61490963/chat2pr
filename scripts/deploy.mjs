@@ -324,6 +324,15 @@ async function apply(before) {
       "line-agentflow-source:local",
       ".",
     ]);
+    // 定期檢查的檢查容器與轉接器（#19）；執行器拒絕版本較舊的檢查映像。
+    run("docker", [
+      "build",
+      "-f",
+      "infra/check/Dockerfile",
+      "-t",
+      "line-agentflow-check:local",
+      ".",
+    ]);
     // 已啟用的 SQL Server 測試映像隨基底一起更新，避免沿用舊執行程式。
     if (
       spawnSync(

@@ -22,7 +22,9 @@ import {
   dailyNoticeLimit,
   runDueChecks,
   setCheckPaused,
+  syncCheckEnvironments,
   updateCheck,
+  validCheckEnvironments,
   type RunnerCall,
 } from "../server/checks.js";
 import {
@@ -122,18 +124,56 @@ describe("檢查定義", () => {
   });
 });
 
-/** 模擬執行器：依序回傳指定結果；error 表示執行失敗。 */
+/**
+ * 模擬執行器：依序回傳指定結果；error 表示執行失敗。
+ * 環境以 checkId＋環境鍵記住，鍵相同就算重用（created=false）；calls 只記錄檢查執行。
+ */
 function fakeRunner(results: ("ok" | "alert" | "error")[]) {
   const calls: { path: string; body: unknown }[] = [];
+  const syncs: { valid: { checkId: string; key: string }[] }[] = [];
+  const kept = new Map<string, string>();
   const call: RunnerCall = async <T>(path: string, body: unknown) => {
+    const b = body as Record<string, unknown>;
+    if (path === "checks/environments/sync") {
+      syncs.push(b as (typeof syncs)[number]);
+      const valid = new Map(
+        (b.valid as { checkId: string; key: string }[]).map((v) => [
+          v.checkId,
+          v.key,
+        ]),
+      );
+      const removed = [...kept]
+        .filter(([id, key]) => valid.get(id) !== key)
+        .map(([checkId]) => ({ checkId, reason: "stale" }));
+      for (const r of removed) kept.delete(r.checkId);
+      return { removed } as T;
+    }
+    if (path === "checks/environments")
+      return {
+        environments: [...kept].map(([checkId, key]) => ({
+          checkId,
+          key,
+          createdAt: "2026-11-14T00:00:00.000Z",
+          lastUsedAt: "2026-11-14T01:00:00.000Z",
+        })),
+        failures: [],
+      } as T;
+    if (path === "checks/environments/remove") {
+      const existed = kept.delete(b.checkId as string);
+      return { removed: existed } as T;
+    }
     calls.push({ path, body });
+    const created = kept.get(b.checkId as string) !== b.key;
+    kept.set(b.checkId as string, b.key as string);
     const r = results.shift() ?? "ok";
     if (r === "error") throw new Error("連不上資料庫");
-    if (path === "checks/sql")
-      return { rows: [{ stale: r === "alert" ? 2 : 0, eqm: "M01" }] } as T;
-    return { ok: r === "ok", status: r === "ok" ? 200 : 500, ms: 12 } as T;
+    const result =
+      b.kind === "sql"
+        ? { rows: [{ stale: r === "alert" ? 2 : 0, eqm: "M01" }] }
+        : { ok: r === "ok", status: r === "ok" ? 200 : 500, ms: 12 };
+    return { result, environment: { created } } as T;
   };
-  return { call, calls };
+  return { call, calls, syncs, kept };
 }
 const due = () =>
   db.query(
@@ -273,7 +313,7 @@ describe("排程與通知", () => {
     await runDueChecks(db, r.call);
     expect(r.calls).toHaveLength(0);
   });
-  it("SQL 檢查用專案登記的連線，在主機執行器上執行", async () => {
+  it("SQL 檢查用專案登記的連線，在該檢查的專用環境執行", async () => {
     await db.query(
       "INSERT INTO project_connections(project_id,engine,host,port,database_name,username,secret) VALUES($1,'sqlserver','db.example.test',1433,'mes','reader',$2)",
       [project, seal({ password: "fictional-password" })],
@@ -295,11 +335,170 @@ describe("排程與通知", () => {
     await approveCheck(db, c.id, c.version, "管理者");
     const r = fakeRunner(["alert"]);
     await runDueChecks(db, r.call);
-    expect(r.calls[0].path).toBe("checks/sql");
-    expect(
-      (r.calls[0].body as { connection: { host: string } }).connection.host,
-    ).toBe("db.example.test");
+    expect(r.calls[0].path).toBe("checks/run");
+    expect(r.calls[0].body).toMatchObject({
+      checkId: c.id,
+      kind: "sql",
+      sql: "SELECT COUNT(*) AS stale FROM EQM",
+      connection: { host: "db.example.test" },
+      policy: { idleMinutes: 120, max: 20 },
+    });
     expect((await notes("group_check"))[0].text).toContain("stale=2：M01");
+  });
+});
+
+describe("檢查環境的保留與清除（#19）", () => {
+  const connect = () =>
+    db.query(
+      "INSERT INTO project_connections(project_id,engine,host,port,database_name,username,secret,updated_at) VALUES($1,'sqlserver','db.example.test',1433,'mes','reader',$2,'2026-11-01T00:00:00Z')",
+      [project, seal({ password: "fictional-password" })],
+    );
+  async function activeSql() {
+    const c = await createCheck(
+      db,
+      {
+        group_id: "group-a",
+        project_id: project,
+        name: "機台回報",
+        kind: "sql",
+        target: "SELECT COUNT(*) AS stale FROM EQM",
+        condition: { column: "stale", op: ">", value: 0 },
+        interval_minutes: 30,
+        investigate: false,
+      },
+      "管理者",
+    );
+    return approveCheck(db, c.id, c.version, "管理者");
+  }
+  const keyOf = async (id: string) =>
+    (await validCheckEnvironments(db)).find((v) => v.checkId === id)?.key;
+  const envAudits = () =>
+    db.query<{ detail: string }>(
+      "SELECT detail FROM audit WHERE kind='check_environment' ORDER BY created_at,id",
+    );
+
+  it("同一個檢查連續兩次執行，第二次重用同一個環境、只記一次建立", async () => {
+    await connect();
+    const c = await activeSql();
+    const r = fakeRunner(["ok", "ok"]);
+    await runDueChecks(db, r.call);
+    await due();
+    await runDueChecks(db, r.call);
+    expect(r.calls).toHaveLength(2);
+    const keys = r.calls.map((x) => (x.body as { key: string }).key);
+    expect(keys[0]).toBe(keys[1]);
+    expect(keys[0]).toBe(await keyOf(c.id));
+    expect((await envAudits()).map((a) => a.detail)).toEqual([
+      "定期檢查「機台回報」建立檢查環境（第 1 版）",
+    ]);
+  });
+
+  it("環境鍵：檢查修改、連線更新、記下 SSH 主機金鑰都會換新環境", async () => {
+    await connect();
+    const c = await activeSql();
+    const first = await keyOf(c.id);
+    await db.query(
+      "UPDATE project_connections SET updated_at='2026-11-02T00:00:00Z' WHERE project_id=$1",
+      [project],
+    );
+    const second = await keyOf(c.id);
+    expect(second).not.toBe(first);
+    await db.query(
+      "UPDATE project_connections SET ssh_host='jump.example.test',ssh_port=22,ssh_username='u',ssh_host_key='SHA256:fictional' WHERE project_id=$1",
+      [project],
+    );
+    const third = await keyOf(c.id);
+    expect(third).not.toBe(second);
+    await updateCheck(
+      db,
+      c.id,
+      c.version,
+      {
+        group_id: "group-a",
+        project_id: project,
+        name: "機台回報",
+        kind: "sql",
+        target: "SELECT COUNT(*) AS stale FROM EQM WHERE 1=1",
+        condition: { column: "stale", op: ">", value: 0 },
+        interval_minutes: 30,
+      },
+      "管理者",
+    );
+    // 待核准仍可試跑，所以保留在有效清單，但鍵已不同。
+    const fourth = await keyOf(c.id);
+    expect(fourth).toBeDefined();
+    expect(fourth).not.toBe(third);
+  });
+
+  it("暫停、因錯誤停用、刪除、連線刪除、群組或專案停用、解除綁定、系統暫停：都不在有效清單", async () => {
+    await connect();
+    const c = await activeSql();
+    const http = await activeHttp();
+    expect(await keyOf(c.id)).toBeDefined();
+    const toggles: [string, string, string][] = [
+      [
+        "UPDATE scheduled_checks SET status='paused' WHERE id=$1",
+        "UPDATE scheduled_checks SET status='active' WHERE id=$1",
+        c.id,
+      ],
+      [
+        "UPDATE scheduled_checks SET status='failed' WHERE id=$1",
+        "UPDATE scheduled_checks SET status='active' WHERE id=$1",
+        c.id,
+      ],
+      [
+        "UPDATE groups SET enabled=false WHERE id='group-a' AND $1::text IS NOT NULL",
+        "UPDATE groups SET enabled=true WHERE id='group-a' AND $1::text IS NOT NULL",
+        c.id,
+      ],
+      [
+        "UPDATE projects SET enabled=false WHERE id=$1",
+        "UPDATE projects SET enabled=true WHERE id=$1",
+        project,
+      ],
+      [
+        "UPDATE settings SET value=jsonb_set(value,'{paused}','true') WHERE id=1 AND $1::text IS NOT NULL",
+        "UPDATE settings SET value=jsonb_set(value,'{paused}','false') WHERE id=1 AND $1::text IS NOT NULL",
+        c.id,
+      ],
+    ];
+    for (const [off, on, arg] of toggles) {
+      await db.query(off, [arg]);
+      expect(await keyOf(c.id), off).toBeUndefined();
+      await db.query(on, [arg]);
+      expect(await keyOf(c.id), on).toBeDefined();
+    }
+    await db.query("DELETE FROM project_connections WHERE project_id=$1", [
+      project,
+    ]);
+    expect(await keyOf(c.id)).toBeUndefined();
+    // 沒有連線的需求只影響 SQL 檢查。
+    expect(await keyOf(http.id)).toBeDefined();
+    await db.query("DELETE FROM group_projects WHERE project_id=$1", [project]);
+    expect(await keyOf(http.id)).toBeUndefined();
+  });
+
+  it("同步：清單外的環境被清除並寫稽核；檢查連續錯誤暫停後立即清除", async () => {
+    const c = await activeHttp();
+    const r = fakeRunner(["error", "error", "error"]);
+    for (let i = 0; i < 2; i++) {
+      await due();
+      await runDueChecks(db, r.call);
+    }
+    expect(r.kept.has(c.id)).toBe(true);
+    await due();
+    await runDueChecks(db, r.call);
+    expect((await one()).status).toBe("failed");
+    expect(r.kept.has(c.id)).toBe(false);
+    expect((await envAudits()).at(-1)?.detail).toContain(
+      "清除定期檢查「機台服務」的檢查環境",
+    );
+    // 已刪除的檢查也照樣寫稽核。
+    r.kept.set("0b3a2d6e-1f00-4c1a-9a00-0000000000ff", "v1");
+    expect(await syncCheckEnvironments(db, r.call)).toEqual([
+      { checkId: "0b3a2d6e-1f00-4c1a-9a00-0000000000ff", reason: "stale" },
+    ]);
+    expect((await envAudits()).at(-1)?.detail).toContain("已刪除定期檢查");
   });
 });
 
@@ -347,6 +546,125 @@ describe("看板 API", () => {
   });
 });
 
+describe("看板 API：檢查環境（#19）", () => {
+  let app: Awaited<ReturnType<typeof buildApp>>;
+  let headers: Awaited<ReturnType<typeof session>>;
+  let r: ReturnType<typeof fakeRunner>;
+  beforeEach(async () => {
+    r = fakeRunner([]);
+    app = await buildApp(db, undefined, undefined, undefined, {
+      call: r.call,
+    });
+    headers = await session();
+  });
+  afterEach(() => app.close());
+
+  it("顯示環境狀態與預計清除時間；修改或暫停後立即清除；可手動清除並寫稽核", async () => {
+    const c = await activeHttp();
+    await runDueChecks(db, r.call);
+    const listed = (await app.inject({ url: "/api/checks", headers })).json();
+    expect(listed[0].environment).toEqual({
+      state: "kept",
+      createdAt: "2026-11-14T00:00:00.000Z",
+      lastUsedAt: "2026-11-14T01:00:00.000Z",
+      expiresAt: "2026-11-14T03:00:00.000Z",
+    });
+    const paused = await app.inject({
+      method: "POST",
+      url: `/api/checks/${c.id}/pause`,
+      headers,
+    });
+    expect(paused.statusCode).toBe(200);
+    await vi.waitFor(() => expect(r.kept.has(c.id)).toBe(false));
+    expect(
+      (await app.inject({ url: "/api/checks", headers })).json()[0].environment,
+    ).toEqual({ state: "none" });
+    // 手動清除。
+    await app.inject({
+      method: "POST",
+      url: `/api/checks/${c.id}/resume`,
+      headers,
+    });
+    await r.call("checks/run", {
+      checkId: c.id,
+      key: "v1",
+      kind: "http",
+    });
+    const cleared = await app.inject({
+      method: "POST",
+      url: `/api/checks/${c.id}/environment/clear`,
+      headers,
+    });
+    expect(cleared.json()).toEqual({ removed: true });
+    expect(
+      await db.query(
+        "SELECT 1 FROM audit WHERE kind='check_environment' AND detail LIKE '%管理者手動清除%'",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("系統頁可以調整閒置時間與保留數上限，範圍外拒絕", async () => {
+    const save = (body: unknown) =>
+      app.inject({
+        method: "PUT",
+        url: "/api/settings/check-environments",
+        headers,
+        payload: body as Record<string, unknown>,
+      });
+    expect((await save({ idleMinutes: 5, max: 20 })).statusCode).toBe(400);
+    expect((await save({ idleMinutes: 30, max: 5 })).statusCode).toBe(200);
+    const s = (
+      await app.inject({ url: "/api/check-environments/settings", headers })
+    ).json();
+    expect(s).toMatchObject({ idleMinutes: 30, max: 5 });
+    // 設定改變後立即送給執行器套用。
+    await vi.waitFor(() =>
+      expect(r.syncs.at(-1)).toMatchObject({
+        policy: { idleMinutes: 30, max: 5 },
+      }),
+    );
+  });
+
+  it("連線更新後立即同步，舊環境（舊機密）被清除", async () => {
+    await db.query(
+      "INSERT INTO project_connections(project_id,engine,host,port,database_name,username,secret) VALUES($1,'sqlserver','db.example.test',1433,'mes','reader',$2)",
+      [project, seal({ password: "fictional-password" })],
+    );
+    const c = await createCheck(
+      db,
+      {
+        group_id: "group-a",
+        project_id: project,
+        name: "機台回報",
+        kind: "sql",
+        target: "SELECT COUNT(*) AS stale FROM EQM",
+        condition: { column: "stale", op: ">", value: 0 },
+        interval_minutes: 30,
+        investigate: false,
+      },
+      "管理者",
+    );
+    await approveCheck(db, c.id, c.version, "管理者");
+    await runDueChecks(db, r.call);
+    expect(r.kept.has(c.id)).toBe(true);
+    const saved = await app.inject({
+      method: "PUT",
+      url: `/api/projects/${project}/database`,
+      headers,
+      payload: {
+        engine: "sqlserver",
+        host: "db2.example.test",
+        port: 1433,
+        database: "mes",
+        username: "reader",
+        password: "another-fictional-password",
+      },
+    });
+    expect(saved.statusCode).toBe(200);
+    await vi.waitFor(() => expect(r.kept.has(c.id)).toBe(false));
+  });
+});
+
 describe("執行器的位址限制", () => {
   it.each([
     "localhost",
@@ -366,9 +684,19 @@ describe("執行器的位址限制", () => {
     await expect(safeHost("192.168.1.20")).resolves.toBe("192.168.1.20");
   });
   it("HTTP 檢查拒絕帶帳密或非 http 的網址", async () => {
-    const { httpProbe } = await import("../server/check-probes.js");
-    await expect(httpProbe("ftp://10.0.0.5/x")).rejects.toThrow();
-    await expect(httpProbe("http://u:p@10.0.0.5/x")).rejects.toThrow();
+    const { httpTarget, httpEndpoint } =
+      await import("../server/check-probes.js");
+    expect(() => httpTarget("ftp://10.0.0.5/x")).toThrow();
+    expect(() => httpTarget("http://u:p@10.0.0.5/x")).toThrow();
+    // 轉接器的目標：網址的主機與連接埠（預設 80／443）。
+    expect(httpEndpoint("https://10.0.0.5/health")).toEqual({
+      host: "10.0.0.5",
+      port: 443,
+    });
+    expect(httpEndpoint("http://[fd00::5]:8080/x")).toEqual({
+      host: "fd00::5",
+      port: 8080,
+    });
   });
 });
 

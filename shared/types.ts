@@ -160,6 +160,10 @@ export interface Settings {
   daily_runs: number;
   /** 全系統同時執行的任務數（系統頁設定，預設 2）；同一專案的修改仍一次一個。 */
   max_runs?: number;
+  /** 定期檢查環境閒置多久清除（分鐘，系統頁設定，預設 120）。 */
+  check_env_idle_minutes?: number;
+  /** 同時保留的定期檢查環境數上限（系統頁設定，預設 20）。 */
+  check_env_max?: number;
   codex_model: string | null;
   triage_effort: Effort;
   coding_effort: Effort;

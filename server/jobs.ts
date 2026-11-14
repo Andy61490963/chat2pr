@@ -22,7 +22,7 @@ import {
 } from "./triage.js";
 import { Execution, HttpRunner, type Runner } from "./execution.js";
 import { cleanup, backup, downloadPendingImages } from "./maintenance.js";
-import { runDueChecks } from "./checks.js";
+import { runDueChecks, syncCheckEnvironments } from "./checks.js";
 import { announceNewGroups, syncGroupNames } from "./line-groups.js";
 import { recordHealth } from "./health.js";
 import { syncOpenPullRequests } from "./pr-sync.js";
@@ -297,6 +297,7 @@ export async function startJobs(
   await boss.schedule("pr-sync", "*/10 * * * *");
   await boss.schedule("backup", "0 3 * * *", null, { tz: "Asia/Taipei" });
   let busy = false;
+  let lastCheckSync = 0;
   const tick = async () => {
     if (busy) return;
     busy = true;
@@ -306,6 +307,13 @@ export async function startJobs(
       await runDueChecks(db, (path, body, timeoutMs) =>
         runner.call(path, body, timeoutMs),
       ).catch((e) => console.warn("定期檢查：", redact(String(e))));
+      // 每分鐘核對一次檢查環境：群組或專案停用、系統暫停、閒置逾時都在這裡清除（#19）。
+      if (Date.now() - lastCheckSync >= 60000) {
+        lastCheckSync = Date.now();
+        await syncCheckEnvironments(db, (path, body, timeoutMs) =>
+          runner.call(path, body, timeoutMs),
+        ).catch((e) => console.warn("定期檢查環境：", redact(String(e))));
+      }
       await budget.recoverExpired();
       // 新群組第一次收到訊息後很快換成 LINE 上的名稱；之後每小時最多查一次。
       await syncGroupNames(db);
