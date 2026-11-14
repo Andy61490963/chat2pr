@@ -79,20 +79,26 @@ export function DockerDiskCard({ request }: { request: Request }) {
     [report, draft],
   );
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const r = await request<DiskReport>("/api/system/disk");
-      setReport(r);
-      setError("");
-      return r;
-    } catch (e) {
-      setError(message(e));
-      return null;
-    } finally {
-      setLoading(false);
-    }
-  }, [request]);
+  // 打開頁面時用伺服器 60 秒內的盤點；「重新盤點」與清理前預覽一律重算。
+  const load = useCallback(
+    async (fresh = false) => {
+      setLoading(true);
+      try {
+        const r = await request<DiskReport>(
+          `/api/system/disk${fresh ? "?fresh=1" : ""}`,
+        );
+        setReport(r);
+        setError("");
+        return r;
+      } catch (e) {
+        setError(message(e));
+        return null;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [request],
+  );
   useEffect(() => {
     void load().then((r) => r && setDraft(r.settings));
   }, [load]);
@@ -119,7 +125,7 @@ export function DockerDiskCard({ request }: { request: Request }) {
   // 預覽前重新盤點，列出的就是這一刻會刪除的項目。
   const openPreview = async () => {
     setNotice("");
-    const r = await load();
+    const r = await load(true);
     if (!r) return;
     setChosen(new Set(r.candidates.map((c) => c.rule!).filter(Boolean)));
     setPreview(r.candidates);
@@ -183,7 +189,7 @@ export function DockerDiskCard({ request }: { request: Request }) {
             variant="outline"
             size="sm"
             disabled={loading}
-            onClick={() => void load()}
+            onClick={() => void load(true)}
           >
             <RefreshCw className={cn(loading && "animate-spin")} /> 重新盤點
           </Button>

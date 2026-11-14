@@ -9,6 +9,7 @@ import {
   SQLSERVER_WORKER_IMAGE,
   detectSqlServer,
   environmentFailure,
+  selfManagedSqlServer,
   sqlServerPlan,
   sqlServerTestCommand,
   testEnvironment,
@@ -125,6 +126,31 @@ describe("選用映像與管理者覆寫", () => {
     expect(
       sqlServerPlan({ image: "team-worker:custom", sql_server: "always" }, {}),
     ).toMatchObject({ image: "team-worker:custom" });
+  });
+  it("專案腳本自己啟動 SQL Server 時自動模式不接手，照專案腳本跑；管理者選一律提供仍提供", () => {
+    // 驗收時的情況：測試腳本自己啟動 sqlservr，系統接手後 AI 給不出測試命令。
+    const own = {
+      ...needs,
+      "scripts/test-isolated.mjs":
+        "spawn('/opt/mssql/bin/sqlservr', [], { env });",
+    };
+    expect(selfManagedSqlServer(own)).toMatchObject({
+      path: "scripts/test-isolated.mjs",
+    });
+    expect(sqlServerPlan({ image: SQLSERVER_WORKER_IMAGE }, own)).toBeNull();
+    expect(
+      sqlServerPlan(
+        { image: SQLSERVER_WORKER_IMAGE, sql_server: "always" },
+        own,
+      ),
+    ).toMatchObject({ source: "admin" });
+    // CI 與文件提到 sqlservr 不算專案自己啟動。
+    expect(
+      selfManagedSqlServer({
+        ".github/workflows/ci.yml": "run: /opt/mssql/bin/sqlservr &",
+        "README.md": "需要 sqlservr",
+      }),
+    ).toBeNull();
   });
 });
 

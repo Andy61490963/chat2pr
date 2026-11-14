@@ -179,7 +179,7 @@ const rules: Rule[] = [
   {
     category: "transient",
     test: matches(
-      /Codex 執行失敗|獨立審查失敗|AI 安裝審查失敗|@openai\/codex-sdk|Codex Exec exited|stream (?:disconnected|error)|Reconnecting|exceeded retry limit|訂閱(?:推論|上游)連線失敗/i,
+      /Codex 執行失敗|獨立審查失敗|AI 安裝審查失敗|@openai\/codex-sdk|Codex Exec exited|stream (?:disconnected|error)|Reconnecting|exceeded retry limit|訂閱(?:推論|上游)連線失敗|訂閱登入讀取或刷新失敗|無法確認(?: Codex )?訂閱額度|AI 環境設定失敗[\s\S]*(?:AbortSignal|AbortError|aborted|Timeout\._onTimeout|timeout)/i,
     ),
     plain: "AI 服務回應中斷或逾時",
     action: "通常稍後就會恢復；系統會先自動重試，仍失敗時到看板按「重試」",
@@ -260,6 +260,30 @@ export function keyErrorLines(output: string, max = 3, limit = 600) {
   const chosen = picked.length ? picked : lines.slice(-2);
   const text = chosen.join("\n");
   return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+}
+
+// 例外訊息、斷言結果與失敗的測試名稱；不含「at …」堆疊行。
+const errorMessage =
+  /(?:Exception|Error)(?:\s*\(0x[0-9a-f]+\))?:\s*\S|Error Message:|Assert\.\w+\(\)\s*Failure|^\s*(?:Expected|Actual|Received):|\[FAIL\]|^\s*Failed\s+\S|^\s*✕|^\s*×|AssertionError/i;
+
+/**
+ * 驗證或測試失敗時保存的錯誤：先放整段輸出裡的例外訊息與失敗測試（最多 8 行），
+ * 再接輸出的結尾。只取結尾時，真正的錯誤訊息常被後面的堆疊擠掉（驗收時 SQL 錯誤就看不到）。
+ */
+export function failureDigest(output: string, limit = 2000) {
+  const text = redact(output.replace(ansi, ""));
+  const picked: string[] = [];
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || /^at\s/.test(trimmed) || !errorMessage.test(line)) continue;
+    const short = trimmed.slice(0, 400);
+    if (!picked.includes(short)) picked.push(short);
+    if (picked.length >= 8) break;
+  }
+  const head = picked.join("\n");
+  const room = Math.max(400, limit - head.length - 20);
+  const tail = text.length > room ? `…${text.slice(-room)}` : text;
+  return head ? `${head}\n---\n${tail}` : tail;
 }
 
 /**
