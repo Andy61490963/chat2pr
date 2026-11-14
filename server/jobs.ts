@@ -434,7 +434,7 @@ export async function startJobs(
           { singletonKey: t.id, singletonSeconds: 300 },
         );
       const queued = await db.query<{ id: string }>(
-        "SELECT id FROM tasks WHERE status='queued' ORDER BY created_at LIMIT 20",
+        "SELECT id FROM tasks WHERE status='queued' AND (retry_at IS NULL OR retry_at<=now()) ORDER BY created_at LIMIT 20",
       );
       // 有工作要派時才讀主機資源：可用記憶體不足就暫停派新工作（執行中的不受影響），原因顯示在系統頁。
       const tasks =

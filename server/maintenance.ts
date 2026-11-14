@@ -90,6 +90,10 @@ export async function backup(db: Database) {
       if (table === "groups")
         for (const group of data[table] as Record<string, unknown>[])
           delete group.triage_retry_at;
+      // 自動重試的退避期限同理（#22）。
+      if (table === "tasks")
+        for (const task of data[table] as Record<string, unknown>[])
+          delete task.retry_at;
     }
     return data;
   });
