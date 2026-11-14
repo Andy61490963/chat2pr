@@ -1,3 +1,4 @@
+import type { InstallReport } from "./install-plan.js";
 export interface RunEvent {
   seq: number;
   at: string;
@@ -20,6 +21,8 @@ export interface RunView {
   deadline: string;
   observed: boolean;
   threads: { phase: string; threadId: string }[];
+  /** 這次執行使用的系統套件與專案衍生映像（#18）；沒有安裝計畫時為 null。 */
+  install_report?: InstallReport | null;
 }
 export const phaseLabels: Record<string, string> = {
   starting: "準備環境",

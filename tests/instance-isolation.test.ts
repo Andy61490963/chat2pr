@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { instanceName, validateRunnerEnvironment } from "../server/config.js";
 import { Containers } from "../server/containers.js";
 import { sourceVolume } from "../server/source-cache.js";
+import { derivedKey, derivedRepository } from "../server/derived-image.js";
 
 describe("執行環境命名與啟動限制", () => {
   it("拒絕不明名稱，正式名稱維持相容，驗收各自隔離", () => {
@@ -33,6 +34,12 @@ describe("執行環境命名與啟動限制", () => {
       sourceVolume(source, b.instance),
     );
     expect(sourceVolume(source, "production")).toMatch(/^agentflow-source-v1-/);
+    // 專案衍生映像（#18）依實例分開命名，鍵也含實例；驗收不會重用或覆寫正式的衍生映像。
+    expect(derivedRepository("production")).toBe("line-agentflow-derived");
+    expect(derivedRepository(a.instance)).toBe("agentflow-verify-a-derived");
+    expect(derivedKey(a.instance, "p", "main", "plan", "sha256:x")).not.toBe(
+      derivedKey(b.instance, "p", "main", "plan", "sha256:x"),
+    );
   });
   it("驗收 runner 在 Docker 清理前要求獨立機密、登入目錄和埠", () => {
     const root = mkdtempSync(join(tmpdir(), "agentflow-config-"));

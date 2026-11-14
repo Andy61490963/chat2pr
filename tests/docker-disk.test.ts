@@ -417,6 +417,83 @@ describe("盤點與用量", () => {
   });
 });
 
+describe("專案衍生映像（#18）", () => {
+  const derived = (
+    tag: string,
+    instance: string,
+    createdDays: number,
+  ): DockerDiskInventory["images"][number] => ({
+    id: `sha256:${tag.replace(/\W/g, "")}`,
+    tags: [tag],
+    created: sec(createdDays),
+    size: 5 * GB,
+    sharedSize: 4 * GB,
+    containers: 0,
+    labels: {
+      "io.agentflow.worker": "v1",
+      "io.agentflow.derived": "v1",
+      "io.agentflow.derived-instance": instance,
+      "io.agentflow.project": "fictional-project",
+    },
+  });
+  const inv = (): DockerDiskInventory => ({
+    ...inventory(),
+    images: [
+      derived("line-agentflow-derived:idle", "production", 40),
+      derived("line-agentflow-derived:recent", "production", 40),
+      derived("line-agentflow-derived:unknown-use", "production", 1),
+      derived("agentflow-verify-x-derived:other", "verify-x", 40),
+    ],
+  });
+  const ctx = (settings: DiskSettings): OwnershipContext => ({
+    ...context(settings),
+    derived: {
+      "line-agentflow-derived:idle": {
+        project: "虛構訂單系統",
+        lastUsed: daysAgo(20),
+      },
+      "line-agentflow-derived:recent": {
+        project: "虛構訂單系統",
+        lastUsed: daysAgo(1),
+      },
+    },
+  });
+  it("歸屬為專案衍生映像，以最後使用時間判斷；預設規則關閉時不自動刪", () => {
+    const items = classifyDisk(inv(), ctx(defaultDiskSettings));
+    expect(
+      new Set(items.filter((i) => i.kind === "image").map((i) => i.owner)),
+    ).toEqual(new Set(["derived_image"]));
+    expect(cleanupPlan(items, defaultDiskSettings, true)).toEqual([]);
+    const idle = items.find((i) => i.target === "line-agentflow-derived:idle");
+    expect(idle?.detail).toContain("專案衍生映像（虛構訂單系統）");
+    expect(idle?.detail).toContain("最後使用");
+    // 預設 14 天；20 天沒用的可清，1 天前用過的保留（即使 40 天前建立）。
+    expect(idle?.rule).toBe("images");
+    const recent = items.find(
+      (i) => i.target === "line-agentflow-derived:recent",
+    );
+    expect(recent?.rule).toBeUndefined();
+    expect(recent?.detail).toContain("1 天內用過");
+  });
+  it("開啟規則後只清本實例、超過天數沒用的；其他實例的只列出", () => {
+    const settings = {
+      ...defaultDiskSettings,
+      rules: {
+        ...defaultDiskSettings.rules,
+        images: { enabled: true, days: 14 },
+      },
+    };
+    const items = classifyDisk(inv(), ctx(settings));
+    expect(cleanupPlan(items, settings, true).map((i) => i.target)).toEqual([
+      "line-agentflow-derived:idle",
+    ]);
+    expect(
+      items.find((i) => i.target === "agentflow-verify-x-derived:other")
+        ?.protected,
+    ).toContain("其他執行環境");
+  });
+});
+
 describe("清理規則", () => {
   it("預設全部規則關閉：自動清理沒有任何項目", () => {
     expect(
@@ -492,6 +569,73 @@ describe("清理規則", () => {
       true,
     ).filter((i) => i.kind === "container");
     expect(plan.map((i) => i.target)).toEqual(["c-stopped-job"]);
+  });
+
+  it("同一份盤點裡，定期檢查環境（#19）與專案衍生映像（#18）各自歸屬，互不混淆", () => {
+    const inv = inventory();
+    inv.images.push(
+      {
+        id: "sha256:derived-x",
+        tags: ["line-agentflow-derived:abc"],
+        created: sec(30),
+        size: 5 * GB,
+        sharedSize: 4 * GB,
+        containers: 0,
+        labels: {
+          "io.agentflow.worker": "v1",
+          "io.agentflow.derived": "v1",
+          "io.agentflow.derived-instance": "production",
+          // 建置容器的歸屬標籤在映像上是空的。
+          "io.agentflow.instance": "",
+          "io.agentflow.managed": "",
+          "io.agentflow.run": "",
+        },
+      },
+      {
+        id: "sha256:check-image",
+        tags: ["line-agentflow-check:local"],
+        created: sec(30),
+        size: GB,
+        sharedSize: 0,
+        containers: 1,
+        labels: { "io.agentflow.check-image": "v1" },
+      },
+    );
+    inv.containers.push({
+      id: "c-check-probe",
+      name: "agentflow-check-0b3a2d6e-1f00-4c1a-9a00-00000000000a-probe",
+      image: "line-agentflow-check:local",
+      imageId: "sha256:check-image",
+      state: "running",
+      sizeRw: 1024,
+      created: sec(1),
+      labels: {
+        "io.agentflow.managed": "true",
+        "io.agentflow.instance": "production",
+        "io.agentflow.check": "0b3a2d6e-1f00-4c1a-9a00-00000000000a",
+        "io.agentflow.check-role": "probe",
+      },
+    });
+    const items = classifyDisk(inv, {
+      ...context(),
+      derived: {
+        "line-agentflow-derived:abc": {
+          project: "虛構訂單系統",
+          lastUsed: daysAgo(20),
+        },
+      },
+    });
+    const owner = (target: string) =>
+      items.find((i) => i.target === target)?.owner;
+    expect(owner("line-agentflow-derived:abc")).toBe("derived_image");
+    expect(owner("line-agentflow-check:local")).toBe("service_image");
+    expect(owner("c-check-probe")).toBe("check_container");
+    expect(cleanupPlan(items, allOn, true).map((i) => i.target)).toContain(
+      "line-agentflow-derived:abc",
+    );
+    expect(cleanupPlan(items, allOn, false).map((i) => i.target)).not.toContain(
+      "line-agentflow-check:local",
+    );
   });
 
   it("定期檢查環境（#19）的容器認得歸屬，但只列出不清：由執行器依閒置逾時清除", () => {

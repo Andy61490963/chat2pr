@@ -73,7 +73,7 @@ flowchart LR
 | -------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------- | ---------------- |
 | `db`                 | `pgvector/pgvector:pg17`                  | PostgreSQL 17＋pgvector：全部資料與 pg-boss 佇列                                        | 不發布           |
 | `app`                | 根目錄 `Dockerfile`                       | Webhook、管理 API、看板與背景工作；每次啟動自動套用資料庫遷移                           | `127.0.0.1:4310` |
-| `egress`             | `infra/egress`（Squid）                   | 安裝階段的出口代理，只放行 npm、PyPI、NuGet                                             | 不發布           |
+| `egress`             | `infra/egress`（Squid）                   | 安裝階段的出口代理，只放行「系統」頁的下載來源白名單（https）                           | 不發布           |
 | `egress-ai`          | `infra/egress`（Squid）                   | 只放行 OpenAI／ChatGPT 的出口代理；目前的推論路徑不經過它，仍隨 `full` 啟動並列在系統頁 | 不發布           |
 | `subscription-relay` | `infra/subscription-relay`                | 把工作容器的訂閱推論請求轉給主機上的訂閱代理                                            | 不發布           |
 | `embedder`           | `text-embeddings-inference:cpu-1.9`       | 本機向量模型 BGE-M3，只有 `app` 連得到                                                  | 不發布           |
@@ -196,13 +196,37 @@ flowchart LR
 
 | 階段           | 網路                                                   | 掛載                 |
 | -------------- | ------------------------------------------------------ | -------------------- |
-| 安裝           | 只能經 `egress` 連到 npm、PyPI、NuGet                  | 工作目錄             |
+| 系統套件安裝   | 只能經 `egress` 連到下載來源白名單                     | 無（不掛工作目錄）   |
+| 安裝           | 只能經 `egress` 連到下載來源白名單                     | 工作目錄             |
 | 判讀（訂閱）   | 專用內網，只能經 `subscription-relay` 使用可信訂閱代理 | 無                   |
 | 開發、審查     | 訂閱：固定訂閱代理；API：應用程式推論代理              | 工作目錄（審查唯讀） |
 | 測試、收集差異 | 無網路                                                 | 工作目錄             |
 | 定期檢查       | 專用內部網路，只能經轉接器連到該檢查的目標             | 無                   |
 
-所有工作容器以非 root、唯讀根目錄、移除全部 Linux capabilities 執行，拿不到主訂閱登入、GitHub 寫入憑證、LINE 機密、資料庫連線機密、Docker socket 或主機目錄。每個容器最多 512 個程序（容器內的 SQL Server 本身就需要兩百多個）。
+除了下面的「系統套件安裝」，所有工作容器以非 root、唯讀根目錄、移除全部 Linux capabilities 執行，拿不到主訂閱登入、GitHub 寫入憑證、LINE 機密、資料庫連線機密、Docker socket 或主機目錄。每個容器最多 512 個程序（容器內的 SQL Server 本身就需要兩百多個）。
+
+### 下載來源白名單
+
+`egress`（Squid）只放行 `/etc/squid/allowed-domains.txt` 內的網域，而且只接受 TLS（443 埠的 CONNECT）；私有網段、主機與清單外的網域一律拒絕。映像內建預設清單（`infra/egress/allowed-domains.txt`，與 `shared/install-plan.ts` 的 `DEFAULT_EGRESS_DOMAINS` 相同）：npm、Yarn、PyPI、NuGet、Debian（`deb.debian.org`、`security.debian.org`）、Ubuntu、`packages.microsoft.com`，以及 GitHub Releases 的下載網域（`github.com`、`objects.githubusercontent.com`、`release-assets.githubusercontent.com`）。
+
+管理者在看板「系統 → 下載來源白名單」增刪網域（開頭加點代表連同子網域，不接受網址、萬用字元、IP、埠號與內網名稱），變更寫入稽核（`audit.kind='egress'`）。應用程式保存在 `settings.egress_domains` 後請執行器寫進本實例的 egress 並送 SIGHUP 重新載入；執行器暫時連不上時仍保存，之後每個安裝、系統套件安裝與開放下載的開發階段開始前都會再同步一次。找 egress 容器時核對 Compose 專案與服務名稱，驗收實例另外核對 `io.agentflow.instance`，不會改到別的實例。CONNECT 無法看路徑，所以 `github.com` 放行後整個網域都連得到（例如 git clone 公開儲存庫）；工作容器沒有任何 GitHub 憑證。
+
+### 系統套件安裝與專案衍生映像
+
+AI 自動設定時，規劃器可以在 `systemPackages` 提出工作映像缺少、專案確實需要的系統工具（例如 `sqlcmd`）：每一項的名稱、來源、版本、用途與安裝指令。安裝前由**獨立的審查**判斷（`server/install-review.ts`），不由規劃器自己決定：
+
+1. 固定規則（`shared/install-plan.ts` 的 `ruleCheck`）：來源與指令中的網址都要在白名單且是 https；拒絕 `curl … | sh`、`bash <(curl …)`、`eval`、執行腳本檔；拒絕讀取環境變數或機密（`printenv`、`/proc`、`.ssh`、`$…TOKEN` 等）；拒絕碰容器外資源（`docker`、`ssh`、`/var/run`、`/workspace` 等）與上傳資料；每個指令只能用安裝工具（`apt-get`、`dpkg`、`curl`、`gpg`、`tar`、`npm/pip/dotnet install` 等）。
+2. 審查模型：另一次模型呼叫，只看通過固定規則的項目，判斷名稱與用途是否相符、是不是與專案無關的工具。沒有回覆的項目視為拒絕。
+
+審查結果存在專案設定（`setup_plan.systemInstall`）並寫入稽核（`install_review`）。被拒絕的項目照常列在專案詳情、任務詳情與 PR 說明，驗證與任務不因此失敗。
+
+放行的項目由執行器在獨立的 root 安裝階段安裝（`server/derived-image.ts`）：容器內 root、根目錄可寫，只補回 `CHOWN`、`DAC_OVERRIDE`、`FOWNER`、`SETUID`、`SETGID`，其餘 capabilities 仍移除，`no-new-privileges`；不掛工作目錄、主機目錄或 Docker socket，沒有任何機密，網路只經 egress。Debian 的套件來源在這個階段改成 https。執行器會再用固定規則核對一次計畫。安裝完成後存成**專案衍生映像** `line-agentflow-derived:<鍵>`（驗收實例為 `agentflow-<實例>-derived`），鍵由實例、專案、分支、放行項目的雜湊與基底映像 ID 組成，所以安裝計畫或基底映像（例如工作映像升版、改用 SQL Server 映像）改變時會重建；同設定的下一次驗證或任務直接重用，不重新下載。衍生映像沿用基底的使用者（`1000:1000`）、環境變數與 `io.agentflow.worker-rev`，代理與安裝指令稿不寫進映像；歸屬用 `io.agentflow.derived`、`derived-instance`、`project` 等映像專屬標籤，建置容器的 `run`、`managed`、`instance` 標籤清空，從映像建立的容器不會被誤認成工作容器。
+
+之後的安裝、測試、開發、審查、收集照常以非 root、唯讀根目錄、移除全部 capabilities 使用衍生映像（`tests/derived-image.test.ts` 固定這件事）。任務詳情的「執行紀錄」顯示這次使用的衍生映像、是否重用，以及每一項「裝了什麼、為什麼、誰放行」（`runs.install_report`）；Codex 也會被告知哪些工具已安裝、哪些被拒絕。系統套件裝不起來時，驗證把輸出交回 AI 調整（最多三次）；派工時修改任務停止、查詢改以閱讀程式碼回答。
+
+衍生映像的最後使用時間記在 `derived_images`；「系統 → Docker 磁碟」把它們歸為「專案衍生映像」，以最後使用時間判斷多久沒用。清理沿用「舊工作映像與專案衍生映像」規則（預設 14 天、預設關閉，由管理者開啟或手動確認），只會刪本實例的衍生映像。
+
+驗收（需要網路）：`docker build -t <臨時標籤> infra/egress` 後執行 `ACCEPTANCE_EGRESS_IMAGE=<臨時標籤> npx vitest run tests/acceptance-install.test.ts`，在獨立實例建立自己的 egress，確認白名單即時生效、apt 經代理安裝、衍生映像重用；測完刪除臨時標籤。
 
 擁有者在專案詳情登記的資料庫連線只由主機執行器使用：執行器連進資料庫擷取結構（不含資料），存成結構快照；之後每次驗證與任務都把快照以唯讀資料卷掛在工作容器的 `/agentflow/env/database`，由 AI 在容器內建立用完即丟的測試資料庫。測試階段維持無網路，工作容器不會連到真實資料庫。做法與界線見[專案環境自動設定](project-setup.md)。推分支與建立 PR 只由應用程式以 GitHub App 執行。
 
@@ -237,7 +261,7 @@ flowchart LR
 
 ## 工作容器工具（重要）
 
-**語言工具鏈（.NET、Python、Node 等）必須預先裝在工作映像**；專案相依套件預設由 AI 根據實際設定決定安裝命令，於安裝階段經 `egress` 下載。開發階段預設也可經同一個白名單下載 npm、PyPI、NuGet 套件（設定頁「開發時允許下載套件」），其他網址一律封鎖。
+**語言工具鏈（.NET、Python、Node 等）預先裝在工作映像**；專案相依套件預設由 AI 根據實際設定決定安裝命令，於安裝階段經 `egress` 下載。開發階段預設也可經同一個白名單下載套件（設定頁「開發時允許下載套件」），其他網址一律封鎖。工作映像缺少、但專案需要的系統工具（例如 `sqlcmd`、`libgdiplus`），AI 自動設定時可以提出安裝計畫，經獨立審查放行後裝成專案衍生映像重用，見上方〈系統套件安裝與專案衍生映像〉；常用、很多專案都需要的工具仍建議直接加進 `worker/Dockerfile`。
 
 新增專案預設「AI 自動設定安裝與測試」，不必填指令。儲存後按「AI 自動設定並驗證」，系統讀取所選分支的固定 commit、CI、文件與套件設定，產生命令後在隔離容器安裝、驗證；成功才保存設定並自動啟用派工。詳情顯示實際命令及引用依據。只有建置檢查時明列「未執行自動測試」。資料庫或測試資料不足時不會停下來等人回答：AI 依序使用專案內的建庫腳本、擁有者提供的結構快照、從程式碼推測的結構；完整測試在模擬環境確實跑不了時才縮小範圍，並在專案卡片與 PR 標示「部分測試通過」及未涵蓋的範圍。
 
@@ -273,7 +297,7 @@ C# 專案可讓 AI 根據實際方案與 CI 決定 `dotnet restore`、`dotnet te
 | -------------------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | .NET Framework 4.x（ASP.NET MVC、IIS） | 舊版 MES 後端等舊專案        | Linux 容器無法建置，只能修改前端靜態檔或改用 Windows 容器                                                                    |
 | SQL Server 測試資料庫                  | 讀寫 SQL Server 的 Loader    | 已提供衍生映像 `line-agentflow-worker-mssql:local`，AI 自動設定判斷需要時自動選用（見 `docs/agents/project-environment.md`） |
-| PyTorch CPU 版                         | 需要實際跑模型推論的視覺專案 | 檔案很大，且需把 `download.pytorch.org` 加入安裝階段白名單                                                                   |
+| PyTorch CPU 版                         | 需要實際跑模型推論的視覺專案 | 檔案很大，且需在「系統 → 下載來源白名單」加入 `download.pytorch.org`                                                         |
 | 專案相依快取                           | npm／pip 專案                | 後續可為 npm／pip 加入跨任務快取；NuGet 已支援主機維護的唯讀套件來源                                                         |
 
 ## 專案原始碼快取

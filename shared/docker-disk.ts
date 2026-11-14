@@ -313,6 +313,8 @@ export interface OwnershipContext {
   now: number;
   /** 專案設定使用中的映像，一律保留。 */
   projectImages: string[];
+  /** 專案衍生映像（標籤 → 所屬專案與最後使用時間）；以最後使用時間判斷多久沒用。 */
+  derived?: Record<string, { project: string | null; lastUsed: string }>;
   /** 盤點中出現的執行：完成時間（null 表示仍在執行）；不在表內代表資料庫找不到。 */
   runs: Record<string, { completedAt: string | null }>;
   settings: DiskSettings;
@@ -361,11 +363,21 @@ export function classifyDisk(
       });
       continue;
     }
+    // 安裝前審查放行的系統套件建立的衍生映像（#18）；其他實例的一律只列出。
+    const derivedImage = image.labels["io.agentflow.derived"] === "v1";
+    const foreign =
+      derivedImage &&
+      image.labels["io.agentflow.derived-instance"] !== ctx.instance;
     for (const tag of tags) {
       const at = tag.lastIndexOf(":");
       const repository = tag.slice(0, at),
         name = tag.slice(at + 1);
-      const ours = cleanupRepositories.includes(repository) || worker;
+      const ours =
+        (cleanupRepositories.includes(repository) || worker) && !foreign;
+      const usage = derivedImage ? ctx.derived?.[tag] : undefined;
+      const idleDays = usage
+        ? (ctx.now - Date.parse(usage.lastUsed)) / day
+        : ageDays;
       const owner: DiskOwner =
         repository === "line-agentflow-worker"
           ? "worker_image"
@@ -378,8 +390,11 @@ export function classifyDisk(
       if (keep.has(tag)) reasons.push("專案使用中");
       if (inUse) reasons.push("有容器在用");
       if (protectedTags.has(name)) reasons.push(`:${name} 一律保留`);
-      if (ageDays < rules.images.days)
+      if (usage && idleDays < rules.images.days)
+        reasons.push(`${Math.floor(idleDays)} 天內用過`);
+      else if (!usage && ageDays < rules.images.days)
         reasons.push(`${Math.floor(ageDays)} 天內建立`);
+      if (foreign) reasons.push("其他執行環境的衍生映像");
       const eligible = ours && !reasons.length;
       items.push({
         key: `image:${tag}`,
@@ -390,6 +405,14 @@ export function classifyDisk(
         owner,
         size: image.size,
         detail: [
+          ...(derivedImage
+            ? [
+                `專案衍生映像${usage?.project ? `（${usage.project}）` : ""}`,
+                ...(usage
+                  ? [`最後使用 ${dateText(Date.parse(usage.lastUsed))}`]
+                  : []),
+              ]
+            : []),
           `建立於 ${dateText(image.created * 1000)}`,
           ...(tags.length > 1 ? ["與其他標籤共用"] : []),
           ...reasons,
@@ -398,6 +421,7 @@ export function classifyDisk(
         ...(!ours && owner === "unknown"
           ? { protected: "不是本系統的映像，只列出" }
           : {}),
+        ...(foreign ? { protected: "其他執行環境的衍生映像，只列出" } : {}),
       });
     }
   }

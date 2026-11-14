@@ -171,10 +171,24 @@ export async function buildDiskReport(
           ? new Date(r.completed_at).toISOString()
           : null,
       };
+  const derived: Record<string, { project: string | null; lastUsed: string }> =
+    {};
+  for (const d of await db.query<{
+    tag: string;
+    project: string | null;
+    last_used_at: Date;
+  }>(
+    "SELECT d.tag,p.name AS project,d.last_used_at FROM derived_images d LEFT JOIN projects p ON p.id=d.project_id",
+  ))
+    derived[d.tag] = {
+      project: d.project,
+      lastUsed: new Date(d.last_used_at).toISOString(),
+    };
   const items = classifyDisk(inventory, {
     instance: inventory.instance,
     now: now.getTime(),
     projectImages: keep,
+    derived,
     runs,
     settings,
   });

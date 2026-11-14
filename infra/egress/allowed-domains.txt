@@ -1,0 +1,13 @@
+.registry.npmjs.org
+.registry.yarnpkg.com
+.pypi.org
+.pythonhosted.org
+.nuget.org
+deb.debian.org
+security.debian.org
+archive.ubuntu.com
+security.ubuntu.com
+packages.microsoft.com
+github.com
+objects.githubusercontent.com
+release-assets.githubusercontent.com

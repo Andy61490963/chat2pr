@@ -32,7 +32,7 @@ export interface SystemStatus {
 const roles: Record<string, string> = {
   app: "看板與 API、排程與判讀",
   db: "PostgreSQL＋pgvector 資料庫",
-  egress: "安裝階段套件出口（npm／PyPI／NuGet 白名單）",
+  egress: "安裝階段套件出口（下載來源白名單，系統頁可改）",
   "egress-ai": "OpenAI／ChatGPT 專用出口",
   "subscription-relay": "訂閱推論轉送（容器不持有登入檔）",
   embedder: "本機向量模型 bge-m3",
@@ -57,7 +57,10 @@ export async function systemStatus(
       created: new Date(c.Created * 1000).toISOString(),
     };
     const runId = c.Labels?.["io.agentflow.run"];
-    if (runId && (c.Labels?.["io.agentflow.instance"] ?? "production") === instance) {
+    if (
+      runId &&
+      (c.Labels?.["io.agentflow.instance"] ?? "production") === instance
+    ) {
       jobs.push({
         ...base,
         role: "工作容器",
@@ -98,8 +101,9 @@ export async function systemStatus(
     volumes: {
       jobs: volumes.filter((v) => /^agentflow-job-[0-9a-f-]+$/.test(v.Name))
         .length,
-      sourceCaches: volumes.filter((v) => v.Name.startsWith("agentflow-source-"))
-        .length,
+      sourceCaches: volumes.filter((v) =>
+        v.Name.startsWith("agentflow-source-"),
+      ).length,
     },
   };
 }

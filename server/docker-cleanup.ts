@@ -332,6 +332,14 @@ export async function removeDiskItems(
         const image = env.docker.getImage(item.target);
         const info = await image.inspect();
         const worker = info.Config?.Labels?.["io.agentflow.worker"] === "v1";
+        // 專案衍生映像只刪本實例建立的。
+        if (
+          info.Config?.Labels?.["io.agentflow.derived"] === "v1" &&
+          info.Config.Labels["io.agentflow.derived-instance"] !== env.instance
+        ) {
+          refuse(key, "其他執行環境的衍生映像");
+          continue;
+        }
         if (item.target.startsWith("sha256:")) {
           if (!worker || (info.RepoTags ?? []).length) {
             refuse(key, "不是本系統的懸空映像");

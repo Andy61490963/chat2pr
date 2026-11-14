@@ -52,6 +52,26 @@ const rules: Rule[] = [
     group: "測試環境沒有啟動成功，請管理者處理專案的測試環境。",
     keep: true,
   },
+  // 系統套件（#18）：要排在 403、安裝失敗等通用規則前，代理擋下來源時輸出裡也會有 403。
+  {
+    category: "config",
+    test: matches(
+      /未通過固定規則|下載來源白名單無效|系統套件安裝失敗[\s\S]*(?:\b403\b|Forbidden)/,
+    ),
+    plain:
+      "系統套件的安裝計畫或下載來源沒有通過目前的白名單（可能是白名單在驗證後被改過）",
+    action:
+      "請管理者到「系統 → 下載來源白名單」確認需要的來源，或到專案頁按「AI 自動設定並驗證」讓 AI 依目前的白名單重新規劃",
+    group: "專案需要的系統套件來源目前不在允許清單，請管理者處理。",
+  },
+  {
+    category: "environment",
+    test: matches(/系統套件安裝失敗|衍生映像[^。\n]{0,20}(?:不屬於|設定異常)/),
+    plain: "安裝前審查放行的系統套件沒有裝起來",
+    action:
+      "到執行紀錄查看安裝輸出（套件名稱、版本或來源），再到專案頁按「AI 自動設定並驗證」重新規劃後重試",
+    group: "專案需要的系統工具沒有裝起來，請管理者處理專案的執行環境。",
+  },
   {
     category: "project",
     test: matches(/一次自動修復後仍未通過驗證|驗證未通過/),
@@ -102,7 +122,7 @@ const rules: Rule[] = [
     category: "config",
     // 本機代理以 429 表示這次執行的預算用完；不能當成暫時性錯誤重試，否則等於繞過每次任務預算。
     test: matches(
-      /額度(?:已達上限|不足|用完)|今日執行次數|usage limit|insufficient_quota|\b429\b|Too Many Requests|rate.?limit/i,
+      /額度(?:已達上限|不足|用完)|超過單次預估上限|今日執行次數|usage limit|insufficient_quota|\b429\b|Too Many Requests|rate.?limit/i,
     ),
     plain: "AI 額度不足或呼叫次數受到限制",
     action:
@@ -159,7 +179,7 @@ const rules: Rule[] = [
   {
     category: "transient",
     test: matches(
-      /Codex 執行失敗|獨立審查失敗|@openai\/codex-sdk|Codex Exec exited|stream (?:disconnected|error)|Reconnecting|exceeded retry limit|訂閱(?:推論|上游)連線失敗/i,
+      /Codex 執行失敗|獨立審查失敗|AI 安裝審查失敗|@openai\/codex-sdk|Codex Exec exited|stream (?:disconnected|error)|Reconnecting|exceeded retry limit|訂閱(?:推論|上游)連線失敗/i,
     ),
     plain: "AI 服務回應中斷或逾時",
     action: "通常稍後就會恢復；系統會先自動重試，仍失敗時到看板按「重試」",

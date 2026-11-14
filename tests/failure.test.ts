@@ -10,6 +10,35 @@ import { codexSdkCrash, codexSdkStackOnly } from "./failure-samples.js";
 
 // 正式環境近 30 天看得到、但使用者看不懂的失敗訊息（#22），各自固定分類與白話說明。
 describe("實際錯誤樣本的分類", () => {
+  it("系統套件（#18）：來源被白名單擋下或計畫不再通過固定規則是設定問題，其他安裝失敗是環境問題", () => {
+    for (const raw of [
+      "系統套件安裝失敗（退出碼 100）：Err:1 https://deb.debian.org/debian bookworm InRelease\n  403  Forbidden [IP: 172.18.0.2 3128]",
+      "安裝項目 mssql-tools18 未通過固定規則：來源 packages.microsoft.com 不在白名單",
+      "下載來源白名單無效：10.0.0.1：不可填 IP 位址",
+    ]) {
+      const f = classifyFailure(raw, "install");
+      expect(f.category).toBe("config");
+      expect(f.action).toContain("下載來源白名單");
+    }
+    const failed = classifyFailure(
+      "系統套件安裝失敗（退出碼 100）：E: Unable to locate package fictional-tool",
+      "install",
+    );
+    expect(failed.category).toBe("environment");
+    expect(failed.plain).toBe("安裝前審查放行的系統套件沒有裝起來");
+    expect(failed.detail).toContain("Unable to locate package");
+    expect(classifyFailure("衍生映像設定異常，已刪除，請回報").category).toBe(
+      "environment",
+    );
+    expect(
+      classifyFailure("AI 安裝審查失敗：stream disconnected", "install")
+        .category,
+    ).toBe("transient");
+    expect(
+      classifyFailure("安裝審查超過單次預估上限", "install").category,
+    ).toBe("config");
+  });
+
   it("安裝失敗但沒有任何輸出：環境問題，說明工具沒留下訊息", () => {
     const f = classifyFailure("安裝失敗：", "install");
     expect(f.category).toBe("environment");

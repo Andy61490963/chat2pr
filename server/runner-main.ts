@@ -37,6 +37,14 @@ import {
   MAX_COLLECT_EXCLUDES,
   validCollectExclude,
 } from "../shared/build-output.js";
+import { applyEgress } from "./egress.js";
+import { derivedImage } from "./derived-image.js";
+import {
+  MAX_EGRESS_DOMAINS,
+  MAX_INSTALL_COMMANDS,
+  MAX_INSTALL_COMMAND_LENGTH,
+  MAX_INSTALL_ITEMS,
+} from "../shared/install-plan.js";
 // 必須在任何 Docker 操作（尤其啟動清理）以前拒絕不完整的隔離設定。
 validateRunnerEnvironment();
 const app = Fastify({ logger: false, bodyLimit: 80 * 1024 * 1024 });
@@ -357,6 +365,71 @@ app.post("/observations", async (req) => {
     .parse(req.body);
   return observations.read(b.runId, b.after);
 });
+const Domains = z.array(z.string().max(253)).max(MAX_EGRESS_DOMAINS);
+// 看板「系統」頁的下載來源白名單；寫進本實例的 egress 並重新載入。
+app.post("/egress", async (req) => {
+  const b = z.object({ domains: Domains }).parse(req.body);
+  return applyEgress(containers, b.domains);
+});
+/** 用到套件出口前先同步白名單；代理還是舊版時記一筆說明，沿用映像內建的預設清單。 */
+async function syncEgress(
+  domains: string[] | undefined,
+  observe: (e: Parameters<ObservationBuffer["add"]>[2]) => void,
+) {
+  if (!domains) return;
+  try {
+    await applyEgress(containers, domains);
+  } catch (e) {
+    observe({
+      kind: "message",
+      detail: `下載來源白名單未能更新，沿用代理目前的清單：${e instanceof Error ? e.message : String(e)}`,
+    });
+  }
+}
+// 安裝前審查放行的系統套件：以 root 安裝成專案衍生映像，已有相同的就直接重用。
+app.post("/derived-image", async (req) => {
+  const b = Job.extend({
+    projectId: z.string().uuid(),
+    branch: z.string().min(1).max(255),
+    items: z
+      .array(
+        z.object({
+          name: z.string().max(100),
+          source: z.string().max(500),
+          version: z.string().max(100),
+          purpose: z.string().max(500),
+          commands: z
+            .array(z.string().max(MAX_INSTALL_COMMAND_LENGTH))
+            .max(MAX_INSTALL_COMMANDS),
+        }),
+      )
+      .min(1)
+      .max(MAX_INSTALL_ITEMS),
+    domains: Domains,
+    timeoutMs: z.number().int().min(1000).max(1800000),
+  }).parse(req.body);
+  const observe = (e: Parameters<ObservationBuffer["add"]>[2]) =>
+    observations.add(b.runId, "install", e);
+  await syncEgress(b.domains, observe);
+  const result = await derivedImage(containers, {
+    runId: b.runId,
+    base: b.image,
+    projectId: b.projectId,
+    branch: b.branch,
+    items: b.items,
+    domains: b.domains,
+    timeoutMs: b.timeoutMs,
+  });
+  observe({
+    kind: "message",
+    detail: result.reused
+      ? `重用專案衍生映像 ${result.image}，沒有重新下載`
+      : result.image
+        ? `系統套件安裝完成，建立專案衍生映像 ${result.image}`
+        : `系統套件安裝失敗（退出碼 ${result.exitCode}）：${result.output.slice(-2000)}`,
+  });
+  return result;
+});
 app.post("/phase", async (req) => {
   const b = Job.extend({
     phase: z.enum(["install", "test", "code", "review", "collect"]),
@@ -371,9 +444,13 @@ app.post("/phase", async (req) => {
       )
       .max(MAX_COLLECT_EXCLUDES + 20)
       .optional(),
+    // 下載來源白名單；只在這個階段會經過套件出口時同步到 egress。
+    egress: Domains.optional(),
   }).parse(req.body);
   const observe = (e: Parameters<ObservationBuffer["add"]>[2]) =>
     observations.add(b.runId, b.phase, e);
+  if (b.phase === "install" || (b.phase === "code" && b.job?.packages === true))
+    await syncEgress(b.egress, observe);
   const ai = b.phase === "code" || b.phase === "review";
   const command = ai
     ? ["node", "/opt/agentflow/run.mjs"]

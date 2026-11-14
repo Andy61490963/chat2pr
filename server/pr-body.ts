@@ -1,4 +1,5 @@
 import { formatBytes, type ExcludedSummary } from "../shared/build-output.js";
+import type { InstallReport } from "../shared/install-plan.js";
 
 // 組成給人閱讀的 PR 說明：先說做了什麼，再用一行交代測試結果，
 // 完整測試輸出收進可展開區塊並略過編譯警告，避免警告洗版蓋掉重點。
@@ -63,6 +64,8 @@ export function prReport(o: {
   /** 測試在容器內的 SQL Server 執行，LocalDB 連線由系統暫時導向。 */
   sqlServer?: boolean;
   excluded?: ExcludedSummary;
+  /** 安裝前審查與專案衍生映像（裝了什麼、為什麼、誰放行）。 */
+  systemInstall?: InstallReport | null;
 }) {
   const summary =
     o.codexSummary.trim().slice(0, 4000) || "（Codex 未提供說明）";
@@ -93,6 +96,7 @@ export function prReport(o: {
       "- 測試：此專案未設定測試命令，未執行自動測試",
       "- 獨立審查：通過",
     );
+  if (o.systemInstall) lines.push(...systemInstallLines(o.systemInstall));
   if (o.excluded?.files) lines.push("", ...excludedSection(o.excluded));
   const notes = (o.reviewNotes ?? [])
     .map((n) => n.trim())
@@ -108,6 +112,23 @@ export function prReport(o: {
       ...notes.map((n) => `- [ ] ${clip(n.replace(/\s+/g, " "), 400)}`),
     );
   return lines.join("\n");
+}
+
+// 被拒絕的系統套件照常列出，審查者知道哪些工具沒有裝、為什麼。
+function systemInstallLines(r: InstallReport) {
+  const lines: string[] = [];
+  const approved = r.review.decisions.filter((d) => d.approved);
+  const rejected = r.review.decisions.filter((d) => !d.approved);
+  if (r.image && approved.length)
+    lines.push(
+      `- 系統套件：${approved.map((d) => `${d.name}${d.version ? ` ${d.version}` : ""}（${clip(d.purpose, 80)}）`).join("、")}，由${r.review.reviewer}放行，${r.reused ? "重用" : "建立"}專案衍生映像`,
+    );
+  if (r.error) lines.push(`- 系統套件：${r.error}，本次未使用`);
+  if (rejected.length)
+    lines.push(
+      `- 未安裝的系統套件：${rejected.map((d) => `${d.name}（${clip(d.reason, 120)}）`).join("、")}`,
+    );
+  return lines;
 }
 
 // 被排除的路徑一定列在 PR 說明，誤排除真正的修改時審查者看得到。
