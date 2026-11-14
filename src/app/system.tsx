@@ -28,6 +28,7 @@ import { type Request, type State, ago, date, message } from "./shared";
 import { FrictionCard } from "./friction";
 import { CapacityCard } from "./capacity";
 import { DockerDiskCard } from "./docker-disk";
+import { CheckEnvironmentCard } from "./check-environments";
 
 type ContainerStatus = {
   name: string;
@@ -69,10 +70,12 @@ export function SystemView({
   state,
   request,
   go,
+  admin = false,
 }: {
   state: State;
   request: Request;
   go: (v: "groups" | "projects") => void;
+  admin?: boolean;
 }) {
   const [status, setStatus] = useState<SystemStatus | null>(null),
     [error, setError] = useState(""),
@@ -225,6 +228,7 @@ export function SystemView({
         </CardContent>
       </Card>
       <DockerDiskCard request={request} />
+      <CheckEnvironmentCard request={request} admin={admin} />
       <MemoryOverview state={state} go={go} />
       <Architecture state={state} />
     </div>

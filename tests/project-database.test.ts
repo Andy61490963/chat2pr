@@ -84,6 +84,8 @@ async function scenario(mode: "auto" | "manual" = "auto") {
     undefined,
     {
       call: async <T>(path: string, body: unknown): Promise<T> => {
+        // 連線變更後同步定期檢查環境（#19）另有測試，這裡只記錄資料庫相關呼叫。
+        if (path.startsWith("checks/environments")) return { removed: [] } as T;
         calls.push({ path, body: body as Record<string, any> });
         if (failure) throw failure;
         return (

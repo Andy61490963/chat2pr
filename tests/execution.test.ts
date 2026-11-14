@@ -1686,7 +1686,12 @@ async function draftScenario(
         stdout: JSON.stringify({ final }),
         stderr: "",
       } as T;
-    if (path === "checks/http") return { ok: true, status: 200, ms: 8 } as T;
+    if (path === "checks/run")
+      return {
+        result: { ok: true, status: 200, ms: 8 },
+        environment: { created: true },
+      } as T;
+    if (path.startsWith("checks/environments")) return { removed: [] } as T;
     return call<T>(path, raw);
   };
   await s.execution.execute(s.task.id);

@@ -15,10 +15,21 @@ import {
   type SqlCondition,
 } from "../shared/checks.js";
 import type { Task } from "../shared/types.js";
+import {
+  checkEnvironmentKey,
+  checkEnvironmentPolicy,
+  environmentView,
+  removalText,
+  type CheckEnvironmentView,
+  type EnvironmentFailure,
+  type KeptEnvironment,
+  type RemovalReason,
+} from "../shared/check-environment.js";
 
 /**
- * 定期檢查（Issue #3）：定義經人核准後，排程到點由主機執行器執行 SQL／HTTP／TCP 探測，
+ * 定期檢查（Issue #3）：定義經人核准後，排程到點請主機執行器執行 SQL／HTTP／TCP 探測，
  * 不呼叫 AI；狀態改變（正常→異常、異常→恢復）時才通知，異常時可自動請 AI 調查原因。
+ * 探測在每個檢查專用的檢查容器裡執行（#19），環境保留重用、閒置逾時或設定改變才清除。
  */
 
 export type RunnerCall = <T>(
@@ -124,11 +135,54 @@ async function assertScope(c: DbClient, input: CheckInput) {
   }
 }
 
-export async function listChecks(db: Database) {
-  return db.query<ScheduledCheck & { last_summary: string | null }>(
-    `SELECT c.*,(SELECT summary FROM scheduled_check_runs r WHERE r.check_id=c.id ORDER BY started_at DESC LIMIT 1) AS last_summary
-     FROM scheduled_checks c ORDER BY c.created_at DESC`,
+type ListedCheck = ScheduledCheck & {
+  last_summary: string | null;
+  environment?: CheckEnvironmentView;
+};
+
+/** 檢查清單；給了執行器時附上每個檢查的環境狀態（讀不到執行器時標示未知）。 */
+export async function listChecks(
+  db: Database,
+  call?: RunnerCall,
+): Promise<ListedCheck[]> {
+  const rows = await db.query<
+    ScheduledCheck & {
+      last_summary: string | null;
+      conn_updated_at: Date | null;
+      conn_host_key: string | null;
+    }
+  >(
+    `SELECT c.*,(SELECT summary FROM scheduled_check_runs r WHERE r.check_id=c.id ORDER BY started_at DESC LIMIT 1) AS last_summary,
+       pc.updated_at AS conn_updated_at,pc.ssh_host_key AS conn_host_key
+     FROM scheduled_checks c LEFT JOIN project_connections pc ON pc.project_id=c.project_id ORDER BY c.created_at DESC`,
   );
+  if (!call)
+    return rows.map(({ conn_updated_at: _a, conn_host_key: _b, ...c }) => c);
+  const policy = checkEnvironmentPolicy(await db.settings());
+  let state:
+    | { environments: KeptEnvironment[]; failures: EnvironmentFailure[] }
+    | undefined;
+  try {
+    state = await call("checks/environments", {}, 5000);
+  } catch {
+    state = undefined;
+  }
+  return rows.map(({ conn_updated_at, conn_host_key, ...c }) => ({
+    ...c,
+    environment: state
+      ? environmentView(
+          checkEnvironmentKey(
+            c,
+            conn_updated_at
+              ? { updated_at: conn_updated_at, ssh_host_key: conn_host_key }
+              : null,
+          ),
+          state.environments.find((e) => e.checkId === c.id),
+          state.failures.find((f) => f.checkId === c.id),
+          policy,
+        )
+      : { state: "unknown", detail: "讀不到主機執行器" },
+  }));
 }
 
 export async function checkDetail(db: Database, id: string) {
@@ -295,9 +349,43 @@ export async function deleteCheck(db: Database, id: string, actor: string) {
   return { ok: true };
 }
 
+type RunReply<T> = {
+  result: T;
+  environment?: {
+    created: boolean;
+    removed?: { checkId: string; reason: RemovalReason }[];
+  };
+};
+
+/** 在檢查專用環境執行；新建環境時寫稽核（重用不寫）。 */
+async function runInEnvironment<T>(
+  db: Database,
+  call: RunnerCall,
+  check: ScheduledCheck,
+  key: string,
+  body: Record<string, unknown>,
+  timeoutMs: number,
+) {
+  const policy = checkEnvironmentPolicy(await db.settings());
+  const reply = await call<RunReply<T>>(
+    "checks/run",
+    { checkId: check.id, key, kind: check.kind, policy, ...body },
+    timeoutMs,
+  );
+  // 為了騰出位置而清掉的其他環境（閒置或超過上限）也要記下。
+  await auditRemovals(db, reply.environment?.removed ?? []);
+  if (reply.environment?.created)
+    await db.audit(
+      null,
+      "check_environment",
+      `定期檢查「${check.name}」建立檢查環境（第 ${check.version} 版）`,
+    );
+  return reply.result;
+}
+
 /** 執行一次探測，回傳是否異常與摘要；連線失敗等執行錯誤直接丟出。 */
 export async function probe(
-  db: Pick<Database, "one">,
+  db: Database,
   call: RunnerCall,
   check: ScheduledCheck,
 ): Promise<{ alert: boolean; summary: string }> {
@@ -307,22 +395,34 @@ export async function probe(
       [check.project_id],
     );
     if (!row) throw new AppError(409, "專案沒有登記資料庫連線");
-    const { rows } = await call<{ rows: Record<string, unknown>[] }>(
-      "checks/sql",
+    const { rows } = await runInEnvironment<{
+      rows: Record<string, unknown>[];
+    }>(
+      db,
+      call,
+      check,
+      checkEnvironmentKey(check, row),
       { connection: captureInput(row), sql: check.target },
-      60000,
+      90000,
     );
     return evaluateSql(check.condition as SqlCondition, rows);
   }
   if (check.kind === "http") {
     const contains = (check.condition as { contains?: string }).contains;
-    const r = await call<{
+    const r = await runInEnvironment<{
       ok: boolean;
       status: number;
       ms: number;
       error?: string;
       missing?: boolean;
-    }>("checks/http", { url: check.target, contains }, 20000);
+    }>(
+      db,
+      call,
+      check,
+      checkEnvironmentKey(check),
+      { url: check.target, contains },
+      60000,
+    );
     return {
       alert: !r.ok,
       summary: r.error
@@ -331,10 +431,13 @@ export async function probe(
     };
   }
   const [host, port] = check.target.split(":");
-  const r = await call<{ ok: boolean; ms: number }>(
-    "checks/tcp",
+  const r = await runInEnvironment<{ ok: boolean; ms: number }>(
+    db,
+    call,
+    check,
+    checkEnvironmentKey(check),
     { host, port: Number(port) },
-    15000,
+    60000,
   );
   return {
     alert: !r.ok,
@@ -582,10 +685,92 @@ export async function runDueChecks(db: Database, call: RunnerCall) {
       }
     }),
   );
+  // 這輪有檢查因連續錯誤暫停時，它的環境要立即清除。
+  if (due.length) await syncCheckEnvironments(db, call).catch(() => {});
   // 暫停期間錯過的次數不補跑：恢復後從現在起算。
   await db.query(
     `UPDATE scheduled_checks c SET next_run_at=now() FROM groups g
      WHERE g.id=c.group_id AND c.status='active' AND c.next_run_at<now()-interval '1 hour'
        AND (NOT g.enabled OR COALESCE((SELECT (value->>'paused')::boolean FROM settings WHERE id=1),false))`,
   );
+}
+
+/**
+ * 目前可以保留環境的檢查與環境鍵：待核准（可試跑）或執行中、群組可用、系統未暫停、
+ * 專案仍啟用且綁定；SQL 檢查還要有登記的連線。不在清單內的環境由執行器立即清除。
+ */
+export async function validCheckEnvironments(db: Database) {
+  const rows = await db.query<
+    ScheduledCheck & {
+      conn_updated_at: Date | null;
+      conn_host_key: string | null;
+    }
+  >(
+    `SELECT c.*,pc.updated_at AS conn_updated_at,pc.ssh_host_key AS conn_host_key
+     FROM scheduled_checks c JOIN groups g ON g.id=c.group_id
+     LEFT JOIN project_connections pc ON pc.project_id=c.project_id
+     WHERE c.status IN ('active','awaiting_approval') AND g.enabled AND g.left_at IS NULL
+       AND NOT COALESCE((SELECT (value->>'paused')::boolean FROM settings WHERE id=1),false)
+       AND (c.project_id IS NULL OR EXISTS(SELECT 1 FROM group_projects gp JOIN projects p ON p.id=gp.project_id
+            WHERE gp.group_id=c.group_id AND gp.project_id=c.project_id AND p.enabled))
+       AND (c.kind<>'sql' OR pc.project_id IS NOT NULL)`,
+  );
+  return rows.map((c) => ({
+    checkId: c.id,
+    key: checkEnvironmentKey(
+      c,
+      c.conn_updated_at
+        ? { updated_at: c.conn_updated_at, ssh_host_key: c.conn_host_key }
+        : null,
+    ),
+  }));
+}
+
+/** 把有效清單送給執行器，清除過期環境並寫稽核。 */
+export async function syncCheckEnvironments(db: Database, call: RunnerCall) {
+  const valid = await validCheckEnvironments(db);
+  const policy = checkEnvironmentPolicy(await db.settings());
+  const { removed } = await call<{
+    removed: { checkId: string; reason: RemovalReason }[];
+  }>("checks/environments/sync", { valid, policy }, 120000);
+  await auditRemovals(db, removed);
+  return removed;
+}
+
+async function auditRemovals(
+  db: Database,
+  removed: { checkId: string; reason: RemovalReason }[],
+  actor?: string,
+) {
+  for (const r of removed) {
+    const name = (
+      await db.one<{ name: string }>(
+        "SELECT name FROM scheduled_checks WHERE id=$1",
+        [r.checkId],
+      )
+    )?.name;
+    await db.audit(
+      null,
+      "check_environment",
+      `${actor ? `${actor} ` : ""}清除${name ? `定期檢查「${name}」` : "已刪除定期檢查"}的檢查環境：${removalText[r.reason]}`,
+    );
+  }
+}
+
+/** 看板「立即清除環境」。 */
+export async function clearCheckEnvironment(
+  db: Database,
+  call: RunnerCall,
+  id: string,
+  actor: string,
+) {
+  await checkDetail(db, id);
+  const { removed } = await call<{ removed: boolean }>(
+    "checks/environments/remove",
+    { checkId: id },
+    60000,
+  );
+  if (removed)
+    await auditRemovals(db, [{ checkId: id, reason: "manual" }], actor);
+  return { removed };
 }

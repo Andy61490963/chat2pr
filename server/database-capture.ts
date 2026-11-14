@@ -157,30 +157,43 @@ function sqlFailure(error: SqlError, viaTunnel: boolean) {
   return fail("資料庫連線失敗，請檢查連線設定。");
 }
 
+/**
+ * 第一段連線改走的位址：檢查容器內只能連到轉接器，轉接器再固定轉到資料庫或 SSH 跳板。
+ * 經跳板時只改連跳板的位址，跳板之後仍連登記的資料庫主機。
+ */
+export interface FirstHop {
+  host: string;
+  port: number;
+}
+
 async function withSqlServer<T>(
   input: CaptureInput,
-  work: (query: (sql: string) => Promise<Row[]>) => Promise<T>,
+  work: (query: (sql: string, batch?: boolean) => Promise<Row[]>) => Promise<T>,
   timeoutMs: number,
+  via?: FirstHop,
 ): Promise<{ value: T; hostKey?: string }> {
   const deadline = Date.now() + timeoutMs;
   const tunnel = input.ssh
-    ? await openTunnel(input.ssh, { host: input.host, port: input.port })
+    ? await openTunnel(
+        via ? { ...input.ssh, host: via.host, port: via.port } : input.ssh,
+        { host: input.host, port: input.port },
+      )
     : undefined;
   let connection: Connection | undefined;
   try {
     connection = new Connection({
-      server: tunnel ? "127.0.0.1" : input.host,
+      server: tunnel ? "127.0.0.1" : (via?.host ?? input.host),
       authentication: {
         type: "default",
         options: { userName: input.username, password: input.password },
       },
       options: {
-        port: tunnel ? tunnel.port : input.port,
+        port: tunnel ? tunnel.port : (via?.port ?? input.port),
         database: input.database,
         encrypt: input.encrypt,
         trustServerCertificate: input.trustServerCertificate,
-        // 透過通道連線時憑證上的名稱仍是資料庫主機。
-        ...(tunnel ? { serverName: input.host } : {}),
+        // 透過通道或轉接器連線時，憑證上的名稱仍是資料庫主機。
+        ...(tunnel || via ? { serverName: input.host } : {}),
         readOnlyIntent: true,
         connectTimeout: 15000,
         requestTimeout: 60000,
@@ -192,7 +205,9 @@ async function withSqlServer<T>(
     await new Promise<void>((resolve, reject) =>
       active.connect((error) => (error ? reject(error) : resolve())),
     );
-    const query = (sql: string) =>
+    // batch：直接送出批次。execSql 會包成 sp_executesql，在裡面 BEGIN TRANSACTION
+    // 會因交易數不一致被 SQL Server 拒絕（錯誤 266），交易控制必須用批次。
+    const query = (sql: string, batch = false) =>
       new Promise<Row[]>((resolve, reject) => {
         if (Date.now() > deadline)
           return reject(fail("擷取超過時間限制，已停止。"));
@@ -207,7 +222,8 @@ async function withSqlServer<T>(
             ),
           ),
         );
-        active.execSql(request);
+        if (batch) active.execSqlBatch(request);
+        else active.execSql(request);
       });
     return { value: await work(query), hostKey: tunnel?.hostKey };
   } catch (error) {
@@ -263,22 +279,33 @@ export async function captureSnapshot(input: CaptureInput) {
 
 /**
  * 定期檢查：在一定回滾的交易中執行單一唯讀 SELECT（另有唯讀連線意圖），
- * 最多回傳 100 列、每格 200 字；只有主機執行器會呼叫，工作容器拿不到連線資料。
+ * 最多回傳 100 列、每格 200 字。只在該檢查的專用檢查容器內執行（#19），
+ * 經轉接器連線；工作容器拿不到連線資料。
  */
-export async function runCheckQuery(input: CaptureInput, sql: string) {
+export async function runCheckQuery(
+  input: CaptureInput,
+  sql: string,
+  via?: FirstHop,
+) {
   const problem = assertReadOnlySelect(sql);
   if (problem) throw fail(problem);
   const { value } = await withSqlServer(
     input,
     async (query) => {
-      await query("SET NOCOUNT ON; SET LOCK_TIMEOUT 5000; BEGIN TRANSACTION");
+      await query(
+        "SET NOCOUNT ON; SET LOCK_TIMEOUT 5000; BEGIN TRANSACTION",
+        true,
+      );
       try {
         return await query(sql);
       } finally {
-        await query("IF @@TRANCOUNT>0 ROLLBACK TRANSACTION").catch(() => {});
+        await query("IF @@TRANCOUNT>0 ROLLBACK TRANSACTION", true).catch(
+          () => {},
+        );
       }
     },
     30000,
+    via,
   );
   return value
     .slice(0, 100)

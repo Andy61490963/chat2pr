@@ -1,16 +1,20 @@
 import { lookup } from "node:dns/promises";
+import http from "node:http";
+import https from "node:https";
 import { isIP, Socket } from "node:net";
+import { checkServerIdentity } from "node:tls";
 import { AppError } from "./policy.js";
 
 /**
- * 定期檢查的 HTTP／TCP 探測，只在主機執行器上執行（可以連到公司內網的設備）。
- * 拒絕本機回環、主機內部名稱與雲端中繼資料等位址，避免被用來探測 chat2pr 自己的服務。
+ * 定期檢查的 HTTP／TCP 探測（#19 起在該檢查的專用檢查容器內執行）。
+ * 主機執行器建立環境前先以 safeHost 拒絕本機回環、主機內部名稱與雲端中繼資料等位址；
+ * 轉接器每次連線時再核對一次解析結果，避免 DNS 改指向後繞過限制。
  */
 
 const blockedNames =
   /^(localhost|host\.docker\.internal|gateway\.docker\.internal|metadata(\.google\.internal)?)$/i;
 
-function blockedAddress(address: string): boolean {
+export function blockedAddress(address: string): boolean {
   if (isIP(address) === 6) {
     const a = address.toLowerCase();
     if (a === "::1" || a === "::" || a.startsWith("fe80:")) return true;
@@ -34,7 +38,8 @@ export async function safeHost(host: string) {
   return address;
 }
 
-export async function httpProbe(url: string, contains?: string) {
+/** HTTP 檢查的網址：只接受不含帳密的 http／https。 */
+export function httpTarget(url: string) {
   let u: URL;
   try {
     u = new URL(url);
@@ -43,51 +48,117 @@ export async function httpProbe(url: string, contains?: string) {
   }
   if (!["http:", "https:"].includes(u.protocol) || u.username || u.password)
     throw new AppError(422, "只能使用不含帳密的 http 或 https 網址");
-  await safeHost(u.hostname);
-  const started = Date.now();
-  try {
-    const response = await fetch(u, {
-      method: "GET",
-      // 不跟隨轉址：轉到別的網域可能繞過位址限制。
-      redirect: "manual",
-      signal: AbortSignal.timeout(10000),
-    });
-    const body = contains ? (await response.text()).slice(0, 200000) : "";
-    const ok =
-      response.status >= 200 &&
-      response.status < 300 &&
-      (!contains || body.includes(contains));
-    return {
-      ok,
-      status: response.status,
-      ms: Date.now() - started,
-      ...(contains && response.status < 300 && !body.includes(contains)
-        ? { missing: true }
-        : {}),
-    };
-  } catch (e) {
-    return {
-      ok: false,
-      status: 0,
-      ms: Date.now() - started,
-      error: (e as Error).name === "TimeoutError" ? "逾時" : "連不上",
-    };
-  }
+  return u;
 }
 
-export async function tcpProbe(host: string, port: number) {
-  if (!Number.isInteger(port) || port < 1 || port > 65535)
-    throw new AppError(422, "連接埠不正確");
-  const address = await safeHost(host);
+/** 網址實際連線的主機與連接埠（轉接器的目標）。 */
+export function httpEndpoint(url: string) {
+  const u = httpTarget(url);
+  return {
+    host: u.hostname.replace(/^\[|\]$/g, ""),
+    port: Number(u.port) || (u.protocol === "https:" ? 443 : 80),
+  };
+}
+
+export interface HttpProbeResult {
+  ok: boolean;
+  status: number;
+  ms: number;
+  error?: string;
+  missing?: boolean;
+}
+
+/**
+ * 經轉接器送出 GET：連線對象是轉接器，Host 標頭與憑證核對仍用原網址的主機。
+ * 不跟隨轉址：轉到別的網域可能繞過位址限制（轉接器也只通到原本的主機）。
+ */
+export function httpProbeVia(
+  url: string,
+  contains: string | undefined,
+  via: { host: string; port: number },
+): Promise<HttpProbeResult> {
+  const u = httpTarget(url);
+  const name = u.hostname.replace(/^\[|\]$/g, "");
   const started = Date.now();
-  return new Promise<{ ok: boolean; ms: number }>((resolve) => {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (r: Omit<HttpProbeResult, "ms">) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      req.destroy();
+      resolve({ ...r, ms: Date.now() - started });
+    };
+    const options: https.RequestOptions = {
+      host: via.host,
+      port: via.port,
+      method: "GET",
+      path: `${u.pathname}${u.search}`,
+      headers: { Host: u.host, "User-Agent": "chat2pr-check" },
+      agent: false,
+    };
+    const req =
+      u.protocol === "https:"
+        ? https.request({
+            ...options,
+            ...(isIP(name) ? {} : { servername: name }),
+            checkServerIdentity: (_host, cert) =>
+              checkServerIdentity(name, cert),
+          })
+        : http.request(options);
+    const timer = setTimeout(
+      () => finish({ ok: false, status: 0, error: "逾時" }),
+      10000,
+    );
+    req.on("error", () => finish({ ok: false, status: 0, error: "連不上" }));
+    req.on("response", (res) => {
+      const status = res.statusCode ?? 0;
+      const good = status >= 200 && status < 300;
+      if (!contains || !good) {
+        res.resume();
+        return finish({ ok: good, status });
+      }
+      let body = "";
+      res.setEncoding("utf8");
+      res.on("data", (chunk: string) => {
+        body += chunk;
+        if (body.length >= 200000 || body.includes(contains)) {
+          const found = body.includes(contains);
+          finish({ ok: found, status, ...(found ? {} : { missing: true }) });
+        }
+      });
+      res.on("end", () => {
+        const found = body.includes(contains);
+        finish({ ok: found, status, ...(found ? {} : { missing: true }) });
+      });
+      res.on("error", () => finish({ ok: false, status: 0, error: "連不上" }));
+    });
+    req.end();
+  });
+}
+
+/**
+ * TCP 檢查：轉接器以「回報模式」執行，收到連線就去連目標，成功回 1、失敗回 0。
+ * 只連到轉接器本身不能算成功（轉接器一定接受連線）。
+ */
+export function tcpProbeVia(via: {
+  host: string;
+  port: number;
+}): Promise<{ ok: boolean; ms: number }> {
+  const started = Date.now();
+  return new Promise((resolve) => {
     const socket = new Socket();
+    let settled = false;
     const done = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
       socket.destroy();
       resolve({ ok, ms: Date.now() - started });
     };
-    socket.setTimeout(5000, () => done(false));
+    socket.setTimeout(8000, () => done(false));
     socket.once("error", () => done(false));
-    socket.connect(port, address, () => done(true));
+    socket.once("data", (b: Buffer) => done(b[0] === 0x31));
+    socket.once("end", () => done(false));
+    socket.connect(via.port, via.host);
   });
 }
