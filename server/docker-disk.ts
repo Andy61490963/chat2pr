@@ -468,20 +468,53 @@ export function registerDockerDisk(
   call: Call,
   options: DiskOptions = {},
 ) {
+  // 盤點要列出全部映像與資料卷，正式主機要十幾秒。看板打開系統頁就會要一次；
+  // 快取 60 秒並讓同時的請求共用同一次盤點，避免頁面重新整理或重新掛載時一直重算、
+  // 停在「盤點中」（驗收時發生）。「重新盤點」與清理前預覽帶 fresh=1 強制重算。
+  let cached: { at: number; report: DiskReport } | undefined;
+  let running: Promise<DiskReport> | undefined;
+  const report = (fresh: boolean) => {
+    if (!fresh && cached && Date.now() - cached.at < 60000)
+      return Promise.resolve(cached.report);
+    running ??= buildDiskReport(db, call, options)
+      .then((r) => {
+        cached = { at: Date.now(), report: r.report };
+        return r.report;
+      })
+      .finally(() => {
+        running = undefined;
+      });
+    return running;
+  };
   app.get("/api/system/disk", async (req, reply) => {
     await requireAdmin(db, req);
     reply.header("Cache-Control", "no-store");
-    return (await buildDiskReport(db, call, options)).report;
+    const { fresh } = z
+      .object({ fresh: z.enum(["0", "1"]).optional() })
+      .parse(req.query);
+    return report(fresh === "1");
   });
   app.put("/api/system/disk/settings", async (req) => {
     const actor = await requireAdmin(db, req);
-    return saveDiskSettings(db, req.body, actor.login ?? "管理者");
+    const saved = await saveDiskSettings(db, req.body, actor.login ?? "管理者");
+    cached = undefined;
+    return saved;
   });
   app.post("/api/system/disk/cleanup", async (req) => {
     const actor = await requireAdmin(db, req);
     const { keys } = z
       .object({ keys: z.array(z.string().min(1).max(400)).min(1).max(1000) })
       .parse(req.body);
-    return confirmedCleanup(db, call, keys, actor.login ?? "管理者", options);
+    try {
+      return await confirmedCleanup(
+        db,
+        call,
+        keys,
+        actor.login ?? "管理者",
+        options,
+      );
+    } finally {
+      cached = undefined;
+    }
   });
 }

@@ -1425,3 +1425,42 @@ it("PR 說明註明測試在容器內的 SQL Server 執行、未修改專案檔�
     }),
   ).toContain("LocalDB 連線只在容器內暫時導向，未修改專案檔案");
 });
+
+// 部署後驗收：已通過的專案重新驗證時碰到暫時性問題（訂閱短暫讀不到），被停用而無法派工。
+it("已驗證通過的專案重新驗證時遇到暫時性問題，沿用先前設定、不停用", async () => {
+  const s = await scenario();
+  expect((await s.validate()).statusCode).toBe(202);
+  const before = await s.project();
+  expect(before.enabled).toBe(true);
+  expect(before.validated_at).not.toBeNull();
+  // 自動設定結果有快取，重新驗證不一定再呼叫 AI；用實際發生過的執行器逾時模擬暫時性問題。
+  const passThrough = s.runner.call.bind(s.runner);
+  s.runner.call = async <T>(path: string, raw: unknown): Promise<T> => {
+    if (path === "phase" && (raw as { phase?: string }).phase === "install")
+      throw new Error(
+        "執行器連線失敗（UND_ERR_HEADERS_TIMEOUT）；請檢查執行器、網路及逾時紀錄",
+      );
+    return passThrough<T>(path, raw);
+  };
+  expect((await s.validate()).statusCode).toBeGreaterThanOrEqual(400);
+  const after = await s.project();
+  expect(after.enabled).toBe(true);
+  expect(after.validated_at).toEqual(before.validated_at);
+  expect(after.setup_plan).toEqual(before.setup_plan);
+  expect(after.test_command).toBe(before.test_command);
+  expect(after.setup_status).toContain("沿用先前通過的設定");
+  expect(after.validation_error).toContain("UND_ERR_HEADERS_TIMEOUT");
+});
+
+it("已驗證通過的專案重新驗證時測試真的失敗，照舊停用", async () => {
+  const s = await scenario();
+  expect((await s.validate()).statusCode).toBe(202);
+  expect((await s.project()).enabled).toBe(true);
+  s.fail("test");
+  expect((await s.validate()).statusCode).toBeGreaterThanOrEqual(400);
+  expect(await s.project()).toMatchObject({
+    enabled: false,
+    validated_at: null,
+    setup_plan: null,
+  });
+});

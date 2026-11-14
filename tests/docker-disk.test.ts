@@ -1134,4 +1134,42 @@ describe("排程、提醒與看板", () => {
     });
     expect(called).toBe(false);
   });
+
+  // 部署後驗收：正式主機盤點要十幾秒，打開系統頁時一直停在「盤點中」。
+  it("看板：60 秒內共用同一次盤點；重新盤點與改設定後重算", async () => {
+    const paths: string[] = [];
+    const { buildApp } = await import("../server/app.js");
+    const app = await buildApp(db, undefined, undefined, undefined, {
+      call: runner(50, [], paths),
+    });
+    try {
+      const headers = await session();
+      const inventories = () =>
+        paths.filter((p) => p === "maintenance/disk/inventory").length;
+      const get = (query = "") =>
+        app.inject({ url: `/api/system/disk${query}`, headers });
+      // 同時兩個請求也只盤點一次。
+      const [a, b] = await Promise.all([get(), get()]);
+      expect(a.statusCode).toBe(200);
+      expect(b.json().checkedAt).toBe(a.json().checkedAt);
+      expect(inventories()).toBe(1);
+      expect((await get()).statusCode).toBe(200);
+      expect(inventories()).toBe(1);
+      expect((await get("?fresh=1")).statusCode).toBe(200);
+      expect(inventories()).toBe(2);
+      const settings = a.json().settings;
+      const saved = await app.inject({
+        method: "PUT",
+        url: "/api/system/disk/settings",
+        headers,
+        payload: { ...settings, warn_percent: 20 },
+      });
+      expect(saved.statusCode).toBe(200);
+      const after = await get();
+      expect(after.json().settings.warn_percent).toBe(20);
+      expect(inventories()).toBe(3);
+    } finally {
+      await app.close();
+    }
+  });
 });

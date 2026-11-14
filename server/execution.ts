@@ -34,6 +34,7 @@ import { AppError, classifyRisk, redact } from "./policy.js";
 import { subscriptionLimited } from "./triage.js";
 import {
   classifyFailure,
+  failureDigest,
   failureNotice,
   groupFailureText,
   keyErrorLines,
@@ -563,7 +564,7 @@ export class Execution {
         const output = `${failed.stdout}\n${failed.stderr}`;
         if (!plan || attempt === 2)
           throw new Error(
-            `${failedPhase}失敗${toolHint(output)}：${redact(output).slice(-2000)}`,
+            `${failedPhase}失敗${toolHint(output)}：${failureDigest(output)}`,
           );
         if (deadline - Date.now() < 180000)
           throw new AppError(
@@ -636,9 +637,29 @@ export class Execution {
         await requestProjectInput(this.db, project, e);
         return { ok: false, waiting: true };
       }
+      // 已經驗證通過的專案重新驗證時，碰到 AI 服務、訂閱或網路的暫時性問題：
+      // 沿用先前通過的設定與啟用狀態，只記下原因，不因一次暫時失敗就停止派工
+      //（驗收時 DcMateH5Api 因訂閱短暫讀不到被停用）。專案或設定本身的問題照舊停用。
+      const message = String(e);
+      if (
+        project.validated_at &&
+        (classifyFailure(message).category === "transient" ||
+          subscriptionLimited(message))
+      ) {
+        await this.db.query(
+          "UPDATE projects SET setup_status=$2,validation_error=$3 WHERE id=$1 AND config_version=$4 AND validated_at IS NOT NULL",
+          [
+            project.id,
+            "重新驗證遇到暫時性問題，沿用先前通過的設定；稍後再按「驗證環境」",
+            redact(message),
+            project.config_version,
+          ],
+        );
+        throw e;
+      }
       await this.db.query(
         "UPDATE projects SET validated_at=NULL,enabled=false,setup_plan=NULL,setup_status='驗證未完成',validation_error=$2 WHERE id=$1 AND config_version=$3",
-        [project.id, redact(String(e)), project.config_version],
+        [project.id, redact(message), project.config_version],
       );
       throw e;
     } finally {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   classifyFailure,
+  failureDigest,
   failureNotice,
   groupFailureText,
   keyErrorLines,
@@ -179,5 +180,40 @@ describe("群組訊息", () => {
       expect(text).toMatch(/到看板按「重試」|請管理者/);
       expect(text).toContain("系統已自動重試一次");
     }
+  });
+});
+
+// 部署後驗收看到的情況：主機記憶體不足時訂閱讀取逾時，不能當成專案或設定問題。
+describe("驗收發現：訂閱讀取失敗與錯誤摘要", () => {
+  it("訂閱登入讀取失敗、無法確認額度與 AI 設定逾時都是暫時性問題", () => {
+    for (const raw of [
+      "Error: 訂閱登入讀取或刷新失敗，請確認服務登入",
+      "Error: 無法確認 Codex 訂閱額度，已保留訊息與工作；稍後重新檢查",
+      "Error: AI 環境設定失敗：ejs.internal.kHybridDispatch] (node:internal/event_target:869:20)\n    at AbortSignal.dispatchEvent (node:internal/event_target:810:26)\n    at Timeout._onTimeout (node:internal/abort_controller:208:7)",
+    ])
+      expect(classifyFailure(raw).category).toBe("transient");
+    expect(
+      classifyFailure("Error: 測試失敗：Assert.Equal() Failure").category,
+    ).not.toBe("transient");
+  });
+
+  it("測試失敗的摘要保留例外訊息與失敗的測試，不被後面的堆疊擠掉", () => {
+    const stack = Array.from(
+      { length: 80 },
+      (_, i) =>
+        `   at Microsoft.Data.SqlClient.SqlCommand.Step${i}(Boolean isInternal)`,
+    ).join("\n");
+    const output = [
+      "[xUnit.net 00:00:00.58]     Fictional.Tests.OrderTests.KeepsIdentity [FAIL]",
+      "Microsoft.Data.SqlClient.SqlException (0x80131904): Invalid object name 'dbo.FICTIONAL_TABLE'.",
+      stack,
+      "Failed!  - Failed:     1, Passed:     5, Skipped:     0, Total:     6",
+    ].join("\n");
+    const digest = failureDigest(output);
+    expect(digest).toContain("Invalid object name 'dbo.FICTIONAL_TABLE'");
+    expect(digest).toContain("KeepsIdentity [FAIL]");
+    expect(digest).toContain("Failed:     1, Passed:     5");
+    expect(digest.length).toBeLessThanOrEqual(2600);
+    expect(digest.split("---")[0]).not.toMatch(/^\s*at /m);
   });
 });

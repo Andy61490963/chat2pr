@@ -92,11 +92,31 @@ export function detectSqlServer(files: Record<string, string>): Reason[] {
   return reasons.slice(0, 10);
 }
 
+// 專案自己的測試腳本啟動 SQL Server（直接執行 sqlservr）；不含 CI 與文件，只看會被執行的腳本。
+const SELF_STARTED_SQLSERVER = /\bsqlservr\b|\/opt\/mssql\/bin\b/;
+const SCRIPT_FILE = /\.(?:sh|bash|mjs|cjs|js|py|ps1)$|(^|\/)Makefile$/i;
+
+/**
+ * 專案自己的測試腳本會啟動 SQL Server 時回傳依據。這種專案已經自行管理資料庫的啟動、
+ * 連線與清理；系統再接手啟動會讓 AI 不能使用專案腳本（驗收時 DcMateH5Api 因此給不出測試命令）。
+ */
+export function selfManagedSqlServer(
+  files: Record<string, string>,
+): Reason | null {
+  for (const [file, content] of Object.entries(files)) {
+    if (!SCRIPT_FILE.test(file) || CI_FILE.test(file)) continue;
+    const match = SELF_STARTED_SQLSERVER.exec(content);
+    if (match) return { path: file, quote: match[0] };
+  }
+  return null;
+}
+
 /**
  * AI 自動設定時決定是否提供 SQL Server 與使用的映像。
  * - 管理者選「不提供」：一律不提供。
  * - 管理者選「一律提供」：預設映像改用 SQL Server 映像；自訂映像照用（須含 agentflow-sqlserver）。
- * - 自動：偵測到需要，而且映像是預設或 SQL Server 映像時才提供；自訂映像由管理者負責，不自動更換。
+ * - 自動：偵測到需要，而且映像是預設或 SQL Server 映像時才提供；自訂映像由管理者負責，不自動更換；
+ *   專案腳本自己會啟動 SQL Server 時也不提供，照專案腳本執行。
  */
 export function sqlServerPlan(
   project: Pick<Project, "image" | "sql_server">,
@@ -116,7 +136,9 @@ export function sqlServerPlan(
     };
   if (
     !reasons.length ||
-    ![DEFAULT_WORKER_IMAGE, SQLSERVER_WORKER_IMAGE].includes(project.image)
+    ![DEFAULT_WORKER_IMAGE, SQLSERVER_WORKER_IMAGE].includes(project.image) ||
+    // 專案腳本自己啟動 SQL Server：照專案的方式跑，不接手（管理者仍可選「一律提供」）。
+    selfManagedSqlServer(files)
   )
     return null;
   return { image: SQLSERVER_WORKER_IMAGE, source: "detected", reasons };
