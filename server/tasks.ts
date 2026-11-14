@@ -314,7 +314,7 @@ export class Tasks {
         )
           throw new AppError(409, "先前執行尚未完成清理");
         await c.query(
-          "UPDATE tasks SET status='queued',last_error=NULL,updated_at=now() WHERE id=$1",
+          "UPDATE tasks SET status='queued',last_error=NULL,retry_at=NULL,updated_at=now() WHERE id=$1",
           [id],
         );
       } else {

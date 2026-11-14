@@ -33,6 +33,12 @@ import { hash } from "./auth.js";
 import { AppError, classifyRisk, redact } from "./policy.js";
 import { subscriptionLimited } from "./triage.js";
 import {
+  classifyFailure,
+  failureNotice,
+  groupFailureText,
+  keyErrorLines,
+} from "./failure.js";
+import {
   SubscriptionGate,
   readSubscriptionAccount,
   type SubscriptionAccount,
@@ -729,6 +735,12 @@ export class Execution {
         task.approved_version !== task.version
       )
         return;
+      // 暫時性錯誤的自動重試要等退避時間過了才派，時間以資料庫為準。
+      const backoff = await this.db.one<{ waiting: boolean }>(
+        "SELECT COALESCE(retry_at>now(),false) AS waiting FROM tasks WHERE id=$1",
+        [task.id],
+      );
+      if (backoff?.waiting) return;
       // 追加修改要等原任務做完（開出 PR 或結束）再開始，才能接在同一個 PR 上；排程稍後會再試。
       if (task.parent_id && task.mode !== "query") {
         const parent = await this.db.one<{ status: string }>(
@@ -855,7 +867,7 @@ export class Execution {
             if (today.rows[0].count >= s.daily_runs) return "daily";
           }
           const change = await c.query(
-            `UPDATE tasks SET status='running',review_note=NULL,updated_at=now() WHERE id=$1 AND status='queued' AND version=$2 AND approved_version=$2 AND task_project_confirmed(id)
+            `UPDATE tasks SET status='running',review_note=NULL,retry_at=NULL,updated_at=now() WHERE id=$1 AND status='queued' AND version=$2 AND approved_version=$2 AND task_project_confirmed(id) AND (retry_at IS NULL OR retry_at<=now())
            AND EXISTS(SELECT 1 FROM settings WHERE id=1 AND revision=$3 AND NOT (value->>'paused')::boolean) RETURNING id`,
             [task.id, task.version, snapshot.revision],
           );
@@ -1081,22 +1093,27 @@ export class Execution {
         if (environment) throw new AppError(422, environment);
       };
       const installCommand = project.install_command.trim() || "true";
+      // 安裝工具常把錯誤寫在 stdout（npm、dotnet restore）；兩邊合併才不會只剩空白。
+      const installOutput = (r: PhaseResult) => `${r.stdout}\n${r.stderr}`;
       let install = await phase("install", { command: installCommand });
       if (install.exitCode !== 0) {
         // 套件下載或工具偶發錯誤常在重跑時消失；先重試一次再判定失敗。
         await this.db.audit(
           task.id,
           "install_retry",
-          `安裝依賴失敗，自動重試一次：${redact(install.stderr).slice(-300)}`,
+          `安裝依賴失敗，自動重試一次：${keyErrorLines(installOutput(install), 2, 300)}`,
         );
         install = await phase("install", { command: installCommand });
       }
       let installNote = "";
       if (install.exitCode !== 0) {
+        // 完整輸出留在執行紀錄；摘要由失敗分類挑出最後幾行有意義的錯誤。
         if (task.mode !== "query")
-          throw new Error(`安裝失敗：${install.stderr.slice(-1500)}`);
+          throw new Error(
+            `安裝失敗：${redact(installOutput(install)).slice(-4000)}`,
+          );
         // 查詢主要靠閱讀程式；依賴裝不起來仍可回答，並在報告中註明。
-        installNote = `安裝依賴兩次都失敗（${redact(install.stderr).slice(-300).trim()}），無法建置或執行程式；請以閱讀程式碼為主回答，並在報告中說明哪些結論因此未能實際執行驗證。`;
+        installNote = `安裝依賴兩次都失敗（${keyErrorLines(installOutput(install), 2, 300) || "沒有錯誤輸出"}），無法建置或執行程式；請以閱讀程式碼為主回答，並在報告中說明哪些結論因此未能實際執行驗證。`;
         await this.db.audit(
           task.id,
           "install_skipped",
@@ -1269,7 +1286,8 @@ export class Execution {
           throw new AppError(429, "Codex 訂閱額度已達上限");
         if (code.exitCode !== 0)
           throw new Error(
-            `Codex 執行失敗：${redact(code.stderr).slice(-1500)}`,
+            // 堆疊之前那行才是真正的原因；多留一些，摘要時再去掉堆疊。
+            `Codex 執行失敗：${redact(code.stderr).slice(-4000)}`,
           );
         try {
           codexSummary = redact(String(JSON.parse(code.stdout).final ?? ""));
@@ -1505,7 +1523,9 @@ ${querySummary(answer)}`,
           )
             throw new AppError(429, "Codex 訂閱額度已達上限");
           if (review.exitCode !== 0)
-            throw new Error(`獨立審查失敗：${review.stderr.slice(-1500)}`);
+            throw new Error(
+              `獨立審查失敗：${redact(review.stderr).slice(-4000)}`,
+            );
           const result = JSON.parse(JSON.parse(review.stdout).final);
           await stable();
           const verdict = reviewVerdict(result);
@@ -1699,10 +1719,10 @@ ${querySummary(answer)}`,
         }
         return;
       }
-      // 只保留可讀的原因，不顯示 "Error:" 等程式前綴。
-      const message = safeDetail(
-        `${phaseLabels[currentPhase] ?? currentPhase}：${e instanceof Error ? e.message : String(e)}`,
-      );
+      const raw = e instanceof Error ? e.message : String(e);
+      const where = phaseLabels[currentPhase] ?? currentPhase;
+      // 執行紀錄保留完整的原始錯誤（含輸出與堆疊）供除錯；不顯示 "Error:" 等程式前綴。
+      const message = safeDetail(`${where}：${raw}`);
       await poll();
       await record("error", message);
       if (e instanceof AppError && e.statusCode === 429) {
@@ -1721,56 +1741,65 @@ ${querySummary(answer)}`,
         await tellGroupWaiting(this.db, taskId, "quota");
         return;
       }
-      // 連線中斷、上游暫時無法服務這類錯誤重跑通常就會過：同一需求版本自動重新排隊最多兩次，不先通知失敗。
-      if (transientFailure(message)) {
-        const current = await this.db.one<{ version: number }>(
-          "SELECT version FROM tasks WHERE id=$1",
-          [taskId],
+      // 看板、通知與群組只看分類後的白話說明；堆疊與完整輸出只在上面的執行紀錄。
+      const failure = classifyFailure(raw, currentPhase);
+      const current = await this.db.one<{ version: number }>(
+        "SELECT version FROM tasks WHERE id=$1",
+        [taskId],
+      );
+      const used = current
+        ? (await this.db.one<{ n: number }>(
+            "SELECT count(*)::int AS n FROM audit WHERE task_id=$1 AND kind='auto_retry' AND detail LIKE $2",
+            [taskId, `%需求版本 ${current.version}，%`],
+          ))!.n
+        : AUTO_RETRIES;
+      // 連線中斷、上游暫時無法服務這類錯誤重跑通常就會過：同一需求版本退避後自動重試一次，不先通知失敗。
+      // 重試是重新排隊，派工時照樣檢查同時執行上限、預算與每日次數，不會因重試超支或超過上限。
+      if (failure.category === "transient" && current && used < AUTO_RETRIES) {
+        const requeued = await this.db.query(
+          "UPDATE tasks SET status='queued',retry_at=now()+make_interval(secs=>$4),last_error=$2,updated_at=now() WHERE id=$1 AND status IN ('running','reviewing') AND version=$3 AND approved_version=$3 RETURNING id",
+          [
+            taskId,
+            `${failureNotice(failure, false, where).split("\n")[0]}系統會在 ${RETRY_BACKOFF_SECONDS} 秒後自動重試一次。`,
+            current.version,
+            RETRY_BACKOFF_SECONDS,
+          ],
         );
-        const used = current
-          ? (await this.db.one<{ n: number }>(
-              "SELECT count(*)::int AS n FROM audit WHERE task_id=$1 AND kind='auto_retry' AND detail LIKE $2",
-              [taskId, `%需求版本 ${current.version}，%`],
-            ))!.n
-          : 2;
-        if (current && used < 2) {
-          const requeued = await this.db.query(
-            "UPDATE tasks SET status='queued',last_error=$2,updated_at=now() WHERE id=$1 AND status IN ('running','reviewing') AND version=$3 AND approved_version=$3 RETURNING id",
-            [taskId, message, current.version],
+        if (requeued.length) {
+          await this.db.audit(
+            taskId,
+            "auto_retry",
+            `暫時性錯誤，${RETRY_BACKOFF_SECONDS} 秒後自動重試（需求版本 ${current.version}，第 ${used + 1} 次）：${where}：${failure.plain}${failure.detail ? `；${failure.detail}` : ""}`,
           );
-          if (requeued.length) {
-            await this.db.audit(
-              taskId,
-              "auto_retry",
-              `暫時性錯誤，自動重新排隊（需求版本 ${current.version}，第 ${used + 1} 次）：${message}`,
-            );
-            return;
-          }
+          return;
         }
       }
+      // 安裝依賴在同一次執行內已重試過一次（install_retry）。
+      const retried = used > 0 || /^安裝失敗：/.test(raw);
+      const summary = failureNotice(failure, retried, where);
       const failed = await this.db.query(
         "UPDATE tasks SET status='failed',last_error=$2,updated_at=now() WHERE id=$1 AND status IN ('running','reviewing') RETURNING id",
-        [taskId, message],
+        [taskId, summary],
       );
       // 任務沒有真的轉為失敗（仍在排隊、已被取消等）時不記錄也不通知，
       // 避免每輪重派都寫一筆動態、推播一次；錯誤仍寫到服務日誌。
       if (!failed.length) {
-        console.warn(`派工未完成（${taskId}）：${message}`);
+        console.warn(`派工未完成（${taskId}）：${summary}`);
         return;
       }
-      await this.db.audit(taskId, "error", message);
+      await this.db.audit(taskId, "error", summary);
       await this.line.notify(
         taskId,
         "failed",
         `failed:${runId ?? taskId}`,
-        `工作需要處理：${clip(message, 180)}`,
+        `工作需要處理：${clip(summary, 240)}`,
       );
       await notifyGroup(
         this.db,
         taskId,
         "failed",
         `failed:${taskId}`,
-        "這則需求處理時遇到問題，已通知管理者處理。",
+        groupFailureText(failure, retried),
       );
     } finally {
       if (monitor) clearInterval(monitor);
@@ -1807,9 +1836,11 @@ ${querySummary(answer)}`,
   }
 }
 
+/** 同一需求版本遇到暫時性錯誤時，自動重試的次數與重試前的等待秒數。 */
+export const AUTO_RETRIES = 1;
+export const RETRY_BACKOFF_SECONDS = 30;
+
 /** 重跑通常就會成功的錯誤：連線中斷、逾時的網路請求、上游暫時無法服務。 */
-export function transientFailure(message: string) {
-  return /連線失敗|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|EAI_AGAIN|UND_ERR_|socket hang up|stream (?:disconnected|error)|\b(?:502|503|504)\b|Bad Gateway|Service Unavailable|Gateway Timeout/i.test(
-    message,
-  );
+export function transientFailure(message: string, phase = "") {
+  return classifyFailure(message, phase).category === "transient";
 }

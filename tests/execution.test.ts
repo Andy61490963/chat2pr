@@ -1,6 +1,7 @@
 import { beforeEach, afterAll, it, expect, vi } from "vitest";
 import { reviewVerdict } from "../server/pr-body.js";
 import { transientFailure } from "../server/execution.js";
+import { codexSdkCrash } from "./failure-samples.js";
 import { db, reset, fixture, confirmTask } from "./helpers.js";
 import {
   Execution,
@@ -1343,7 +1344,7 @@ it("審查判定只看阻擋問題", () => {
   expect(reviewVerdict({ passed: true })).toMatchObject({ passed: false });
 });
 
-it("暫時性錯誤自動重新排隊兩次、不通知；第三次才轉為失敗並通知", async () => {
+it("暫時性錯誤退避後自動重試一次、不先通知；仍失敗才回報並註明已自動重試", async () => {
   const s = await scenario();
   const original = s.runner.call.bind(s.runner);
   s.runner.call = async <T>(path: string, raw: unknown): Promise<T> => {
@@ -1354,22 +1355,104 @@ it("暫時性錯誤自動重新排隊兩次、不通知；第三次才轉為失�
     return original<T>(path, raw);
   };
   const state = () =>
-    db.one<{ status: string }>("SELECT status FROM tasks WHERE id=$1", [
-      s.task.id,
-    ]);
+    db.one<Task & { waiting: boolean }>(
+      "SELECT *,retry_at>now() AS waiting FROM tasks WHERE id=$1",
+      [s.task.id],
+    );
   const failures = () =>
-    db.query("SELECT 1 FROM notifications WHERE kind='failed'");
-  for (const attempt of [1, 2]) {
-    await s.execution.execute(s.task.id);
-    expect((await state())?.status).toBe("queued");
-    expect(
-      await db.query("SELECT detail FROM audit WHERE kind='auto_retry'"),
-    ).toHaveLength(attempt);
-    expect(await failures()).toHaveLength(0);
-  }
+    db.query(
+      "SELECT 1 FROM notifications WHERE kind IN ('failed','group_failed')",
+    );
   await s.execution.execute(s.task.id);
-  expect((await state())?.status).toBe("failed");
-  expect(await failures()).toHaveLength(1);
+  expect(await state()).toMatchObject({ status: "queued", waiting: true });
+  expect((await state()).last_error).toContain("30 秒後自動重試一次");
+  expect(
+    await db.query("SELECT detail FROM audit WHERE kind='auto_retry'"),
+  ).toHaveLength(1);
+  expect(await failures()).toHaveLength(0);
+  // 退避期間不派工，也不另開執行。
+  const runs = () => db.query("SELECT 1 FROM runs");
+  await s.execution.execute(s.task.id);
+  expect(await runs()).toHaveLength(1);
+  expect((await state()).status).toBe("queued");
+
+  await db.query("UPDATE tasks SET retry_at=now()-interval '1 second'");
+  await s.execution.execute(s.task.id);
+  const task = await state();
+  expect(task.status).toBe("failed");
+  expect(task.last_error).toContain("暫時性問題");
+  expect(task.last_error).toContain("已自動重試一次");
+  expect(await failures()).toHaveLength(2);
+  const group = await db.one<{ text: string }>(
+    "SELECT text FROM notifications WHERE kind='group_failed'",
+  );
+  expect(group.text).toContain("系統已自動重試一次");
+  expect(group.text).toContain("到看板按「重試」");
+});
+
+it("暫時性錯誤重試一次後成功時任務正常完成，稽核記下重試", async () => {
+  const s = await scenario();
+  const original = s.runner.call.bind(s.runner);
+  let broken = true;
+  s.runner.call = async <T>(path: string, raw: unknown): Promise<T> => {
+    if ((raw as { phase?: string }).phase === "code" && broken) {
+      broken = false;
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: codexSdkCrash("stream disconnected before completion"),
+      } as T;
+    }
+    return original<T>(path, raw);
+  };
+  await s.execution.execute(s.task.id);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("queued");
+  await db.query("UPDATE tasks SET retry_at=now()-interval '1 second'");
+  await s.execution.execute(s.task.id);
+  const task = await db.one<Task & { retry_at: Date | null }>(
+    "SELECT * FROM tasks",
+  );
+  expect(task.status).toBe("ready");
+  expect(task.retry_at).toBeNull();
+  const retry = await db.one<{ detail: string }>(
+    "SELECT detail FROM audit WHERE kind='auto_retry'",
+  );
+  expect(retry.detail).toContain("AI 服務回應中斷或逾時");
+  expect(retry.detail).not.toContain("file:///");
+  expect(
+    await db.query(
+      "SELECT 1 FROM notifications WHERE kind IN ('failed','group_failed')",
+    ),
+  ).toHaveLength(0);
+});
+
+it("自動重試仍經過派工檢查：同時執行已滿時保持排隊，不多開執行", async () => {
+  const s = await scenario();
+  const original = s.runner.call.bind(s.runner);
+  s.runner.call = async <T>(path: string, raw: unknown): Promise<T> => {
+    if ((raw as { phase?: string }).phase === "code")
+      throw new Error("執行器連線失敗（UND_ERR_HEADERS_TIMEOUT）");
+    return original<T>(path, raw);
+  };
+  await s.execution.execute(s.task.id);
+  await db.query(
+    "UPDATE tasks SET retry_at=now()-interval '1 second';UPDATE settings SET value=jsonb_set(value,'{max_runs}','1')",
+  );
+  // 另一張任務佔住唯一的執行位置。
+  const other = await db.one<{ id: string }>(
+    "INSERT INTO tasks(project_id,group_id,title,summary,acceptance,status,approved_version,dedupe_key) SELECT project_id,group_id,'另一張','另一張','[]','running',1,'other' FROM tasks LIMIT 1 RETURNING id",
+  );
+  await db.query(
+    "INSERT INTO runs(id,task_id,version,model,deadline,workspace) VALUES(gen_random_uuid(),$1,1,'m',now()+interval '1 hour','w')",
+    [other.id],
+  );
+  await s.execution.execute(s.task.id);
+  expect(
+    (await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [s.task.id])).status,
+  ).toBe("queued");
+  expect(
+    await db.query("SELECT 1 FROM runs WHERE task_id=$1", [s.task.id]),
+  ).toHaveLength(1);
 });
 
 it("需要修正的錯誤不會自動重試", () => {
@@ -1491,8 +1574,41 @@ it("修改任務安裝重試仍失敗就停止", async () => {
   expect(installs).toBe(2);
   const task = await db.one<Task>("SELECT * FROM tasks");
   expect(task.status).not.toBe("answered");
-  expect(task.last_error).toContain("安裝失敗");
+  expect(task.last_error).toContain("安裝依賴失敗");
+  expect(task.last_error).toContain("已自動重試一次");
+  expect(task.last_error).toContain("還原失敗");
   expect(s.counts().codeCalls).toBe(0);
+});
+it("安裝錯誤只寫在 stdout 時，摘要仍有錯誤內容；完整輸出留在執行紀錄", async () => {
+  const s = await scenario();
+  const call = s.runner.call.bind(s.runner);
+  const stdout = [
+    "  Determining projects to restore...",
+    ...Array.from({ length: 60 }, (_, i) => `  Restoring package ${i}...`),
+    "/workspace/src/Orders/Orders.csproj : error NU1101: Unable to find package Contoso.Missing. No packages exist with this id in source(s): nuget.org",
+    "  Failed to restore /workspace/src/Orders/Orders.csproj (in 1.2 sec).",
+  ].join("\n");
+  s.runner.call = async <T>(path: string, raw: unknown): Promise<T> => {
+    if (path === "phase" && (raw as { phase?: string }).phase === "install")
+      return { exitCode: 1, stdout, stderr: "" } as T;
+    return call<T>(path, raw);
+  };
+  await s.execution.execute(s.task.id);
+  const task = await db.one<Task>("SELECT * FROM tasks");
+  expect(task.status).toBe("failed");
+  expect(task.last_error).toContain("環境問題");
+  expect(task.last_error).toContain("error NU1101");
+  expect(task.last_error).not.toContain("Restoring package 3");
+  const events = await db.query<{ detail: string }>(
+    "SELECT detail FROM run_events WHERE kind='error'",
+  );
+  expect(events.map((e) => e.detail).join("\n")).toContain(
+    "Restoring package 30",
+  );
+  const retry = await db.one<{ detail: string }>(
+    "SELECT detail FROM audit WHERE kind='install_retry'",
+  );
+  expect(retry.detail).toContain("error NU1101");
 });
 it("追問時提示帶入前面的問答（由舊到新），回答標明延續哪一題", async () => {
   const s = await queryScenario();
