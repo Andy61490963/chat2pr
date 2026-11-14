@@ -1,3 +1,5 @@
+import type { InstallReview } from "./install-plan.js";
+
 /** 自動設定的依據及實際驗證方式；手動指令獨立保存，不被 AI 覆寫。 */
 export interface SetupPlan {
   branch: string;
@@ -17,6 +19,8 @@ export interface SetupPlan {
   evidence: { path: string; quote: string }[];
   /** 測試需要 SQL Server 時的映像與判斷依據；不需要時沒有這個欄位。 */
   sqlServer?: SqlServerPlan;
+  /** 工作映像缺少的系統套件與安裝前審查結果；不需要時沒有這個欄位。 */
+  systemInstall?: InstallReview;
 }
 
 /**

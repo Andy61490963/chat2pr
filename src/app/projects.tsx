@@ -40,6 +40,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { type Request, type Run, type State, Empty, date } from "./shared";
+import { InstallReviewList } from "./egress";
 import { ConfirmButton } from "./confirm";
 import { useUnsaved, useGuard } from "./unsaved";
 import { ProjectContextEditor } from "./project-context";
@@ -330,6 +331,16 @@ export function ProjectsView({
                   <p className="whitespace-pre-line">
                     {open.setup_plan.explanation}
                   </p>
+                  {open.setup_plan.systemInstall && (
+                    <div className="rounded-lg border p-3">
+                      <p className="mb-2 text-xs font-medium text-muted-foreground">
+                        系統套件（安裝前審查）
+                      </p>
+                      <InstallReviewList
+                        review={open.setup_plan.systemInstall}
+                      />
+                    </div>
+                  )}
                   {!!open.setup_plan.omissions?.length && (
                     <div className="text-xs text-muted-foreground">
                       <p>以下檔案只提供摘錄或未讀取：</p>

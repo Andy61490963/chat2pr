@@ -150,12 +150,14 @@ export interface Settings {
   triage_paused: boolean;
   /** AI 可從對話自行歸納群組記憶；預設開啟。 */
   auto_memory: boolean;
-  /** 開發階段可經套件白名單出口下載 npm／PyPI／NuGet；預設開啟。 */
+  /** 開發階段可經下載來源白名單出口下載套件；預設開啟。 */
   code_downloads: boolean;
   /** 總開關：關閉時所有群組都不回覆，只私訊管理者；各群組另有自己的回覆範圍。預設開啟。 */
   group_replies?: boolean;
   /** isolated：只開放套件白名單；open：開發、測試、審查容器可直接連網際網路與公司內網。 */
   container_network: "isolated" | "open";
+  /** 安裝階段與開發下載套件可連的網域（系統頁維護）；沒有設定時用預設白名單。 */
+  egress_domains?: string[];
   ai_mode: AiMode;
   daily_runs: number;
   /** 全系統同時執行的任務數（系統頁設定，預設 2）；同一專案的修改仍一次一個。 */

@@ -317,8 +317,8 @@ function AiCard({
               id="code-downloads-hint"
               className="text-xs text-muted-foreground"
             >
-              Codex 修改程式時可下載 npm、PyPI、NuGet
-              套件；其他網址一律封鎖。關閉後只能使用安裝命令預先下載的套件。
+              Codex
+              修改程式時可經「系統」頁的下載來源白名單下載套件；其他網址一律封鎖。關閉後只能使用安裝命令預先下載的套件。
             </p>
           </div>
           <div className="space-y-2">

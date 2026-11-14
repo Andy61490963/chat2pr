@@ -414,7 +414,7 @@ export class Tasks {
         [id],
       ),
       this.db.query(
-        "SELECT r.id,version,status,outcome,observed,model,started_at,completed_at,heartbeat_at,deadline,COALESCE((SELECT jsonb_agg(jsonb_build_object('phase',e.phase,'threadId',e.thread_id) ORDER BY e.id) FROM run_events e WHERE e.run_id=r.id AND e.kind='thread'),'[]') AS threads FROM runs r WHERE task_id=$1 ORDER BY started_at DESC LIMIT 50",
+        "SELECT r.id,version,status,outcome,observed,model,started_at,completed_at,heartbeat_at,deadline,install_report,COALESCE((SELECT jsonb_agg(jsonb_build_object('phase',e.phase,'threadId',e.thread_id) ORDER BY e.id) FROM run_events e WHERE e.run_id=r.id AND e.kind='thread'),'[]') AS threads FROM runs r WHERE task_id=$1 ORDER BY started_at DESC LIMIT 50",
         [id],
       ),
     ]);

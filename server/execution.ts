@@ -65,6 +65,8 @@ import { clip, failureSummary, prReport, reviewVerdict } from "./pr-body.js";
 import { threadHistory } from "./followup.js";
 import { environmentFailure, sqlServerTestCommand } from "./sqlserver-test.js";
 import { askInGroup } from "./answers.js";
+import { provideSystemInstall, systemInstallNote } from "./system-install.js";
+import { egressDomains, type InstallReport } from "../shared/install-plan.js";
 import { createCheck, testCheck } from "./checks.js";
 import type { ScheduledCheck } from "../shared/checks.js";
 import {
@@ -486,22 +488,47 @@ export class Execution {
       }
       await this.provideSnapshot(project, runId);
       let test: PhaseResult | undefined;
+      // 安裝、測試與收集使用的映像；有放行的系統套件時換成專案衍生映像。
+      let image = project.image;
+      const egress = egressDomains(await this.db.settings());
       for (let attempt = 0; attempt < 3; attempt++) {
-        await progress(
-          attempt
-            ? `AI 已調整準備方式，正在重試（${attempt}/2）`
-            : "安裝相依套件",
-        );
-        const install = await this.runner.call<PhaseResult>("phase", {
-          runId,
-          image: project.image,
-          phase: "install",
-          command: project.install_command.trim() || "true",
-          timeoutMs: Math.max(1000, Math.min(600000, deadline - Date.now())),
-        });
-        await current();
-        let failed = install.exitCode !== 0 ? install : undefined;
-        let failedPhase = "安裝";
+        image = project.image;
+        let failed: PhaseResult | undefined;
+        let failedPhase = "系統套件安裝";
+        if (plan?.systemInstall) {
+          await progress("安裝審查放行的系統套件");
+          const system = await provideSystemInstall(this.db, this.runner, {
+            runId,
+            taskId: null,
+            project,
+            plan,
+            timeoutMs: Math.max(1000, Math.min(900000, deadline - Date.now())),
+          });
+          await current();
+          if (system?.image) image = system.image;
+          if (system?.error)
+            failed = { exitCode: 1, stdout: "", stderr: system.output };
+        }
+        if (!failed) {
+          await progress(
+            attempt
+              ? `AI 已調整準備方式，正在重試（${attempt}/2）`
+              : "安裝相依套件",
+          );
+          const install = await this.runner.call<PhaseResult>("phase", {
+            runId,
+            image,
+            phase: "install",
+            command: project.install_command.trim() || "true",
+            timeoutMs: Math.max(1000, Math.min(600000, deadline - Date.now())),
+            egress,
+          });
+          await current();
+          if (install.exitCode !== 0) {
+            failed = install;
+            failedPhase = "安裝";
+          }
+        }
         if (!failed) {
           await progress(
             plan?.verification === "build"
@@ -510,7 +537,7 @@ export class Execution {
           );
           test = await this.runner.call<PhaseResult>("phase", {
             runId,
-            image: project.image,
+            image,
             phase: "test",
             command: plan
               ? sqlServerTestCommand(plan, project.test_command.trim())
@@ -562,7 +589,7 @@ export class Execution {
         assertTestsFound(plan, test.stdout + test.stderr);
         const collected = await this.runner.call<PhaseResult>("phase", {
           runId,
-          image: project.image,
+          image,
           phase: "collect",
           timeoutMs: 60000,
           exclude: effectiveCollectExcludes(project.collect_excludes),
@@ -1072,6 +1099,25 @@ export class Execution {
         // 測試需要 SQL Server：之後的安裝、測試、開發與審查都用含 SQL Server 的映像。
         if (setup.plan.sqlServer) project.image = setup.plan.sqlServer.image;
       }
+      // 安裝前審查放行的系統套件：建立或重用專案衍生映像，之後各階段仍以非 root 使用它。
+      let systemInstall: InstallReport | null = null;
+      if (setup?.plan.systemInstall) {
+        await stage("install");
+        const system = await provideSystemInstall(this.db, this.runner, {
+          runId,
+          taskId: task.id,
+          project,
+          plan: setup.plan,
+          timeoutMs: Math.max(1000, Math.min(900000, deadline - Date.now())),
+        });
+        await assertCurrent();
+        systemInstall = system;
+        if (system?.image) project.image = system.image;
+        if (system?.error && task.mode !== "query")
+          throw new Error(
+            `${system.error}：${system.output.slice(-1500) || "沒有輸出"}`,
+          );
+      }
       // 測試階段由系統啟動容器內的 SQL Server 並導向 LocalDB；起不來時標示為測試環境問題。
       const testCommand = setup
         ? sqlServerTestCommand(setup.plan, project.test_command.trim())
@@ -1081,7 +1127,8 @@ export class Execution {
         if (environment) throw new AppError(422, environment);
       };
       const installCommand = project.install_command.trim() || "true";
-      let install = await phase("install", { command: installCommand });
+      const egress = egressDomains(s);
+      let install = await phase("install", { command: installCommand, egress });
       if (install.exitCode !== 0) {
         // 套件下載或工具偶發錯誤常在重跑時消失；先重試一次再判定失敗。
         await this.db.audit(
@@ -1089,7 +1136,7 @@ export class Execution {
           "install_retry",
           `安裝依賴失敗，自動重試一次：${redact(install.stderr).slice(-300)}`,
         );
-        install = await phase("install", { command: installCommand });
+        install = await phase("install", { command: installCommand, egress });
       }
       let installNote = "";
       if (install.exitCode !== 0) {
@@ -1186,6 +1233,14 @@ export class Execution {
             }
           : {}),
         ...(installNote ? { installStatus: installNote } : {}),
+        ...(systemInstall
+          ? {
+              systemPackages: {
+                ...systemInstallNote(systemInstall),
+                note: "installed 是安裝前審查放行、已裝在本次工作映像的系統工具，可以直接使用；rejected 沒有安裝，不要嘗試自行安裝，需要時在報告說明哪些驗證因此沒有做。",
+              },
+            }
+          : {}),
         ...(continuing && continuation
           ? {
               continuation: {
@@ -1249,7 +1304,7 @@ export class Execution {
           token: subscription ? undefined : credential,
           model: subscription ? (s.codex_model ?? undefined) : s.coding_model,
           effort: s.coding_effort,
-          // 開發階段可經套件白名單出口下載 npm／PyPI／NuGet 套件；可在設定關閉。
+          // 開發階段可經下載來源白名單出口下載套件；可在設定關閉。
           packages: s.code_downloads !== false,
           open: s.container_network === "open",
           query: task.mode === "query",
@@ -1260,7 +1315,7 @@ export class Execution {
           feedback,
           timeoutMs: Math.max(1000, deadline - Date.now()),
         };
-        const code = await phase("code", { job });
+        const code = await phase("code", { job, egress });
         if (
           subscription &&
           code.exitCode !== 0 &&
@@ -1562,6 +1617,7 @@ ${querySummary(answer)}`,
         dataSource: setup?.plan.dataSource,
         limitations: setup?.plan.limitations,
         sqlServer: !!setup?.plan.sqlServer,
+        systemInstall,
         testOutput: report,
       });
       const pr =

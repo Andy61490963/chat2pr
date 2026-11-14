@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { RunEvent, RunView } from "../../shared/observation.js";
+import { InstallReportView } from "./egress";
 import { eventLabels, phaseLabels } from "../../shared/observation.js";
 import { statusLabels, type TaskStatus } from "../../shared/types.js";
 import { Button } from "@/components/ui/button";
@@ -190,6 +191,11 @@ export function RunObserver({
                   {phaseLabels[t.phase]}：{t.threadId}
                 </p>
               ))}
+            </div>
+          )}
+          {run.install_report && (
+            <div className="mt-3">
+              <InstallReportView report={run.install_report} />
             </div>
           )}
           {!run.observed && (

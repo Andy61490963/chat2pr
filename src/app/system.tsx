@@ -28,6 +28,7 @@ import { type Request, type State, ago, date, message } from "./shared";
 import { FrictionCard } from "./friction";
 import { CapacityCard } from "./capacity";
 import { DockerDiskCard } from "./docker-disk";
+import { EgressCard } from "./egress";
 
 type ContainerStatus = {
   name: string;
@@ -225,6 +226,7 @@ export function SystemView({
         </CardContent>
       </Card>
       <DockerDiskCard request={request} />
+      <EgressCard request={request} />
       <MemoryOverview state={state} go={go} />
       <Architecture state={state} />
     </div>
@@ -564,7 +566,7 @@ const flowSteps = (open: boolean): FlowStep[] => [
   {
     title: "1 安裝相依套件",
     detail:
-      "執行專案的安裝命令，只能經 egress 白名單下載 npm、PyPI、NuGet 套件。",
+      "先以 root 安裝審查放行的系統套件（存成專案衍生映像、之後重用），再以非 root 執行專案的安裝命令；都只能經 egress 白名單下載。",
     active: ["jobs", "s1", "egress", "packages"],
     path: "M790 570 L750 570 M640 610 L640 672 L210 672",
   },
@@ -904,7 +906,7 @@ function Architecture({ state }: { state: State }) {
                 h={80}
                 id="egress"
                 title="egress（squid）"
-                lines={["安裝階段套件出口", "npm、PyPI、NuGet 白名單"]}
+                lines={["安裝階段套件出口", "下載來源白名單（系統頁可改）"]}
               />
 
               {/* 執行 */}
@@ -1117,9 +1119,15 @@ function Architecture({ state }: { state: State }) {
               <tbody className="divide-y">
                 {[
                   [
+                    "系統套件",
+                    "以 root 安裝審查放行的系統套件，存成專案衍生映像（同設定重用）",
+                    "下載來源白名單（系統頁可改）",
+                    "不掛載",
+                  ],
+                  [
                     "安裝",
                     "執行專案的安裝命令",
-                    "套件白名單（npm、PyPI、NuGet）",
+                    "下載來源白名單（系統頁可改）",
                     "可寫",
                   ],
                   [
