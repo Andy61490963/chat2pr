@@ -102,9 +102,10 @@ Start-Process (Get-Content .local\setup-url.txt)
 ```powershell
 docker build -f worker/Dockerfile -t line-agentflow-worker:local .
 docker build -f infra/source/Dockerfile -t line-agentflow-source:local .
+docker build -f infra/check/Dockerfile -t line-agentflow-check:local .
 ```
 
-預期結果：`docker image ls line-agentflow-worker:local` 與 `docker image ls line-agentflow-source:local` 各列出一個映像（約 4.6 GB 與 0.5 GB）。第一次建置要下載 .NET SDK、Chromium 等工具，時間視網路而定。
+預期結果：`docker image ls line-agentflow-worker:local`、`docker image ls line-agentflow-source:local` 與 `docker image ls line-agentflow-check:local` 各列出一個映像（約 4.6 GB、0.5 GB 與 0.35 GB）。最後一個是定期檢查的檢查容器與轉接器。第一次建置要下載 .NET SDK、Chromium 等工具，時間視網路而定。
 
 ### 步驟 5：下載向量模型
 

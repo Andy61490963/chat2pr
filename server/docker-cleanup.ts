@@ -335,7 +335,7 @@ export async function removeDiskItems(
         // 專案衍生映像只刪本實例建立的。
         if (
           info.Config?.Labels?.["io.agentflow.derived"] === "v1" &&
-          info.Config.Labels["io.agentflow.instance"] !== env.instance
+          info.Config.Labels["io.agentflow.derived-instance"] !== env.instance
         ) {
           refuse(key, "其他執行環境的衍生映像");
           continue;

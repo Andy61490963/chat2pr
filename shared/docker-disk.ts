@@ -210,6 +210,7 @@ export type DiskOwner =
   | "derived_image"
   | "service_image"
   | "job_container"
+  | "check_container"
   | "service_container"
   | "workspace_volume"
   | "database_volume"
@@ -224,6 +225,7 @@ export const ownerLabels: Record<DiskOwner, string> = {
   derived_image: "專案衍生映像",
   service_image: "服務映像",
   job_container: "工作容器",
+  check_container: "定期檢查環境",
   service_container: "服務容器",
   workspace_volume: "任務工作區",
   database_volume: "正式資料庫",
@@ -364,7 +366,8 @@ export function classifyDisk(
     // 安裝前審查放行的系統套件建立的衍生映像（#18）；其他實例的一律只列出。
     const derivedImage = image.labels["io.agentflow.derived"] === "v1";
     const foreign =
-      derivedImage && image.labels["io.agentflow.instance"] !== ctx.instance;
+      derivedImage &&
+      image.labels["io.agentflow.derived-instance"] !== ctx.instance;
     for (const tag of tags) {
       const at = tag.lastIndexOf(":");
       const repository = tag.slice(0, at),
@@ -424,6 +427,24 @@ export function classifyDisk(
   }
 
   for (const c of inv.containers) {
+    // 定期檢查環境（#19）由執行器依閒置逾時與有效清單清除，磁碟清理不碰。
+    if (
+      c.labels["io.agentflow.check"] &&
+      c.labels["io.agentflow.managed"] === "true" &&
+      c.labels["io.agentflow.instance"] === ctx.instance
+    ) {
+      items.push({
+        key: `container:${c.id}`,
+        kind: "container",
+        target: c.id,
+        name: c.name,
+        owner: "check_container",
+        size: Math.max(0, c.sizeRw),
+        detail: `${c.state === "running" ? "執行中" : "已停止"} · ${c.image}`,
+        protected: "定期檢查環境，閒置逾時或設定變更時自動清除",
+      });
+      continue;
+    }
     const runId = c.labels["io.agentflow.run"];
     const own =
       !!runId &&

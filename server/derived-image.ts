@@ -132,7 +132,7 @@ async function existing(c: Containers, tag: string, key: string) {
   const labels = info.Config?.Labels ?? {};
   if (
     labels[DERIVED_LABEL] !== "v1" ||
-    labels["io.agentflow.instance"] !== c.instance ||
+    labels["io.agentflow.derived-instance"] !== c.instance ||
     labels["io.agentflow.derived-key"] !== key
   )
     throw new AppError(409, `衍生映像 ${tag} 不屬於此執行環境`);
@@ -271,10 +271,12 @@ async function build(
           WorkingDir: config.WorkingDir || "/workspace",
           Labels: {
             ...(config.Labels ?? {}),
-            // 建置容器的工作標籤不帶進映像；映像以下列標籤歸屬到專案與實例。
+            // 建置容器的歸屬標籤（run、managed、instance）不帶進映像，否則從映像建立的容器
+            // 會繼承它們而被誤認成工作容器；映像改用 derived-instance 等專屬標籤歸屬到專案與實例。
             "io.agentflow.run": "",
             "io.agentflow.managed": "",
-            "io.agentflow.instance": c.instance,
+            "io.agentflow.instance": "",
+            "io.agentflow.derived-instance": c.instance,
             [DERIVED_LABEL]: "v1",
             "io.agentflow.derived-key": target.key,
             "io.agentflow.project": request.projectId,

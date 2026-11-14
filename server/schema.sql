@@ -695,6 +695,8 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS check_draft jsonb;
 -- Docker 磁碟管理：清理規則設定與最近一次空間檢查。清理規則預設全部關閉，只盤點與提醒；不進備份，還原後回到預設。
 CREATE TABLE IF NOT EXISTS docker_disk (id integer PRIMARY KEY CHECK(id=1), settings jsonb NOT NULL DEFAULT '{}', level text NOT NULL DEFAULT 'unknown', free_percent numeric, detail text, checked_at timestamptz);
 INSERT INTO docker_disk(id) VALUES(1) ON CONFLICT DO NOTHING;
+-- 暫時性錯誤自動重試的退避期限（#22）：期限前不派工。只屬於目前這次重試，不進備份。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS retry_at timestamptz;
 -- 安裝前審查放行的系統套件裝成的專案衍生映像（以專案、分支、安裝計畫雜湊與基底映像為鍵）。
 -- 只記最後使用時間給 Docker 磁碟管理判斷多久沒用；映像本身在 Docker，預設不自動刪，不進備份。
 CREATE TABLE IF NOT EXISTS derived_images (

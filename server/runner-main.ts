@@ -20,7 +20,6 @@ import { subscriptionIdentity } from "./subscription-identity.js";
 import {
   CaptureInput,
   captureSnapshot,
-  runCheckQuery,
   testConnection,
 } from "./database-capture.js";
 import {
@@ -30,7 +29,10 @@ import {
   dockerDiskInventory,
   removeDiskItems,
 } from "./docker-cleanup.js";
-import { httpProbe, tcpProbe } from "./check-probes.js";
+import { httpEndpoint, safeHost } from "./check-probes.js";
+import { CheckEnvironments, viaHostGateway } from "./check-environments.js";
+import { assertReadOnlySelect } from "../shared/checks.js";
+import { checkEnvironmentLimits } from "../shared/check-environment.js";
 import {
   MAX_COLLECT_EXCLUDES,
   validCollectExclude,
@@ -48,6 +50,7 @@ validateRunnerEnvironment();
 const app = Fastify({ logger: false, bodyLimit: 80 * 1024 * 1024 });
 const containers = new Containers();
 const sourceCache = new SourceCache(containers);
+const checkEnvironments = new CheckEnvironments(containers);
 const observations = new ObservationBuffer();
 // 訂閱登入只存在可信主機；工作容器、應用程式、資料庫及日誌都不取得登入檔。
 // 不放在 .local：該目錄會唯讀掛載進應用程式容器。
@@ -223,30 +226,99 @@ app.post("/database/test", async (req) =>
 app.post("/database/snapshot", async (req) =>
   captureSnapshot(CaptureInput.parse(req.body)),
 );
-// 定期檢查：唯讀 SQL、HTTP 與 TCP 探測只在主機執行；結果回給應用程式判定。
-app.post("/checks/sql", async (req) => {
-  const b = z
-    .object({ connection: CaptureInput, sql: z.string().min(1).max(4000) })
-    .parse(req.body);
-  return { rows: await runCheckQuery(b.connection, b.sql) };
+// 定期檢查（#19）：每個檢查在自己的檢查容器執行，網路只通到該檢查的目標；結果回給應用程式判定。
+const CheckPolicy = z.object({
+  idleMinutes: z
+    .number()
+    .int()
+    .min(checkEnvironmentLimits.idleMinutes.min)
+    .max(checkEnvironmentLimits.idleMinutes.max),
+  max: z
+    .number()
+    .int()
+    .min(checkEnvironmentLimits.max.min)
+    .max(checkEnvironmentLimits.max.max),
 });
-app.post("/checks/http", async (req) => {
+const CheckRef = {
+  checkId: z.string().uuid(),
+  key: z.string().regex(/^[A-Za-z0-9.]{1,100}$/),
+  policy: CheckPolicy,
+};
+const CheckRun = z.discriminatedUnion("kind", [
+  z.object({
+    ...CheckRef,
+    kind: z.literal("sql"),
+    connection: CaptureInput,
+    sql: z.string().min(1).max(4000),
+  }),
+  z.object({
+    ...CheckRef,
+    kind: z.literal("http"),
+    url: z.string().url().max(2000),
+    contains: z.string().max(200).optional(),
+  }),
+  z.object({
+    ...CheckRef,
+    kind: z.literal("tcp"),
+    host: z.string().min(1).max(255),
+    port: z.number().int().min(1).max(65535),
+  }),
+]);
+app.post("/checks/run", async (req) => {
+  const b = CheckRun.parse(req.body);
+  if (b.kind === "sql") {
+    const problem = assertReadOnlySelect(b.sql);
+    if (problem) throw new AppError(422, problem);
+    const first = b.connection.ssh ?? b.connection;
+    const { result, created, removed } = await checkEnvironments.run(
+      {
+        checkId: b.checkId,
+        key: b.key,
+        kind: "sql",
+        target: { host: viaHostGateway(first.host), port: first.port },
+        init: { connection: b.connection },
+      },
+      { sql: b.sql },
+      b.policy,
+    );
+    return { result, environment: { created, removed } };
+  }
+  // HTTP／TCP 目標先在主機核對一次，轉接器每次連線再核對解析結果。
+  const target =
+    b.kind === "http" ? httpEndpoint(b.url) : { host: b.host, port: b.port };
+  await safeHost(target.host);
+  const { result, created, removed } = await checkEnvironments.run(
+    { checkId: b.checkId, key: b.key, kind: b.kind, target, init: {} },
+    b.kind === "http" ? { url: b.url, contains: b.contains } : {},
+    b.policy,
+  );
+  return { result, environment: { created, removed } };
+});
+app.post("/checks/environments", async () => ({
+  environments: checkEnvironments.list(),
+  failures: checkEnvironments.failureList(),
+}));
+// 應用程式定期送來目前有效的檢查與環境鍵；清單外、閒置逾時或超過上限的環境立即清除。
+app.post("/checks/environments/sync", async (req) => {
   const b = z
     .object({
-      url: z.string().url().max(2000),
-      contains: z.string().max(200).optional(),
+      valid: z
+        .array(z.object({ checkId: z.string().uuid(), key: CheckRef.key }))
+        .max(5000),
+      policy: CheckPolicy,
     })
     .parse(req.body);
-  return httpProbe(b.url, b.contains);
+  const removed = await checkEnvironments.sync(
+    new Map(b.valid.map((v) => [v.checkId, v.key])),
+    b.policy,
+  );
+  return { removed };
 });
-app.post("/checks/tcp", async (req) => {
-  const b = z
-    .object({
-      host: z.string().min(1).max(255),
-      port: z.number().int().min(1).max(65535),
-    })
-    .parse(req.body);
-  return tcpProbe(b.host, b.port);
+app.post("/checks/environments/remove", async (req) => {
+  const { checkId } = z.object({ checkId: z.string().uuid() }).parse(req.body);
+  const existed = checkEnvironments.list().some((e) => e.checkId === checkId);
+  await checkEnvironments.remove(checkId);
+  return { removed: existed };
 });
 // 每天由應用程式的維護工作呼叫；只有正式實例清理，驗收實例共用同一個 Docker 時不動手。
 app.post("/maintenance/docker", async (req) => {
@@ -509,6 +581,8 @@ app.post("/dispose", async (req) => {
   return { ok: true };
 });
 await containers.cleanup();
+// 檢查環境的機密只在上一個執行器程序的記憶體裡，重啟後全部重建。
+await checkEnvironments.cleanupAll();
 const listenPort = z.coerce
   .number()
   .int()

@@ -118,10 +118,12 @@ describe("真實 Docker：專案衍生映像", () => {
       expect(meta.Config.Labels).toMatchObject({
         "io.agentflow.worker": "v1",
         "io.agentflow.derived": "v1",
-        "io.agentflow.instance": c.instance,
+        "io.agentflow.derived-instance": c.instance,
         "io.agentflow.project": project,
         "io.agentflow.base": base.Id,
         "io.agentflow.run": "",
+        "io.agentflow.managed": "",
+        "io.agentflow.instance": "",
       });
 
       // 同專案、同分支、同計畫、同基底：不建容器、不重新下載。

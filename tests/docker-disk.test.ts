@@ -432,7 +432,7 @@ describe("專案衍生映像（#18）", () => {
     labels: {
       "io.agentflow.worker": "v1",
       "io.agentflow.derived": "v1",
-      "io.agentflow.instance": instance,
+      "io.agentflow.derived-instance": instance,
       "io.agentflow.project": "fictional-project",
     },
   });
@@ -569,6 +569,100 @@ describe("清理規則", () => {
       true,
     ).filter((i) => i.kind === "container");
     expect(plan.map((i) => i.target)).toEqual(["c-stopped-job"]);
+  });
+
+  it("同一份盤點裡，定期檢查環境（#19）與專案衍生映像（#18）各自歸屬，互不混淆", () => {
+    const inv = inventory();
+    inv.images.push(
+      {
+        id: "sha256:derived-x",
+        tags: ["line-agentflow-derived:abc"],
+        created: sec(30),
+        size: 5 * GB,
+        sharedSize: 4 * GB,
+        containers: 0,
+        labels: {
+          "io.agentflow.worker": "v1",
+          "io.agentflow.derived": "v1",
+          "io.agentflow.derived-instance": "production",
+          // 建置容器的歸屬標籤在映像上是空的。
+          "io.agentflow.instance": "",
+          "io.agentflow.managed": "",
+          "io.agentflow.run": "",
+        },
+      },
+      {
+        id: "sha256:check-image",
+        tags: ["line-agentflow-check:local"],
+        created: sec(30),
+        size: GB,
+        sharedSize: 0,
+        containers: 1,
+        labels: { "io.agentflow.check-image": "v1" },
+      },
+    );
+    inv.containers.push({
+      id: "c-check-probe",
+      name: "agentflow-check-0b3a2d6e-1f00-4c1a-9a00-00000000000a-probe",
+      image: "line-agentflow-check:local",
+      imageId: "sha256:check-image",
+      state: "running",
+      sizeRw: 1024,
+      created: sec(1),
+      labels: {
+        "io.agentflow.managed": "true",
+        "io.agentflow.instance": "production",
+        "io.agentflow.check": "0b3a2d6e-1f00-4c1a-9a00-00000000000a",
+        "io.agentflow.check-role": "probe",
+      },
+    });
+    const items = classifyDisk(inv, {
+      ...context(),
+      derived: {
+        "line-agentflow-derived:abc": {
+          project: "虛構訂單系統",
+          lastUsed: daysAgo(20),
+        },
+      },
+    });
+    const owner = (target: string) =>
+      items.find((i) => i.target === target)?.owner;
+    expect(owner("line-agentflow-derived:abc")).toBe("derived_image");
+    expect(owner("line-agentflow-check:local")).toBe("service_image");
+    expect(owner("c-check-probe")).toBe("check_container");
+    expect(cleanupPlan(items, allOn, true).map((i) => i.target)).toContain(
+      "line-agentflow-derived:abc",
+    );
+    expect(cleanupPlan(items, allOn, false).map((i) => i.target)).not.toContain(
+      "line-agentflow-check:local",
+    );
+  });
+
+  it("定期檢查環境（#19）的容器認得歸屬，但只列出不清：由執行器依閒置逾時清除", () => {
+    const inv = inventory();
+    inv.containers.push({
+      id: "c-check-probe",
+      name: "agentflow-check-0b3a2d6e-1f00-4c1a-9a00-00000000000a-probe",
+      image: "line-agentflow-check:local",
+      imageId: "sha256:check",
+      state: "exited",
+      sizeRw: 1024,
+      created: sec(1),
+      labels: {
+        "io.agentflow.managed": "true",
+        "io.agentflow.instance": "production",
+        "io.agentflow.check": "0b3a2d6e-1f00-4c1a-9a00-00000000000a",
+        "io.agentflow.check-role": "probe",
+      },
+    });
+    const items = classifyDisk(inv, context());
+    const probe = items.find((i) => i.target === "c-check-probe")!;
+    expect(probe.owner).toBe("check_container");
+    expect(probe.protected).toContain("定期檢查環境");
+    expect(probe.rule).toBeUndefined();
+    expect(cleanupPlan(items, allOn, false).map((i) => i.target)).not.toContain(
+      "c-check-probe",
+    );
   });
 
   it("映像：只清沒有專案、沒有容器在用、超過天數的本系統映像；:local 與其他專案的映像不動", () => {

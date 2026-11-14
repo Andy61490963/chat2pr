@@ -43,7 +43,9 @@ it.each([
     );
     const entered = deferred<void>(),
       pending = deferred<SubscriptionAccount>();
-    const call = vi.fn(async () => {
+    const call = vi.fn(async (path: string): Promise<any> => {
+      // 每分鐘核對定期檢查環境（#19）不是模型執行，不在這個測試的範圍。
+      if (path.startsWith("checks/environments")) return { removed: [] };
       throw new Error("設定變更期間不可執行模型");
     });
     const runner: Runner = {
@@ -83,7 +85,11 @@ it.each([
           )
         ).status,
       ).toBe(before);
-      expect(call).not.toHaveBeenCalled();
+      expect(
+        call.mock.calls.filter(
+          ([path]) => !String(path).startsWith("checks/environments"),
+        ),
+      ).toEqual([]);
       expect(
         (await db.settings())[
           change === "mode"

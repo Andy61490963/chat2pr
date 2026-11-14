@@ -4,6 +4,7 @@ import type {
   ScheduledCheck,
   SqlCondition,
 } from "../../shared/checks";
+import type { CheckEnvironmentView } from "../../shared/check-environment";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,7 +18,20 @@ import { Input } from "@/components/ui/input";
 import { Checkbox, Label, Textarea } from "@/components/ui/form-controls";
 import { type Request, type State, ago, date, message } from "./shared";
 
-type Listed = ScheduledCheck & { last_summary: string | null };
+type Listed = ScheduledCheck & {
+  last_summary: string | null;
+  environment?: CheckEnvironmentView;
+};
+
+/** 檢查環境（#19）：每個檢查專用的檢查容器與網路，保留重用、閒置逾時才清除。 */
+function environmentText(e: CheckEnvironmentView | undefined) {
+  if (!e) return null;
+  if (e.state === "kept")
+    return `保留中・上次使用 ${ago(e.lastUsedAt)}・預計 ${date(e.expiresAt)} 清除`;
+  if (e.state === "failed") return `建立失敗（${date(e.at)}）：${e.message}`;
+  if (e.state === "unknown") return `狀態不明：${e.detail}`;
+  return "未建立（下次執行時建立）";
+}
 
 const statusLabel: Record<
   ScheduledCheck["status"],
@@ -431,7 +445,7 @@ export function ChecksView({
             <CardDescription>
               核准後依排程自動執行，不呼叫
               AI；狀態改變（變成異常、恢復正常）時才通知。檢查本身連續失敗 3
-              次會暫停並通知管理者。
+              次會暫停並通知管理者。每個檢查在自己的檢查容器執行，網路只通到該檢查的目標；環境保留重用，閒置逾時（系統頁設定）或檢查、連線變更時清除。
             </CardDescription>
           </div>
           {admin && editing === null && (
@@ -508,6 +522,13 @@ export function ChecksView({
                       　第 {c.version} 版
                       {c.approved_by ? `・${c.approved_by} 核准` : ""}
                     </p>
+                    {c.environment && (
+                      <p
+                        className={`text-xs ${c.environment.state === "failed" ? "text-danger" : "text-muted-foreground"}`}
+                      >
+                        檢查環境：{environmentText(c.environment)}
+                      </p>
+                    )}
                     {runs.length > 0 && (
                       <ol
                         className="flex flex-wrap gap-1"
@@ -597,6 +618,25 @@ export function ChecksView({
                               恢復
                             </Button>
                           )}
+                        {c.environment?.state === "kept" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={busy}
+                            onClick={() =>
+                              void act(
+                                () =>
+                                  request(
+                                    `/api/checks/${c.id}/environment/clear`,
+                                    "POST",
+                                  ),
+                                "已清除檢查環境，下次執行時重新建立",
+                              )
+                            }
+                          >
+                            立即清除環境
+                          </Button>
+                        )}
                         <Button
                           size="sm"
                           variant="ghost"
