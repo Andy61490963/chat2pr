@@ -130,6 +130,7 @@ describe("部署計畫", () => {
       "scripts/start-windows.mjs",
       "scripts/tunnel.ts",
       "server/tunnel-provider.ts",
+      "scripts/lib/tunnel-watchdog.mjs",
     ])
       expect(deployPlan([file]).host).toBe("all");
     expect(deployPlan([], { restartHost: true }).host).toBe("all");

@@ -191,6 +191,7 @@ Invoke-RestMethod http://127.0.0.1:4312/health -Headers @{ 'x-runner-key' = $k }
      - 把固定 HTTPS 網域轉到 `http://127.0.0.1:4310`。
      - 自備一個常駐程序維持通道，並至少每 180 秒改寫一次 `.local/tunnel-status.json`，內容為 `{"ok":true,"detail":"說明文字","checked_at":"ISO 8601 時間"}`。看板「HTTPS 入口」與異常通知讀的就是這個檔，沒有程序更新就會顯示異常。
      - 這個程序要自己設定登入後啟動（例如另一個排程工作）；`npm run deploy` 不會重啟它，也不會動到它。
+     - **看門狗**：Windows 上的監督程序每 30 秒檢查 `.local/tunnel-status.json`，超過 3 分鐘沒更新時，找出動作指向本目錄 `.local` 底下、檔名含 `cloudflare` 或 `tunnel` 的腳本的排程工作，重新啟動它（每 3 分鐘最多一次，紀錄在 `.local\supervisor.log`）。原因：自備程序被主控台中斷而結束時，排程工作的「失敗後重試」不會觸發，入口會一直斷著。要讓看門狗認得，把常駐程序的腳本放在 `.local` 底下、檔名含 `cloudflare` 或 `tunnel`。
 
    更換入口方式或憑證後，執行 `npm run deploy -- --restart-host`，讓監督程序與通道用新設定重新啟動。沒有選過入口方式的舊安裝維持原本的行為：填過 Cloudflare 憑證就使用 Cloudflare，否則填過 ngrok Authtoken 就使用 ngrok，兩者都沒有就不啟動內建通道。
 
