@@ -3,6 +3,7 @@ const hostFiles = [
   "scripts/start-windows.mjs",
   "scripts/tunnel.ts",
   "scripts/lib/public-health.mjs",
+  "scripts/lib/tunnel-watchdog.mjs",
   "server/tunnel-provider.ts",
   "server/config.ts",
 ];
