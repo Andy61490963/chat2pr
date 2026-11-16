@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { tunnelWatchdog } from "./lib/tunnel-watchdog.mjs";
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 process.chdir(root);
 mkdirSync(".local", { recursive: true });
@@ -67,10 +68,18 @@ const startDocker = () => {
     spawn(exe, [], { detached: true, stdio: "ignore" }).unref();
   } catch {}
 };
+// 儲存庫外的通道程序（例如 .local 的 Cloudflare 監督程式）停了就重新啟動它的排程工作；
+// 放在 Docker 檢查之前，Docker 沒回應時入口照樣會被救回來。
+const checkExternalTunnel = tunnelWatchdog({ root, note });
 const tick = async () => {
   if (busy || stopping) return;
   busy = true;
   try {
+    try {
+      checkExternalTunnel();
+    } catch (error) {
+      note(`外部通道看門狗發生錯誤：${String(error).slice(0, 300)}`);
+    }
     if (
       spawnSync("docker", ["info", "--format", "{{.ServerVersion}}"], {
         windowsHide: true,
