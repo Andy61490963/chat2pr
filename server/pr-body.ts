@@ -44,9 +44,15 @@ function verificationLine(o: {
   dataSource?: string;
   limitations?: string;
 }) {
-  if (o.verification === "build") return "建置：通過；未執行自動測試";
+  // 與 shared/project-setup.ts 的 verificationLabel 同規則：部分驗證或只建置時也標出推測結構。
+  const inferred =
+    o.dataSource === "inferred"
+      ? "；資料庫結構由 AI 推測，可能和真實資料庫不同"
+      : "";
+  if (o.verification === "build")
+    return `建置：通過；未執行自動測試${inferred}`;
   if (o.verification === "partial")
-    return `測試：部分通過；AI 依環境限制縮小了範圍，未涵蓋：${o.limitations?.trim().slice(0, 300) || "未說明"}`;
+    return `測試：部分通過；AI 依環境限制縮小了範圍，未涵蓋：${o.limitations?.trim().slice(0, 300) || "未說明"}${inferred}`;
   if (o.dataSource === "inferred")
     return "測試：通過；資料庫結構由 AI 從程式碼推測，可能和真實資料庫不同";
   if (o.dataSource === "snapshot") return "測試：通過；資料庫以結構快照模擬";

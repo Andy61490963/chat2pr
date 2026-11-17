@@ -223,6 +223,31 @@ describe("專案資料庫連線", () => {
     ).toBe(422);
   });
 
+  it("格式錯誤回 400，details 帶看板可以直接顯示的中文欄位提示", async () => {
+    const s = await scenario();
+    const wrongHost = await s.request("PUT", "", {
+      ...connectionBody,
+      host: "sqlserver://db:1433",
+    });
+    expect(wrongHost.statusCode).toBe(400);
+    expect(wrongHost.json()).toMatchObject({ error: "輸入格式錯誤" });
+    expect(wrongHost.json().details.join("\n")).toContain(
+      "主機只能是主機名稱或 IP",
+    );
+    const zeroPort = await s.request("PUT", "", { ...connectionBody, port: 0 });
+    expect(zeroPort.statusCode).toBe(400);
+    expect(zeroPort.json().details).toContain("port: 連接埠請填 1–65535");
+    const sshPort = await s.request("PUT", "", {
+      ...connectionBody,
+      ssh: { ...connectionBody.ssh, port: 0 },
+    });
+    expect(sshPort.json().details).toContain(
+      "ssh.port: SSH 連接埠請填 1–65535",
+    );
+    // 格式錯誤不會寫入任何連線。
+    expect((await s.request("GET")).json().connection).toBeNull();
+  });
+
   it("測試連線由執行器進行，記下第一次看到的 SSH 主機金鑰，回應不含機密", async () => {
     const s = await scenario();
     expect((await s.request("POST", "/test")).statusCode).toBe(404);

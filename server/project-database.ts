@@ -109,21 +109,41 @@ export function unseal(sealed: Buffer): Secret {
   }
 }
 
-const host = z
-  .string()
-  .trim()
-  .min(1, "請填主機")
-  .max(253)
-  .regex(/^[A-Za-z0-9._:-]+$/, "主機只能是主機名稱或 IP，不含通訊協定與路徑");
-const port = z.number().int().min(1).max(65535);
-const optionalSecret = z.string().max(20000).optional();
+// 看板會把這些中文訊息接在「輸入格式錯誤」後面顯示（src/app/api-response.ts），
+// 所以每條規則都要有中文訊息；zod 的英文預設訊息不會顯示。SSH 欄位前加「SSH 」，
+// 讓管理者知道是哪一塊要改。
+const host = (prefix = "") =>
+  z
+    .string({ error: `請填${prefix}主機` })
+    .trim()
+    .min(1, `請填${prefix}主機`)
+    .max(253, `${prefix}主機最多 253 字`)
+    .regex(
+      /^[A-Za-z0-9._:-]+$/,
+      `${prefix}主機只能是主機名稱或 IP，不含通訊協定與路徑`,
+    );
+const port = (prefix = "") =>
+  z
+    .number({ error: `${prefix}連接埠請填 1–65535 的數字` })
+    .int(`${prefix}連接埠請填整數`)
+    .min(1, `${prefix}連接埠請填 1–65535`)
+    .max(65535, `${prefix}連接埠請填 1–65535`);
+// 帳號、名稱這類必填欄位先去掉前後空白再檢查；密碼與私鑰保留原樣。
+const text = (label: string, max: number, required = "") =>
+  required
+    ? z
+        .string({ error: required })
+        .trim()
+        .min(1, required)
+        .max(max, `${label}最多 ${max} 字`)
+    : z.string().max(max, `${label}最多 ${max} 字`);
 export const ConnectionBody = z.object({
   engine: z.literal("sqlserver"),
-  host,
-  port,
-  database: z.string().trim().min(1, "請填資料庫名稱").max(128),
-  username: z.string().trim().min(1, "請填帳號").max(128),
-  password: z.string().max(512).optional(),
+  host: host(),
+  port: port(),
+  database: text("資料庫名稱", 128, "請填資料庫名稱"),
+  username: text("帳號", 128, "請填帳號"),
+  password: text("密碼", 512).optional(),
   encrypt: z.boolean().default(true),
   trustServerCertificate: z.boolean().default(true),
   referenceTables: z
@@ -131,20 +151,20 @@ export const ConnectionBody = z.object({
       z
         .string()
         .trim()
-        .min(1)
-        .max(260)
+        .min(1, "參考資料表名稱不可空白")
+        .max(260, "參考資料表名稱最多 260 字")
         .regex(/^[^;'"\s]+$/, "參考資料表名稱不可包含空白、引號或分號"),
     )
-    .max(50)
+    .max(50, "參考資料表最多 50 個")
     .default([]),
   ssh: z
     .object({
-      host,
-      port,
-      username: z.string().trim().min(1, "請填 SSH 帳號").max(128),
-      privateKey: optionalSecret,
-      passphrase: z.string().max(512).optional(),
-      password: z.string().max(512).optional(),
+      host: host("SSH "),
+      port: port("SSH "),
+      username: text("SSH 帳號", 128, "請填 SSH 帳號"),
+      privateKey: text("SSH 私鑰", 20000).optional(),
+      passphrase: text("SSH 私鑰的密碼片語", 512).optional(),
+      password: text("SSH 密碼", 512).optional(),
     })
     .nullable()
     .default(null),
