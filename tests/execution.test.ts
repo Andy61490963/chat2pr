@@ -1127,17 +1127,39 @@ it("執行中系統暫停：工作放回排隊、不算失敗也不推失敗通�
   expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("ready");
   expect(await db.query("SELECT 1 FROM runs")).toHaveLength(2);
 });
-it("執行中專案設定變更：說明是設定被變更，不是預期外的錯誤", async () => {
+it("執行中群組停用：說明是設定被變更，不是預期外的錯誤", async () => {
   const s = await scenario();
-  stopDuringCode(s, () =>
-    db.query("UPDATE projects SET config_version=config_version+1"),
-  );
+  stopDuringCode(s, () => db.query("UPDATE groups SET enabled=false"));
   await s.execution.execute(s.task.id);
   const task = await db.one<Task>("SELECT * FROM tasks");
   expect(task.status).toBe("failed");
   expect(task.last_error).toContain("設定問題");
   expect(task.last_error).toContain("設定被變更");
   expect(task.last_error).not.toContain("預期外的錯誤");
+  expect(
+    (
+      await db.one<{ detail: string }>(
+        "SELECT detail FROM run_events WHERE kind='error'",
+      )
+    ).detail,
+  ).toContain("停止原因：群組已停用");
+});
+it("執行中專案設定變更（config_version+1）：任務回到待確認並說明設定已變更，不推失敗", async () => {
+  const s = await scenario();
+  stopDuringCode(s, () =>
+    db.query("UPDATE projects SET config_version=config_version+1"),
+  );
+  await s.execution.execute(s.task.id);
+  // 資料庫觸發器先把任務改回待確認並寫下原因；執行結束時不能再蓋成「預期外的錯誤」或推失敗。
+  const task = await db.one<Task>("SELECT * FROM tasks");
+  expect(task.status).toBe("awaiting_approval");
+  expect(task.last_error).toContain("專案設定已變更");
+  expect(task.last_error).not.toContain("預期外的錯誤");
+  expect(
+    await db.query(
+      "SELECT 1 FROM notifications WHERE kind IN ('failed','group_failed')",
+    ),
+  ).toHaveLength(0);
 });
 it("逾時訊息寫出設定的單次執行時間", async () => {
   const s = await scenario();
