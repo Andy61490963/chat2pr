@@ -4,6 +4,8 @@ const hostFiles = [
   "scripts/tunnel.ts",
   "scripts/lib/public-health.mjs",
   "scripts/lib/tunnel-watchdog.mjs",
+  "scripts/lib/startup-task.mjs",
+  "scripts/install-startup.ps1",
   "server/tunnel-provider.ts",
   "server/config.ts",
 ];

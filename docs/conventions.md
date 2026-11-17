@@ -126,10 +126,11 @@
 
 ## 9. Windows 與殼層
 
-| 規則                                                                                          | 原因                                                                              |
-| --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| 在 Git Bash 執行 `docker compose exec` 帶路徑參數時加 `MSYS_NO_PATHCONV=1`。                  | Git Bash 會把 `/data/...` 改寫成 Windows 路徑。                                   |
-| 查資料庫用 `docker compose exec -T db psql -U agentflow -d agentflow`（在部署目錄）。         | 正式資料庫不發布主機連接埠。                                                      |
-| Windows PowerShell 5.1 沒有 `&&`、`??`；寫腳本以 Node 為主。                                  | 部署腳本要在預設環境就能執行。                                                    |
-| 重新載入 egress 的白名單用 `kill -HUP "$(cat /tmp/squid.pid)"`，不用 `squid -k reconfigure`。 | Squid 在容器內是 PID 1，`squid -k` 會以「PID 值太小」拒絕執行。                   |
-| Linux 主機目前不能部署。                                                                      | `app` 經 `host.docker.internal` 連主機執行器、開機啟動只支援 Windows 工作排程器。 |
+| 規則                                                                                          | 原因                                                                                                                                                                           |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 在 Git Bash 執行 `docker compose exec` 帶路徑參數時加 `MSYS_NO_PATHCONV=1`。                  | Git Bash 會把 `/data/...` 改寫成 Windows 路徑。                                                                                                                                |
+| 查資料庫用 `docker compose exec -T db psql -U agentflow -d agentflow`（在部署目錄）。         | 正式資料庫不發布主機連接埠。                                                                                                                                                   |
+| Windows PowerShell 5.1 沒有 `&&`、`??`；寫腳本以 Node 為主。                                  | 部署腳本要在預設環境就能執行。                                                                                                                                                 |
+| 重新載入 egress 的白名單用 `kill -HUP "$(cat /tmp/squid.pid)"`，不用 `squid -k reconfigure`。 | Squid 在容器內是 PID 1，`squid -k` 會以「PID 值太小」拒絕執行。                                                                                                                |
+| Linux 主機目前不能部署。                                                                      | `app` 經 `host.docker.internal` 連主機執行器、開機啟動只支援 Windows 工作排程器。                                                                                              |
+| 常駐的排程工作（監督程序、自備通道）經 `conhost.exe --headless` 執行，不直接執行 `node.exe`。 | 直接執行會開出可見的主控台視窗；視窗被人或桌面自動化工具關掉時，監督程序連同執行器與通道一起被結束（2026-11-17 正式入口因此中斷）。`npm run deploy` 偵測到舊設定會自動改註冊。 |

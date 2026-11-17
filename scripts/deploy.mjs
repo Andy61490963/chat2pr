@@ -6,6 +6,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deployPlan } from "./lib/deploy-plan.mjs";
 import { publicHealth } from "./lib/public-health.mjs";
+import { opensConsoleWindow } from "./lib/startup-task.mjs";
 
 const script = fileURLToPath(import.meta.url);
 const root = resolve(dirname(script), "..");
@@ -295,6 +296,17 @@ async function apply(before) {
     `\n${short(before)} → ${short(git("rev-parse", "HEAD"))}，${changed.length} 個檔案有變更。`,
   );
   if (!windows) console.log("  非 Windows 主機：主機程序請自行重啟。");
+  // 舊版開機排程工作直接執行 node.exe，會開出可見的主控台視窗；視窗被關掉時
+  // 監督程序、執行器與通道會一起被結束。偵測到就改註冊為無視窗執行並重啟主機程序。
+  const startupVisible =
+    windows &&
+    opensConsoleWindow(
+      powershell(
+        "$t = Get-ScheduledTask -TaskName 'LINE-AgentFlow' -ErrorAction SilentlyContinue; " +
+          "if ($t) { '{0} {1}' -f $t.Actions[0].Execute, $t.Actions[0].Arguments }",
+      ),
+    );
+  if (startupVisible) plan.host = "all";
 
   let hostStopped = false;
   try {
@@ -302,6 +314,12 @@ async function apply(before) {
       step("停止主機程序（監督程序、執行器、通道）");
       stopHost();
       hostStopped = true;
+    }
+    if (startupVisible) {
+      step("把開機排程工作改為無視窗執行");
+      run(process.execPath, ["scripts/install-startup.mjs"], {
+        what: "重新註冊開機排程工作（npm run install:startup）",
+      });
     }
     if (plan.install || !existsSync("node_modules")) {
       step("安裝相依套件");

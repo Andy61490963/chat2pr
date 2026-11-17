@@ -9,7 +9,7 @@ export function statusAge(
 export function findTunnelTask(
   listing: string,
   root: string,
-): { path: string; name: string } | null;
+): { path: string; name: string; visible: boolean } | null;
 export function tunnelWatchdog(deps: {
   root: string;
   note: (text: string) => void;

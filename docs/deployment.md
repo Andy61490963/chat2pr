@@ -140,7 +140,7 @@ npm run install:startup
 Start-ScheduledTask -TaskName 'LINE-AgentFlow'
 ```
 
-預期結果：第一個指令顯示「已設定 Windows 登入後恢復服務；Docker Desktop 沒有執行時會自動啟動。無人值守的主機請另外設定 Windows 自動登入。」排程工作會在使用者登入時啟動監督程序，並每 5 分鐘補啟動一次。等大約一分鐘後核對執行器與通道：
+預期結果：第一個指令顯示「已設定 Windows 登入後恢復服務；Docker Desktop 沒有執行時會自動啟動。無人值守的主機請另外設定 Windows 自動登入。」排程工作會在使用者登入時啟動監督程序，並每 5 分鐘補啟動一次。監督程序經 `conhost.exe --headless` 執行，桌面上不會出現視窗（舊版直接執行 `node.exe` 會開出主控台視窗，被關掉就連同執行器與通道一起停止；`npm run deploy` 偵測到舊設定會自動改註冊）。等大約一分鐘後核對執行器與通道：
 
 ```powershell
 $k = (Get-Content .local\secrets.json -Raw | ConvertFrom-Json).runnerSecret
@@ -190,7 +190,7 @@ Invoke-RestMethod http://127.0.0.1:4312/health -Headers @{ 'x-runner-key' = $k }
    - **自備入口（不由本系統啟動）**：使用其他通道或反向代理時選這一項，並滿足下列條件：
      - 把固定 HTTPS 網域轉到 `http://127.0.0.1:4310`。
      - 自備一個常駐程序維持通道，並至少每 180 秒改寫一次 `.local/tunnel-status.json`，內容為 `{"ok":true,"detail":"說明文字","checked_at":"ISO 8601 時間"}`。看板「HTTPS 入口」與異常通知讀的就是這個檔，沒有程序更新就會顯示異常。
-     - 這個程序要自己設定登入後啟動（例如另一個排程工作）；`npm run deploy` 不會重啟它，也不會動到它。
+     - 這個程序要自己設定登入後啟動（例如另一個排程工作）；`npm run deploy` 不會重啟它，也不會動到它。排程工作的動作建議用 `C:\Windows\System32\conhost.exe`，參數 `--headless "node.exe 完整路徑" "腳本完整路徑"`，不要直接執行 `node.exe`：可見的主控台視窗被關掉時，通道會跟著斷線。看門狗重新啟動可見視窗的工作時，會在 `.local\supervisor.log` 提醒一次。
      - **看門狗**：Windows 上的監督程序每 30 秒檢查 `.local/tunnel-status.json`，超過 3 分鐘沒更新時，找出動作指向本目錄 `.local` 底下、檔名含 `cloudflare` 或 `tunnel` 的腳本的排程工作，重新啟動它（每 3 分鐘最多一次，紀錄在 `.local\supervisor.log`）。原因：自備程序被主控台中斷而結束時，排程工作的「失敗後重試」不會觸發，入口會一直斷著。要讓看門狗認得，把常駐程序的腳本放在 `.local` 底下、檔名含 `cloudflare` 或 `tunnel`。
 
    更換入口方式或憑證後，執行 `npm run deploy -- --restart-host`，讓監督程序與通道用新設定重新啟動。沒有選過入口方式的舊安裝維持原本的行為：填過 Cloudflare 憑證就使用 Cloudflare，否則填過 ngrok Authtoken 就使用 ngrok，兩者都沒有就不啟動內建通道。
