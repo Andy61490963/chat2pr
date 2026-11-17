@@ -1,7 +1,10 @@
 ﻿$ErrorActionPreference = 'Stop'
 $script = (Resolve-Path (Join-Path $PSScriptRoot 'start-windows.mjs')).Path
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-$action = New-ScheduledTaskAction -Execute (Get-Command node.exe).Source -Argument ('"' + $script + '"')
+# 經無視窗的主控台主機執行：可見的主控台視窗被關掉時，監督程序連同執行器與通道都會被結束。
+$conhost = Join-Path $env:WINDIR 'System32\conhost.exe'
+$node = (Get-Command node.exe).Source
+$action = New-ScheduledTaskAction -Execute $conhost -Argument ('--headless "' + $node + '" "' + $script + '"')
 $trigger = New-ScheduledTaskTrigger -AtLogOn -User $identity
 $watchdog = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(5) -RepetitionInterval (New-TimeSpan -Minutes 5)
 $principal = New-ScheduledTaskPrincipal -UserId $identity -LogonType Interactive -RunLevel Limited

@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { opensConsoleWindow } from "./startup-task.mjs";
 
 /**
  * 外部通道看門狗（Windows 主機監督程式 start-windows.mjs 每 30 秒呼叫一次）。
@@ -39,12 +40,17 @@ export function findTunnelTask(listing, root) {
   for (const line of listing.split(/\r?\n/)) {
     const [path, name, ...rest] = line.split("|");
     if (!path || !name) continue;
-    const action = norm(rest.join("|").replace(/"/g, ""));
+    const raw = rest.join("|");
+    const action = norm(raw.replace(/"/g, ""));
     const at = action.indexOf(local);
     if (at < 0) continue;
     const script = action.slice(at + local.length).split(/\s/)[0];
     if (/cloudflare|tunnel/.test(script) && !script.includes("/"))
-      return { path: path.trim(), name: name.trim() };
+      return {
+        path: path.trim(),
+        name: name.trim(),
+        visible: opensConsoleWindow(raw),
+      };
   }
   return null;
 }
@@ -78,6 +84,7 @@ export function tunnelWatchdog({
 }) {
   let lastAttempt = 0;
   let task;
+  let warnedVisible = false;
   return function check() {
     if (platform !== "win32") return null;
     let text;
@@ -110,8 +117,12 @@ export function tunnelWatchdog({
     );
     if (started.status === 0) {
       note(
-        `外部通道狀態檔已 ${minutes} 分鐘沒有更新，重新啟動排程工作「${task.name}」。`,
+        `外部通道狀態檔已 ${minutes} 分鐘沒有更新，重新啟動排程工作「${task.name}」。` +
+          (task.visible && !warnedVisible
+            ? "這個工作會開出可見的主控台視窗，視窗被關掉通道就會斷線；建議把動作改成經 conhost.exe --headless 執行（見部署手冊〈自備入口〉）。"
+            : ""),
       );
+      if (task.visible) warnedVisible = true;
       return "restarted";
     }
     note(

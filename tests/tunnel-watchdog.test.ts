@@ -27,14 +27,16 @@ describe("外部通道看門狗：判斷", () => {
   });
 
   it("只認動作指向本目錄 .local 通道腳本的排程工作，不分斜線方向與大小寫", () => {
-    expect(findTunnelTask(listing, root)).toEqual({
+    expect(findTunnelTask(listing, root)).toMatchObject({
       path: "\\Fictional\\",
       name: "chat2pr-edge",
     });
-    expect(findTunnelTask(listing, "C:/FICTIONAL/chat2pr-prod/")).toEqual({
-      path: "\\Fictional\\",
-      name: "chat2pr-edge",
-    });
+    expect(findTunnelTask(listing, "C:/FICTIONAL/chat2pr-prod/")).toMatchObject(
+      {
+        path: "\\Fictional\\",
+        name: "chat2pr-edge",
+      },
+    );
     // 主機監督程式本身、其他目錄的通道都不算。
     expect(findTunnelTask(listing, "C:\\fictional\\unknown")).toBeNull();
   });
@@ -135,5 +137,58 @@ describe("外部通道看門狗：重新啟動", () => {
     const notes: string[] = [];
     expect(check()).toBe("not-found");
     expect(notes[0]).toContain("找不到啟動它的排程工作");
+  });
+});
+
+describe("開機排程工作是否開出可見視窗", () => {
+  it("直接執行主控台程式算可見，經 conhost --headless 不算", async () => {
+    const { opensConsoleWindow } =
+      await import("../scripts/lib/startup-task.mjs");
+    expect(
+      opensConsoleWindow(
+        String.raw`C:\Program Files\nodejs\node.exe "C:\fictional\scripts\start-windows.mjs"`,
+      ),
+    ).toBe(true);
+    expect(
+      opensConsoleWindow(String.raw`"C:\fictional\cloudflared.exe" tunnel run`),
+    ).toBe(true);
+    expect(
+      opensConsoleWindow(
+        String.raw`C:\Windows\System32\conhost.exe --headless "C:\Program Files\nodejs\node.exe" "C:\fictional\a.mjs"`,
+      ),
+    ).toBe(false);
+    expect(
+      opensConsoleWindow(
+        String.raw`C:\Windows\System32\conhost.exe "node.exe" a.mjs`,
+      ),
+    ).toBe(true);
+    expect(
+      opensConsoleWindow(String.raw`C:\Windows\System32\wscript.exe a.vbs`),
+    ).toBe(false);
+    expect(opensConsoleWindow(undefined)).toBe(false);
+  });
+
+  it("找到的通道工作會標出是否可見，重啟時只提醒一次", () => {
+    expect(findTunnelTask(listing, root)?.visible).toBe(true);
+    const headless = listing.replace(
+      String.raw`C:\Program Files\nodejs\node.exe "C:/fictional/chat2pr-prod/.local/`,
+      String.raw`C:\Windows\System32\conhost.exe --headless "C:\Program Files\nodejs\node.exe" "C:/fictional/chat2pr-prod/.local/`,
+    );
+    expect(findTunnelTask(headless, root)?.visible).toBe(false);
+    let clock = Date.parse("2026-11-16T02:00:00Z");
+    const notes: string[] = [];
+    const check = tunnelWatchdog({
+      root,
+      note: (text) => notes.push(text),
+      platform: "win32",
+      now: () => clock,
+      read: () => JSON.stringify({ checked_at: "2026-11-16T01:50:00Z" }),
+      run: () => ({ status: 0, stdout: listing, stderr: "" }),
+    });
+    check();
+    clock += RETRY_MS;
+    check();
+    expect(notes[0]).toContain("conhost.exe --headless");
+    expect(notes[1]).not.toContain("conhost.exe --headless");
   });
 });
