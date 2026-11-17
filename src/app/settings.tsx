@@ -781,8 +781,8 @@ export function SettingsView({
           <CardHeader>
             <CardTitle>LINE 推播（群組回覆與私訊）</CardTitle>
             <CardDescription>
-              私訊只在需要你決定、執行異常或 PR 完成時送出；群組回覆與私訊都計入
-              LINE 每月推播額度
+              私訊只在需要你決定、執行異常或 PR
+              完成時送出；私訊與群組回覆（「收到」除外）都計入 LINE 每月推播額度
             </CardDescription>
             {s.admin_line_id && (
               <CardAction>
