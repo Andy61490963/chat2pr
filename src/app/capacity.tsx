@@ -13,7 +13,8 @@ import {
 import { Input } from "@/components/ui/input";
 import { type Request, ago, message } from "./shared";
 
-const gb = (mb: number) => `${(mb / 1024).toFixed(1)} GB`;
+// 與伺服器的暫停說明同一格式（「2 GB」而不是「2.0 GB」），系統頁與管理者通知的數字才對得上。
+const gb = (mb: number) => `${Number((mb / 1024).toFixed(1))} GB`;
 const kind = (mode: string) => (mode === "query" ? "查詢" : "修改");
 /** 主機記憶體不足而暫停派工時的處理建議（固定說明，不放進通知內文以免變長）。 */
 export const memoryAdvice =
