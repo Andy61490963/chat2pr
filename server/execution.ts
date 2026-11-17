@@ -125,9 +125,12 @@ export class ValidationPhaseError extends Error {
       "validation",
     );
     if (toolHint(this.output)) failure.action += `（${missingTool}）`;
+    // 指令沒有任何輸出時，任務用的「完整輸出見執行紀錄」在專案頁找不到，改說明沒有輸出；也不附空的原始摘要。
+    if (!failure.detail)
+      failure.detail = "指令沒有留下任何輸出（結束代碼不是 0）";
     return {
       failure,
-      text: `${failureNotice(failure, false, this.label)}${validationOutputMark}${digest}`,
+      text: `${failureNotice(failure, false, this.label)}${digest.trim() ? `${validationOutputMark}${digest}` : ""}`,
     };
   }
 }

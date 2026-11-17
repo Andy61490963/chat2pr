@@ -7,6 +7,10 @@ import {
   keyErrorLines,
   stripInternals,
 } from "../server/failure.js";
+import {
+  ValidationPhaseError,
+  validationOutputMark,
+} from "../server/execution.js";
 import { codexSdkCrash, codexSdkStackOnly } from "./failure-samples.js";
 
 // 正式環境近 30 天看得到、但使用者看不懂的失敗訊息（#22），各自固定分類與白話說明。
@@ -202,6 +206,15 @@ describe("環境驗證的建議處理", () => {
       expect(classifyFailure(raw, "", "validation").action).not.toMatch(
         /按「重試」|執行紀錄/,
       );
+  });
+
+  it("安裝指令沒有任何輸出就失敗：不叫人看執行紀錄，也不附空的原始摘要", () => {
+    const { text } = new ValidationPhaseError("安裝", "install", "\n").notice();
+    expect(text.startsWith("環境問題（安裝階段）")).toBe(true);
+    expect(text).toContain("錯誤重點：指令沒有留下任何輸出");
+    expect(text).toContain("建議：");
+    expect(text).not.toContain("執行紀錄");
+    expect(text).not.toContain(validationOutputMark.trim());
   });
 });
 
