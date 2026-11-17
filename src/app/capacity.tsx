@@ -15,6 +15,9 @@ import { type Request, ago, message } from "./shared";
 
 const gb = (mb: number) => `${(mb / 1024).toFixed(1)} GB`;
 const kind = (mode: string) => (mode === "query" ? "查詢" : "修改");
+/** 主機記憶體不足而暫停派工時的處理建議（固定說明，不放進通知內文以免變長）。 */
+export const memoryAdvice =
+  "可關閉主機上用不到的程式；若 vmmem 長期佔用，可在 .wslconfig 開啟 autoMemoryReclaim 或設定 memory 上限後重新啟動 Docker Desktop（上限設小會一併降低建議的同時執行數）；記憶體回升後自動恢復。";
 
 /** 系統頁：同時執行數設定、正在跑的任務與排隊順序（#21）。 */
 export function CapacityCard({ request }: { request: Request }) {
@@ -66,12 +69,15 @@ export function CapacityCard({ request }: { request: Request }) {
           </p>
         )}
         {data?.hold && (
-          <p
+          <div
             role="status"
-            className="rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn"
+            className="flex flex-col gap-1 rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn"
           >
-            {data.hold}
-          </p>
+            <p>{data.hold}</p>
+            {data.holdKind === "memory" && (
+              <p className="text-xs">{memoryAdvice}</p>
+            )}
+          </div>
         )}
         {data && (
           <>
@@ -108,11 +114,30 @@ export function CapacityCard({ request }: { request: Request }) {
                 目前 {data.maxRuns}（預設 {data.defaultRuns}，最多 {data.cap}）
                 {data.suggested !== null &&
                   `；依主機建議不超過 ${data.suggested}`}
-                {host &&
-                  `（${host.dockerCpus ?? host.cpus} 顆 CPU、${gb(host.dockerMemMb ?? host.memTotalMb)} 記憶體，可用 ${gb(host.memFreeMb)}）`}
-                。可用記憶體低於 {gb(data.memoryFloorMb)} 時暫停派新工作。
+                。
               </span>
             </form>
+            <dl className="flex flex-col gap-1 text-xs text-muted-foreground">
+              <div>
+                <dt className="inline font-medium">Windows 主機記憶體：</dt>
+                <dd className="inline">
+                  {host
+                    ? `可用 ${gb(host.memFreeMb)}／共 ${gb(host.memTotalMb)}`
+                    : "暫時讀不到"}
+                  （低於 {gb(data.memoryFloorMb)} 時暫停派新工作，回升到{" "}
+                  {gb(data.memoryResumeMb)} 才恢復）
+                </dd>
+              </div>
+              <div>
+                <dt className="inline font-medium">Docker（WSL）：</dt>
+                <dd className="inline">
+                  {host?.dockerCpus || host?.dockerMemMb
+                    ? `${host.dockerCpus ?? "?"} 顆 CPU、共 ${host.dockerMemMb ? gb(host.dockerMemMb) : "?"} 記憶體`
+                    : "暫時讀不到"}
+                  （用於建議同時執行數）
+                </dd>
+              </div>
+            </dl>
             <section className="flex flex-col gap-2">
               <h3 className="text-xs font-medium text-muted-foreground">
                 執行中（{data.running.length}／{data.maxRuns}）
@@ -168,11 +193,18 @@ export function CapacityCard({ request }: { request: Request }) {
                           {t.project ?? "未指定專案"} · {ago(t.created_at)}
                           提出
                         </span>
+                        {/* 全系統暫停的處理方式已在上方橫幅說明，這裡只列個別任務要處理的事。 */}
+                        {t.hint &&
+                          (t.code === "project" || t.code === "group") && (
+                            <span className="text-xs text-warn">{t.hint}</span>
+                          )}
                       </span>
                       <Badge
-                        variant={t.reason === "即將開始" ? "good" : "warn"}
+                        variant={t.code === "next" ? "good" : "warn"}
+                        title={t.reason}
+                        className="max-w-[45%]"
                       >
-                        {t.reason}
+                        <span className="truncate">{t.reason}</span>
                       </Badge>
                     </li>
                   ))}

@@ -14,15 +14,25 @@ const critical: Record<string, string> = {
 
 /**
  * 寫入服務狀態；重要服務由正常變異常、或由異常恢復時通知管理者一次。
- * 第一次觀察只建立基準不通知。confirm 用於每分鐘檢查的項目：連續兩次異常才通知，避免瞬斷洗版。
+ * 第一次觀察只建立基準不通知。confirm 用於定期檢查的項目：轉異常與恢復都要連續兩次
+ * 同方向的讀數才通知，避免在門檻上下徘徊時「異常／已恢復」交替洗版、耗推播額度。
+ * silent 只更新目前狀態與說明，不動通知基準也不通知（例如暫時讀不到資料，不能算一次恢復）。
  */
 export async function recordHealth(
   db: Database,
   name: string,
   ok: boolean,
   detail: string,
-  options: { confirm?: boolean } = {},
+  options: { confirm?: boolean; silent?: boolean } = {},
 ) {
+  if (options.silent) {
+    await db.query(
+      `INSERT INTO service_health(name,ok,detail) VALUES($1,$2,$3)
+       ON CONFLICT(name) DO UPDATE SET ok=$2,detail=$3,checked_at=now()`,
+      [name, ok, detail],
+    );
+    return;
+  }
   const [before] = await db.query<{
     was: boolean | null;
     told: boolean | null;
@@ -45,7 +55,7 @@ export async function recordHealth(
       ]);
     return;
   }
-  if (!ok && options.confirm && was !== false) return;
+  if (options.confirm && was !== ok) return;
   const marked = await db.query(
     "UPDATE service_health SET notified_ok=$2 WHERE name=$1 AND notified_ok IS DISTINCT FROM $2 RETURNING name",
     [name, ok],

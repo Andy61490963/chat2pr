@@ -6,17 +6,12 @@ import {
   DEFAULT_MAX_RUNS,
   MAX_RUNS_CAP,
   MEMORY_FLOOR_MB,
-  hostHold,
-  maxRuns,
+  MEMORY_RESUME_MB,
   parseResources,
+  queueSnapshot,
   suggestedMaxRuns,
 } from "./capacity.js";
-import { diskPaused } from "./docker-disk.js";
-import type {
-  Capacity,
-  CapacityQueued,
-  CapacityRun,
-} from "../shared/capacity.js";
+import type { Capacity, CapacityQueued } from "../shared/capacity.js";
 
 /**
  * 看板「系統」頁的同時執行：目前上限、依主機的建議值、正在跑的任務與排隊順序。
@@ -29,57 +24,30 @@ export function registerCapacity(
 ) {
   app.get("/api/capacity", async (req): Promise<Capacity> => {
     await requireUser(db, req);
-    const settings = await db.settings();
-    const limit = maxRuns(settings);
     const host = parseResources(await readResources().catch(() => null));
-    const running = await db.query<CapacityRun & { project_id: string | null }>(
-      `SELECT t.id,t.title,t.mode,t.project_id,p.name AS project,r.status AS phase,r.started_at
-       FROM runs r JOIN tasks t ON t.id=r.task_id LEFT JOIN projects p ON p.id=t.project_id
-       WHERE r.completed_at IS NULL ORDER BY r.started_at`,
-    );
-    const queued = await db.query<
-      Omit<CapacityQueued, "reason"> & {
-        project_id: string | null;
-        parent_active: boolean;
-      }
-    >(
-      `SELECT t.id,t.title,t.mode,t.project_id,p.name AS project,t.created_at,
-        (t.mode<>'query' AND EXISTS(SELECT 1 FROM tasks u WHERE u.id=t.parent_id AND u.status IN ('queued','running','reviewing','budget_wait'))) AS parent_active
-       FROM tasks t LEFT JOIN projects p ON p.id=t.project_id
-       WHERE t.status='queued' ORDER BY t.created_at LIMIT 50`,
-    );
-    const changing = new Set(
-      running.filter((r) => r.mode !== "query").map((r) => r.project_id),
-    );
-    // 主機記憶體不足（#21）或 Docker 磁碟嚴重不足且開啟暫停（#28）時都不派新工作。
-    const hold =
-      (await hostHold(db.pool)) ??
-      ((await diskPaused(db))
-        ? "Docker 磁碟空間嚴重不足，已暫停派新工作；空間回升後自動恢復，詳見下方磁碟用量"
-        : null);
-    let free = hold ? 0 : limit - running.length;
+    // 排隊原因與任務詳情共用同一套判斷（queueSnapshot）。
+    const snapshot = await queueSnapshot(db);
     return {
-      maxRuns: limit,
+      maxRuns: snapshot.limit,
       cap: MAX_RUNS_CAP,
       defaultRuns: DEFAULT_MAX_RUNS,
       memoryFloorMb: MEMORY_FLOOR_MB,
+      memoryResumeMb: MEMORY_RESUME_MB,
       suggested: host ? suggestedMaxRuns(host) : null,
       host,
-      hold,
-      running: running.map(({ project_id: _, ...r }) => r),
-      queued: queued.map(
-        ({ project_id, parent_active, ...t }): CapacityQueued => {
-          let reason = hold ? "暫停派工中" : "等待空位";
-          if (parent_active) reason = "等上一題完成";
-          else if (t.mode !== "query" && changing.has(project_id))
-            reason = "同專案的修改進行中";
-          else if (free > 0) {
-            free--;
-            reason = "即將開始";
-          }
-          return { ...t, reason };
-        },
-      ),
+      hold: snapshot.hold,
+      holdKind: snapshot.holdKind,
+      running: snapshot.running.map(({ project_id: _, ...r }) => r),
+      queued: snapshot.queued.map((t): CapacityQueued => ({
+        id: t.id,
+        title: t.title,
+        mode: t.mode,
+        project: t.project,
+        created_at: t.created_at,
+        reason: t.text,
+        code: t.code,
+        hint: t.hint,
+      })),
     };
   });
   app.put("/api/capacity", async (req) => {

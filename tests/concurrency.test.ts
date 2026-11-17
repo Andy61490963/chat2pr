@@ -8,10 +8,12 @@ import { recoverInterrupted } from "../server/jobs.js";
 import {
   checkHostResources,
   hostHealthName,
+  hostHold,
+  memoryHold,
   suggestedMaxRuns,
 } from "../server/capacity.js";
 import { subscriptionGateName } from "../server/subscription-gate.js";
-import type { Capacity } from "../shared/capacity.js";
+import type { Capacity, TaskQueue } from "../shared/capacity.js";
 import type { Task, TaskMode } from "../shared/types.js";
 
 beforeEach(reset);
@@ -353,6 +355,231 @@ it("主機可用記憶體不足時暫停派新工作，恢復後照常派工", a
   expect(await status(t.id)).toBe("answered");
 });
 
+const hostReading = (memFreeMb: number) =>
+  checkHostResources(db, async () => ({
+    cpus: 8,
+    memTotalMb: 16384,
+    memFreeMb,
+  }));
+const notices = (kind: string) =>
+  db.query<{ text: string }>("SELECT text FROM notifications WHERE kind=$1", [
+    kind,
+  ]);
+const clearHostHealth = () =>
+  db.query("DELETE FROM service_health WHERE name=$1", [hostHealthName]);
+
+it("記憶體暫停判斷有遲滯：低於 2 GB 才暫停，暫停中要回升到 2.5 GB 以上才恢復", () => {
+  const r = (memFreeMb: number) => ({ cpus: 8, memTotalMb: 16384, memFreeMb });
+  expect(memoryHold(r(1900))).toBe(
+    "Windows 主機可用記憶體只剩 1.9 GB（低於 2 GB），暫停派新工作，回升到 2.5 GB 以上才恢復；執行中的工作不受影響",
+  );
+  expect(memoryHold(r(2100))).toBeNull();
+  expect(memoryHold(r(2100), true)).toBe(
+    "Windows 主機可用記憶體 2.1 GB，尚未回升到 2.5 GB，仍暫停派新工作；執行中的工作不受影響",
+  );
+  expect(memoryHold(r(2559), true)).not.toBeNull();
+  expect(memoryHold(r(2560), true)).toBeNull();
+});
+
+it("主機記憶體在 2 GB 上下徘徊時只通知一次異常；回升到 2.5 GB 以上連續兩次才通知恢復", async () => {
+  const h = await harness(1);
+  const t = await task(h.projects[0], "query");
+  await clearHostHealth();
+  try {
+    expect(await hostReading(8192)).toBeNull();
+    for (const mb of [1900, 2100, 1900, 2100, 2200])
+      expect(await hostReading(mb)).toContain("暫停派新工作");
+    const down = await notices("service_down");
+    expect(down).toHaveLength(1);
+    expect(down[0].text).toContain("主機資源");
+    expect(await notices("service_up")).toHaveLength(0);
+    // 2.1、2.2 GB 仍在遲滯區間，派工維持暫停。
+    expect(await hostHold(db.pool)).toContain("尚未回升到 2.5 GB");
+    await h.execution.execute(t.id);
+    expect(await status(t.id)).toBe("queued");
+    expect(await activeRuns()).toHaveLength(0);
+    expect(await hostReading(2600)).toBeNull();
+    expect(await hostReading(2600)).toBeNull();
+    expect(await notices("service_up")).toHaveLength(1);
+    expect(await notices("service_down")).toHaveLength(1);
+    h.release();
+    await h.execution.execute(t.id);
+    expect(await status(t.id)).toBe("answered");
+  } finally {
+    await clearHostHealth();
+  }
+});
+
+it("低記憶體時暫時讀不到資源不擋派工，也不算恢復、不通知；之後仍沿用恢復門檻", async () => {
+  await clearHostHealth();
+  try {
+    await hostReading(8192);
+    await hostReading(1900);
+    await hostReading(1900);
+    expect(await notices("service_down")).toHaveLength(1);
+    expect(
+      await checkHostResources(db, async () => {
+        throw new Error("執行器暫時無回應");
+      }),
+    ).toBeNull();
+    expect(await hostHold(db.pool)).toBeNull();
+    expect(await hostReading(1900)).toContain("暫停派新工作");
+    expect(await hostReading(2100)).toContain("尚未回升到 2.5 GB");
+    expect(await notices("service_up")).toHaveLength(0);
+    expect(await notices("service_down")).toHaveLength(1);
+  } finally {
+    await clearHostHealth();
+  }
+});
+
+it("主機記憶體不足暫停時，系統頁回傳 holdKind 與排隊原因，任務詳情說明原因", async () => {
+  const h = await harness(1);
+  const t = await task(h.projects[0], "query");
+  await clearHostHealth();
+  await hostReading(1500);
+  await hostReading(1500);
+  const { buildApp } = await import("../server/app.js");
+  const app = await buildApp(db, undefined, undefined, undefined, {
+    call: async <T>(path: string) =>
+      (path === "resources"
+        ? {
+            cpus: 8,
+            memTotalMb: 16384,
+            memFreeMb: 1500,
+            dockerCpus: 8,
+            dockerMemMb: 7990,
+          }
+        : {}) as T,
+  });
+  try {
+    const headers = await session();
+    const view = (
+      await app.inject({ url: "/api/capacity", headers })
+    ).json<Capacity>();
+    expect(view.holdKind).toBe("memory");
+    expect(view.hold).toContain("Windows 主機可用記憶體只剩 1.5 GB");
+    expect(view.hold).toContain("回升到 2.5 GB 以上才恢復");
+    expect(view.queued.map((q) => [q.id, q.code, q.reason])).toEqual([
+      [t.id, "memory", "主機記憶體不足，暫停派工中"],
+    ]);
+    const detail = (
+      await app.inject({ url: `/api/tasks/${t.id}`, headers })
+    ).json<{ queue: TaskQueue }>();
+    expect(detail.queue).toMatchObject({
+      code: "memory",
+      text: "主機記憶體不足，暫停派工中",
+      position: 1,
+    });
+  } finally {
+    await app.close();
+    await clearHostHealth();
+  }
+});
+
+it("專案停用、驗證未通過、群組停用與退避中的任務顯示原因，不佔空位也不標為即將開始", async () => {
+  const h = await harness(3);
+  const [disabled, unvalidated, retrying] = h.projects;
+  // 另一個群組綁定自己的虛構專案，之後由管理者停用群組。
+  const other = await db.one<{ id: string }>(
+    "INSERT INTO projects(name,repo,enabled,validated_at) VALUES('虛構專案 乙群','example-org/demo-group-b',true,now()) RETURNING id",
+  );
+  await db.query(
+    "INSERT INTO groups(id,name,enabled,trigger_mode) VALUES('group-b','虛構群組乙',true,'auto')",
+  );
+  await db.query(
+    "INSERT INTO group_projects(group_id,project_id) VALUES('group-b',$1)",
+    [other.id],
+  );
+  const a = await task(disabled),
+    b = await task(unvalidated);
+  const c = await db.one<Task>(
+    "INSERT INTO tasks(project_id,group_id,title,summary,acceptance,status,approved_version,dedupe_key,mode) VALUES($1,'group-b','乙群任務','虛構需求','[\"完成\"]','queued',1,'concurrency-group-b','query') RETURNING *",
+    [other.id],
+  );
+  await confirmTask(c.id);
+  const d = await task(retrying, "query"),
+    e = await task(retrying, "query");
+  const { buildApp } = await import("../server/app.js");
+  const app = await buildApp(db, undefined, undefined, undefined, {
+    call: async <T>() => ({}) as T,
+  });
+  try {
+    const headers = await session();
+    // 管理者在專案頁只取消「啟用」，其他設定不變（不會讓已確認的任務失效）。
+    const row = await db.one<Record<string, unknown>>(
+      "SELECT name,repo,description,base_branch,image,install_command,test_command,sensitive_paths FROM projects WHERE id=$1",
+      [disabled],
+    );
+    const put = await app.inject({
+      method: "PUT",
+      url: `/api/projects/${disabled}`,
+      headers,
+      payload: { ...row, enabled: false },
+    });
+    expect(put.statusCode).toBe(200);
+    await db.query(
+      "UPDATE projects SET validated_at=NULL,validation_error='虛構的驗證錯誤：找不到 package.json' WHERE id=$1",
+      [unvalidated],
+    );
+    const group = await app.inject({
+      method: "PUT",
+      url: "/api/groups/group-b",
+      headers,
+      payload: { name: "虛構群組乙", project_ids: [other.id], enabled: false },
+    });
+    expect(group.statusCode).toBe(200);
+    await db.query(
+      "UPDATE tasks SET retry_at=now()+interval '10 minutes' WHERE id=$1",
+      [d.id],
+    );
+    // 這些任務仍在排隊，沒有被退回待審核。
+    for (const t of [a, b, c, d, e]) expect(await status(t.id)).toBe("queued");
+    const view = (
+      await app.inject({ url: "/api/capacity", headers })
+    ).json<Capacity>();
+    expect(view.holdKind).toBeNull();
+    const byId = Object.fromEntries(view.queued.map((q) => [q.id, q]));
+    expect(byId[a.id]).toMatchObject({
+      code: "project",
+      reason: "專案已停用",
+      hint: "到專案頁重新啟用",
+    });
+    expect(byId[b.id]).toMatchObject({
+      code: "project",
+      reason: "專案驗證未通過：虛構的驗證錯誤：找不到 package.json",
+      hint: "到專案頁重新驗證",
+    });
+    expect(byId[c.id]).toMatchObject({
+      code: "group",
+      reason: "群組已停用",
+      hint: "到群組頁重新啟用",
+    });
+    expect(byId[d.id].code).toBe("retry");
+    expect(byId[d.id].reason).toMatch(/^暫時性錯誤，約 \d{2}:\d{2} 自動重試$/);
+    // 被擋住的任務不佔空位：只有最後一張沒有阻擋的任務是「即將開始」。
+    expect(
+      view.queued.filter((q) => q.code === "next").map((q) => q.id),
+    ).toEqual([e.id]);
+    const queueOf = async (id: string) =>
+      (await app.inject({ url: `/api/tasks/${id}`, headers })).json<{
+        queue: TaskQueue;
+      }>().queue;
+    expect((await queueOf(a.id)).code).toBe("project");
+    expect((await queueOf(b.id)).code).toBe("project");
+    expect((await queueOf(c.id)).code).toBe("group");
+    const retry = await queueOf(d.id);
+    expect(retry.code).toBe("retry");
+    expect(retry.retry_at).not.toBeNull();
+    expect(await queueOf(e.id)).toMatchObject({
+      code: "next",
+      text: "即將開始",
+      position: 5,
+    });
+  } finally {
+    await app.close();
+  }
+});
+
 it("磁碟空間不足的暫停派工（#28）開啟時，並行派工也一起停，看板顯示原因", async () => {
   const h = await harness(2);
   const a = await task(h.projects[0]),
@@ -376,9 +603,10 @@ it("磁碟空間不足的暫停派工（#28）開啟時，並行派工也一起�
         await app.inject({ url: "/api/capacity", headers: await session() })
       ).json<Capacity>();
       expect(view.hold).toContain("磁碟空間嚴重不足");
-      expect(view.queued.map((q) => q.reason)).toEqual([
-        "暫停派工中",
-        "暫停派工中",
+      expect(view.holdKind).toBe("disk");
+      expect(view.queued.map((q) => [q.code, q.reason])).toEqual([
+        ["disk", "Docker 磁碟不足，暫停派工中"],
+        ["disk", "Docker 磁碟不足，暫停派工中"],
       ]);
     } finally {
       await app.close();
@@ -435,12 +663,34 @@ it("看板顯示執行中與排隊順序，管理者可調整同時執行數", a
     const view = (
       await app.inject({ url: "/api/capacity", headers })
     ).json<Capacity>();
-    expect(view).toMatchObject({ maxRuns: 2, suggested: 4, hold: null });
+    expect(view).toMatchObject({
+      maxRuns: 2,
+      suggested: 4,
+      hold: null,
+      holdKind: null,
+      memoryFloorMb: 2048,
+      memoryResumeMb: 2560,
+    });
     expect(view.running.map((r) => r.id)).toEqual([first.id]);
-    expect(view.queued.map((q) => [q.id, q.reason])).toEqual([
-      [second.id, "同專案的修改進行中"],
-      [other.id, "即將開始"],
+    expect(view.queued.map((q) => [q.id, q.code, q.reason])).toEqual([
+      [second.id, "changing", "同專案的修改進行中"],
+      [other.id, "next", "即將開始"],
     ]);
+    // 任務詳情回傳同一套排隊原因。
+    const detail = (
+      await app.inject({ url: `/api/tasks/${second.id}`, headers })
+    ).json<{ queue: TaskQueue }>();
+    expect(detail.queue).toMatchObject({
+      code: "changing",
+      text: "同專案的修改進行中",
+      position: 1,
+      retry_at: null,
+    });
+    // 不在排隊中的任務沒有排隊資訊。
+    expect(
+      (await app.inject({ url: `/api/tasks/${first.id}`, headers })).json()
+        .queue,
+    ).toBeNull();
     expect(
       (
         await app.inject({

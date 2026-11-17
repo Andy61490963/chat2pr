@@ -191,7 +191,7 @@ describe("服務狀態通知", () => {
     expect(await db.query("SELECT 1 FROM notifications")).toHaveLength(0);
   });
 
-  it("需要確認的項目連續兩次異常才通知，瞬斷不通知", async () => {
+  it("需要確認的項目轉異常與恢復都要連續兩次才通知，瞬斷與瞬間恢復都不通知", async () => {
     const tunnel = (ok: boolean) =>
       recordHealth(db, "tunnel", ok, ok ? "正常" : "無法連線", {
         confirm: true,
@@ -204,7 +204,12 @@ describe("服務狀態通知", () => {
     await tunnel(false);
     expect(await notices("service_down")).toHaveLength(1);
     await tunnel(true);
+    await tunnel(false);
+    expect(await notices("service_up")).toHaveLength(0);
+    await tunnel(true);
+    await tunnel(true);
     expect(await notices("service_up")).toHaveLength(1);
+    expect(await notices("service_down")).toHaveLength(1);
   });
 });
 
