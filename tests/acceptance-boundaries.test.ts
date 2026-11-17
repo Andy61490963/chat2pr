@@ -134,15 +134,34 @@ it("E03.notification：供應商已接受但本機寫入中斷，重試沿用同
   vi.stubGlobal("fetch", upstream);
   await line.notify(null, "ready", "唯一驗收通知", "完成");
   await line.notify(null, "ready", "唯一驗收通知", "完成");
-  const original = db.query.bind(db);
+  const original = db.transaction.bind(db);
   let interrupted = false;
-  const spy = vi.spyOn(db, "query").mockImplementation(async (sql, values) => {
-    if (!interrupted && sql.startsWith("UPDATE notifications SET sent_at")) {
-      interrupted = true;
-      throw new Error("模擬供應商接受後的資料庫中斷");
-    }
-    return original(sql, values);
-  });
+  // 推播在交易內記錄送出（撈取時鎖住這批通知），所以攔截交易用的連線。
+  const spy = vi.spyOn(db, "transaction").mockImplementation(((
+    fn: Parameters<typeof db.transaction>[0],
+  ) =>
+    original(async (client) => {
+      const saved = client.query;
+      const query = client.query.bind(client) as (
+        sql: string,
+        values?: unknown[],
+      ) => Promise<unknown>;
+      client.query = ((sql: string, values?: unknown[]) => {
+        if (
+          !interrupted &&
+          sql.startsWith("UPDATE notifications SET sent_at")
+        ) {
+          interrupted = true;
+          return Promise.reject(new Error("模擬供應商接受後的資料庫中斷"));
+        }
+        return query(sql, values);
+      }) as typeof client.query;
+      try {
+        return await fn(client);
+      } finally {
+        client.query = saved;
+      }
+    })) as typeof db.transaction);
   await line.flushNotifications();
   spy.mockRestore();
   await line.flushNotifications();
