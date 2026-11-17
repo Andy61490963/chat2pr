@@ -3,8 +3,9 @@ import {
   portError,
   takenRepos,
   validationErrorParts,
+  validationKind,
 } from "../src/app/project-form.js";
-import { verificationLabel } from "../shared/project-setup.js";
+import { repoNotice, verificationLabel } from "../shared/project-setup.js";
 import { prReport } from "../server/pr-body.js";
 import { ConnectionBody } from "../server/project-database.js";
 
@@ -177,6 +178,48 @@ describe("驗證失敗摘要的分段", () => {
       detail: [],
       advice: [],
     });
+  });
+});
+
+describe("驗證失敗和其他提醒分開標示", () => {
+  const project = {
+    setup_input: null,
+    repo_missing_at: null,
+    validated_at: null,
+    validation_error: null,
+  } as unknown as Parameters<typeof validationKind>[0];
+  it("沒有通過驗證且留有原因才是驗證失敗；從未驗證不是", () => {
+    expect(validationKind(project)).toBeNull();
+    expect(
+      validationKind({
+        ...project,
+        validation_error: "測試失敗：有測試沒過。",
+      }),
+    ).toBe("failed");
+  });
+  it("已驗證的專案重新驗證遇到暫時性問題，維持原狀態只提醒", () => {
+    expect(
+      validationKind({
+        ...project,
+        validated_at: "2026-11-01T00:00:00Z",
+        validation_error: "AI 服務暫時無法使用",
+      } as typeof project),
+    ).toBe("transient");
+  });
+  it("儲存庫接回後的「請重新驗證」不算驗證失敗", () => {
+    for (const text of [repoNotice.found, repoNotice.changed])
+      expect(validationKind({ ...project, validation_error: text })).toBe(
+        "notice",
+      );
+  });
+  it("等你回答與找不到儲存庫另有標示", () => {
+    expect(
+      validationKind({
+        ...project,
+        repo_missing_at: "2026-11-01T00:00:00Z",
+        validation_error: "找不到儲存庫",
+      } as typeof project),
+    ).toBeNull();
   });
 });
 

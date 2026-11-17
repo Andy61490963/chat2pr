@@ -47,13 +47,17 @@ import {
   date,
   message,
 } from "./shared";
-import { takenRepos, validationErrorParts } from "./project-form";
+import {
+  takenRepos,
+  validationErrorParts,
+  validationKind,
+} from "./project-form";
 import { InstallReviewList } from "./egress";
 import { ConfirmButton } from "./confirm";
 import { useUnsaved, useGuard } from "./unsaved";
 import { ProjectContextEditor } from "./project-context";
 import { ProjectDatabase } from "./project-database";
-import { verificationLabel } from "../../shared/project-setup.js";
+import { isRepoNotice, verificationLabel } from "../../shared/project-setup.js";
 import {
   DEFAULT_COLLECT_EXCLUDES,
   MAX_COLLECT_EXCLUDES,
@@ -411,8 +415,15 @@ export function ProjectsView({
               {open.validation_error && !open.repo_missing_at && (
                 <ValidationError
                   text={open.validation_error}
-                  // 已驗證的專案重新驗證遇到暫時性問題時沿用先前的設定，只是提醒，不算失敗。
-                  transient={!!open.validated_at}
+                  // 已驗證的專案重新驗證遇到暫時性問題時沿用先前的設定；儲存庫接回後的
+                  // 「請重新驗證」也只是提醒。這兩種都不算失敗。
+                  tone={
+                    isRepoNotice(open.validation_error)
+                      ? "notice"
+                      : open.validated_at
+                        ? "transient"
+                        : "failed"
+                  }
                 />
               )}
               <Separator />
@@ -501,16 +512,8 @@ function missingGroups(p: Project, state: State) {
   return names.length ? `（${names.join("、")}），接回後會自動綁回去` : "";
 }
 
-// 沒有通過驗證、而且留有失敗原因；和「從未驗證」分開，管理者才知道要先看原因。
-// 已驗證的專案重新驗證遇到暫時性問題時 validated_at 仍在，沿用原本的狀態。
-function validationFailed(p: Project) {
-  return (
-    !p.setup_input &&
-    !p.repo_missing_at &&
-    !p.validated_at &&
-    !!p.validation_error
-  );
-}
+// 沒有通過驗證、而且留有失敗原因；儲存庫接回後的「請重新驗證」提醒不算失敗。
+const validationFailed = (p: Project) => validationKind(p) === "failed";
 
 // 「登記資料庫連線」按鈕：捲到詳情裡的資料庫連線區塊並聚焦第一個欄位。
 function jumpToDatabase() {
@@ -525,22 +528,24 @@ function jumpToDatabase() {
 
 function ValidationError({
   text,
-  transient,
+  tone,
 }: {
   text: string;
-  transient: boolean;
+  tone: "failed" | "transient" | "notice";
 }) {
   const { headline, body, detail, advice } = validationErrorParts(text);
   return (
     <div
-      role={transient ? "status" : "alert"}
+      role={tone === "failed" ? "alert" : "status"}
       className={cn(
         "space-y-1 whitespace-pre-wrap break-words rounded-lg px-3 py-2 text-xs",
-        transient ? "bg-warn-soft text-warn" : "bg-danger-soft text-danger",
+        tone === "failed"
+          ? "bg-danger-soft text-danger"
+          : "bg-warn-soft text-warn",
       )}
     >
       <p className="text-sm font-medium">
-        {transient ? `上次重新驗證未完成：${headline}` : headline}
+        {tone === "transient" ? `上次重新驗證未完成：${headline}` : headline}
       </p>
       {body.map((line, i) => (
         <p key={i}>{line}</p>

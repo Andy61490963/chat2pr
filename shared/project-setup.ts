@@ -70,3 +70,16 @@ export function verificationLabel(plan: Verified | null | undefined): {
     return { status: "安裝與測試通過（資料庫以結構快照模擬）", caution: null };
   return { status: "安裝與測試通過", caution: null };
 }
+
+/**
+ * 儲存庫接回後寫進 validation_error 的提醒（server/repo-missing.ts）。這是「請重新驗證」的提示，
+ * 不是驗證失敗；看板靠這兩句分辨，不能標成「驗證失敗」。
+ */
+export const repoNotice = {
+  found:
+    "GitHub 上又找得到這個儲存庫了；請重新驗證環境，再到群組重新勾選這個專案。",
+  changed: "儲存庫已接回，但這段期間改過設定；請重新驗證環境後再啟用。",
+} as const;
+
+export const isRepoNotice = (text: string | null | undefined) =>
+  text === repoNotice.found || text === repoNotice.changed;
