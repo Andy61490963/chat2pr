@@ -83,10 +83,54 @@ import {
 } from "./query-report.js";
 
 // 指令不存在時多半是工作容器缺少工具鏈，直接說明原因。
+const missingTool =
+  "工作容器可能缺少此指令或工具鏈；請確認 worker/Dockerfile 已安裝，或改用專案專屬映像";
 const toolHint = (output: string) =>
   /(command not found|: not found|No such file or directory)/.test(output)
-    ? "（工作容器可能缺少此指令或工具鏈；請確認 worker/Dockerfile 已安裝，或改用專案專屬映像）"
+    ? `（${missingTool}）`
     : "";
+
+/** 專案 validation_error 裡，白話說明與原始輸出摘要之間的分隔行。 */
+export const validationOutputMark = "\n\n--- 原始輸出摘要 ---\n";
+
+/** 執行中系統被暫停：工作放回排隊，恢復派工後自動繼續，不算失敗。 */
+export class PausedStop extends AppError {
+  constructor() {
+    super(409, "系統已暫停派工，執行中的工作已保留");
+  }
+}
+
+/**
+ * 環境驗證的安裝或測試指令沒有通過。訊息維持原本的「安裝失敗：…」，
+ * 另外帶著階段代號與輸出，讓專案頁顯示分類後的白話說明與建議處理。
+ */
+export class ValidationPhaseError extends Error {
+  constructor(
+    /** 畫面上的階段名稱：安裝、測試、系統套件安裝。 */
+    public label: string,
+    public phase: "install" | "test",
+    public output: string,
+  ) {
+    super(`${label}失敗${toolHint(output)}：${failureDigest(output)}`);
+  }
+  /**
+   * 「分類：白話說明。\n錯誤重點：…\n建議：…」，與任務失敗的摘要同一種格式；
+   * 驗證沒有執行紀錄，原始輸出摘要接在 `validationOutputMark` 之後，畫面可收合顯示。
+   */
+  notice() {
+    const digest = failureDigest(this.output);
+    const failure = classifyFailure(
+      `${this.label}失敗：${digest}`,
+      this.phase,
+      "validation",
+    );
+    if (toolHint(this.output)) failure.action += `（${missingTool}）`;
+    return {
+      failure,
+      text: `${failureNotice(failure, false, this.label)}${validationOutputMark}${digest}`,
+    };
+  }
+}
 export interface PhaseResult {
   observations?: RunEvent[];
   exitCode: number;
@@ -341,6 +385,16 @@ export class Execution {
       parentTitle: parent.title,
     };
   }
+  /** 專案是否登記了資料庫連線；沒有專案（一般查詢）時視為有，不提醒。 */
+  private async hasDatabaseConnection(projectId: string | null) {
+    return (
+      !projectId ||
+      !!(await this.db.one(
+        "SELECT 1 FROM project_connections WHERE project_id=$1",
+        [projectId],
+      ))
+    );
+  }
   /**
    * 從 LINE 要求定期檢查：Codex 回覆的最後一行是 AGENTFLOW_CHECK: {定義}。
    * 依需求記下的排程建立「待核准」的檢查並試跑一次；回答改成給人看的說明，不含 JSON。
@@ -348,15 +402,10 @@ export class Execution {
   private async draftCheck(task: Task, final: string) {
     const m = /AGENTFLOW_CHECK:\s*(\{[\s\S]*\})\s*$/.exec(final);
     const body = (m ? final.slice(0, m.index) : final).trim();
-    // 專案沒有登記資料庫連線時 SQL 檢查跑不了：每種結果都提醒管理者去看板設定。
-    const hint =
-      task.project_id &&
-      !(await this.db.one(
-        "SELECT 1 FROM project_connections WHERE project_id=$1",
-        [task.project_id],
-      ))
-        ? `\n\n${noConnectionHint}`
-        : "";
+    // 專案沒有登記資料庫連線時 SQL 檢查跑不了：擬出 SQL 或沒有擬出有效定義時，提醒管理者去看板設定；
+    // HTTP、TCP 檢查不需要資料庫連線，不附提醒。
+    const missing = !(await this.hasDatabaseConnection(task.project_id));
+    let hint = missing ? `\n\n${noConnectionHint}` : "";
     if (!m)
       return `${body}\n\n（這次沒有產生可用的檢查定義，請管理者到看板「定期檢查」手動建立。）${hint}`;
     const schedule = task.check_draft!;
@@ -387,6 +436,7 @@ export class Execution {
     }
     if (!created)
       return `${body}\n\n（擬出的檢查定義不符合規則：${redact(problem).slice(0, 200)}。請管理者到看板「定期檢查」修改後建立。）${hint}`;
+    if (created.kind !== "sql") hint = "";
     const trial = await testCheck(
       this.db,
       (path, b, timeoutMs) => this.runner.call(path, b, timeoutMs),
@@ -563,8 +613,10 @@ export class Execution {
         if (!failed) break;
         const output = `${failed.stdout}\n${failed.stderr}`;
         if (!plan || attempt === 2)
-          throw new Error(
-            `${failedPhase}失敗${toolHint(output)}：${failureDigest(output)}`,
+          throw new ValidationPhaseError(
+            failedPhase,
+            failedPhase === "測試" ? "test" : "install",
+            output,
           );
         if (deadline - Date.now() < 180000)
           throw new AppError(
@@ -640,10 +692,16 @@ export class Execution {
       // 已經驗證通過的專案重新驗證時，碰到 AI 服務、訂閱或網路的暫時性問題：
       // 沿用先前通過的設定與啟用狀態，只記下原因，不因一次暫時失敗就停止派工
       //（驗收時 DcMateH5Api 因訂閱短暫讀不到被停用）。專案或設定本身的問題照舊停用。
-      const message = String(e);
+      // 專案頁顯示的文字：安裝、測試指令沒過時用分類後的白話說明與專案頁的建議處理；
+      // 其他錯誤本身已是整理過的說明（剩餘時間不足、修改了專案檔案、設定已變更…），只去掉「Error: 」前綴。
+      const message = e instanceof Error ? e.message : String(e);
+      const phaseFailure =
+        e instanceof ValidationPhaseError ? e.notice() : undefined;
+      const shown = redact(phaseFailure?.text ?? message);
       if (
         project.validated_at &&
-        (classifyFailure(message).category === "transient" ||
+        ((phaseFailure?.failure ?? classifyFailure(message)).category ===
+          "transient" ||
           subscriptionLimited(message))
       ) {
         await this.db.query(
@@ -651,7 +709,7 @@ export class Execution {
           [
             project.id,
             "重新驗證遇到暫時性問題，沿用先前通過的設定；稍後再按「驗證環境」",
-            redact(message),
+            shown,
             project.config_version,
           ],
         );
@@ -659,7 +717,7 @@ export class Execution {
       }
       await this.db.query(
         "UPDATE projects SET validated_at=NULL,enabled=false,setup_plan=NULL,setup_status='驗證未完成',validation_error=$2 WHERE id=$1 AND config_version=$3",
-        [project.id, redact(message), project.config_version],
+        [project.id, shown, project.config_version],
       );
       throw e;
     } finally {
@@ -704,6 +762,8 @@ export class Execution {
       reservation: string | undefined,
       runId: string | undefined,
       monitor: NodeJS.Timeout | undefined;
+    // 監看計時器發現該停止的原因（暫停、設定變更、逾時…）；執行器之後只會回「工作已取消」。
+    let stopReason: unknown, checkStop: (() => Promise<void>) | undefined;
     let currentPhase = "starting",
       localSeq = 0,
       cursor = 0;
@@ -971,23 +1031,27 @@ export class Execution {
           "SELECT * FROM projects WHERE id=$1",
           [project.id],
         );
-        if (
-          t.version !== task.version ||
-          !["running", "reviewing"].includes(t.status) ||
-          settings.paused ||
-          !g.enabled ||
-          !g.bound ||
-          t.project_id !== project.id ||
-          !p.enabled ||
-          !p.validated_at ||
-          p.config_version !== project.config_version
-        )
-          throw new AppError(409, "任務已取消、暫停或需求版本已改變");
+        // 依原因給具體的訊息：failure.ts 的設定規則認得它們，看板與群組才不會看到「預期外的錯誤」。
+        // 暫停另用 PausedStop，工作放回排隊而不是失敗。
+        const stop = (message: string) => new AppError(409, message);
+        if (t.version !== task.version)
+          throw stop("需求版本已改變，已停止這次執行");
+        if (!["running", "reviewing"].includes(t.status))
+          throw stop("任務已取消或狀態已改變，已停止這次執行");
+        if (settings.paused) throw new PausedStop();
+        if (!g.enabled) throw stop("群組已停用，已停止這次執行");
+        if (!g.bound) throw stop("群組已不再綁定這個專案，已停止這次執行");
+        if (t.project_id !== project.id)
+          throw stop("任務的目標專案已改變，已停止這次執行");
+        if (!p.enabled) throw stop("專案已停用，已停止這次執行");
+        if (!p.validated_at || p.config_version !== project.config_version)
+          throw stop("專案設定已變更，需要重新驗證環境，已停止這次執行");
         if (Date.now() >= deadline)
-          throw new AppError(408, "任務超過 30 分鐘限制");
+          throw new AppError(408, `任務超過 ${s.task_minutes} 分鐘限制`);
         await validateTaskImages(this.db, task.id, task.version);
         await validateTaskSources(this.db, task.id, task.version);
       };
+      checkStop = assertCurrent;
       monitor = setInterval(() => {
         void poll();
         void assertCurrent()
@@ -996,9 +1060,11 @@ export class Execution {
               runId,
             ]),
           )
-          .catch(() =>
-            this.runner.call("cancel", { runId }, 20000).catch(() => {}),
-          );
+          .catch((e: unknown) => {
+            // 記下第一個停止原因：容器被停後執行器只會回「工作已取消」。
+            stopReason ??= e;
+            return this.runner.call("cancel", { runId }, 20000).catch(() => {});
+          });
       }, 2000);
       await stage("issue");
       const head = await this.github.base(project);
@@ -1221,6 +1287,10 @@ export class Execution {
         s.rag_enabled,
       );
       const images = await getTaskImages(this.db, task.id, task.version);
+      // 擬定定期檢查時先告訴 Codex 專案有沒有資料庫連線，沒有就優先擬 HTTP／TCP。
+      const databaseConnection = task.check_draft
+        ? await this.hasDatabaseConnection(task.project_id)
+        : true;
       await recordContextEvidence(
         this.db.pool,
         task.id,
@@ -1291,6 +1361,13 @@ export class Execution {
               checkDraft: {
                 note: '這一題是擬定定期檢查。請依需求、專案程式碼、文件與資料庫結構快照（若有），設計一個最能直接反映狀態的檢查，三選一：sql（對專案資料庫執行單一唯讀 SELECT）、http（服務的健康檢查網址，GET）、tcp（設備或服務的「主機:連接埠」）。先用白話寫出你選的方式、怎樣算異常、門檻的依據；最後一行輸出「AGENTFLOW_CHECK: 」再接一個 JSON：{"name":"20 字內的名稱","kind":"sql|http|tcp","target":"SELECT 查詢／網址／主機:連接埠","condition":sql 用 {"column":"第一列的欄位或 $rows","op":">","value":0,"listColumn":"異常時列出的欄位（可省略）"}、http 用 {"contains":"回應需包含的文字"} 或 {}、tcp 用 {},"rationale":"判斷依據","alertText":"異常時的一句話","recoveredText":"恢復時的一句話"}。SQL 只能讀取，不得寫入、執行程序或使用暫存表；不要在報告或 JSON 放入密碼、連線字串。排程由系統依需求設定，不用填。',
                 schedule: task.check_draft,
+                ...(databaseConnection
+                  ? {}
+                  : {
+                      databaseConnection: false,
+                      databaseNote:
+                        "此專案沒有登記資料庫連線；請優先用 http 或 tcp。若只有 SQL 能反映狀態，仍可輸出 sql 定義，但要在白話說明寫明需先登記資料庫連線才能核准。",
+                    }),
               },
             }
           : {}),
@@ -1796,12 +1873,46 @@ ${querySummary(answer)}`,
         }
         return;
       }
-      const raw = e instanceof Error ? e.message : String(e);
+      const original = e instanceof Error ? e.message : String(e);
+      // 容器被停時執行器只回「工作已取消」：改用監看計時器記下的真正原因（暫停、設定變更、逾時…）分類，
+      // 沒記到時再核對一次目前狀態；否則管理者按個暫停，任務就被說成「系統發生預期外的錯誤」。
+      let cause: unknown = e;
+      if (
+        e instanceof AppError &&
+        e.statusCode === 409 &&
+        /工作已取消/.test(e.message)
+      ) {
+        stopReason ??= await checkStop?.().then(
+          () => undefined,
+          (x: unknown) => x,
+        );
+        if (stopReason) cause = stopReason;
+      }
+      const raw = cause instanceof Error ? cause.message : String(cause);
       const where = phaseLabels[currentPhase] ?? currentPhase;
       // 執行紀錄保留完整的原始錯誤（含輸出與堆疊）供除錯；不顯示 "Error:" 等程式前綴。
-      const message = safeDetail(`${where}：${raw}`);
+      const message = safeDetail(
+        `${where}：${original}${cause === e ? "" : `（停止原因：${raw}）`}`,
+      );
       await poll();
       await record("error", message);
+      if (cause instanceof PausedStop) {
+        // 系統暫停：工作放回排隊，恢復派工後照常經過預算、同時執行與每日次數檢查再繼續；
+        // 不算失敗、不占自動重試次數，也不推「工作需要處理」或群組失敗訊息。預留額度由 finally 釋放。
+        const requeued = await this.db.query(
+          "UPDATE tasks SET status='queued',last_error=$2,updated_at=now() WHERE id=$1 AND status IN ('running','reviewing') AND version=approved_version AND version=(SELECT version FROM runs WHERE id=$3) RETURNING id",
+          [taskId, "系統暫停，工作已保留，恢復派工後自動繼續", runId],
+        );
+        if (requeued.length) {
+          await this.db.audit(
+            taskId,
+            "paused_requeue",
+            `系統暫停派工，${where}階段的工作已停止並放回排隊，恢復後自動繼續`,
+          );
+          await tellGroupWaiting(this.db, taskId, "paused");
+        }
+        return;
+      }
       if (e instanceof AppError && e.statusCode === 429) {
         // 訂閱額度用完：保留工作，額度恢復後由排程重新派工，不自動改用 API。
         await this.db.query(
