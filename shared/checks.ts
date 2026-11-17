@@ -232,24 +232,71 @@ const compare = (left: unknown, op: SqlCondition["op"], right: unknown) => {
   }
 };
 
-/** SQL 結果判定：回傳是否異常與一句摘要（不含機密，最多列 10 筆）。 */
+/**
+ * 在查詢結果的欄位中找出指定欄位：先精確比對，沒有再不分大小寫比對（恰好一個符合才算）。
+ * SQL Server 回傳的欄位保留 SELECT 別名的大小寫，常和判定設定的大小寫不同。
+ */
+function resolveColumn(row: Record<string, unknown>, column: string) {
+  if (Object.prototype.hasOwnProperty.call(row, column)) return column;
+  const lower = column.toLowerCase();
+  const hits = Object.keys(row).filter((k) => k.toLowerCase() === lower);
+  return hits.length === 1 ? hits[0] : null;
+}
+
+/**
+ * SQL 結果判定：回傳是否異常與一句摘要（不含機密，最多列 10 筆）。
+ * 有回傳資料、卻找不到判定欄位時丟出錯誤（試跑顯示執行失敗、排程計入錯誤），
+ * 不再把找不到的欄位當成空值判定，以免監看靜默失效或一直誤報。
+ */
 export function evaluateSql(
   condition: SqlCondition,
   rows: Record<string, unknown>[],
 ): { alert: boolean; summary: string } {
-  const value =
-    condition.column === "$rows" ? rows.length : rows[0]?.[condition.column];
+  let column = condition.column;
+  if (column !== "$rows" && rows.length > 0) {
+    const found = resolveColumn(rows[0], column);
+    if (found === null) {
+      const keys = Object.keys(rows[0]);
+      throw new Error(
+        `查詢結果沒有欄位「${column}」，可用欄位：${keys.length ? keys.slice(0, 10).join("、") + (keys.length > 10 ? "…" : "") : "（無）"}（請修改判定欄位或 SELECT 別名）`,
+      );
+    }
+    column = found;
+  }
+  const value = column === "$rows" ? rows.length : rows[0]?.[column];
   const alert = compare(value, condition.op, condition.value);
-  const listed = condition.listColumn
+  // 列出欄位只影響通知內容；找不到時只提示，不讓它擋下整個檢查。
+  const listColumn =
+    condition.listColumn && rows.length > 0
+      ? resolveColumn(rows[0], condition.listColumn)
+      : (condition.listColumn ?? null);
+  const listed = listColumn
     ? rows
-        .map((r) => r[condition.listColumn!])
+        .map((r) => r[listColumn])
         .filter((v) => v !== null && v !== undefined)
         .slice(0, 10)
         .map((v) => String(v).slice(0, 40))
     : [];
+  const missingList =
+    condition.listColumn && rows.length > 0 && listColumn === null
+      ? `（找不到列出欄位「${condition.listColumn}」）`
+      : "";
   const label = condition.column === "$rows" ? "筆數" : condition.column;
   return {
     alert,
-    summary: `${label}=${value === undefined ? "（無資料）" : String(value).slice(0, 80)}${listed.length ? `：${listed.join("、")}${rows.length > 10 ? "…" : ""}` : ""}`,
+    summary: `${label}=${value === undefined ? "（無資料）" : String(value).slice(0, 80)}${listed.length ? `：${listed.join("、")}${rows.length > 10 ? "…" : ""}` : ""}${missingList}`,
   };
+}
+
+/**
+ * 主機端暫時無法執行（執行器連不上、檢查環境建立失敗或啟動逾時）時，執行紀錄摘要的開頭。
+ * 這類錯誤不計入連續失敗；看板用這個開頭辨認。不改資料表，仍記為 outcome='error'。
+ */
+export const hostUnavailablePrefix = "系統暫時無法執行（不計入連續失敗）：";
+/** 主機端連續無法執行超過幾小時要提醒管理者處理（仍不暫停檢查）。 */
+export const hostUnavailableAlertHours = 6;
+
+/** 主機端暫時無法執行時的重試間隔（分鐘）：第 1、2、3 次 5／15／30 分鐘，之後 60 分鐘。 */
+export function hostRetryMinutes(streak: number) {
+  return [5, 15, 30][Math.max(0, streak - 1)] ?? 60;
 }
