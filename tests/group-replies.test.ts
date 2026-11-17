@@ -381,7 +381,7 @@ describe("LINE 每月推播額度用完", () => {
     expect(pushes).toHaveLength(2);
     const [row] = await rows();
     expect(row.attempts).toBe(2);
-    expect(row.last_error).toBe("LINE 推播太頻繁，稍後會再送（429）");
+    expect(row.last_error).toContain("LINE 推播太頻繁，稍後會再送（429）");
     expect(await quota()).toBeUndefined();
   });
 

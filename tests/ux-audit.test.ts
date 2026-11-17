@@ -374,7 +374,7 @@ describe("LINE 推播額度與重送", () => {
     ]);
     expect(rows[1].sent_at).not.toBeNull();
     const [audit] = await db.query<{ detail: string }>(
-      "SELECT detail FROM audit WHERE action='notification_retry'",
+      "SELECT detail FROM audit WHERE kind='notification_retry'",
     );
     expect(audit.detail).toContain("私訊 1 則、群組 1 則，略過已過期 1 則");
   });
