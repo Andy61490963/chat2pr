@@ -1,4 +1,5 @@
 // 專案頁表單與狀態呈現用的純函式；不依賴 React，方便以單元測試確認判斷規則。
+// tests/project-form.test.ts 直接 import 這個檔案，所以不能用 `@/` 路徑別名（vitest 不解析）。
 
 /** 連接埠欄位的檢查：空值或不是 1–65535 的整數時回傳提示，不能讓空值被當成 0 送出。 */
 export function portError(value: string, label = "連接埠"): string {

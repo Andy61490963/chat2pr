@@ -274,8 +274,18 @@ describe("專案資料庫連線", () => {
     s.fail(new AppError(422, "資料庫拒絕登入，請檢查帳號、密碼與資料庫名稱。"));
     const tested = await s.request("POST", "/test");
     expect(tested.statusCode).toBe(422);
-    expect(tested.body).toContain("資料庫拒絕登入");
+    // 看板只讀 error 欄位；不能是 Fastify 預設的「Unprocessable Entity」。
+    expect(tested.json()).toEqual({
+      error: "資料庫拒絕登入，請檢查帳號、密碼與資料庫名稱。",
+    });
     expect(tested.body).not.toContain(password);
+    // 伺服器內部錯誤不露出原始訊息。
+    s.fail(new Error(`內部錯誤 ${password}`));
+    const broken = await s.request("POST", "/test");
+    expect(broken.statusCode).toBe(500);
+    expect(broken.json()).toEqual({
+      error: "服務暫時無法完成操作，請檢查設定與服務狀態",
+    });
   });
 
   it("擷取快照後顯示版本與物件數量；自動模式的專案作廢舊驗證並重新排程", async () => {

@@ -18,6 +18,7 @@ import {
 } from "../shared/project-database.js";
 import { AppError } from "./policy.js";
 import { requireAdmin } from "./auth.js";
+import { replyError } from "./error-reply.js";
 import { secrets } from "./config.js";
 import { Database } from "./db.js";
 import type { CaptureInput } from "./database-capture.js";
@@ -357,8 +358,11 @@ export function registerProjectDatabase(
       return false;
     }
   };
+  // 這些路由在 app.ts 的 setErrorHandler 之前註冊，要自己指定錯誤處理，
+  // 否則看板只看到 Fastify 預設的「Unprocessable Entity」或 500，看不到中文原因與欄位提示。
+  const route = { errorHandler: replyError };
 
-  app.get("/api/projects/:id/database", async (req, reply) => {
+  app.get("/api/projects/:id/database", route, async (req, reply) => {
     await requireAdmin(db, req);
     reply.header("Cache-Control", "no-store");
     const id = params(req);
@@ -366,7 +370,7 @@ export function registerProjectDatabase(
     return projectDatabaseView(db, id);
   });
 
-  app.put("/api/projects/:id/database", async (req, reply) => {
+  app.put("/api/projects/:id/database", route, async (req, reply) => {
     const actor = await requireAdmin(db, req);
     reply.header("Cache-Control", "no-store");
     const id = params(req);
@@ -436,7 +440,7 @@ export function registerProjectDatabase(
     return projectDatabaseView(db, id);
   });
 
-  app.delete("/api/projects/:id/database", async (req, reply) => {
+  app.delete("/api/projects/:id/database", route, async (req, reply) => {
     await requireAdmin(db, req);
     reply.header("Cache-Control", "no-store");
     const id = params(req);
@@ -457,7 +461,7 @@ export function registerProjectDatabase(
     return projectDatabaseView(db, id);
   });
 
-  app.post("/api/projects/:id/database/test", async (req, reply) => {
+  app.post("/api/projects/:id/database/test", route, async (req, reply) => {
     await requireAdmin(db, req);
     reply.header("Cache-Control", "no-store");
     const id = params(req);
@@ -476,7 +480,7 @@ export function registerProjectDatabase(
     return result;
   });
 
-  app.post("/api/projects/:id/database/snapshot", async (req, reply) => {
+  app.post("/api/projects/:id/database/snapshot", route, async (req, reply) => {
     const actor = await requireAdmin(db, req);
     reply.header("Cache-Control", "no-store");
     const id = params(req);
@@ -549,34 +553,38 @@ export function registerProjectDatabase(
     };
   });
 
-  app.delete("/api/projects/:id/database/snapshot", async (req, reply) => {
-    await requireAdmin(db, req);
-    reply.header("Cache-Control", "no-store");
-    const id = params(req);
-    const invalidated = await db.transaction(async (c) => {
-      const target = (
-        await c.query<Project>(
-          "SELECT * FROM projects WHERE id=$1 FOR UPDATE",
+  app.delete(
+    "/api/projects/:id/database/snapshot",
+    route,
+    async (req, reply) => {
+      await requireAdmin(db, req);
+      reply.header("Cache-Control", "no-store");
+      const id = params(req);
+      const invalidated = await db.transaction(async (c) => {
+        const target = (
+          await c.query<Project>(
+            "SELECT * FROM projects WHERE id=$1 FOR UPDATE",
+            [id],
+          )
+        ).rows[0];
+        if (!target) throw new AppError(404, "找不到專案");
+        const removed = await c.query(
+          "DELETE FROM project_schema_snapshots WHERE project_id=$1",
           [id],
-        )
-      ).rows[0];
-      if (!target) throw new AppError(404, "找不到專案");
-      const removed = await c.query(
-        "DELETE FROM project_schema_snapshots WHERE project_id=$1",
-        [id],
-      );
-      if (!removed.rowCount) return false;
-      await db.audit(
-        null,
-        "project_database",
-        `已刪除專案「${target.name}」的資料庫結構快照`,
-        c,
-      );
-      return invalidate(c, target, "資料庫結構快照已刪除，等待重新驗證");
-    });
-    return {
-      ...(await projectDatabaseView(db, id)),
-      queued: invalidated ? await revalidate(id) : false,
-    };
-  });
+        );
+        if (!removed.rowCount) return false;
+        await db.audit(
+          null,
+          "project_database",
+          `已刪除專案「${target.name}」的資料庫結構快照`,
+          c,
+        );
+        return invalidate(c, target, "資料庫結構快照已刪除，等待重新驗證");
+      });
+      return {
+        ...(await projectDatabaseView(db, id)),
+        queued: invalidated ? await revalidate(id) : false,
+      };
+    },
+  );
 }
