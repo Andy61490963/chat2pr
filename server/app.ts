@@ -43,7 +43,8 @@ import { registerEgress } from "./egress-api.js";
 import { notifyGroup } from "./group-replies.js";
 import { HttpRunner, type Runner } from "./execution.js";
 import { clientAddress } from "./client-address.js";
-import { AppError, verifySignature, redact } from "./policy.js";
+import { replyError } from "./error-reply.js";
+import { AppError, verifySignature } from "./policy.js";
 import { Line } from "./line.js";
 import {
   expireStaleNotifications,
@@ -180,6 +181,10 @@ export async function buildApp(
   app.addHook("onClose", async () => {
     await checkSync;
   });
+  // Fastify 的路由在建立當下就取用當時的錯誤處理器，之後才呼叫 setErrorHandler 不會套到已註冊的路由。
+  // 所以這行必須在任何 register*／app.get 之前：輸入格式錯誤才會一律回「輸入格式錯誤」與 details，
+  // 不會落到 Fastify 預設的 { error: "Bad Request" }（看板只會顯示英文狀態名稱）。
+  app.setErrorHandler(replyError);
   registerChat(app, db);
   registerProjectContext(app, db, enqueueValidation);
   registerProjectDatabase(
@@ -223,24 +228,6 @@ export async function buildApp(
       }
     },
   );
-  app.setErrorHandler((error, _req, reply) => {
-    if (error instanceof z.ZodError) {
-      reply.code(400).send({
-        error: "輸入格式錯誤",
-        details: error.issues.map((i) => `${i.path.join(".")}: ${i.message}`),
-      });
-      return;
-    }
-    const e = error as Error & { statusCode?: number };
-    const status = e.statusCode ?? 500;
-    reply.code(status).send({
-      error:
-        status >= 500
-          ? "服務暫時無法完成操作，請檢查設定與服務狀態"
-          : redact(e.message),
-    });
-    if (status >= 500) app.log.warn(redact(e.message));
-  });
   const line = new Line(db),
     tasks = new Tasks(db),
     budget = new Budget(db),
@@ -910,25 +897,50 @@ export async function buildApp(
     await requireAdmin(db, req);
     const p = ProjectInput.parse(req.body);
     if (p.enabled) throw new AppError(409, "建立後須先驗證專案環境");
+    // 同一個儲存庫（不分大小寫）只能有一個專案，與 PUT 改指時的檢查一致；先查再問 GitHub，
+    // 已被佔用時不必多打一次 API。佔用的專案找不到儲存庫時，引導去改指那個專案。
+    const taken = () =>
+      db.one<Pick<Project, "id" | "name" | "repo_missing_at">>(
+        "SELECT id,name,repo_missing_at FROM projects WHERE lower(repo)=lower($1)",
+        [p.repo],
+      );
+    const duplicate = (used: Pick<Project, "name" | "repo_missing_at">) =>
+      new AppError(
+        409,
+        used.repo_missing_at
+          ? `專案「${used.name}」原本使用這個儲存庫，但目前找不到；請到該專案改選位置，不要另建新專案`
+          : `已經有專案「${used.name}」使用這個儲存庫`,
+      );
+    const used = await taken();
+    if (used) throw duplicate(used);
     // 只查此儲存庫的安裝，不逐一列出所有組織的儲存庫。
     await github.installation(p.repo);
-    return db.one(
-      "INSERT INTO projects(name,repo,base_branch,image,install_command,test_command,sensitive_paths,description,index_paths,setup_mode,collect_excludes,sql_server) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *",
-      [
-        p.name,
-        p.repo,
-        p.base_branch,
-        p.image,
-        p.install_command,
-        p.test_command,
-        p.sensitive_paths,
-        p.description,
-        p.index_paths ?? [],
-        p.setup_mode ?? "auto",
-        p.collect_excludes ?? [],
-        p.sql_server ?? "auto",
-      ],
-    );
+    try {
+      return await db.one(
+        "INSERT INTO projects(name,repo,base_branch,image,install_command,test_command,sensitive_paths,description,index_paths,setup_mode,collect_excludes,sql_server) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *",
+        [
+          p.name,
+          p.repo,
+          p.base_branch,
+          p.image,
+          p.install_command,
+          p.test_command,
+          p.sensitive_paths,
+          p.description,
+          p.index_paths ?? [],
+          p.setup_mode ?? "auto",
+          p.collect_excludes ?? [],
+          p.sql_server ?? "auto",
+        ],
+      );
+    } catch (e) {
+      // 兩個請求同時送出時，查重之後才撞到 repo 的唯一限制；一樣回 409，不落到 500。
+      if ((e as { code?: string }).code !== "23505") throw e;
+      const winner = await taken();
+      throw winner
+        ? duplicate(winner)
+        : new AppError(409, "已經有專案使用這個儲存庫");
+    }
   });
   app.put("/api/projects/:id", async (req) => {
     await requireAdmin(db, req);
