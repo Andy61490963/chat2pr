@@ -10,6 +10,7 @@ import {
   type KeptEnvironment,
   type RemovalReason,
 } from "../shared/check-environment.js";
+import { systemIssueText } from "../shared/checks.js";
 
 /**
  * 定期檢查的專用環境（#19），只在主機執行器使用。
@@ -380,15 +381,10 @@ export class CheckEnvironments {
       .catch(() => undefined);
     const labels = meta?.Config.Labels ?? {};
     if (!meta || labels["io.agentflow.check-image"] !== "v1")
-      throw new AppError(
-        503,
-        `找不到定期檢查映像 ${this.image}，請以 npm run deploy 更新（會自動建置）`,
-      );
+      // 503＋固定訊息：伺服器以 shared/checks.ts 的 systemIssueRules 認出「需要處理的系統問題」。
+      throw new AppError(503, systemIssueText.imageMissing(this.image));
     if ((labels["io.agentflow.check-rev"] ?? "") < CHECK_REV)
-      throw new AppError(
-        503,
-        `定期檢查映像 ${this.image} 版本過舊，請以 npm run deploy 重建`,
-      );
+      throw new AppError(503, systemIssueText.imageOutdated(this.image));
     return meta.Id;
   }
 
@@ -438,11 +434,7 @@ export class CheckEnvironments {
       );
       for (let index = 0, tried = 0; tried < 8; index++) {
         const subnet = subnetSlot(this.pool, index);
-        if (!subnet)
-          throw new AppError(
-            503,
-            "定期檢查網路的位址已用完，請減少保留的環境數或調整 CHECK_SUBNET_POOL",
-          );
+        if (!subnet) throw new AppError(503, systemIssueText.subnetExhausted);
         if (used.has(subnet)) continue;
         tried++;
         try {
@@ -460,10 +452,7 @@ export class CheckEnvironments {
             throw e;
         }
       }
-      throw new AppError(
-        503,
-        "定期檢查網路位址與其他網路重疊，請調整 CHECK_SUBNET_POOL",
-      );
+      throw new AppError(503, systemIssueText.subnetOverlap);
     });
     this.allocation = work.catch(() => {});
     return work;
