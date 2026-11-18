@@ -48,7 +48,11 @@ import {
   message,
 } from "./shared";
 import {
+  configChanged as settingsChanged,
+  offersValidation,
+  repoListStatus,
   takenRepos,
+  validateLabel,
   validationErrorParts,
   validationKind,
 } from "./project-form";
@@ -104,15 +108,25 @@ export function ProjectsView({
   run,
   request,
   edit,
+  focusId = null,
+  focused,
 }: {
   state: State;
   busy: boolean;
   run: Run;
   request: Request;
   edit: (p: Partial<Project>) => void;
+  /** 剛存好的專案：打開它的詳情（從詳情按「編輯設定」進來的也回到同一個詳情），打開後呼叫 focused 清掉。 */
+  focusId?: string | null;
+  focused?: () => void;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
   const guard = useGuard();
+  useEffect(() => {
+    if (!focusId) return;
+    setOpenId(focusId);
+    focused?.();
+  }, [focusId]);
   const open = state.projects.find((p) => p.id === openId);
   return (
     <div className="flex flex-col gap-4">
@@ -472,12 +486,7 @@ export function ProjectsView({
                   )
                 }
               >
-                <RefreshCw />{" "}
-                {open.repo_missing_at
-                  ? "重新檢查"
-                  : open.setup_mode === "auto"
-                    ? "AI 自動設定並驗證"
-                    : "驗證環境"}
+                <RefreshCw /> {validateLabel(open)}
               </Button>
               {open.repo_missing_at && (
                 <ConfirmButton
@@ -834,7 +843,8 @@ export function ProjectForm({
 }: {
   project: Partial<Project>;
   busy: boolean;
-  save: (p: unknown) => unknown;
+  /** validate 為真：存檔成功後接著排入環境驗證（「儲存並驗證環境」）。 */
+  save: (p: unknown, validate: boolean) => unknown;
   request: Request;
 }) {
   const [repos, setRepos] = useState<
@@ -909,17 +919,11 @@ export function ProjectForm({
     .map((x) => x.trim())
     .filter(Boolean);
   // 變更執行設定或索引範圍需要重新驗證，存檔時自動改為未啟用。
-  const configChanged =
-    !!p.id &&
-    (form.repo !== p.repo ||
-      form.base_branch !== p.base_branch ||
-      form.image !== p.image ||
-      form.setup_mode !== (p.setup_mode ?? "manual") ||
-      form.sql_server !== (p.sql_server ?? "auto") ||
-      form.install_command !== p.install_command ||
-      form.test_command !== p.test_command ||
-      form.sensitive_paths !== (p.sensitive_paths?.join("\n") ?? "") ||
-      JSON.stringify(indexPaths) !== JSON.stringify(p.index_paths ?? []));
+  const fields = { ...form, index_paths: indexPaths };
+  const configChanged = settingsChanged(p, fields);
+  // 新增專案或改了需要重新驗證的設定：主按鈕是「儲存並驗證環境」，另給「只儲存」。
+  const offerValidate = offersValidation(p, fields);
+  const repoList = repoListStatus(repos, reposError);
   const choose = (full: string) => {
     // 清單載入前後元件可能送出空值，不能因此清掉已選的儲存庫。
     if (!full) return;
@@ -954,16 +958,22 @@ export function ProjectForm({
           return;
         }
         setExcludeError("");
-        save({
-          ...form,
-          sensitive_paths: form.sensitive_paths
-            .split("\n")
-            .map((x) => x.trim())
-            .filter(Boolean),
-          index_paths: indexPaths,
-          collect_excludes: collectExcludes,
-          enabled: form.enabled && !configChanged && !!p.validated_at,
-        });
+        // 在輸入框按 Enter 送出時，瀏覽器以第一顆送出按鈕（主按鈕）為 submitter。
+        const submitter = (e.nativeEvent as SubmitEvent)
+          .submitter as HTMLButtonElement | null;
+        save(
+          {
+            ...form,
+            sensitive_paths: form.sensitive_paths
+              .split("\n")
+              .map((x) => x.trim())
+              .filter(Boolean),
+            index_paths: indexPaths,
+            collect_excludes: collectExcludes,
+            enabled: form.enabled && !configChanged && !!p.validated_at,
+          },
+          offerValidate && submitter?.value !== "save-only",
+        );
       }}
     >
       <div className="flex flex-col gap-2">
@@ -987,15 +997,7 @@ export function ProjectForm({
           <Select value={form.repo} onValueChange={choose} disabled={!repos}>
             <SelectTrigger className="w-full">
               {/* 清單內只列儲存庫名稱，選定後這裡仍顯示含擁有者的完整名稱。 */}
-              <SelectValue
-                placeholder={
-                  repos
-                    ? "選擇已安裝 GitHub App 的儲存庫"
-                    : reposError
-                      ? "無法取得儲存庫清單"
-                      : "載入中…"
-                }
-              >
+              <SelectValue placeholder={repoList.placeholder}>
                 {form.repo}
               </SelectValue>
             </SelectTrigger>
@@ -1036,12 +1038,12 @@ export function ProjectForm({
             </SelectContent>
           </Select>
         )}
-        {pickRepo && reposError && (
+        {pickRepo && repoList.error && (
           <div
             role="alert"
             className="space-y-2 rounded-lg bg-danger-soft px-3 py-2.5 text-sm text-danger"
           >
-            <p className="break-words">無法取得儲存庫清單：{reposError}</p>
+            <p className="break-words">{repoList.error}</p>
             <Button
               type="button"
               variant="outline"
@@ -1053,7 +1055,7 @@ export function ProjectForm({
             </Button>
           </div>
         )}
-        {pickRepo && repos?.length === 0 && (
+        {pickRepo && repoList.empty && (
           <p className="text-xs text-muted-foreground" role="status">
             沒有可選的儲存庫。請先在 GitHub 把 App
             安裝到儲存庫，裝好後按「重新整理清單」。
@@ -1116,8 +1118,12 @@ export function ProjectForm({
         </p>
         <p className="mt-1 text-muted-foreground">
           {form.setup_mode === "auto"
-            ? "不必填指令。儲存後按「AI 自動設定並驗證」，AI 會讀取所選分支的 CI、文件與套件設定，安裝並驗證。成功後自動啟用派工；只有建置或缺少必要資訊時會明確說明。"
-            : "驗證環境與每次派工都會執行進階設定中的指令。既有設定已保留，也可以切換成 AI 自動設定。"}
+            ? offerValidate
+              ? "不必填指令。按「儲存並驗證環境」，AI 會讀取所選分支的 CI、文件與套件設定，安裝並驗證；成功後自動啟用派工，只有建置或缺少必要資訊時會明確說明。按「只儲存」不會開始驗證，存檔後會打開專案詳情，之後可在那裡驗證。"
+              : "不必填指令。AI 依所選分支的 CI、文件與套件設定安裝並驗證；只改名稱或說明不需要重新驗證。"
+            : offerValidate
+              ? "驗證環境與每次派工都會執行進階設定中的指令。按「儲存並驗證環境」會接著用這些指令驗證；也可以切換成 AI 自動設定。"
+              : "驗證環境與每次派工都會執行進階設定中的指令。既有設定已保留，也可以切換成 AI 自動設定。"}
         </p>
       </div>
       <details
@@ -1311,7 +1317,34 @@ export function ProjectForm({
           <span className="text-warn">（已變更設定，存檔後需重新驗證）</span>
         )}
       </Label>
-      <Button disabled={busy}>儲存專案</Button>
+      {offerValidate ? (
+        // 主按鈕放第一顆：在輸入框按 Enter 時送出的也是它。手機上兩顆各佔一整行。
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <Button
+            type="submit"
+            name="intent"
+            value="validate"
+            className="sm:flex-1"
+            disabled={busy}
+          >
+            <RefreshCw /> 儲存並驗證環境
+          </Button>
+          <Button
+            type="submit"
+            name="intent"
+            value="save-only"
+            variant="outline"
+            className="sm:flex-1"
+            disabled={busy}
+          >
+            只儲存
+          </Button>
+        </div>
+      ) : (
+        <Button type="submit" disabled={busy}>
+          儲存專案
+        </Button>
+      )}
     </form>
   );
 }

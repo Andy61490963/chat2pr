@@ -50,6 +50,7 @@ import { GroupsView } from "./app/groups";
 import { ChatView } from "./app/chat";
 import { InboxView } from "./app/inbox";
 import { ProjectForm, ProjectsView } from "./app/projects";
+import { saveProject } from "./app/project-form";
 import { applyTheme, pickSettings, SettingsView } from "./app/settings";
 import {
   type Account,
@@ -206,6 +207,8 @@ export function App() {
     [selected, setSelected] = useState<Detail | null>(null),
     [busy, setBusy] = useState(false),
     [project, setProject] = useState<Partial<Project> | null>(null),
+    // 剛存好的專案 id；專案頁打開它的詳情後清掉。
+    [savedProject, setSavedProject] = useState<string | null>(null),
     // 每次從導覽切換頁面就加一，讓該頁丟掉上一輪的篩選、照網址重新開始。
     [visit, setVisit] = useState(0),
     [offline, setOffline] = useState(false),
@@ -916,6 +919,8 @@ export function App() {
                 run={run}
                 request={request}
                 edit={setProject}
+                focusId={savedProject}
+                focused={() => setSavedProject(null)}
               />
             )}
             {current.id === "checks" && (
@@ -1035,18 +1040,23 @@ export function App() {
               project={project}
               busy={busy}
               request={request}
-              save={(p) =>
-                run(async () => {
-                  await request(
-                    project.id
-                      ? `/api/projects/${project.id}`
-                      : "/api/projects",
-                    project.id ? "PUT" : "POST",
+              save={async (p, validate) => {
+                // 存好後打開該專案的詳情；選了「儲存並驗證環境」就接著排入驗證，
+                // 驗證沒排上只提示原因，不讓儲存看起來失敗。
+                let notice = null as { text: string; error?: boolean } | null;
+                const ok = await run(async () => {
+                  const result = await saveProject(
+                    request,
+                    project.id,
                     p,
+                    validate,
                   );
+                  notice = result.notice;
                   setProject(null);
-                }, "專案已儲存")
-              }
+                  setSavedProject(result.saved.id);
+                }, "專案已儲存");
+                if (ok && notice) setToast(notice);
+              }}
             />
           </SheetContent>
         </Sheet>

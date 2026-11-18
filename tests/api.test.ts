@@ -10,8 +10,137 @@ vi.mock("../server/config.js", async (original) => ({
 import { db, reset, fixture, session } from "./helpers.js";
 import { buildApp } from "../server/app.js";
 import { Line } from "../server/line.js";
+import { GitHub } from "../server/github.js";
 beforeEach(reset);
 afterAll(() => db.close());
+
+describe("新增專案不能重複使用同一個儲存庫", () => {
+  const body = (name: string, repo: string) => ({
+    name,
+    repo,
+    base_branch: "main",
+    image: "fixture-image",
+    install_command: "",
+    test_command: "",
+    sensitive_paths: [],
+    enabled: false,
+  });
+  const create = (
+    app: Awaited<ReturnType<typeof buildApp>>,
+    headers: Record<string, string>,
+    name: string,
+    repo: string,
+  ) =>
+    app.inject({
+      method: "POST",
+      url: "/api/projects",
+      headers,
+      payload: body(name, repo),
+    });
+
+  it("同一儲存庫（含大小寫不同）第二次新增回 409 與中文訊息，不再落到 500", async () => {
+    const app = await buildApp(db),
+      headers = await session();
+    const installation = vi
+      .spyOn(GitHub.prototype, "installation")
+      .mockResolvedValue(1);
+    try {
+      expect(
+        (await create(app, headers, "虛構訂單", "fictional-org/orders"))
+          .statusCode,
+      ).toBe(200);
+      for (const repo of ["fictional-org/orders", "Fictional-Org/Orders"]) {
+        const again = await create(app, headers, "另一個訂單", repo);
+        expect(again.statusCode).toBe(409);
+        expect(again.json().error).toBe("已經有專案「虛構訂單」使用這個儲存庫");
+      }
+      // 已被佔用時不必再問 GitHub。
+      expect(installation).toHaveBeenCalledTimes(1);
+      expect(
+        await db.query("SELECT id FROM projects WHERE lower(repo)=$1", [
+          "fictional-org/orders",
+        ]),
+      ).toHaveLength(1);
+    } finally {
+      installation.mockRestore();
+      await app.close();
+    }
+  });
+
+  it("佔用的專案找不到儲存庫時，訊息引導去那個專案改選位置", async () => {
+    const app = await buildApp(db),
+      headers = await session();
+    await db.query(
+      "INSERT INTO projects(name,repo,repo_missing_at) VALUES('虛構舊倉','fictional-org/legacy',now())",
+    );
+    const installation = vi
+      .spyOn(GitHub.prototype, "installation")
+      .mockResolvedValue(1);
+    try {
+      const res = await create(app, headers, "新倉", "FICTIONAL-ORG/legacy");
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe(
+        "專案「虛構舊倉」原本使用這個儲存庫，但目前找不到；請到該專案改選位置，不要另建新專案",
+      );
+      expect(installation).not.toHaveBeenCalled();
+    } finally {
+      installation.mockRestore();
+      await app.close();
+    }
+  });
+
+  it("查重之後才被另一個請求搶先建立時，唯一限制的錯誤也轉成 409", async () => {
+    const app = await buildApp(db),
+      headers = await session();
+    // 模擬兩個請求同時送出：查重通過後、INSERT 之前，另一筆先寫進去。
+    const installation = vi
+      .spyOn(GitHub.prototype, "installation")
+      .mockImplementation(async () => {
+        await db.query(
+          "INSERT INTO projects(name,repo) VALUES('搶先專案','fictional-org/race')",
+        );
+        return 1;
+      });
+    try {
+      const res = await create(app, headers, "慢一步", "fictional-org/race");
+      expect(res.statusCode).toBe(409);
+      expect(res.json().error).toBe("已經有專案「搶先專案」使用這個儲存庫");
+    } finally {
+      installation.mockRestore();
+      await app.close();
+    }
+  });
+});
+
+describe("所有管理 API 的輸入格式錯誤都回看板讀得懂的格式", () => {
+  it("成員與聊天室的路由也回「輸入格式錯誤」與中文提示，不是 Bad Request", async () => {
+    await fixture();
+    const app = await buildApp(db),
+      headers = await session();
+    try {
+      const member = await app.inject({
+        method: "POST",
+        url: "/api/members",
+        headers,
+        payload: { login: "不是 帳號", role: "admin" },
+      });
+      expect(member.statusCode).toBe(400);
+      expect(member.json().error).toBe("輸入格式錯誤");
+      expect(member.json().details.join("\n")).toContain(
+        "GitHub 帳號格式不正確",
+      );
+      const chat = await app.inject({
+        url: "/api/groups/group-a/messages?before=",
+        headers,
+      });
+      expect(chat.statusCode).toBe(400);
+      expect(chat.json().error).toBe("輸入格式錯誤");
+      expect(chat.json()).toHaveProperty("details");
+    } finally {
+      await app.close();
+    }
+  });
+});
 describe("公開 Webhook 與管理 API 邊界", () => {
   it("非管理者即使持有有效工作階段與 CSRF 仍不能讀取或修改設定", async () => {
     const headers = await session(),
