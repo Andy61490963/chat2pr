@@ -1,9 +1,9 @@
 import { z } from "zod";
-import { Database } from "./db.js";
+import { Database, type DbClient } from "./db.js";
 import { secrets, config } from "./config.js";
 import { hash } from "./auth.js";
 import { AppError, redact } from "./policy.js";
-import { isTaskCommand } from "../shared/chat.js";
+import { isProgressCommand, isTaskCommand } from "../shared/chat.js";
 import { notificationView } from "../shared/notifications.js";
 import {
   commandAck,
@@ -11,10 +11,21 @@ import {
   followupAck,
   answerAck,
   answerHeldAck,
+  credentialAnswerAck,
   detailRequest,
   lineChunks,
   groupRepliesOn,
+  ackFor,
+  claimPendingGroupReplies,
+  pendingGroupReplies,
+  progressMoreNote,
+  progressSummary,
+  progressTasks,
+  replyFailedNote,
+  type QuickReply,
 } from "./group-replies.js";
+import { subscriptionGateName } from "./subscription-gate.js";
+import { LINE_QUOTA } from "../shared/line-quota.js";
 import { applyAnswer, questionByQuote } from "./answers.js";
 import {
   LineQuotaExhausted,
@@ -62,6 +73,38 @@ const Event = z
   })
   .passthrough();
 export const LinePayload = z.object({ events: z.array(Event).max(100) });
+/** reply token 一次最多送 5 則；同一個 token 只能用一次，所有內容要合併成一個陣列。 */
+const REPLY_LIMIT = 5;
+type ReplyMessage = string | { text: string; quick?: QuickReply[] | null };
+interface Ack {
+  token: string;
+  messages: ReplyMessage[];
+  /** messages[i] 是補送的哪一則通知（沒有則為 null）：送出後依索引寫回 sent_message_id。 */
+  notices?: (string | null)[];
+}
+const lineText = (m: ReplyMessage) => {
+  const text = typeof m === "string" ? m : m.text;
+  const quick = typeof m === "string" ? null : m.quick;
+  return {
+    type: "text",
+    text,
+    ...(quick?.length
+      ? {
+          quickReply: {
+            items: quick.slice(0, 13).map((q) => ({
+              type: "action",
+              action: {
+                type: "postback",
+                label: q.label,
+                data: q.data,
+                displayText: q.displayText,
+              },
+            })),
+          },
+        }
+      : {}),
+  };
+};
 export class Line {
   constructor(private db: Database) {}
   async ingest(body: unknown) {
@@ -69,7 +112,7 @@ export class Line {
     const adoptions: Array<{ task: string; version: number; index: number }> =
       [];
     // 「/任務」的立即回覆：交易完成後才送，失敗不影響收訊。
-    const acks: { token: string; text: string | string[] }[] = [];
+    const acks: Ack[] = [];
     for (const e of payload.events)
       await this.db.transaction(async (c) => {
         const inserted = await c.query(
@@ -198,6 +241,49 @@ export class Line {
           return;
         }
         if (e.type === "message" && e.message) {
+          const replyOn =
+            !!e.replyToken && settings.reply_mode !== "off" && settings.replies;
+          // 「/進度」：用不耗推播額度的 reply token 回本群組的需求狀態與先前沒送到的回覆。
+          // 不建任務、不送判讀、不呼叫模型；在判斷補問回答與指令之前處理，引用補問打 /進度 也不會被當成回答。
+          if (e.message.type === "text" && isProgressCommand(e.message.text)) {
+            const saved = await c.query(
+              "INSERT INTO messages(id,group_id,user_id,type,text,quoted_id,trigger_mode,processed) VALUES($1,$2,$3,'text',$4,$5,'chat',true) ON CONFLICT DO NOTHING RETURNING id",
+              [
+                e.message.id,
+                group,
+                e.source?.userId ?? null,
+                e.message.text,
+                e.message.quotedMessageId ?? null,
+              ],
+            );
+            if (!saved.rowCount || !replyOn) return;
+            if (!settings.enabled) {
+              acks.push({ token: e.replyToken!, messages: [disabledAck] });
+              return;
+            }
+            const { tasks, total } = await progressTasks(c, group);
+            const { replies, remaining } = await claimPendingGroupReplies(
+              c,
+              group,
+              REPLY_LIMIT - 1,
+            );
+            const notes: ReplyMessage[] = replies.map((r, i) => ({
+              text:
+                remaining && i === replies.length - 1
+                  ? `${r.text}\n\n${progressMoreNote(remaining)}`
+                  : r.text,
+              quick: r.quick_replies,
+            }));
+            acks.push({
+              token: e.replyToken!,
+              messages: [
+                progressSummary(tasks, total, replies.length),
+                ...notes,
+              ],
+              notices: [null, ...replies.map((r) => r.id)],
+            });
+            return;
+          }
           // 「回覆」機器人的補問就是回答：直接併進需求，不用等判讀，也不再呼叫模型。
           // 含常見憑證格式的回答不收，改走一般流程，避免機密寫進需求。
           const answerText = e.message.text?.trim() ?? "";
@@ -231,14 +317,42 @@ export class Line {
               false,
               e.message.id,
             );
-            if (
-              e.replyToken &&
-              settings.reply_mode !== "off" &&
-              settings.replies
-            )
+            if (replyOn)
               acks.push({
-                token: e.replyToken,
-                text: t.status === "queued" ? answerAck : answerHeldAck,
+                token: e.replyToken!,
+                messages: [t.status === "queued" ? answerAck : answerHeldAck],
+              });
+            return;
+          }
+          // 回答補問卻含憑證格式：明確拒收。不存原文、不排判讀，也不能落到追問路徑回「收到」，
+          // 否則成員以為已收下，原文還會以追問身分交給判讀模型。過期的補問不在此處理，照舊當補充。
+          if (
+            settings.enabled &&
+            e.message.type === "text" &&
+            e.message.quotedMessageId &&
+            answerText &&
+            redact(answerText) !== answerText &&
+            (
+              await c.query(
+                "SELECT 1 FROM notifications n JOIN tasks t ON t.id=n.task_id WHERE n.sent_message_id=$1 AND n.group_id=$2 AND t.group_id=$2 AND n.kind='group_question' LIMIT 1",
+                [e.message.quotedMessageId, group],
+              )
+            ).rowCount
+          ) {
+            const saved = await c.query(
+              "INSERT INTO messages(id,group_id,user_id,type,text,quoted_id,trigger_mode,processed,bot_reply) VALUES($1,$2,$3,'text',$4,$5,'chat',true,false) ON CONFLICT DO NOTHING RETURNING id",
+              [
+                e.message.id,
+                group,
+                e.source?.userId ?? null,
+                redact(answerText),
+                e.message.quotedMessageId,
+              ],
+            );
+            if (saved.rowCount && replyOn)
+              acks.push({
+                token: e.replyToken!,
+                messages: [credentialAnswerAck],
               });
             return;
           }
@@ -266,15 +380,10 @@ export class Line {
                   e.message.quotedMessageId,
                 ],
               );
-              if (
-                saved.rowCount &&
-                e.replyToken &&
-                settings.reply_mode !== "off" &&
-                settings.replies
-              )
+              if (saved.rowCount && replyOn)
                 acks.push({
-                  token: e.replyToken,
-                  text: lineChunks(full.answer),
+                  token: e.replyToken!,
+                  messages: lineChunks(full.answer, REPLY_LIMIT),
                 });
               return;
             }
@@ -309,20 +418,24 @@ export class Line {
               botReply,
             ],
           );
-          if (
-            (command || botReply) &&
-            saved.rowCount &&
-            e.replyToken &&
-            settings.reply_mode !== "off" &&
-            settings.replies
-          )
+          if ((command || botReply) && saved.rowCount && replyOn)
             acks.push({
-              token: e.replyToken,
-              text: eligible
-                ? botReply
-                  ? await this.followupAck(c, group, e.message.quotedMessageId)
-                  : commandAck
-                : disabledAck,
+              token: e.replyToken!,
+              messages: [
+                eligible
+                  ? await this.honestAck(
+                      c,
+                      group,
+                      botReply
+                        ? await this.followupAck(
+                            c,
+                            group,
+                            e.message.quotedMessageId,
+                          )
+                        : commandAck,
+                    )
+                  : disabledAck,
+              ],
             });
           if (eligible && saved.rowCount)
             await c.query(
@@ -331,7 +444,10 @@ export class Line {
             );
         }
       });
-    for (const a of acks) await this.reply(a.token, a.text);
+    for (const a of acks) {
+      const ids = await this.reply(a.token, a.messages);
+      if (a.notices) await this.settleClaimed(a.notices, ids);
+    }
     for (const a of adoptions) {
       const reply =
         "這個按鈕已改為看板確認流程。請先到看板檢視目標專案與方案，再確認執行。";
@@ -405,24 +521,87 @@ export class Line {
       minutes <= 1 ? "，大約 1 分鐘。" : `，大約 ${minutes} 分鐘。`,
     );
   }
-  /** 用 reply token 回覆群組；不計入推播額度，送不出去也不影響收訊。 */
-  private async reply(token: string, text: string | string[]) {
+  /**
+   * 「收到」依收訊當下的系統狀態說實話（只改文字，不改審核、派工、判讀規則）：
+   * 系統或判讀暫停、群組沒有可用專案（條件同 triage-window.ts）、訂閱模式的 Codex 額度關卡關閉。
+   * 推播額度用完或本群組有推播失敗的回覆時，再提醒可以打 /進度 取回，但不附完整內容。
+   */
+  private async honestAck(c: DbClient, group: string, base: string) {
+    const s = (
+      await c.query<{
+        paused: boolean;
+        ai_out: boolean;
+        no_project: boolean;
+        push_out: boolean;
+      }>(
+        `SELECT COALESCE((s.value->>'paused')::boolean,false) OR COALESCE((s.value->>'triage_paused')::boolean,false) AS paused,
+           COALESCE(s.value->>'ai_mode','')='subscription' AND COALESCE((SELECT NOT ok FROM service_health WHERE name=$2),false) AS ai_out,
+           NOT EXISTS(SELECT 1 FROM group_projects gp JOIN projects p ON p.id=gp.project_id WHERE gp.group_id=$1 AND p.enabled AND p.validated_at IS NOT NULL) AS no_project,
+           COALESCE((SELECT NOT ok FROM service_health WHERE name=$3),false) AS push_out
+         FROM settings s WHERE s.id=1`,
+        [group, subscriptionGateName, LINE_QUOTA],
+      )
+    ).rows[0];
+    const pending = await pendingGroupReplies(c, group);
+    return ackFor({
+      base,
+      paused: !!s?.paused,
+      noProject: !!s?.no_project,
+      aiQuotaOut: !!s?.ai_out,
+      undelivered: s?.push_out || pending.failed ? pending.count : 0,
+    });
+  }
+  /**
+   * /進度 補送的通知：reply 成功就依索引寫回 sent_message_id（之後「詳細」、引用追問、引用作答才接得上）；
+   * 失敗或逾時就把佔住的列還原成未送出，下次 /進度 或正常推播可以再試。
+   */
+  private async settleClaimed(
+    notices: (string | null)[],
+    ids: (string | null)[] | null,
+  ) {
+    const claimed = notices.flatMap((id, i) => (id ? [{ id, i }] : []));
+    if (!claimed.length) return;
+    if (!ids) {
+      await this.db.query(
+        "UPDATE notifications SET sent_at=NULL,last_error=$2 WHERE id=ANY($1::uuid[]) AND sent_message_id IS NULL",
+        [claimed.map((n) => n.id), replyFailedNote],
+      );
+      return;
+    }
+    for (const n of claimed)
+      await this.db.query(
+        "UPDATE notifications SET sent_message_id=$2,last_error=NULL WHERE id=$1",
+        [n.id, ids[n.i] ?? null],
+      );
+  }
+  /**
+   * 用 reply token 回覆群組；不計入推播額度，送不出去也不影響收訊。
+   * 成功時依索引回傳 LINE 給每則訊息的 ID；沒送出（沒有權杖、逾時、非 2xx）時回傳 null。
+   */
+  private async reply(
+    token: string,
+    messages: ReplyMessage[],
+  ): Promise<(string | null)[] | null> {
     const access = secrets().lineToken;
-    if (!access) return;
-    await fetch("https://api.line.me/v2/bot/message/reply", {
+    if (!access) return null;
+    const sent = messages.slice(0, REPLY_LIMIT);
+    const response = await fetch("https://api.line.me/v2/bot/message/reply", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${access}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        replyToken: token,
-        messages: (Array.isArray(text) ? text : [text])
-          .slice(0, 5)
-          .map((t) => ({ type: "text", text: t })),
-      }),
+      body: JSON.stringify({ replyToken: token, messages: sent.map(lineText) }),
       signal: AbortSignal.timeout(5000),
     }).catch(() => null);
+    if (!response?.ok) return null;
+    const body = (await response.json().catch(() => null)) as {
+      sentMessages?: { id?: unknown }[];
+    } | null;
+    return sent.map((_, i) => {
+      const id = body?.sentMessages?.[i]?.id;
+      return typeof id === "string" ? id : null;
+    });
   }
   /** 立即送一則測試私訊，讓管理者確認配對與權杖都正常；不進通知佇列。 */
   async sendTest() {
