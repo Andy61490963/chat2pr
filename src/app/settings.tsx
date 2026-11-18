@@ -2,7 +2,21 @@ import { useEffect, useRef, useState } from "react";
 import { Check, Copy, RefreshCw, Send } from "lucide-react";
 import type { NotificationFailures, Settings } from "../../shared/types.js";
 import { LINE_QUOTA, linePushPanel } from "../../shared/line-quota.js";
+import {
+  riskyChanges,
+  settingsDiff,
+  type SettingsChange,
+} from "../../shared/settings-diff.js";
 import { ConfirmButton } from "./confirm";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -250,6 +264,16 @@ function AiCard({
   useUnsaved("settings-ai", dirty);
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
+  const save = (values: Form) =>
+    void run(
+      () => request("/api/settings", "PUT", values),
+      "設定已儲存，新工作會套用",
+    );
+  // 等管理者確認的危險變更；取消時什麼都不送，表單內容留著。
+  const [pending, setPending] = useState<{
+    form: Form;
+    changes: SettingsChange[];
+  } | null>(null);
   const models = typeof account === "object" && account ? account.models : [];
   const fallback = models.find((m) => m.isDefault);
   const current = models.find((m) => m.id === form.codex_model) ?? fallback;
@@ -267,10 +291,12 @@ function AiCard({
           className="flex flex-col gap-5"
           onSubmit={(e) => {
             e.preventDefault();
-            void run(
-              () => request("/api/settings", "PUT", form),
-              "設定已儲存，新工作會套用",
+            // 開放容器網路、改用 API 計費先確認；改回隔離或訂閱、改其他欄位直接儲存。
+            const risky = riskyChanges(
+              settingsDiff(JSON.parse(savedSettings) as Form, form),
             );
+            if (risky.length) setPending({ form, changes: risky });
+            else save(form);
           }}
         >
           <div className="space-y-2">
@@ -550,6 +576,45 @@ function AiCard({
             )}
           </div>
         </form>
+        <Dialog
+          open={!!pending}
+          onOpenChange={(open) => !open && setPending(null)}
+        >
+          <DialogContent showCloseButton={false} className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>確定要套用這些變更？</DialogTitle>
+              <DialogDescription>
+                以下變更會影響之後開始的判讀與開發，儲存後立即生效。
+              </DialogDescription>
+            </DialogHeader>
+            <ul className="flex flex-col gap-3 text-sm">
+              {pending?.changes.map((c) => (
+                <li key={c.key} className="rounded-lg bg-warn-soft px-3 py-2">
+                  <p className="font-medium text-warn">
+                    {c.label}：{c.from} → {c.to}
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">{c.risk}</p>
+                </li>
+              ))}
+            </ul>
+            <DialogFooter>
+              <DialogClose asChild>
+                <Button variant="outline">先不要</Button>
+              </DialogClose>
+              <Button
+                variant="destructive"
+                disabled={busy}
+                onClick={() => {
+                  const values = pending?.form;
+                  setPending(null);
+                  if (values) save(values);
+                }}
+              >
+                確認並儲存
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </CardContent>
     </Card>
   );

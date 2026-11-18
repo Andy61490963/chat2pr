@@ -73,9 +73,11 @@ import type {
   NotificationFailures,
   NotificationRetryResult,
   Project,
+  Settings,
   StateTotals,
   TaskStatus,
 } from "../shared/types.js";
+import { describeChanges, settingsDiff } from "../shared/settings-diff.js";
 import {
   countStatuses,
   efforts,
@@ -1280,7 +1282,7 @@ export async function buildApp(
     return { ok: true };
   });
   app.put("/api/settings", async (req) => {
-    await requireAdmin(db, req);
+    const admin = await requireAdmin(db, req);
     const b = z
       .object({
         paused: z.boolean(),
@@ -1324,14 +1326,21 @@ export async function buildApp(
       );
       if (!checked.ok) throw new AppError(409, "請先執行串接檢查");
     }
-    await db.query("UPDATE settings SET value=value || $1::jsonb WHERE id=1", [
-      JSON.stringify(b),
-    ]);
+    // 同一個語句先鎖住、讀出舊值再更新，稽核寫的差異才對得上這次實際的改動。
+    // CTE 不叫 old：PostgreSQL 18 起 RETURNING 的 old／new 是保留別名。
+    const { before } = await db.one<{ before: Partial<Settings> }>(
+      `WITH prev AS (SELECT value FROM settings WHERE id=1 FOR UPDATE)
+       UPDATE settings s SET value=s.value || $1::jsonb FROM prev WHERE s.id=1
+       RETURNING prev.value AS before`,
+      [JSON.stringify(b)],
+    );
     await db.audit(
       null,
       "settings",
-      b.paused ? "已暫停新派工" : "工作流程設定已更新",
+      `管理者 ${admin.login} 更新工作流程設定：${describeChanges(settingsDiff(before, b))}`,
     );
+    if (b.paused && !before.paused)
+      await db.audit(null, "settings", "暫停新派工");
     return { ok: true };
   });
   app.post("/api/notifications/retry", async (req) => {

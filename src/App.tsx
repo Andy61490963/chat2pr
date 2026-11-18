@@ -72,7 +72,13 @@ import { SystemView } from "./app/system";
 import { ChecksView } from "./app/checks";
 import { MembersView } from "./app/members";
 import { AlertBell } from "./app/alerts";
-import { readApiResponse } from "./app/api-response";
+import {
+  expiredMessage,
+  probeService,
+  readApiResponse,
+  SessionExpiredError,
+} from "./app/api-response";
+import { dispatchStatus } from "./app/dispatch-status";
 import { useGuard } from "./app/unsaved";
 
 export { applyTheme };
@@ -197,9 +203,12 @@ export function App() {
       login: string;
       role?: "admin" | "member";
     } | null>(null),
-    [configured, setConfigured] = useState(false),
+    // null：連不上服務（通道或服務重啟中），false：服務在但還沒設定 GitHub App。
+    [configured, setConfigured] = useState<boolean | null>(false),
     [loading, setLoading] = useState(true),
     [error, setError] = useState(""),
+    // 操作中途登入過期時顯示在登入頁的說明；主動登出不設。
+    [expired, setExpired] = useState(""),
     // 失敗的提示用紅色、停留較久，才不會跟「已儲存」混在一起又一閃而過。
     [toast, setToast] = useState<{ text: string; error?: boolean } | null>(
       null,
@@ -225,6 +234,7 @@ export function App() {
     if (path !== location.pathname)
       history.replaceState(null, "", path + location.search);
   }, []);
+  const signingOut = useRef(false);
   const request = useCallback<Request>(
     async (url, method = "GET", body) => {
       const response = await fetch(url, {
@@ -238,11 +248,14 @@ export function App() {
           ? undefined
           : JSON.stringify(body ?? {}),
       });
-      if (response.status === 401) {
+      // 主動登出途中還在跑的請求回 401 是預期的，不當成「登入已失效」。
+      if (response.status === 401 && !signingOut.current) {
+        // 保留第一個說明：寫入失敗後緊接的重新整理（GET）不能把「操作沒有完成」蓋掉。
+        setExpired((prev) => prev || expiredMessage(method));
         setUser(null);
         setState(null);
       }
-      return readApiResponse(response);
+      return readApiResponse(response, method);
     },
     [user],
   );
@@ -260,22 +273,23 @@ export function App() {
       setError(message(e));
     }
   }, [request]);
-  useEffect(() => {
-    void (async () => {
-      try {
-        const info = await readApiResponse<{ githubConfigured: boolean }>(
-          await fetch("/api/public/status"),
-        );
-        setConfigured(!!info.githubConfigured);
-        const r = await fetch("/api/me");
-        if (r.ok) setUser(await readApiResponse(r));
-      } catch {
-        setError("無法連線到本機服務，請檢查啟動狀態。");
-      } finally {
-        setLoading(false);
-      }
-    })();
+  // 通道停了會回 502／530 的 HTML 頁：當成暫時連不上（configured=null），
+  // 登入頁給「重新連線」，不要叫使用者去執行 npm run setup。
+  const connect = useCallback(async () => {
+    setLoading(true);
+    const probe = await probeService<NonNullable<typeof user>>((url) =>
+      fetch(url, { credentials: "same-origin" }),
+    );
+    if (probe.user) {
+      signingOut.current = false;
+      setUser(probe.user);
+    }
+    setConfigured(probe.configured);
+    setLoading(false);
   }, []);
+  useEffect(() => {
+    void connect();
+  }, [connect]);
   useEffect(() => {
     if (!user) return;
     void refresh();
@@ -425,6 +439,12 @@ export function App() {
     const id = new URLSearchParams(location.search).get("task");
     if (id) void openTask(id, false);
   }, [user, openTask]);
+  // 使用者從導覽換頁後把焦點移到頁面標題，讀屏與鍵盤從新頁面開頭繼續；
+  // visit 只在換頁時加一，初次載入與輪詢重新整理都不搶焦點。
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (visit) heading.current?.focus({ preventScroll: true });
+  }, [visit]);
   useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(null), toast.error ? 12000 : 4500);
@@ -479,6 +499,18 @@ export function App() {
   };
   // 換頁前先確認沒有未儲存的修改。
   const go = (v: View) => guard(() => leave(v));
+  // 從選單換頁時，選單關閉會把焦點還給觸發按鈕；改送到新頁面的標題。
+  const fromMenu = useRef(false);
+  const goFromMenu = (v: View) => {
+    fromMenu.current = true;
+    go(v);
+  };
+  const headingAfterMenu = (e: Event) => {
+    if (!fromMenu.current) return;
+    fromMenu.current = false;
+    e.preventDefault();
+    heading.current?.focus({ preventScroll: true });
+  };
   // 收件匣統計卡直接開啟對應篩選的任務列表。
   const showTasks = (filter: string) =>
     guard(() => {
@@ -506,14 +538,43 @@ export function App() {
     };
     return refresh();
   };
-  const logout = () => void run(() => request("/api/logout", "POST"), "已登出");
+  // 主動登出不經過 refresh：登出後再讀狀態必然 401，登入頁會誤顯示「登入已失效」。
+  const signOut = async () => {
+    signingOut.current = true;
+    setBusy(true);
+    try {
+      await request("/api/logout", "POST");
+    } catch (e) {
+      // 工作階段本來就過期也算登出完成；其他錯誤（例如連不上）留在原畫面說明。
+      if (!(e instanceof SessionExpiredError)) {
+        signingOut.current = false;
+        setToast({ text: message(e), error: true });
+        return;
+      }
+    } finally {
+      setBusy(false);
+    }
+    setSelected(null);
+    setUser(null);
+    setState(null);
+    setError("");
+    setExpired("");
+  };
+  const logout = () => void signOut();
   if (loading)
     return (
       <div className="flex min-h-screen items-center justify-center gap-2 text-muted-foreground">
         <Loader2 className="size-4 animate-spin" /> 正在連線…
       </div>
     );
-  if (!user) return <Login configured={configured} error={error} />;
+  if (!user)
+    return (
+      <Login
+        configured={configured}
+        notice={expired}
+        retry={() => void connect()}
+      />
+    );
   const needs = state?.tasks.filter((t) => attention.includes(t.status)) ?? [];
   const togglePause = () =>
     state &&
@@ -543,6 +604,25 @@ export function App() {
   // 記憶體不足時系統自己暫停派新工作；手動暫停時以手動暫停為準。
   const hold = state && !state.settings.paused ? memoryHold(state) : null;
   const live = state && !state.settings.paused && !hold;
+  const dispatch =
+    state &&
+    dispatchStatus({
+      paused: state.settings.paused,
+      triagePaused: !!state.settings.triage_paused,
+      hold,
+      admin,
+    });
+  const dispatchContent = dispatch && (
+    <>
+      <span
+        className={cn(
+          "inline-flex size-1.5 rounded-full",
+          live ? "bg-good" : "bg-warn",
+        )}
+      />
+      {dispatch.label}
+    </>
+  );
   return (
     <div
       className={cn(
@@ -572,8 +652,8 @@ export function App() {
                   {section}
                 </p>
               )}
+              {/* 不設 aria-label：名稱由文字與徽章組成，讀屏才念得到待處理數量。 */}
               <button
-                aria-label={label}
                 aria-current={current.id === id ? "page" : undefined}
                 onClick={() => go(id)}
                 className={cn(
@@ -593,7 +673,8 @@ export function App() {
                 {label}
                 {id === "inbox" && needs.length > 0 && (
                   <span className="absolute top-1 right-[calc(50%-1.25rem)] min-w-4 rounded-full bg-warn px-1 text-[10px] leading-4 font-semibold text-background md:static md:ml-auto md:bg-warn-soft md:px-1.5 md:text-xs md:text-warn">
-                    {needs.length}
+                    <span aria-hidden="true">{needs.length}</span>
+                    <span className="sr-only">，{needs.length} 件待處理</span>
                   </span>
                 )}
               </button>
@@ -613,7 +694,12 @@ export function App() {
                 更多
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent side="top" align="end" className="w-60">
+            <DropdownMenuContent
+              side="top"
+              align="end"
+              className="w-60"
+              onCloseAutoFocus={headingAfterMenu}
+            >
               <DropdownMenuLabel className="flex items-center gap-2">
                 <Initials name={user.login} />
                 <span className="min-w-0 truncate">{user.login}</span>
@@ -622,7 +708,7 @@ export function App() {
                 <DropdownMenuItem
                   disabled={!admin}
                   className="flex-col items-start gap-0.5 data-[disabled]:opacity-100"
-                  onSelect={() => go("settings")}
+                  onSelect={() => goFromMenu("settings")}
                 >
                   <QuotaLines
                     settings={state.settings}
@@ -635,7 +721,7 @@ export function App() {
               {visible
                 .filter((v) => mobileMore.includes(v.id))
                 .map(({ id, label, icon: Icon }) => (
-                  <DropdownMenuItem key={id} onSelect={() => go(id)}>
+                  <DropdownMenuItem key={id} onSelect={() => goFromMenu(id)}>
                     <Icon /> {label}
                   </DropdownMenuItem>
                 ))}
@@ -687,7 +773,11 @@ export function App() {
         >
           <div className="flex min-w-0 items-center gap-3">
             <div className="min-w-0">
-              <h1 className="text-2xl font-semibold tracking-tight md:text-[26px]">
+              <h1
+                ref={heading}
+                tabIndex={-1}
+                className="text-2xl font-semibold tracking-tight outline-none md:text-[26px]"
+              >
                 {current.label}
               </h1>
               <p className="mt-0.5 hidden text-sm text-muted-foreground sm:block">
@@ -697,47 +787,34 @@ export function App() {
           </div>
           {state && (
             <div className="flex items-center gap-1.5">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={busy || !admin}
-                onClick={() => void togglePause()}
-                aria-label={
-                  state.settings.paused
-                    ? "已暫停，點此開始自動派工"
-                    : "點此暫停派工"
-                }
-                title={
-                  state.settings.paused
-                    ? "目前只接收訊息，不辨識與派工；點此開始"
-                    : hold
-                      ? hold
-                      : state.settings.triage_paused
-                        ? "新需求判讀已暫停，已核准任務仍可執行；點此暫停派工"
-                        : "已確認修改與明確查詢會依序派工；點此暫停"
-                }
-                className="font-normal"
-              >
+              {dispatch && "ariaLabel" in dispatch ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => void togglePause()}
+                  aria-label={dispatch.ariaLabel}
+                  title={dispatch.title}
+                  className="font-normal"
+                >
+                  {dispatchContent}
+                </Button>
+              ) : (
+                // 一般成員不能切換：只顯示狀態，不做成按鈕，也不寫「點此」。
                 <span
-                  className={cn(
-                    "inline-flex size-1.5 rounded-full",
-                    live ? "bg-good" : "bg-warn",
-                  )}
-                />
-                {state.settings.paused
-                  ? "已暫停"
-                  : hold
-                    ? "派工自動暫停"
-                    : state.settings.triage_paused
-                      ? "判讀暫停中"
-                      : "自動派工中"}
-              </Button>
+                  title={dispatch?.title}
+                  className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border bg-background px-3 text-sm whitespace-nowrap shadow-xs dark:border-input dark:bg-input/30"
+                >
+                  {dispatchContent}
+                </span>
+              )}
               <AlertBell
                 alerts={state.alerts ?? []}
                 seenAt={state.alertsSeenAt ?? null}
                 request={request}
                 open={showTask}
-                openView={admin ? go : undefined}
+                openView={admin ? goFromMenu : undefined}
+                onCloseAutoFocus={headingAfterMenu}
               />
               <Button
                 variant="ghost"
@@ -1072,7 +1149,17 @@ const flow = [
   [GitPullRequest, "你來合併", "審閱 PR，一鍵決定是否上線"],
 ] as const;
 
-function Login({ configured, error }: { configured: boolean; error: string }) {
+function Login({
+  configured,
+  notice,
+  retry,
+}: {
+  /** null：連不上服務；false：服務在但尚未設定 GitHub App。 */
+  configured: boolean | null;
+  /** 登入過期的說明（例如剛才的操作沒有完成）。 */
+  notice: string;
+  retry: () => void;
+}) {
   return (
     <div className="grid min-h-screen lg:grid-cols-[1.1fr_1fr]">
       <section className="hidden border-r bg-sidebar p-12 lg:flex lg:flex-col">
@@ -1115,45 +1202,64 @@ function Login({ configured, error }: { configured: boolean; error: string }) {
               你只需要做決定。
             </p>
           </div>
-          {error && (
-            <p className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">
-              {error}
-            </p>
-          )}
-          <Button
-            size="lg"
-            asChild
-            disabled={!configured}
-            className={cn(
-              "w-full",
-              !configured && "pointer-events-none opacity-50",
-            )}
-          >
-            <a
-              href={configured ? "/auth/github" : undefined}
-              onClick={() => {
-                try {
-                  sessionStorage.setItem(
-                    returnKey,
-                    location.pathname + location.search,
-                  );
-                } catch {
-                  // 無法保存時登入後回到首頁。
-                }
-              }}
-            >
-              <GithubMark /> 使用 GitHub 登入 <ArrowRight />
-            </a>
-          </Button>
-          {!configured ? (
-            <p className="text-sm text-muted-foreground">
-              尚未完成 GitHub App 設定。請先執行{" "}
-              <code className="rounded bg-muted px-1">npm run setup</code>。
-            </p>
+          {configured === null ? (
+            <>
+              <p
+                role="alert"
+                className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
+              >
+                暫時連不上 AgentFlow 服務，可能正在重新啟動，請稍後再試。
+              </p>
+              <Button size="lg" className="w-full" onClick={retry}>
+                <RefreshCw /> 重新連線
+              </Button>
+            </>
           ) : (
-            <p className="text-xs text-muted-foreground">
-              只有擁有者與成員名單上的 GitHub 帳號可以登入。
-            </p>
+            <>
+              {notice && (
+                <p
+                  role="status"
+                  className="rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn"
+                >
+                  {notice}
+                </p>
+              )}
+              <Button
+                size="lg"
+                asChild
+                disabled={!configured}
+                className={cn(
+                  "w-full",
+                  !configured && "pointer-events-none opacity-50",
+                )}
+              >
+                <a
+                  href={configured ? "/auth/github" : undefined}
+                  onClick={() => {
+                    try {
+                      sessionStorage.setItem(
+                        returnKey,
+                        location.pathname + location.search,
+                      );
+                    } catch {
+                      // 無法保存時登入後回到首頁。
+                    }
+                  }}
+                >
+                  <GithubMark /> 使用 GitHub 登入 <ArrowRight />
+                </a>
+              </Button>
+              {!configured ? (
+                <p className="text-sm text-muted-foreground">
+                  服務尚未完成 GitHub App 設定，請聯絡部署者執行{" "}
+                  <code className="rounded bg-muted px-1">npm run setup</code>。
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  只有擁有者與成員名單上的 GitHub 帳號可以登入。
+                </p>
+              )}
+            </>
           )}
           <ol className="flex flex-col gap-2 lg:hidden">
             {flow.map(([Icon, label]) => (

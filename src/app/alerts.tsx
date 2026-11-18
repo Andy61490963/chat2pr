@@ -19,7 +19,7 @@ import {
   UserPlus,
 } from "lucide-react";
 import {
-  notificationView,
+  notificationTarget,
   type NotificationView,
 } from "../../shared/notifications.js";
 import { LINE_QUOTA } from "../../shared/line-quota.js";
@@ -27,6 +27,7 @@ import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
@@ -121,6 +122,7 @@ export function AlertBell({
   request,
   open: openTask,
   openView,
+  onCloseAutoFocus,
 }: {
   alerts: Alert[];
   seenAt: string | null;
@@ -128,13 +130,16 @@ export function AlertBell({
   open: (id: string) => unknown;
   // 只有管理者看得到專案、群組與設定頁；沒給就不可點。
   openView?: (view: NotificationView) => unknown;
+  /** 選單關閉時的焦點處理；換頁後由看板把焦點移到頁面標題。 */
+  onCloseAutoFocus?: (e: Event) => void;
 }) {
   // 跟任務有關的通知開任務；其餘帶去能處理它的頁面（專案、群組或設定）。
   const follow = (a: Alert) => {
+    const target = notificationTarget(a, !!openView);
+    if ("note" in target) return;
     setMenuOpen(false);
-    const view = notificationView(a.kind);
-    if (a.task_id) void openTask(a.task_id);
-    else if (view) void openView?.(view);
+    if ("task" in target) void openTask(target.task);
+    else void openView?.(target.view);
   };
   // 推播額度用完的提示由伺服器依 service_health 附上，固定放在清單頂端，不算未讀、不跳桌面通知。
   const quota = all.find((a) => a.kind === LINE_QUOTA);
@@ -225,21 +230,21 @@ export function AlertBell({
         align="end"
         collisionPadding={12}
         className="w-[22rem] max-w-[calc(100vw-2rem)] p-0"
+        onCloseAutoFocus={onCloseAutoFocus}
       >
-        <div className="flex items-center justify-between border-b px-3 py-2.5">
+        <div className="flex items-center justify-between border-b px-3 py-2">
           <span className="text-sm font-medium">通知</span>
           {"Notification" in window && (
-            <Button
-              variant="ghost"
-              size="xs"
-              className="text-muted-foreground"
-              onClick={(e) => {
+            // 選單項目才能用方向鍵選到；切換後選單保持開著。
+            <DropdownMenuItem
+              className="h-7 px-2 text-xs text-muted-foreground focus:bg-muted/60 focus:text-foreground"
+              onSelect={(e) => {
                 e.preventDefault();
                 void toggleDesktop();
               }}
             >
               {desktop ? "關閉桌面通知" : "開啟桌面通知"}
-            </Button>
+            </DropdownMenuItem>
           )}
         </div>
         {quota && (
@@ -253,45 +258,63 @@ export function AlertBell({
             </span>
           </p>
         )}
-        <ul className="max-h-[26rem] overflow-y-auto">
+        {/* 每則通知都是選單項目：鍵盤開啟鈴鐺後方向鍵可選、Enter 開啟。 */}
+        <div className="max-h-[26rem] overflow-y-auto">
           {alerts.length ? (
             alerts.map((a) => {
               const k = kindOf(a.kind);
               const Icon = k.icon;
               const isNew = !!unread.find((u) => u.id === a.id);
+              // 不能前往時仍可聚焦（讀得到內容），但說明為什麼點了沒反應。
+              const t = notificationTarget(a, !!openView);
+              const why = "note" in t ? t.note : null;
+              const target = !why;
               return (
-                <li key={a.id}>
-                  <button
-                    className={cn(
-                      "flex w-full gap-3 border-b px-3 py-2.5 text-left transition-colors last:border-0 hover:bg-muted/50",
-                      isNew && "bg-brand-soft/40",
-                    )}
-                    onClick={() => follow(a)}
-                  >
-                    <Icon className={cn("mt-0.5 size-4 shrink-0", k.tone)} />
-                    <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                      <span className="text-xs text-muted-foreground">
-                        {k.label} · {ago(a.created_at)}
-                      </span>
-                      {a.title && (
-                        <span className="truncate text-sm font-medium">
-                          {a.title}
-                        </span>
-                      )}
-                      <span className="line-clamp-2 text-xs text-muted-foreground [overflow-wrap:anywhere]">
-                        {a.text}
-                      </span>
+                <DropdownMenuItem
+                  key={a.id}
+                  aria-disabled={target ? undefined : "true"}
+                  onSelect={(e) => {
+                    if (!target) {
+                      e.preventDefault();
+                      return;
+                    }
+                    follow(a);
+                  }}
+                  className={cn(
+                    "w-full items-start gap-3 rounded-none border-b px-3 py-2.5 text-left last:border-0 focus:bg-muted/60 focus:text-foreground",
+                    target &&
+                      "cursor-pointer transition-colors hover:bg-muted/50",
+                    isNew && "bg-brand-soft/40",
+                  )}
+                >
+                  <Icon className={cn("mt-0.5 size-4 shrink-0", k.tone)} />
+                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <span className="text-xs text-muted-foreground">
+                      {k.label} · {ago(a.created_at)}
                     </span>
-                  </button>
-                </li>
+                    {a.title && (
+                      <span className="truncate text-sm font-medium">
+                        {a.title}
+                      </span>
+                    )}
+                    <span className="line-clamp-2 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                      {a.text}
+                    </span>
+                    {why && (
+                      <span className="text-[11px] text-muted-foreground/80">
+                        {why}
+                      </span>
+                    )}
+                  </span>
+                </DropdownMenuItem>
               );
             })
           ) : (
-            <li className="px-3 py-6 text-center text-sm text-muted-foreground">
+            <p className="px-3 py-6 text-center text-sm text-muted-foreground">
               還沒有通知。
-            </li>
+            </p>
           )}
-        </ul>
+        </div>
       </DropdownMenuContent>
     </DropdownMenu>
   );
