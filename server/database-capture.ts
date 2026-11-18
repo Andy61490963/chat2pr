@@ -129,11 +129,68 @@ export function openTunnel(
   });
 }
 
-type SqlError = Error & { code?: string; number?: number };
+export type SqlError = Error & { code?: string; number?: number };
 
-function sqlFailure(error: SqlError, viaTunnel: boolean) {
+/** 這次連線的用途：擷取結構（含測試連線）或定期檢查的查詢；錯誤說明依用途不同。 */
+export type SqlPurpose = "capture" | "check";
+
+export interface SqlFailureContext {
+  viaTunnel: boolean;
+  purpose: SqlPurpose;
+  /** 連線（登入）是否已完成；完成後的錯誤來自查詢本身，不再是連不上主機。 */
+  connected: boolean;
+}
+
+/** SQL Server 錯誤訊息中第一個引號內的物件名稱（例如 Invalid object name 'dbo.X'），截 100 字。 */
+function quotedName(message: string) {
+  const m = /['‘「]([^'’」]{1,400})['’」]/.exec(message);
+  return m ? m[1].slice(0, 100) : null;
+}
+
+/** 定期檢查連線完成後、查詢本身的錯誤；不認得時回傳 null，交給共用說明。 */
+function checkQueryFailure(error: SqlError) {
+  const n = error.number;
+  if (n === 207 || n === 208) {
+    const name = quotedName(error.message ?? "");
+    return fail(
+      `查詢的欄位或資料表不存在${name ? `：${name}` : ""}，請修正檢查 SQL。`,
+    );
+  }
+  if (n === 102 || n === 156 || n === 170)
+    return fail("檢查 SQL 語法錯誤，請修正後試跑。");
+  if (n === 229 || n === 297 || n === 300)
+    return fail("帳號沒有查詢這張資料表的 SELECT 權限。");
+  if (n === 1222)
+    return fail(
+      "資料表被其他交易鎖住超過 5 秒，請避開長交易時段或縮小查詢範圍。",
+    );
+  if (error.code === "ETIMEOUT")
+    return fail("查詢超過 60 秒仍未完成，請加條件或索引。");
+  if (error.code === "ESOCKET")
+    return fail("查詢途中與資料庫的連線中斷，請稍後試跑確認。");
+  if (error.code === "EREQUEST")
+    return fail(
+      `資料庫拒絕了檢查查詢（錯誤 ${typeof n === "number" ? n : "未知"}），請試跑確認 SQL。`,
+    );
+  return null;
+}
+
+/**
+ * 把 tedious 的錯誤轉成固定的白話說明（AppError 422）。
+ * 只回固定文字、錯誤代碼與 SQL Server 訊息中引號內的物件名稱，不回連線帳密或原始連線字串。
+ */
+export function sqlFailure(
+  error: SqlError,
+  { viaTunnel, purpose, connected }: SqlFailureContext,
+) {
   if (error instanceof AppError) return error;
   const message = error.message ?? "";
+  if (connected && purpose === "check") {
+    const known = checkQueryFailure(error);
+    if (known) return known;
+  }
+  if (connected && purpose === "capture" && error.code === "ETIMEOUT")
+    return fail("讀取結構的查詢超過時間限制，請稍後再試或減少參考資料表。");
   if (/Cannot open database/i.test(message) || error.number === 4060)
     return fail("資料庫不存在，或這個帳號沒有開啟它的權限。");
   if (/Login failed|登入失敗/i.test(message) || error.number === 18456)
@@ -170,9 +227,11 @@ async function withSqlServer<T>(
   input: CaptureInput,
   work: (query: (sql: string, batch?: boolean) => Promise<Row[]>) => Promise<T>,
   timeoutMs: number,
+  purpose: SqlPurpose,
   via?: FirstHop,
 ): Promise<{ value: T; hostKey?: string }> {
   const deadline = Date.now() + timeoutMs;
+  let connected = false;
   const tunnel = input.ssh
     ? await openTunnel(
         via ? { ...input.ssh, host: via.host, port: via.port } : input.ssh,
@@ -205,12 +264,19 @@ async function withSqlServer<T>(
     await new Promise<void>((resolve, reject) =>
       active.connect((error) => (error ? reject(error) : resolve())),
     );
+    connected = true;
     // batch：直接送出批次。execSql 會包成 sp_executesql，在裡面 BEGIN TRANSACTION
     // 會因交易數不一致被 SQL Server 拒絕（錯誤 266），交易控制必須用批次。
     const query = (sql: string, batch = false) =>
       new Promise<Row[]>((resolve, reject) => {
         if (Date.now() > deadline)
-          return reject(fail("擷取超過時間限制，已停止。"));
+          return reject(
+            fail(
+              purpose === "check"
+                ? "檢查超過時間限制，已停止。"
+                : "擷取超過時間限制，已停止。",
+            ),
+          );
         const rows: Row[] = [];
         const request = new Request(sql, (error) =>
           error ? reject(error) : resolve(rows),
@@ -227,7 +293,11 @@ async function withSqlServer<T>(
       });
     return { value: await work(query), hostKey: tunnel?.hostKey };
   } catch (error) {
-    throw sqlFailure(error as SqlError, !!tunnel);
+    throw sqlFailure(error as SqlError, {
+      viaTunnel: !!tunnel,
+      purpose,
+      connected,
+    });
   } finally {
     connection?.close();
     tunnel?.close();
@@ -256,6 +326,7 @@ export async function testConnection(
         )
       )[0],
     30000,
+    "capture",
   );
   return {
     ok: true,
@@ -273,6 +344,7 @@ export async function captureSnapshot(input: CaptureInput) {
     (query) =>
       captureSqlServer(query, { referenceTables: input.referenceTables }),
     5 * 60 * 1000,
+    "capture",
   );
   return { ...value, ...(hostKey ? { hostKey } : {}) };
 }
@@ -305,6 +377,7 @@ export async function runCheckQuery(
       }
     },
     30000,
+    "check",
     via,
   );
   return value

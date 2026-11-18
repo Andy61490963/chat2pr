@@ -300,3 +300,89 @@ export const hostUnavailableAlertHours = 6;
 export function hostRetryMinutes(streak: number) {
   return [5, 15, 30][Math.max(0, streak - 1)] ?? 60;
 }
+
+/**
+ * 需要管理者處理的系統設定問題：檢查映像缺少或過舊、檢查網路位址用完或重疊。
+ * 和暫時性的主機問題不同，不會自己好（要重新部署或調整 CHECK_SUBNET_POOL），
+ * 但也和檢查本身無關，所以同樣不計入連續失敗。
+ *
+ * 訊息由主機執行器的 server/check-environments.ts 以這裡的常數丟出（AppError 503），
+ * 伺服器再以 systemIssueRules 比對；改訊息時兩邊一起改（見 docs/conventions.md 第 3 節）。
+ */
+export const systemIssueText = {
+  imageMissing: (image: string) =>
+    `找不到定期檢查映像 ${image}，請以 npm run deploy 更新（會自動建置）`,
+  imageOutdated: (image: string) =>
+    `定期檢查映像 ${image} 版本過舊，請以 npm run deploy 重建`,
+  subnetExhausted:
+    "定期檢查網路的位址已用完，請減少保留的環境數或調整 CHECK_SUBNET_POOL",
+  subnetOverlap: "定期檢查網路位址與其他網路重疊，請調整 CHECK_SUBNET_POOL",
+};
+
+export type SystemIssueKind =
+  "image_missing" | "image_outdated" | "subnet_exhausted" | "subnet_overlap";
+
+export interface SystemIssue {
+  kind: SystemIssueKind;
+  /** 白話原因（看板橫幅、通知用）。 */
+  label: string;
+  /** 處理方式。 */
+  fix: string;
+}
+
+const deployFix =
+  "請在部署目錄執行 npm run deploy，會重建定期檢查映像；完成後檢查會自動繼續。";
+const subnetFix =
+  "請到「系統」頁減少保留的檢查環境數，或在主機執行器的環境變數調整 CHECK_SUBNET_POOL 後以 npm run deploy 重新部署；完成後檢查會自動繼續。";
+
+export const systemIssueRules: (SystemIssue & { pattern: RegExp })[] = [
+  {
+    kind: "image_missing",
+    pattern: /^找不到定期檢查映像 /,
+    label: "找不到定期檢查映像",
+    fix: deployFix,
+  },
+  {
+    kind: "image_outdated",
+    pattern: /^定期檢查映像 \S+ 版本過舊/,
+    label: "定期檢查映像版本過舊",
+    fix: deployFix,
+  },
+  {
+    kind: "subnet_exhausted",
+    pattern: /^定期檢查網路的位址已用完/,
+    label: "定期檢查網路的位址已用完",
+    fix: subnetFix,
+  },
+  {
+    kind: "subnet_overlap",
+    pattern: /^定期檢查網路位址與其他網路重疊/,
+    label: "定期檢查網路位址與其他網路重疊",
+    fix: subnetFix,
+  },
+];
+
+/** 依錯誤訊息找出系統設定問題；不是時回傳 null。 */
+export function systemIssueOfMessage(message: string): SystemIssue | null {
+  const rule = systemIssueRules.find((r) => r.pattern.test(message));
+  return rule ? { kind: rule.kind, label: rule.label, fix: rule.fix } : null;
+}
+
+/** 執行檢查丟出的錯誤是不是系統設定問題：只認執行器回的 503 加上固定訊息。 */
+export function systemIssueOf(e: unknown): SystemIssue | null {
+  const error = e as { statusCode?: unknown; message?: unknown } | null;
+  if (error?.statusCode !== 503 || typeof error.message !== "string")
+    return null;
+  return systemIssueOfMessage(error.message);
+}
+
+/** 系統設定問題時，執行紀錄摘要的開頭（與 hostUnavailablePrefix 區分；仍記為 outcome='error'）。 */
+export const systemIssuePrefix = "系統設定問題（不計入連續失敗）：";
+/** 系統設定問題不會自己好：重試間隔至少這麼久，避免每小時白跑。 */
+export const systemIssueRetryHours = 6;
+
+/** 從執行紀錄摘要讀回系統設定問題（看板與清單用）。 */
+export function systemIssueOfSummary(summary: string | null | undefined) {
+  if (!summary?.startsWith(systemIssuePrefix)) return null;
+  return systemIssueOfMessage(summary.slice(systemIssuePrefix.length));
+}
