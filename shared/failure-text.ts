@@ -115,3 +115,47 @@ export const fixPageLabels: Record<FixPage, string> = {
   system: "前往系統頁",
   groups: "前往群組設定",
 };
+
+/**
+ * 失敗卡片的主動作（收件匣與任務詳情共用）：
+ * - retry：主按鈕「重試」。
+ * - amend：主按鈕「縮小需求範圍」，打開補充需求編輯；重試留作次要。
+ * - page：主按鈕前往建議指向的頁面（只有管理者看得到，成員改用「詳情」）。
+ * - detail：要先處理，但建議沒有指向任何頁面，主按鈕是「詳情」。
+ */
+export type PrimaryFix =
+  | { kind: "retry" }
+  | { kind: "amend" }
+  | { kind: "page"; page: FixPage }
+  | { kind: "detail" };
+
+/** 「執行期間任務、群組或專案的設定被變更」：確認後直接重試就是主要動作。 */
+const changedDuringRun = /執行期間.*設定被變更/;
+/** 「工作沒有在單次執行的時間限制內完成」：建議首要是縮小需求範圍，不是去改設定。 */
+const timedOut = /時間限制/;
+
+export function primaryFix(parsed: ParsedFailure | null): PrimaryFix {
+  if (!parsed) return { kind: "retry" };
+  if (changedDuringRun.test(parsed.plain)) return { kind: "retry" };
+  if (timedOut.test(parsed.plain)) return { kind: "amend" };
+  if (!fixFirst(parsed.category)) return { kind: "retry" };
+  const page = fixPage(parsed.action);
+  return page ? { kind: "page", page } : { kind: "detail" };
+}
+
+/**
+ * 等待額度（budget_wait）的恢復說明：依保留原因說明什麼時候會自動繼續。
+ * `lastError` 是伺服器保留工作時寫入的原因，`aiMode` 是目前的 AI 模式。
+ */
+export function waitHint(
+  lastError: string | null | undefined,
+  aiMode: "api" | "subscription",
+) {
+  if (lastError?.includes("今日執行次數"))
+    return "今日執行次數已用完：臺北時間午夜後，或管理者提高每日次數後自動繼續。";
+  if (aiMode === "api") return "API 模式預估額度不足：臺北時間隔日自動繼續。";
+  // 訂閱額度查不到（網路或登入問題）時伺服器也會保留工作，這時不是額度用完。
+  if (lastError?.includes("無法確認"))
+    return "暫時無法確認 Codex 訂閱額度：系統會定期重新檢查，確認可用後自動繼續。";
+  return "Codex 訂閱額度已達上限：額度恢復後自動繼續。";
+}

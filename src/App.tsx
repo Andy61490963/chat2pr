@@ -60,6 +60,7 @@ import {
   type View,
   attention,
   cash,
+  countOf,
   Initials,
   memoryHold,
   message,
@@ -298,10 +299,9 @@ export function App() {
       setOffline(false);
     };
   }, [user, refresh]);
-  // 分頁標題跟著頁面與任務走，多開分頁時分得出來；有待處理的事會顯示數量。
-  const waiting = state?.tasks.filter((t) =>
-    attention.includes(t.status),
-  ).length;
+  // 分頁標題跟著頁面與任務走，多開分頁時分得出來；有待處理的事會顯示數量
+  // （伺服器的實際數量，等待額度會自動繼續、不算在內）。
+  const waiting = state ? countOf(state, attention) : 0;
   const pageLabel = views.find((v) => v.id === view)?.label;
   const taskTitle = selected?.task.title;
   useEffect(() => {
@@ -482,9 +482,17 @@ export function App() {
       leave("tasks");
       history.replaceState(null, "", `${viewPaths.tasks}?filter=${filter}`);
     });
+  // 收件匣「縮小需求範圍」：打開任務詳情後直接展開補充需求編輯。只對下一次開啟的那個任務有效。
+  const amendNext = useRef<string | null>(null);
   // 已開著另一個任務、而且補充需求還沒送出時，先問再切換。
-  const showTask = (id: string) =>
-    guard(() => void openTask(id), { prefixes: ["task"] });
+  const showTask = (id: string, amend = false) =>
+    guard(
+      () => {
+        amendNext.current = amend ? id : null;
+        void openTask(id);
+      },
+      { prefixes: ["task"] },
+    );
   const loadMore = (kind: "tasks" | "activity") => {
     limits.current = {
       ...limits.current,
@@ -973,6 +981,8 @@ export function App() {
           state={state}
           busy={busy}
           admin={admin}
+          startAmend={amendNext.current === selected.task.id}
+          amendStarted={() => (amendNext.current = null)}
           close={() => guard(closeTask, { prefixes: ["task"] })}
           go={go}
           act={act}

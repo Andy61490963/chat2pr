@@ -27,10 +27,10 @@ import type { Project, Task } from "../../shared/types.js";
 import { statusLabels } from "../../shared/types.js";
 import {
   failureBrief,
-  fixFirst,
-  fixPage,
   fixPageLabels,
   parseFailure,
+  primaryFix,
+  waitHint,
 } from "../../shared/failure-text.js";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -44,8 +44,10 @@ import {
   type State,
   type View,
   ago,
+  attention,
   Clamped,
   collapseRepeats,
+  countOf,
   Empty,
   groupName,
   Linkified,
@@ -53,11 +55,14 @@ import {
   memoryHold,
   moving,
   projectName,
+  ready as readyStatuses,
+  RunProgressLine,
   SectionTitle,
   StatCard,
   StatusBadge,
   StatusIcon,
   Stepper,
+  waiting as waitingStatuses,
 } from "./shared";
 
 function setupSteps(state: State) {
@@ -123,32 +128,46 @@ export function InboxView({
   go: (v: View) => void;
   admin: boolean;
   showTasks: (filter: string) => void;
-  open: (id: string) => unknown;
+  /** amend 為 true 時打開任務詳情並直接展開補充需求編輯。 */
+  open: (id: string, amend?: boolean) => unknown;
   act: Act;
   more: () => unknown;
 }) {
   const setup = setupSteps(state);
   const left = setup.filter((s) => !s.done);
+  // 清單用已載入的任務（未結束的伺服器一律載入）；統計卡的數字用伺服器的實際數量。
   const working = state.tasks.filter((t) => moving.includes(t.status));
-  const ready = state.tasks.filter((t) => t.status === "ready");
+  const ready = state.tasks.filter((t) => readyStatuses.includes(t.status));
+  const held = state.tasks.filter((t) => waitingStatuses.includes(t.status));
+  const needCount = countOf(state, attention);
+  const heldCount = countOf(state, waitingStatuses);
+  const readyCount = countOf(state, readyStatuses);
   const week = Date.now() - 7 * 86400000;
-  const merged = state.tasks.filter(
-    (t) => t.status === "merged" && new Date(t.updated_at).getTime() > week,
-  );
+  const mergedWeek =
+    state.totals?.mergedWeek ??
+    state.tasks.filter(
+      (t) => t.status === "merged" && new Date(t.updated_at).getTime() > week,
+    ).length;
   return (
     <div className="flex flex-col gap-8">
       <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border bg-border lg:grid-cols-4">
         <StatCard
           label="需要你處理"
-          value={needs.length}
-          hint={needs.length ? "審核、補充或重試" : "目前沒有待決定的事"}
+          value={needCount}
+          hint={
+            needCount
+              ? "審核、補充或重試"
+              : heldCount
+                ? `另有 ${heldCount} 件等待額度，會自動繼續`
+                : "目前沒有待決定的事"
+          }
           icon={<CircleAlert />}
-          tone={needs.length ? "warn" : "default"}
+          tone={needCount ? "warn" : "default"}
           onClick={() => showTasks("todo")}
         />
         <StatCard
           label="進行中"
-          value={working.length}
+          value={countOf(state, moving)}
           hint="排程、開發與驗證"
           icon={<Loader2 />}
           tone="info"
@@ -156,16 +175,16 @@ export function InboxView({
         />
         <StatCard
           label="待你合併"
-          value={ready.length}
+          value={readyCount}
           hint="PR 已建立"
           icon={<GitPullRequest />}
-          tone={ready.length ? "good" : "default"}
+          tone={readyCount ? "good" : "default"}
           onClick={() => showTasks("ready")}
         />
         <StatCard
           label="近 7 天已合併"
-          value={merged.length}
-          hint={`累計 ${state.tasks.length} 個需求`}
+          value={mergedWeek}
+          hint={`累計 ${state.totals?.tasks ?? state.tasks.length} 個需求`}
           icon={<GitMerge />}
           onClick={() => showTasks("closed")}
         />
@@ -228,6 +247,42 @@ export function InboxView({
           </Card>
         )}
       </section>
+      {/* 等待額度的工作會自動繼續，不需要決定；放在較低調的段落，只說明什麼時候恢復。 */}
+      {held.length > 0 && (
+        <section aria-labelledby="waiting-title">
+          <div className="mb-3 flex items-center gap-2">
+            <h2
+              id="waiting-title"
+              className="text-sm font-medium text-muted-foreground"
+            >
+              等待額度（會自動繼續）
+            </h2>
+            <Badge variant="secondary">{held.length}</Badge>
+            {admin && (
+              <Button
+                variant="link"
+                size="sm"
+                className="ml-auto h-auto p-0"
+                onClick={() => go("settings")}
+              >
+                調整每日次數／預算 <ChevronRight />
+              </Button>
+            )}
+          </div>
+          <Card className="gap-0 bg-muted/30 py-1">
+            {held.map((t) => (
+              <WaitingRow
+                key={t.id}
+                task={t}
+                state={state}
+                busy={busy}
+                open={open}
+                act={act}
+              />
+            ))}
+          </Card>
+        </section>
+      )}
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <div className="flex flex-col gap-8">
           <section>
@@ -484,16 +539,19 @@ function DecisionCard({
   task: Task;
   state: State;
   busy: boolean;
-  open: (id: string) => unknown;
+  open: (id: string, amend?: boolean) => unknown;
   act: Act;
   go?: (v: View) => void;
 }) {
   const pick = t.status === "awaiting_approval" && !t.project_id;
   // 失敗說明拆成白話說明、建議與錯誤重點：建議固定排在最後，整段截兩行一定看不到。
   const failure = t.status === "failed" ? parseFailure(t.last_error) : null;
-  const demoteRetry = fixFirst(failure?.category);
+  // 主動作與任務詳情共用 primaryFix：重試、縮小需求範圍、前往頁面或看詳情。
+  const fix = primaryFix(failure);
+  const demoteRetry = t.status === "failed" && fix.kind !== "retry";
   // go 只在管理者時提供；成員看不到前往設定頁的按鈕，改用「詳情」當主按鈕。
-  const target = go && failure && demoteRetry ? fixPage(failure.action) : null;
+  const target = go && fix.kind === "page" ? fix.page : null;
+  const amend = t.status === "failed" && fix.kind === "amend";
   const reason =
     t.status === "awaiting_approval"
       ? pick
@@ -572,7 +630,11 @@ function DecisionCard({
                   {fixPageLabels[target]}
                 </Button>
               )}
-              {["failed", "budget_wait"].includes(t.status) && (
+              {amend && (
+                // 逾時：首要是把需求拆小，打開詳情直接進補充需求編輯。
+                <Button onClick={() => open(t.id, true)}>縮小需求範圍</Button>
+              )}
+              {t.status === "failed" && (
                 <Button
                   // 設定、環境、專案類失敗不先處理，重試只會再失敗一次、多用一次每日次數。
                   variant={demoteRetry ? "outline" : "default"}
@@ -586,7 +648,7 @@ function DecisionCard({
                 <RejectButton task={t} busy={busy} act={act} />
               )}
               <Button
-                variant={demoteRetry && !target ? "default" : "ghost"}
+                variant={demoteRetry && !target && !amend ? "default" : "ghost"}
                 onClick={() => open(t.id)}
               >
                 詳情
@@ -609,6 +671,82 @@ function DecisionCard({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * 等待額度時的次要按鈕：只有 API 模式顯示（管理者可能剛提高預算）。訂閱模式的額度由
+ * Codex 決定，手動再試只會立刻回到等待額度，所以不給。伺服器的重試規則不變。
+ */
+export function BudgetRetry({
+  task: t,
+  state,
+  busy,
+  act,
+}: {
+  task: Task;
+  state: State;
+  busy: boolean;
+  act: Act;
+}) {
+  if (t.status !== "budget_wait" || state.settings.ai_mode !== "api")
+    return null;
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      disabled={busy}
+      onClick={() =>
+        void act(t, "retry", {}, "已重新排程；額度仍不足時會回到等待額度")
+      }
+    >
+      <RefreshCw /> 已提高預算，立即再試
+    </Button>
+  );
+}
+
+// 等待額度的一列：保留原因、什麼時候自動繼續，沒有「重試」主按鈕。
+function WaitingRow({
+  task: t,
+  state,
+  busy,
+  open,
+  act,
+}: {
+  task: Task;
+  state: State;
+  busy: boolean;
+  open: (id: string) => unknown;
+  act: Act;
+}) {
+  const reason = t.last_error?.replace(/^Error: /, "");
+  return (
+    <div className="flex flex-col gap-2 border-b px-5 py-3 last:border-0 sm:flex-row sm:items-center sm:gap-3">
+      <button
+        className="flex min-w-0 flex-1 items-start gap-3 text-left"
+        onClick={() => open(t.id)}
+      >
+        <StatusIcon status={t.status} />
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="truncate font-medium">{t.title}</span>
+          <span className="text-xs text-muted-foreground">
+            {groupName(state, t)} · {projectName(state, t)} · 更新於{" "}
+            {ago(t.updated_at)}
+          </span>
+          {reason && (
+            <span className="text-sm text-warn [overflow-wrap:anywhere]">
+              {reason}
+            </span>
+          )}
+          <span className="text-sm text-muted-foreground">
+            {waitHint(t.last_error, state.settings.ai_mode)}
+          </span>
+        </span>
+      </button>
+      <div className="flex shrink-0 flex-wrap gap-2 pl-7 sm:pl-0">
+        <BudgetRetry task={t} state={state} busy={busy} act={act} />
+      </div>
+    </div>
   );
 }
 
@@ -827,6 +965,17 @@ export function TaskRow({
           <span className="truncate text-sm text-warn">
             待執行（暫停派工中）
           </span>
+        )}
+        {/* 開發或驗證中：目前階段、已跑多久與期限；心跳逾時改說狀態待確認。 */}
+        {["running", "reviewing"].includes(t.status) && t.run_phase && (
+          <RunProgressLine
+            run={{
+              phase: t.run_phase,
+              startedAt: t.run_started_at,
+              deadline: t.run_deadline,
+              heartbeatAt: t.run_heartbeat_at,
+            }}
+          />
         )}
         {steps && <Stepper status={t.status} query={t.mode === "query"} />}
       </span>

@@ -39,6 +39,8 @@ import {
   inQuietHours,
   nextRunAt,
   parseSchedule,
+  systemIssuePrefix,
+  systemIssueText,
   type ScheduledCheck,
 } from "../shared/checks.js";
 
@@ -434,6 +436,71 @@ describe("排程與通知", () => {
     // 一次正常執行後就不再標示。
     await runCheck(db, fakeRunner(["ok"]).call, await one());
     expect((await listChecks(db))[0].host_unavailable_since).toBeNull();
+  });
+  const imageMissing = () =>
+    new AppError(
+      503,
+      systemIssueText.imageMissing("line-agentflow-check:local"),
+    );
+  it("系統設定問題（找不到定期檢查映像）：不計入連續失敗、至少 6 小時後重試、只通知管理者一次", async () => {
+    await activeHttp();
+    const r = fakeRunner(["error", imageMissing(), imageMissing()]);
+    for (let i = 0; i < 3; i++) {
+      await due();
+      await runDueChecks(db, r.call);
+    }
+    const c = await one();
+    expect(c.status).toBe("active");
+    // 第一次是檢查本身的錯誤；之後的系統設定問題不增加也不歸零。
+    expect(c.consecutive_errors).toBe(1);
+    // 15 分鐘的間隔拉長到 6 小時。
+    expect(gapMinutes(c)).toBe(6 * 60);
+    const runs = await db.query<{ outcome: string; summary: string }>(
+      "SELECT outcome,summary FROM scheduled_check_runs ORDER BY id",
+    );
+    expect(runs.map((x) => x.outcome)).toEqual(["error", "error", "error"]);
+    expect(runs[1].summary.startsWith(systemIssuePrefix)).toBe(true);
+    const admin = await notes("check");
+    expect(admin).toHaveLength(1);
+    expect(admin[0].text).toContain("定期檢查因系統設定問題暫停執行");
+    expect(admin[0].text).toContain("npm run deploy");
+    expect(await notes("group_check")).toHaveLength(0);
+    const audits = await db.query<{ detail: string }>(
+      "SELECT detail FROM audit WHERE kind='check_system_issue'",
+    );
+    expect(audits).toHaveLength(1);
+    expect(audits[0].detail).toContain("npm run deploy");
+    const [listed] = await listChecks(db);
+    expect(listed.system_issue?.kind).toBe("image_missing");
+    expect(listed.host_unavailable_since).toBeNull();
+    // 問題排除後正常執行，標示消失、間隔恢復。
+    await due();
+    await runDueChecks(db, fakeRunner(["ok"]).call);
+    expect((await listChecks(db))[0].system_issue).toBeNull();
+    expect(gapMinutes(await one())).toBe(15);
+  });
+  it("多個檢查同時遇到同一個系統設定問題，只產生一則管理者通知", async () => {
+    for (const name of ["機台服務甲", "機台服務乙", "機台服務丙"])
+      await activeHttp({ name });
+    const r = fakeRunner(Array.from({ length: 6 }, imageMissing));
+    await runDueChecks(db, r.call);
+    expect(r.calls).toHaveLength(3);
+    const checks = await db.query<ScheduledCheck>(
+      "SELECT * FROM scheduled_checks",
+    );
+    for (const c of checks) {
+      expect(c.status).toBe("active");
+      expect(c.consecutive_errors).toBe(0);
+      expect(gapMinutes(c)).toBe(6 * 60);
+    }
+    expect(await notes("check")).toHaveLength(1);
+    // 同一天再遇到也不重發。
+    await due();
+    await runDueChecks(db, r.call);
+    expect(await notes("check")).toHaveLength(1);
+    expect(
+      await db.query("SELECT 1 FROM audit WHERE kind='check_system_issue'"),
+    ).toHaveLength(1);
   });
   it("24 小時內第二次轉為異常：不再承諾回報，也不重複建立調查", async () => {
     await activeHttp();

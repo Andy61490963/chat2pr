@@ -11,6 +11,7 @@ import {
   type CheckRunView,
   type ScheduledCheck,
   type SqlCondition,
+  type SystemIssue,
 } from "../../shared/checks";
 import type { CheckEnvironmentView } from "../../shared/check-environment";
 import type { ProjectDatabaseView } from "../../shared/project-database";
@@ -35,6 +36,8 @@ type Listed = ScheduledCheck & {
   missing_connection?: boolean;
   /** 目前這段連續「系統暫時無法執行」的開始時間。 */
   host_unavailable_since?: string | null;
+  /** 最近一次卡在需要管理者處理的系統設定問題（映像缺失、子網路用完等）。 */
+  system_issue?: SystemIssue | null;
   environment?: CheckEnvironmentView;
 };
 
@@ -75,6 +78,68 @@ function hostTrouble(c: Listed) {
       Date.now() - new Date(c.host_unavailable_since).getTime() >
       hostUnavailableAlertHours * 3600000,
   };
+}
+
+const runTone = {
+  ok: "text-muted-foreground",
+  alert: "text-danger",
+  error: "text-warn",
+};
+const dotTone = { ok: "bg-good", alert: "bg-danger", error: "bg-warn" };
+const recentShown = 5;
+
+/**
+ * 最近結果：色點只作總覽（各自有 aria-label），下方逐列寫出時間、結果與摘要，
+ * 手機不能懸停也看得到每次失敗的原因。預設最近 5 筆，其餘可展開。
+ */
+function RecentRuns({ runs }: { runs: CheckRunView[] }) {
+  const [all, setAll] = useState(false);
+  if (!runs.length) return null;
+  const shown = all ? runs : runs.slice(0, recentShown);
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-xs font-medium">最近結果</span>
+        <ol
+          className="flex flex-wrap gap-1"
+          aria-label={`最近 ${runs.length} 次結果總覽，由舊到新`}
+        >
+          {[...runs].reverse().map((r) => (
+            <li key={r.id}>
+              <span
+                role="img"
+                aria-label={`${date(r.started_at)} ${trialLabel[r.outcome]}`}
+                title={`${date(r.started_at)} ${trialLabel[r.outcome]}`}
+                className={`block size-3 rounded-full ${dotTone[r.outcome]}`}
+              />
+            </li>
+          ))}
+        </ol>
+      </div>
+      <ol className="flex flex-col gap-1 text-xs" aria-label="最近結果明細">
+        {shown.map((r) => (
+          <li key={r.id} className={`break-words ${runTone[r.outcome]}`}>
+            <span className="tabular-nums">{date(r.started_at)}</span>・
+            <span className="font-medium">{trialLabel[r.outcome]}</span>・
+            {r.summary}
+          </li>
+        ))}
+      </ol>
+      {runs.length > recentShown && (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="self-start"
+          aria-expanded={all}
+          onClick={() => setAll(!all)}
+        >
+          {all
+            ? `只顯示最近 ${recentShown} 筆`
+            : `顯示更早的 ${runs.length - recentShown} 筆`}
+        </Button>
+      )}
+    </div>
+  );
 }
 
 /** 換到專案頁（經 App 的換頁流程，未存修改會先詢問）。 */
@@ -582,6 +647,16 @@ export function ChecksView({
   };
   const groupName = (id: string) =>
     state.groups.find((g) => g.id === id)?.name ?? id;
+  // 同一種系統設定問題會讓所有檢查一起卡住：頁首每種問題只顯示一次，並列出受影響的數量。
+  const issues = new Map<string, { issue: SystemIssue; count: number }>();
+  for (const c of checks ?? [])
+    if (c.system_issue) {
+      const seen = issues.get(c.system_issue.kind);
+      issues.set(c.system_issue.kind, {
+        issue: c.system_issue,
+        count: (seen?.count ?? 0) + 1,
+      });
+    }
   return (
     <div className="flex flex-col gap-4">
       <Card>
@@ -591,7 +666,7 @@ export function ChecksView({
             <CardDescription>
               核准後依排程自動執行，不呼叫
               AI；狀態改變（變成異常、恢復正常）時才通知。檢查本身連續失敗 3
-              次會暫停並通知管理者；執行器或檢查環境的系統問題不計入，會延後自動重試。SQL
+              次會暫停並通知管理者；執行器或檢查環境的系統問題不計入，會延後自動重試；檢查映像缺少、網路位址用完這類要管理者處理的系統設定問題會在這裡提示。SQL
               檢查要先在專案頁登記資料庫連線才能核准。每個檢查在自己的檢查容器執行，網路只通到該檢查的目標；環境保留重用，閒置逾時（系統頁設定）或檢查、連線變更時清除。
             </CardDescription>
           </div>
@@ -600,6 +675,21 @@ export function ChecksView({
           )}
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
+          {[...issues.values()].map(({ issue, count }) => (
+            <div
+              key={issue.kind}
+              role="status"
+              className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
+            >
+              <p className="font-medium">
+                定期檢查因系統設定問題暫停執行：{issue.label}。
+              </p>
+              <p>
+                {issue.fix}（受影響的檢查：{count}{" "}
+                個，檢查狀態不變、不計入連續失敗）
+              </p>
+            </div>
+          ))}
           {note &&
             (note.tone === "error" ? (
               <p
@@ -691,6 +781,9 @@ export function ChecksView({
                         {host.overdue ? "系統問題需要處理" : "系統暫時無法執行"}
                       </Badge>
                     )}
+                    {c.system_issue && (
+                      <Badge variant="warn">等待系統問題排除</Badge>
+                    )}
                     <span className="text-xs text-muted-foreground">
                       {kindLabel[c.kind]}・{schedule(c)}・
                       {groupName(c.group_id)}
@@ -729,6 +822,16 @@ export function ChecksView({
                             `已超過 ${hostUnavailableAlertHours} 小時，請到系統頁確認執行器與 Docker。`}
                         </p>
                       )}
+                      {c.system_issue && (
+                        <p className="rounded-lg bg-warn-soft px-3 py-2 text-warn">
+                          等待系統問題排除（{c.system_issue.label}）
+                          {c.next_run_at
+                            ? `，將於 ${date(c.next_run_at)} 重試`
+                            : ""}
+                          。這類問題不計入連續失敗，檢查狀態不變。
+                          {c.system_issue.fix}
+                        </p>
+                      )}
                       <p className="text-xs text-muted-foreground">
                         上次：
                         {c.last_run_at
@@ -745,20 +848,7 @@ export function ChecksView({
                           檢查環境：{environmentText(c.environment, c)}
                         </p>
                       )}
-                      {runs.length > 0 && (
-                        <ol
-                          className="flex flex-wrap gap-1"
-                          aria-label="最近結果"
-                        >
-                          {[...runs].reverse().map((r) => (
-                            <li
-                              key={r.id}
-                              title={`${date(r.started_at)} ${r.summary}`}
-                              className={`size-3 rounded-full ${r.outcome === "ok" ? "bg-good" : r.outcome === "alert" ? "bg-danger" : "bg-warn"}`}
-                            />
-                          ))}
-                        </ol>
-                      )}
+                      <RecentRuns key={c.id} runs={runs} />
                       {admin && tried && (
                         <p
                           role="status"

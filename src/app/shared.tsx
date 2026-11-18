@@ -1,5 +1,15 @@
-import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type { RunView } from "../../shared/observation.js";
+import {
+  runProgress,
+  type RunProgressInput,
+} from "../../shared/run-progress.js";
 import type { ContextEvidence } from "../../shared/context-evidence.js";
 import type { TaskQueue } from "../../shared/capacity.js";
 import { memoryHold as hostMemoryHold } from "../../shared/host-hold.js";
@@ -23,9 +33,11 @@ import type {
   Memory,
   Project,
   Settings,
+  StateTotals,
   Task,
+  TaskStatus,
 } from "../../shared/types.js";
-import { statusLabels } from "../../shared/types.js";
+import { countStatuses, statusLabels, taskGroups } from "../../shared/types.js";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -72,8 +84,11 @@ export type State = {
   activity: Audit[];
   alerts?: import("./alerts").Alert[];
   alertsSeenAt?: string | null;
-  /** 資料庫裡的總筆數；清單只載入最近的一部分，差額用「載入更多」補上。 */
-  totals?: { tasks: number; activity: number };
+  /**
+   * 資料庫裡的總筆數與各狀態數量；已結束的任務與動態只載入最近的一部分，差額用「載入更多」補上。
+   * 舊版伺服器沒有 byStatus、mergedWeek。
+   */
+  totals?: Pick<StateTotals, "tasks" | "activity"> & Partial<StateTotals>;
   /** 重試三次仍送不出去的 LINE 通知數。 */
   failedNotifications?: number;
   integrations: {
@@ -191,8 +206,54 @@ export type Act = (
 export const memoryHold = (state: State | null | undefined) =>
   hostMemoryHold(state?.health);
 
-export const attention = ["awaiting_approval", "failed", "budget_wait"];
-export const moving = ["queued", "running", "reviewing"];
+// 看板的任務分組定義在 shared/types.ts 的 taskGroups：伺服器依它完整載入未結束的任務，兩邊一起改。
+// 等待額度會自動繼續，不算「需要你處理」。
+export const attention: TaskStatus[] = taskGroups.attention;
+export const waiting: TaskStatus[] = taskGroups.waiting;
+export const moving: TaskStatus[] = taskGroups.moving;
+export const ready: TaskStatus[] = taskGroups.ready;
+/**
+ * 一組狀態的任務數：有伺服器的 byStatus 就用它（不受清單載入範圍影響），
+ * 舊版伺服器沒有時退回只算已載入的任務。
+ */
+export const countOf = (state: State, statuses: readonly TaskStatus[]) =>
+  state.totals?.byStatus
+    ? countStatuses(state.totals.byStatus, statuses)
+    : state.tasks.filter((t) => statuses.includes(t.status)).length;
+
+/** 每隔一段時間重繪一次，讓「已跑幾分」這類相對時間跟著走。 */
+export function useNow(ms = 30000) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), ms);
+    return () => clearInterval(id);
+  }, [ms]);
+  return now;
+}
+
+/** 進行中執行的一行進度（階段・已跑時間／期限）；心跳逾時改說「狀態待確認」。 */
+export function RunProgressLine({
+  run,
+  className,
+}: {
+  run: RunProgressInput;
+  className?: string;
+}) {
+  const now = useNow();
+  const p = runProgress(run, now);
+  if (!p) return null;
+  return (
+    <span
+      className={cn(
+        "truncate text-sm tabular-nums",
+        p.stale ? "text-warn" : "text-info",
+        className,
+      )}
+    >
+      {p.text}
+    </span>
+  );
+}
 export const date = (v: string) =>
   new Date(v).toLocaleString("zh-TW", {
     timeZone: "Asia/Taipei",
@@ -565,7 +626,7 @@ export function LoadMore({
   return (
     <div className="flex flex-wrap items-center justify-center gap-3 py-2 text-sm text-muted-foreground">
       <span>
-        目前載入最近 {shown} {unit}，共 {total} {unit}
+        已載入 {shown} {unit}，還有 {total - shown} {unit}未載入
       </span>
       <Button
         variant="outline"

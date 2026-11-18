@@ -1,5 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { RunEvent, RunView } from "../../shared/observation.js";
+import { heartbeatStale } from "../../shared/run-progress.js";
 import { InstallReportView } from "./egress";
 import { eventLabels, phaseLabels } from "../../shared/observation.js";
 import { statusLabels, type TaskStatus } from "../../shared/types.js";
@@ -109,10 +110,20 @@ export function RunObserver({
       events?.close();
     };
   }, [taskId, run?.id, run?.completed_at, before]);
-  const stale =
-    run &&
-    !run.completed_at &&
-    Date.now() - new Date(run.heartbeat_at).getTime() > 30000;
+  const stale = run && !run.completed_at && heartbeatStale(run.heartbeat_at);
+  // 即時模式（看最新、執行未結束）且使用者原本就在底部附近時，新事件進來自動捲到最新；
+  // 翻閱較早紀錄或往上捲著看時不動。
+  const list = useRef<HTMLOListElement>(null);
+  const atBottom = useRef(true);
+  const live = !!run && !before && !run.completed_at;
+  // 換到另一次執行或按「回到最新」時，重新從最新開始跟。
+  useEffect(() => {
+    atBottom.current = true;
+  }, [run?.id, before]);
+  useLayoutEffect(() => {
+    const el = list.current;
+    if (el && live && atBottom.current) el.scrollTop = el.scrollHeight;
+  }, [page, live]);
   return (
     <section
       className="min-w-0 rounded-lg border p-3"
@@ -267,6 +278,12 @@ export function RunObserver({
             )}
           </div>
           <ol
+            ref={list}
+            onScroll={(e) => {
+              const el = e.currentTarget;
+              atBottom.current =
+                el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+            }}
             className="mt-3 flex max-h-[32rem] flex-col gap-3 overflow-y-auto text-xs"
             aria-label="執行事件"
           >
