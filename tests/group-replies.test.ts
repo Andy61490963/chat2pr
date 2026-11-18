@@ -669,7 +669,7 @@ describe("LINE 每月推播額度用完", () => {
     await notifyGroup(db, id, "answered", "answered:old", "兩天前的結果");
     await notifyGroup(db, id, "answered", "answered:new", "剛才的結果");
     await db.query(
-      "UPDATE notifications SET created_at=now()-interval '2 days' WHERE dedupe_key='answered:old'",
+      "UPDATE notifications SET created_at=now()-interval '2 days' WHERE dedupe_key='group:answered:old'",
     );
     await setQuota(true, "本月已用 195／上限 200 則");
     const calls = billedApi({ push: delivered, quota: null, members: 8 });
