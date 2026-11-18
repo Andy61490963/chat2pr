@@ -23,6 +23,7 @@ import { Line } from "../server/line.js";
 import { Budget } from "../server/budget.js";
 import { GitHub } from "../server/github.js";
 import { downloadPendingImages } from "../server/maintenance.js";
+import { notifyGroup } from "../server/group-replies.js";
 import type { TriageDecision } from "../shared/types.js";
 import type { ChatPage } from "../shared/chat.js";
 
@@ -104,7 +105,8 @@ const decision = (
 function triage(classify: Classifier["classify"]) {
   const github = new GitHub();
   github.context = async () => ({
-    branches: {names:["main"],defaultBranch:"main",truncated:false}, branchError: null,
+    branches: { names: ["main"], defaultBranch: "main", truncated: false },
+    branchError: null,
     sha: "test-base",
     paths: [],
     files: {},
@@ -368,8 +370,13 @@ describe("聊天室與明確指令派工", () => {
     expect((await page()).messages[0].sender).toBe("王小明");
     expect(fetch).toHaveBeenCalledTimes(1);
     // 成員退出或 LINE 失敗時沿用快取；沒有快取則顯示代號。
-    await db.query("UPDATE line_members SET fetched_at=now()-interval '8 days'");
-    vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 404 })));
+    await db.query(
+      "UPDATE line_members SET fetched_at=now()-interval '8 days'",
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("", { status: 404 })),
+    );
     expect((await page()).messages[0].sender).toBe("王小明");
     await db.query("DELETE FROM line_members");
     expect((await page()).messages[0].sender).toMatch(/^成員 /);
@@ -442,8 +449,11 @@ describe("聊天室與明確指令派工", () => {
     await receive("g1", "你好", "text", undefined, "Cline-group");
     await receive("r1", "你好", "text", undefined, "Rline-room");
     const name = async (id: string) =>
-      (await db.one<{ name: string }>("SELECT name FROM groups WHERE id=$1", [id]))
-        .name;
+      (
+        await db.one<{ name: string }>("SELECT name FROM groups WHERE id=$1", [
+          id,
+        ])
+      ).name;
     const original = await name("Cline-group");
     // 未設定 Token 時不查詢。
     await syncGroupNames(db);
@@ -471,8 +481,16 @@ describe("聊天室與明確指令派工", () => {
       "INSERT INTO group_memories(group_id,project_id,content,source) VALUES('group-a',NULL,'報表都改報表系統','ai') RETURNING id",
     );
     const put = (payload: object, id = m.id) =>
-      app.inject({ method: "PUT", url: `/api/memories/${id}`, headers, payload });
-    const r = await put({ content: "報表相關需求改這個專案", project_id: project });
+      app.inject({
+        method: "PUT",
+        url: `/api/memories/${id}`,
+        headers,
+        payload,
+      });
+    const r = await put({
+      content: "報表相關需求改這個專案",
+      project_id: project,
+    });
     expect(r.statusCode).toBe(200);
     expect(
       await db.one("SELECT content,project_id,source FROM group_memories"),
@@ -484,7 +502,9 @@ describe("聊天室與明確指令派工", () => {
     const unbound = await db.one<{ id: string }>(
       "INSERT INTO projects(name,repo) VALUES('未綁定','test/unbound') RETURNING id",
     );
-    expect((await put({ content: "改別的", project_id: unbound.id })).statusCode).toBe(409);
+    expect(
+      (await put({ content: "改別的", project_id: unbound.id })).statusCode,
+    ).toBe(409);
     expect(
       (await put({ content: "不存在", project_id: null }, crypto.randomUUID()))
         .statusCode,
@@ -574,5 +594,239 @@ describe("聊天室與明確指令派工", () => {
         "SELECT enabled,trigger_mode FROM groups WHERE id='group-new'",
       ),
     ).toEqual({ enabled: false, trigger_mode: "command" });
+  });
+});
+
+describe("聊天室與任務詳情顯示機器人的群組訊息與送達狀態", () => {
+  const botNotice = (
+    key: string,
+    text: string,
+    extra: {
+      group?: string;
+      kind?: string;
+      sent?: boolean;
+      messageId?: string;
+      attempts?: number;
+      error?: string;
+      age?: string;
+    } = {},
+  ) =>
+    db.query(
+      `INSERT INTO notifications(kind,dedupe_key,text,group_id,sent_at,sent_message_id,attempts,last_error,created_at)
+       VALUES($1,$2,$3,$4,CASE WHEN $5 THEN now() END,$6,$7,$8,now()-$9::interval)`,
+      [
+        extra.kind ?? "group_check",
+        key,
+        text,
+        extra.group ?? "group-a",
+        extra.sent ?? false,
+        extra.messageId ?? null,
+        extra.attempts ?? 0,
+        extra.error ?? null,
+        extra.age ?? "0 seconds",
+      ],
+    );
+
+  it("只顯示本群組的機器人訊息與送達狀態；到期文字為空；不回傳 LINE 訊息 ID 與原始錯誤", async () => {
+    await receive("other", "別群的訊息", "text", undefined, "group-b");
+    await botNotice("sent", "查詢結果：首頁按鈕是綠色", {
+      kind: "group_answered",
+      sent: true,
+      messageId: "fictional-line-message-1",
+      attempts: 1,
+      age: "2 minutes",
+    });
+    // 判讀回報之類沒有任務的群組通知也要出現。
+    await botNotice("failed", "定期檢查：網站沒有回應", {
+      attempts: 3,
+      error: "LINE 通知失敗（500）",
+      age: "1 minute",
+    });
+    await botNotice("old", "很久以前的機器人回覆", {
+      sent: true,
+      age: "31 days",
+    });
+    await botNotice("foreign", "別群組的機器人回覆", { group: "group-b" });
+    await db.query(
+      "INSERT INTO notifications(kind,dedupe_key,text) VALUES('approval','direct','管理者私訊內容')",
+    );
+    await receive("hello", "大家好");
+    const r = await app.inject({
+      url: "/api/groups/group-a/messages",
+      headers,
+    });
+    const body: ChatPage = r.json();
+    expect(body.messages.map((m) => m.id)).toEqual(["hello"]);
+    expect(
+      body.bot_messages.map((b) => [b.kind, b.task_id, b.text, b.delivery]),
+    ).toEqual([
+      // 超過保留期限：仍列出時間與狀態，文字回 null。
+      [
+        "group_check",
+        null,
+        null,
+        { status: "sent", reason: null, note: "已送到群組" },
+      ],
+      [
+        "group_answered",
+        null,
+        "查詢結果：首頁按鈕是綠色",
+        { status: "sent", reason: null, note: "已送到群組" },
+      ],
+      [
+        "group_check",
+        null,
+        "定期檢查：網站沒有回應",
+        { status: "failed", reason: "error", note: "LINE 回應錯誤（500）" },
+      ],
+    ]);
+    expect(r.body).not.toContain("fictional-line-message-1");
+    expect(r.body).not.toContain("sent_message_id");
+    expect(r.body).not.toContain("last_error");
+    expect(r.body).not.toContain("LINE 通知失敗");
+    expect(r.body).not.toContain("別群組的機器人回覆");
+    expect(r.body).not.toContain("管理者私訊內容");
+    expect(r.body).not.toContain("很久以前的機器人回覆");
+  });
+
+  it("成員引用機器人訊息時帶出機器人文字；機器人訊息到期後不再帶出", async () => {
+    await botNotice("answer", "查詢結果：報表每天早上八點產生", {
+      kind: "group_answered",
+      sent: true,
+      messageId: "fictional-line-message-2",
+      attempts: 1,
+    });
+    // 別群組同一個 LINE 訊息 ID 的通知不能被對到。
+    await receive("other", "別群的訊息", "text", undefined, "group-b");
+    await botNotice("foreign", "別群組的回答", {
+      group: "group-b",
+      sent: true,
+      messageId: "fictional-line-message-3",
+    });
+    await receive(
+      "ask",
+      "那週末也會產生嗎？",
+      "text",
+      "fictional-line-message-2",
+    );
+    await receive("cross", "這是哪一則？", "text", "fictional-line-message-3");
+    const p = await page();
+    const ask = p.messages.find((m) => m.id === "ask")!;
+    expect(ask).toMatchObject({
+      quoted_text: "查詢結果：報表每天早上八點產生",
+      quoted_sender: "機器人",
+      quoted_bot_id: p.bot_messages[0].id,
+    });
+    expect(p.messages.find((m) => m.id === "cross")).toMatchObject({
+      quoted_text: null,
+      quoted_sender: null,
+      quoted_bot_id: null,
+    });
+    await db.query(
+      "UPDATE notifications SET created_at=now()-interval '31 days' WHERE dedupe_key='answer'",
+    );
+    const expired = await page();
+    expect(expired.messages.find((m) => m.id === "ask")).toMatchObject({
+      quoted_text: null,
+      quoted_sender: null,
+    });
+    expect(JSON.stringify(expired)).not.toContain("報表每天早上八點產生");
+  });
+
+  it("機器人訊息跟著成員訊息分頁，跨頁不重複也不遺漏（含與分頁界線同一時間的訊息）", async () => {
+    // 同一個陳述式內 now() 相同：成員訊息每分鐘一則，機器人訊息一則與成員訊息同時、一則晚 30 秒；
+    // i=0 比所有成員訊息新，i=106 比所有成員訊息舊。
+    await db.query(
+      `WITH m AS (
+         INSERT INTO messages(id,group_id,type,text,received_at)
+         SELECT 'pm-'||lpad(i::text,3,'0'),'group-a','text','測試',now()-make_interval(mins=>i)
+         FROM generate_series(1,105) i RETURNING id)
+       INSERT INTO notifications(kind,dedupe_key,text,group_id,sent_at,created_at)
+       SELECT 'group_check','bot:'||i||':'||x,'機器人 '||i||':'||x,'group-a',now(),
+         now()-make_interval(mins=>i)+make_interval(secs=>x*30)
+       FROM generate_series(0,106) i,generate_series(0,1) x`,
+    );
+    await botNotice("foreign", "別群組", { group: "group-b" });
+    const bots: string[] = [];
+    let next: string | null = null;
+    let pages = 0;
+    do {
+      const p = await page(next ?? undefined);
+      bots.push(...p.bot_messages.map((b) => b.text!));
+      next = p.next;
+      pages++;
+    } while (next);
+    expect(pages).toBe(3);
+    expect(bots).toHaveLength(214);
+    expect(new Set(bots).size).toBe(214);
+    expect(bots).not.toContain("別群組");
+  });
+
+  it("推播額度用完時任務詳情標示群組訊息沒送出；總開關關閉後改為略過", async () => {
+    await db.query("DELETE FROM service_health WHERE name='line_quota'");
+    try {
+      await receive("src", "/任務 查首頁按鈕顏色");
+      await triage(async () => [decision(["src"])]).process("group-a");
+      const task = await db.one<{ id: string }>("SELECT id FROM tasks");
+      // 只留這則群組回答：撞到每月上限後本輪就停，排在前面的其他通知會先吃掉那次 429。
+      await db.query("DELETE FROM notifications");
+      await notifyGroup(
+        db,
+        task.id,
+        "answered",
+        `answered:${task.id}`,
+        "查詢結果：首頁按鈕目前是綠色",
+      );
+      line.token = "fictional-line-token";
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: string) =>
+          url.endsWith("/v2/bot/message/push")
+            ? Response.json(
+                { message: "You have reached your monthly limit." },
+                { status: 429 },
+              )
+            : Response.json({}),
+        ),
+      );
+      await new Line(db).flushNotifications();
+      const detail = async () => {
+        const r = await app.inject({ url: `/api/tasks/${task.id}`, headers });
+        expect(r.statusCode).toBe(200);
+        return {
+          body: r.body,
+          answered: (
+            r.json().groupDeliveries as {
+              kind: string;
+              text: string;
+              delivery: { status: string; reason: string | null };
+            }[]
+          ).find((d) => d.kind === "group_answered")!,
+        };
+      };
+      const blocked = await detail();
+      expect(blocked.answered).toMatchObject({
+        text: "查詢結果：首頁按鈕目前是綠色",
+        delivery: {
+          status: "pending",
+          reason: "quota",
+          note: "LINE 本月推播額度已用完",
+        },
+      });
+      // 原始 last_error（含「下個月初重置」）不送給瀏覽器。
+      expect(blocked.body).not.toContain("下個月初重置");
+      expect(blocked.body).not.toContain('last_error":"LINE');
+
+      await db.query(
+        "UPDATE settings SET value=value||'{\"group_replies\":false}'::jsonb",
+      );
+      await new Line(db).flushNotifications();
+      expect((await detail()).answered.delivery).toMatchObject({
+        status: "skipped",
+        reason: "replies_off",
+      });
+    } finally {
+      await db.query("DELETE FROM service_health WHERE name='line_quota'");
+    }
   });
 });
