@@ -22,7 +22,12 @@ import { Triage } from "../server/triage.js";
 import { GitHub } from "../server/github.js";
 import { Budget } from "../server/budget.js";
 import { askInGroup } from "../server/answers.js";
-import { answerAck, answerHeldAck } from "../server/group-replies.js";
+import {
+  answerAck,
+  answerHeldAck,
+  credentialAnswerAck,
+} from "../server/group-replies.js";
+import { dueTriageGroups } from "../server/triage-window.js";
 import type { Group, Message, Project, Task } from "../shared/types.js";
 
 let project: string;
@@ -206,8 +211,32 @@ describe("在 LINE 回覆補問", () => {
   });
   it("回答含有憑證格式時不收，避免寫進需求", async () => {
     const t = await waiting("query");
-    await reply("ghp_abcdefghijklmnopqrstuvwxyz123456", "bot-q-1");
+    const token = "ghp_abcdefghijklmnopqrstuvwxyz123456";
+    const msg = await reply(`密碼在這 ${token}`, "bot-q-1");
     expect((await reload(t.id)).question).not.toBeNull();
+    // 明確告訴成員沒有收下，而不是回「收到，我接著上一題處理」。
+    expect(replies.map((r) => r.text)).toEqual([credentialAnswerAck]);
+    const m = await db.one<{
+      processed: boolean;
+      trigger_mode: string;
+      bot_reply: boolean;
+      text: string | null;
+    }>(
+      "SELECT processed,trigger_mode,bot_reply,text FROM messages WHERE id=$1",
+      [msg],
+    );
+    expect(m).toMatchObject({
+      processed: true,
+      trigger_mode: "chat",
+      bot_reply: false,
+    });
+    expect(m?.text ?? "").not.toContain(token);
+    // 沒有排入判讀：群組沒有待判讀的時間點，也不在待判讀清單。
+    const g = await db.one<{ first_pending_at: Date | null }>(
+      "SELECT first_pending_at FROM groups WHERE id='group-a'",
+    );
+    expect(g?.first_pending_at).toBeNull();
+    expect(await dueTriageGroups(db, "group-a")).toHaveLength(0);
   });
 });
 

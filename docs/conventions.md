@@ -113,6 +113,9 @@
 - **回覆補問就是回答**：收訊時若引用的是本群組、目前版本的補問（`notifications.kind='group_question'`，`dedupe_key` 帶版本），直接以 `server/answers.ts` 的 `applyAnswer` 併進需求，不再進判讀、也不呼叫模型；舊版本的提問不會被套用。看板「送出回答」走同一個函式。
 - **追加修改接在同一個 PR**：修改任務有 `parent_id`、上一題 `status=ready` 且 PR 仍開著（同儲存庫、分支相同、目標分支相同）時，派工以 PR head 為 `base_sha`、沿用上一題的分支，發布改用 `GitHub.continuePr`（快轉分支、PR 說明附上追加段落）。上一題還在 queued／running／reviewing／budget_wait 時先不執行。重試時若分支是上一題的、但 PR 已不能接續，就停下來請人確認，避免把舊 PR 當成這次的結果。
 - **群組推播要記下 LINE 回傳的訊息 ID**（`sentMessages[0].id`）。少了它，成員引用機器人的回答時就認不出是哪一題。
+- **用 reply token 補送通知（`/進度`）也要寫回訊息 ID**：`Line.reply` 回傳每則的 `sentMessages[i].id`，呼叫端依陣列索引寫回對應通知的 `sent_message_id`。同一個 reply token 只能用一次，所有內容必須合併成一個最多 5 則的 `messages` 陣列，不能分兩次回。補送前在收訊交易內用 `claimPendingGroupReplies`（`FOR UPDATE OF n SKIP LOCKED` 並先設 `sent_at`）佔住，reply 失敗或逾時再把 `sent_at` 還原。原因：沒寫回 ID，補送的答案打「詳細」、補送的問題用「回覆」作答都接不上；不先佔住，`flushNotifications` 會在同一時間再推一次。
+- **含憑證的補問回答不能落到追問路徑**：引用本群組補問、回答含憑證格式時，訊息只存 `redact` 後的文字、`trigger_mode='chat'`、`processed=true`，回 `credentialAnswerAck` 後直接 return。原因：落到 botReply 會被存成 `command` 交給判讀模型（判讀送的是原文），還回「收到，我接著上一題處理」讓成員以為已收下。過期補問（已有人回答或需求改版）不在此列，照舊當補充送判讀。
+- **「收到」的狀態判斷要和判讀排程一致**（`server/line.ts` 的 `honestAck`、`server/group-replies.ts` 的 `ackFor`）：沒有可用專案的條件與 `triage-window.ts` 的 `EXISTS(... p.enabled AND p.validated_at IS NOT NULL)` 相同，改一邊要同步另一邊。這些狀態只改回覆文字，不改 `eligible`、`processed`，專案恢復或解除暫停後訊息仍會被判讀。原因：兩邊條件不同時，「收到」會說已保留但永遠不處理，或說沒專案卻其實會處理。
 - **引用追問入口與等待**：收訊以同群組、具任務的通知核對引用，記為 `command` 並保存 `messages.bot_reply`，避免通知清理改變等待時間。整批待判讀文字都是已核對引用時安靜 5 秒即可排程；混合批次維持 60／300 秒。排程與取得群組鎖後共用 `triage-window.ts` 的判斷，明確追問不等檔案索引完成。判讀失敗以獨立的 `triage_retry_at` 退避 60 秒，佇列重試、新收訊息與五分鐘上限都不能跳過；成功或人工恢復時清除。此暫時期限不納入備份。
 - **定期檢查的排程只看 `tasks.check_draft`**：沒有它，需求再怎麼寫「每 15 分鐘」都只會當一般查詢回答一份方案，不會建立檢查。判讀沒聽到頻率時先填每 60 分鐘並列為假設，不為此發問；若還是問了，回答補問時以 `shared/checks.ts` 的 `parseSchedule` 讀出排程補進 `check_draft`（只在補問是在問頻率時，避免把答案裡剛好出現的時間誤當排程）。專案沒有登記資料庫連線時，擬定結果一律附上 `noConnectionHint`，請管理者到看板專案頁設定；帳密只在看板輸入、加密保存，不從聊天收。
 

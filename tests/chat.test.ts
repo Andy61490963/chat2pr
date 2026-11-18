@@ -205,6 +205,32 @@ describe("聊天室與明確指令派工", () => {
       true,
     );
   });
+  it("自動辨識模式下 /進度 只顯示、不建任務也不呼叫模型；/進度表 照一般訊息處理", async () => {
+    await mode("auto");
+    await receive("p1", "/進度");
+    await receive("p2", "/進度：看一下");
+    const classify = vi.fn<Classifier["classify"]>(async () => []);
+    await triage(classify).process("group-a");
+    expect(classify).not.toHaveBeenCalled();
+    expect(await db.query("SELECT id FROM tasks")).toHaveLength(0);
+    const saved = await db.query<{ trigger_mode: string; processed: boolean }>(
+      "SELECT trigger_mode,processed FROM messages WHERE id IN ('p1','p2')",
+    );
+    expect(saved).toEqual([
+      { trigger_mode: "chat", processed: true },
+      { trigger_mode: "chat", processed: true },
+    ]);
+    expect((await page()).messages.every((m) => m.routing === "chat")).toBe(
+      true,
+    );
+    // 不是指令的「/進度表」在自動辨識模式下仍是一般待判讀訊息。
+    await receive("p3", "/進度表要更新");
+    expect(
+      await db.one<{ trigger_mode: string; processed: boolean }>(
+        "SELECT trigger_mode,processed FROM messages WHERE id='p3'",
+      ),
+    ).toEqual({ trigger_mode: "auto", processed: false });
+  });
   it("簽章收訊、指令引用圖片、去重、辨識、任務與來源 API 串通", async () => {
     await receive("pic", undefined, "image");
     const image = vi.fn(async () => ({

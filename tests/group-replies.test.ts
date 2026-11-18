@@ -19,12 +19,24 @@ import { db, reset, fixture, session } from "./helpers.js";
 import { buildApp } from "../server/app.js";
 import { Line } from "../server/line.js";
 import {
+  aiQuotaAck,
+  answerAck,
+  answerHeldAck,
   commandAck,
+  detailHint,
   disabledAck,
+  lineChunks,
+  noProjectAck,
   notifyGroup,
+  pausedAck,
+  replyFailedNote,
   tellGroupWaiting,
+  undeliveredHint,
 } from "../server/group-replies.js";
+import { askInGroup } from "../server/answers.js";
+import { dueTriageGroups } from "../server/triage-window.js";
 import { GitHub } from "../server/github.js";
+import type { Task } from "../shared/types.js";
 
 let app: Awaited<ReturnType<typeof buildApp>>;
 let headers: Awaited<ReturnType<typeof session>>;
@@ -452,5 +464,381 @@ describe("LINE 每月推播額度用完", () => {
       expect.stringContaining("今天的執行次數用完了"),
       "舊版的問題",
     ]);
+  });
+});
+
+describe("用 reply token 取回與說實話", () => {
+  // service_health 不在 reset() 清除的資料表裡；留著會影響其他測試。
+  const clearHealth = () =>
+    db.query(
+      "DELETE FROM service_health WHERE name IN ('line_quota','notifications','codex_subscription_gate')",
+    );
+  let pushes: { to: string; text: string }[];
+  let replyCalls: { token: string; messages: { text: string }[] }[];
+  let push: () => Promise<Response>;
+  let replyStatus: number;
+  beforeEach(async () => {
+    await clearHealth();
+    pushes = [];
+    replyCalls = [];
+    replyStatus = 200;
+    push = async () =>
+      Response.json({ message: "Too many requests" }, { status: 429 });
+    // 模擬 LINE：reply 成功時依序回傳每則訊息的 ID（reply-第幾次-第幾則）。
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const body = init?.body ? JSON.parse(String(init.body)) : {};
+        if (url.endsWith("/v2/bot/message/push")) {
+          pushes.push({ to: body.to, text: body.messages[0].text });
+          return push();
+        }
+        if (url.endsWith("/v2/bot/message/reply")) {
+          replyCalls.push({ token: body.replyToken, messages: body.messages });
+          const n = replyCalls.length;
+          return replyStatus === 200
+            ? Response.json({
+                sentMessages: body.messages.map((_: unknown, i: number) => ({
+                  id: `reply-${n}-${i}`,
+                })),
+              })
+            : Response.json(
+                { message: "Invalid reply token" },
+                { status: replyStatus },
+              );
+        }
+        return Response.json({});
+      }),
+    );
+  });
+  afterEach(clearHealth);
+
+  async function send(
+    id: string,
+    text: string,
+    opts: { quoted?: string; group?: string } = {},
+  ) {
+    const payload = JSON.stringify({
+      events: [
+        {
+          webhookEventId: `event-${id}`,
+          type: "message",
+          replyToken: `fictional-reply-${id}`,
+          source: {
+            type: "group",
+            groupId: opts.group ?? "group-a",
+            userId: "private-member-id",
+          },
+          message: { id, type: "text", text, quotedMessageId: opts.quoted },
+        },
+      ],
+    });
+    const r = await app.inject({
+      method: "POST",
+      url: "/webhooks/line",
+      payload,
+      headers: {
+        "content-type": "application/json",
+        "x-line-signature": createHmac("sha256", "fictional-group-secret")
+          .update(payload)
+          .digest("base64"),
+      },
+    });
+    expect(r.statusCode).toBe(200);
+  }
+  const lastReply = () => replyCalls.at(-1)!.messages.map((m) => m.text);
+  const longAnswer = `重點：訂單日期欄位叫 order_date。\n\n${"細節說明。".repeat(400)}\n\n結尾段落`;
+  async function answeredTask(title: string, group = "group-a") {
+    const t = await db.one<{ id: string }>(
+      `INSERT INTO tasks(project_id,group_id,title,summary,acceptance,status,mode,answer,dedupe_key)
+       VALUES($1,$2,$3,'摘要','[]','answered','query',$4,$5) RETURNING id`,
+      [project, group, title, longAnswer, `dedupe-${title}`],
+    );
+    await notifyGroup(
+      db,
+      t!.id,
+      "answered",
+      `answered:${t!.id}:1`,
+      `「${title}」的查詢結果：\n\n重點：訂單日期欄位叫 order_date。\n\n${detailHint}`,
+    );
+    return t!.id;
+  }
+  async function askingTask(title: string, status = "awaiting_approval") {
+    const t = await db.one<Task>(
+      `INSERT INTO tasks(project_id,group_id,title,summary,acceptance,status,mode,missing,question,dedupe_key)
+       VALUES($1,'group-a',$2,'匯出怪怪的','["說明匯出問題"]',$3,'query','[]',
+       '{"text":"是按了沒下載，還是內容不對？","choices":["沒有下載","內容不對"]}',$4) RETURNING *`,
+      [project, title, status, `dedupe-${title}`],
+    );
+    await askInGroup(db.pool, t!);
+    return t!;
+  }
+  const notice = (taskId: string) =>
+    db.one<{
+      sent_at: Date | null;
+      sent_message_id: string | null;
+      last_error: string | null;
+      attempts: number;
+    }>(
+      "SELECT sent_at,sent_message_id,last_error,attempts FROM notifications WHERE task_id=$1 AND group_id IS NOT NULL ORDER BY created_at DESC LIMIT 1",
+      [taskId],
+    );
+  const setSettings = (value: Record<string, unknown>) =>
+    db.query("UPDATE settings SET value=value||$1::jsonb WHERE id=1", [
+      JSON.stringify(value),
+    ]);
+
+  it("推播回 429 三次後，/進度 取回查詢答案與仍有效的補問；「詳細」與引用作答都接得上", async () => {
+    await settings();
+    const answered = await answeredTask("查訂單欄位");
+    const asking = await askingTask("匯出問題");
+    const line = new Line(db);
+    for (let n = 0; n < 3; n++) await line.flushNotifications();
+    expect(pushes).toHaveLength(6);
+    expect((await notice(answered)).attempts).toBe(3);
+    // 試滿 3 次後推播不再送，只能靠 /進度 取回。
+    await line.flushNotifications();
+    expect(pushes).toHaveLength(6);
+
+    await send("p1", "/進度");
+    expect(replyCalls).toHaveLength(1);
+    const [summary, answer, question] = lastReply();
+    expect(lastReply()).toHaveLength(3);
+    expect(summary).toContain("・查訂單欄位：已回答");
+    expect(summary).toContain("・匯出問題：等你們回答一個問題");
+    expect(answer).toContain("「查訂單欄位」的查詢結果");
+    expect(answer).toContain(detailHint);
+    expect(question).toContain("是按了沒下載，還是內容不對？");
+    expect(await notice(answered)).toMatchObject({
+      sent_message_id: "reply-1-1",
+      last_error: null,
+    });
+    expect((await notice(answered)).sent_at).not.toBeNull();
+    expect((await notice(asking.id)).sent_message_id).toBe("reply-1-2");
+    // /進度 本身不建任務、不排判讀。
+    const saved = await db.one<{ trigger_mode: string; processed: boolean }>(
+      "SELECT trigger_mode,processed FROM messages WHERE id='p1'",
+    );
+    expect(saved).toEqual({ trigger_mode: "chat", processed: true });
+
+    // 引用補送的答案打「詳細」拿到全文。
+    await send("d1", "詳細", { quoted: "reply-1-1" });
+    expect(lastReply()).toEqual(lineChunks(longAnswer));
+    // 引用補送的補問直接回答，會被 applyAnswer 收下。
+    await send("a1", "沒有下載", { quoted: "reply-1-2" });
+    const after = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [
+      asking.id,
+    ]);
+    expect(after.question).toBeNull();
+    expect(after.version).toBe(asking.version + 1);
+    expect([answerAck, answerHeldAck]).toContain(lastReply()[0]);
+
+    // 都取回了：再打一次只回摘要並說明沒有待取回的結果。
+    await send("p2", "/進度");
+    expect(lastReply()).toHaveLength(1);
+    expect(lastReply()[0]).toContain("目前沒有待取回的結果");
+  });
+
+  it("只取本群組、仍有效、每個需求最新的一則；超過 4 則時提示再輸入 /進度", async () => {
+    await settings();
+    await db.query(
+      "INSERT INTO groups(id,name,enabled,trigger_mode) VALUES('group-b','另一個群組',true,'command')",
+    );
+    await answeredTask("另一群組的查詢", "group-b");
+    const oldVersion = await askingTask("舊版補問");
+    await db.query("UPDATE tasks SET version=version+1 WHERE id=$1", [
+      oldVersion.id,
+    ]);
+    const cancelled = await askingTask("已取消的補問", "cancelled");
+    const merged = await task("已合併的修改");
+    await notifyGroup(db, merged, "ready", "ready:old", "PR 已完成");
+    await notifyGroup(db, merged, "merged", "merged:new", "PR 已合併");
+    await tellGroupWaiting(db, merged, "daily");
+    for (const n of [1, 2, 3, 4]) await answeredTask(`查詢 ${n}`);
+
+    await send("p1", "/進度");
+    const texts = lastReply();
+    expect(texts).toHaveLength(5);
+    expect(texts[0]).not.toContain("另一群組的查詢");
+    const all = texts.join("\n");
+    for (const hidden of [
+      "另一群組的查詢",
+      "PR 已完成",
+      "是按了沒下載",
+      "今天的執行次數用完了",
+    ])
+      expect(texts.slice(1).join("\n")).not.toContain(hidden);
+    expect(texts[1]).toBe("PR 已合併");
+    expect(all).toContain("「查詢 1」的查詢結果");
+    expect(texts[4]).toContain("「查詢 3」的查詢結果");
+    expect(texts[4]).toContain("還有 1 則，再輸入 /進度。");
+
+    await send("p2", "/進度");
+    expect(lastReply()).toHaveLength(2);
+    expect(lastReply()[1]).toContain("「查詢 4」的查詢結果");
+    expect(lastReply()[1]).not.toContain("還有");
+    // 舊的、過期的、其他群組的都沒被動到；同一需求較舊的那則標成已被取代。
+    expect((await notice(oldVersion.id)).sent_at).toBeNull();
+    expect((await notice(cancelled.id)).sent_at).toBeNull();
+    expect(
+      await db.one<{ sent_at: Date | null }>(
+        "SELECT sent_at FROM notifications WHERE group_id='group-b'",
+      ),
+    ).toEqual({ sent_at: null });
+    const ready = await db.one<{ sent_at: Date | null; last_error: string }>(
+      "SELECT sent_at,last_error FROM notifications WHERE dedupe_key='group:ready:old'",
+    );
+    expect(ready?.sent_at).not.toBeNull();
+    expect(ready?.last_error).toBe("已有較新的回覆，未補送");
+
+    await send("p3", "/進度");
+    expect(lastReply()).toHaveLength(1);
+  });
+
+  it("/進度 與推播同時執行不會重複送出；reply 失敗時通知回到未送出", async () => {
+    await settings();
+    for (const n of [1, 2, 3]) await answeredTask(`查詢 ${n}`);
+    push = async () => {
+      await new Promise((r) => setTimeout(r, 30));
+      return Response.json({ sentMessages: [{ id: "fictional-push" }] });
+    };
+    await Promise.all([send("p1", "/進度"), new Line(db).flushNotifications()]);
+    const delivered = [
+      ...pushes.map((p) => p.text),
+      ...replyCalls.flatMap((r) => r.messages.slice(1).map((m) => m.text)),
+    ];
+    for (const n of [1, 2, 3])
+      expect(delivered.filter((t) => t.includes(`「查詢 ${n}」`))).toHaveLength(
+        1,
+      );
+    expect(
+      await db.query("SELECT 1 FROM notifications WHERE sent_at IS NULL"),
+    ).toHaveLength(0);
+
+    replyCalls = [];
+    const id = await answeredTask("查詢 4");
+    replyStatus = 400;
+    await send("p2", "/進度");
+    expect(replyCalls).toHaveLength(1);
+    expect(await notice(id)).toMatchObject({
+      sent_at: null,
+      sent_message_id: null,
+      last_error: replyFailedNote,
+    });
+    // 下一次 /進度 可以再取。
+    replyStatus = 200;
+    await send("p3", "/進度");
+    expect(lastReply()[1]).toContain("「查詢 4」的查詢結果");
+    expect((await notice(id)).sent_message_id).toBe("reply-2-1");
+  });
+
+  it("/進度表 不觸發；不回覆設定或總開關關閉時不回；群組停用時說明沒有啟用", async () => {
+    await settings();
+    await answeredTask("查詢");
+    await send("p1", "/進度表");
+    await send("p2", "有人說 /進度");
+    expect(replyCalls).toHaveLength(0);
+
+    await settings({ reply_mode: "off" });
+    await send("p3", "/進度");
+    expect(replyCalls).toHaveLength(0);
+
+    await settings({ reply_mode: "results" });
+    await setSettings({ group_replies: false });
+    await send("p4", "/進度");
+    expect(replyCalls).toHaveLength(0);
+
+    await setSettings({ group_replies: true });
+    await settings({ enabled: false });
+    await send("p5", "/進度");
+    expect(lastReply()).toEqual([disabledAck]);
+    // 都沒有被補送。
+    expect(
+      await db.query(
+        "SELECT 1 FROM notifications WHERE group_id='group-a' AND sent_at IS NULL",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("「收到」依暫停、判讀暫停、沒有可用專案、AI 額度關閉說明；正常時維持原文字", async () => {
+    await settings();
+    await send("m0", "/任務 調整按鈕顏色");
+    expect(lastReply()).toEqual([commandAck]);
+
+    await setSettings({ paused: true });
+    await send("m1", "/任務 調整按鈕顏色");
+    expect(lastReply()).toEqual([pausedAck]);
+
+    await setSettings({ paused: false, triage_paused: true });
+    await send("m2", "/任務 調整按鈕顏色");
+    expect(lastReply()).toEqual([pausedAck]);
+
+    // 引用機器人回答的追問也套用同一套判斷。
+    const answered = await answeredTask("查訂單欄位");
+    await db.query(
+      "UPDATE notifications SET sent_at=now(),sent_message_id='bot-answer' WHERE task_id=$1",
+      [answered],
+    );
+    await send("m3", "那出貨日期呢？", { quoted: "bot-answer" });
+    expect(lastReply()).toEqual([pausedAck]);
+
+    await setSettings({ triage_paused: false, ai_mode: "subscription" });
+    await db.query(
+      "INSERT INTO service_health(name,ok,detail) VALUES('codex_subscription_gate',false,'Codex 訂閱額度已達上限')",
+    );
+    await send("m4", "/任務 調整按鈕顏色");
+    expect(lastReply()).toEqual([aiQuotaAck]);
+    // API 模式不看訂閱額度關卡。
+    await setSettings({ ai_mode: "api" });
+    await send("m5", "/任務 調整按鈕顏色");
+    expect(lastReply()).toEqual([commandAck]);
+  });
+
+  it("沒有可用專案時說明已記下；訊息維持待判讀，專案重新驗證後會被判讀", async () => {
+    await settings();
+    await db.query("UPDATE projects SET validated_at=NULL WHERE id=$1", [
+      project,
+    ]);
+    await send("m1", "/任務 調整按鈕顏色");
+    expect(lastReply()).toEqual([noProjectAck]);
+    expect(
+      await db.one<{ processed: boolean; trigger_mode: string }>(
+        "SELECT processed,trigger_mode FROM messages WHERE id='m1'",
+      ),
+    ).toEqual({ processed: false, trigger_mode: "command" });
+    await db.query(
+      "UPDATE groups SET first_pending_at=now()-interval '10 minutes',last_pending_at=now()-interval '10 minutes'",
+    );
+    expect(await dueTriageGroups(db, "group-a")).toHaveLength(0);
+
+    await db.query("UPDATE projects SET validated_at=now() WHERE id=$1", [
+      project,
+    ]);
+    expect((await dueTriageGroups(db, "group-a")).map((g) => g.id)).toEqual([
+      "group-a",
+    ]);
+  });
+
+  it("推播額度用完或有回覆沒送到時，「收到」只加一句 /進度 提示", async () => {
+    await settings();
+    const id = await answeredTask("查訂單欄位");
+    // 剛排入、推播還沒輪到的不提示。
+    await send("m1", "/任務 調整按鈕顏色");
+    expect(lastReply()).toEqual([commandAck]);
+
+    await db.query(
+      "INSERT INTO service_health(name,ok,detail) VALUES('line_quota',false,'LINE 本月推播額度已用完')",
+    );
+    await send("m2", "/任務 調整按鈕顏色");
+    expect(lastReply()).toEqual([`${commandAck}\n${undeliveredHint(1)}`]);
+    expect(lastReply()[0]).not.toContain("查詢結果");
+
+    await db.query("DELETE FROM service_health WHERE name='line_quota'");
+    await db.query(
+      "UPDATE notifications SET attempts=3,last_error='LINE 通知失敗（500）' WHERE task_id=$1",
+      [id],
+    );
+    await send("m3", "/任務 調整按鈕顏色");
+    expect(lastReply()).toEqual([`${commandAck}\n${undeliveredHint(1)}`]);
   });
 });
