@@ -8,6 +8,7 @@
  * 「/任務」訊息的立即回覆使用 reply token，不計入推播額度，off 以外都會回。
  */
 import type { DbClient } from "./db.js";
+import { redact } from "./policy.js";
 import type { TaskStatus } from "../shared/types.js";
 
 export type ReplyMode = "off" | "results" | "all";
@@ -20,7 +21,10 @@ type Queryable = {
   query: (sql: string, params?: unknown[]) => Promise<unknown>;
 };
 
-/** 依任務所屬群組的回覆設定排入群組通知；群組已離開或設定不需要時不排。 */
+/**
+ * 依任務所屬群組的回覆設定排入群組通知；群組已離開或設定不需要時不排。
+ * quickReplies：附在訊息下方的 LINE 快速回覆按鈕（目前只有補問的常見答案）。
+ */
 export async function notifyGroup(
   c: Queryable,
   taskId: string,
@@ -28,15 +32,54 @@ export async function notifyGroup(
   key: string,
   text: string,
   level: "results" | "all" = "results",
+  quickReplies: QuickReply[] = [],
+) {
+  await c.query(
+    `INSERT INTO notifications(task_id,kind,dedupe_key,text,group_id,quick_replies)
+     SELECT t.id,$2,$3,$4,g.id,$6::jsonb FROM tasks t JOIN groups g ON g.id=t.group_id
+     WHERE t.id=$1 AND g.left_at IS NULL AND COALESCE((SELECT (value->>'group_replies')::boolean FROM settings WHERE id=1),true) AND (g.reply_mode='all' OR (g.reply_mode='results' AND $5='results'))
+     ON CONFLICT DO NOTHING`,
+    [
+      taskId,
+      `group_${kind}`,
+      `group:${key}`,
+      text,
+      level,
+      quickReplies.length ? JSON.stringify(quickReplies) : null,
+    ],
+  );
+}
+
+/**
+ * 不經由任務所屬群組、直接指定群組排入通知（例如判讀沒有建立任務時的說明）。
+ * 條件與 notifyGroup 的「只回覆結果」相同：群組未離開、總開關開啟、reply_mode 為 results 或 all。
+ */
+export async function notifyGroupDirect(
+  c: Queryable,
+  groupId: string,
+  taskId: string | null,
+  kind: string,
+  key: string,
+  text: string,
 ) {
   await c.query(
     `INSERT INTO notifications(task_id,kind,dedupe_key,text,group_id)
-     SELECT t.id,$2,$3,$4,g.id FROM tasks t JOIN groups g ON g.id=t.group_id
-     WHERE t.id=$1 AND g.left_at IS NULL AND COALESCE((SELECT (value->>'group_replies')::boolean FROM settings WHERE id=1),true) AND (g.reply_mode='all' OR (g.reply_mode='results' AND $5='results'))
+     SELECT $2,$3,$4,$5,g.id FROM groups g
+     WHERE g.id=$1 AND g.left_at IS NULL AND ${groupRepliesOn} AND g.reply_mode IN ('results','all')
      ON CONFLICT DO NOTHING`,
-    [taskId, `group_${kind}`, `group:${key}`, text, level],
+    [groupId, taskId, `group_${kind}`, `group:${key}`, groupText(text)],
   );
 }
+
+/** 判讀沒有建立新任務時，回給用 /任務 提出的群組的說明（推播，不用 reply token）。 */
+export const triageDuplicateText = (title: string) =>
+  `這則和「${title}」是同一件事，已記在那題，處理完會一起回報，不用重新提出。`;
+/** 記住的內容回到群組前先遮罩憑證格式，並以字元（非 UTF-16 單位）截到 100 字，避免切壞表情符號。 */
+export const triageRememberedText = (content: string) =>
+  `已記住：${Array.from(redact(content)).slice(0, 100).join("")}`;
+export const triageKnownMemoryText = "這條已經記住了。";
+export const triageIgnoredText =
+  "這則沒有看到要處理的事項，請在 /任務 後寫清楚要查或要改什麼。";
 
 /** LINE 單則文字上限 5000 字；群組訊息保留餘裕。 */
 export function groupText(text: string, max = 4500) {
@@ -64,6 +107,11 @@ export const noProjectAck =
   "收到，需求已先記下。這個群組目前沒有可處理需求的專案，管理者把專案恢復可用後會自動接著處理，不用重新提出。";
 export const aiQuotaAck =
   "收到，AI 額度暫時用完，這則已保留，額度恢復後會自動處理，不用重新提出。";
+/** 本群組的需求判讀連續失敗而停止（groups.triage_failures>=3，見 triage.ts、triage-window.ts）。 */
+export const triageStoppedAck =
+  "收到，但這個群組的需求判讀目前因連續錯誤暫停，訊息已保留；管理者排除問題後會接著整理，不用重新提出。";
+/** 點了補問的常見答案按鈕，但那一題已回答、需求已改版或按鈕不屬於這個群組。 */
+export const staleAnswerAck = "這題已經回答過或需求已更新，請看最新的提問。";
 /** 用「回覆」回答補問、內容卻含憑證格式：不收、不交給 AI，也不能回「收到」讓人以為已收下。 */
 export const credentialAnswerAck =
   "這則回答看起來含有密碼或金鑰，沒有收下，也不會交給 AI。請先收回這則訊息，機密改由管理者在看板輸入；其他內容請不含機密再回覆一次。";
@@ -75,6 +123,8 @@ export interface AckState {
   base: string;
   /** 系統暫停或暫停新需求判讀。 */
   paused: boolean;
+  /** 本群組的需求判讀因連續失敗停止（triage_failures>=3），要等管理者按「重新辨識」。 */
+  triageStopped: boolean;
   /** 群組沒有已啟用且已驗證的綁定專案（與 triage-window.ts 的條件相同）。 */
   noProject: boolean;
   /** 訂閱模式且 Codex 額度關卡關閉。 */
@@ -82,15 +132,17 @@ export interface AckState {
   /** 先前沒送達、可以用 /進度 取回的群組回覆數；0 表示不提。 */
   undelivered: number;
 }
-/** 依優先序挑「收到」的文字：暫停 → 沒有可用專案 → AI 額度 → 原文字。 */
+/** 依優先序挑「收到」的文字：暫停 → 判讀停止 → 沒有可用專案 → AI 額度 → 原文字。 */
 export function ackFor(s: AckState) {
   const text = s.paused
     ? pausedAck
-    : s.noProject
-      ? noProjectAck
-      : s.aiQuotaOut
-        ? aiQuotaAck
-        : s.base;
+    : s.triageStopped
+      ? triageStoppedAck
+      : s.noProject
+        ? noProjectAck
+        : s.aiQuotaOut
+          ? aiQuotaAck
+          : s.base;
   return s.undelivered > 0
     ? `${text}\n${undeliveredHint(s.undelivered)}`
     : text;
@@ -152,15 +204,51 @@ export interface ClaimedReply {
 export const claimingNote = "以 /進度 回覆補送中";
 export const replyFailedNote = "以 /進度 回覆補送失敗，下次再試";
 export const supersededNote = "已有較新的回覆，未補送";
+/** 同一則通知以 /進度 補送、被 LINE 以內容問題拒收的次數上限；到了就不再取回，避免整個群組的 /進度 一直失敗。 */
+export const REPLY_FAILURE_LIMIT = 2;
+export const replyGaveUpNote =
+  "以 /進度 補送多次失敗，已停止補送，請管理者在看板查看並手動轉達";
+/** 佔住後超過這段時間仍是「補送中」，視為程序在 reply 前後中止；reply 本身 5 秒逾時，2 分鐘足以排除正常進行中的補送。 */
+export const claimTimeout = "2 minutes";
+
+/**
+ * reply 失敗是不是這批內容的問題（要計入 reply_failures）：只算 LINE 明確拒收的 4xx。
+ * 不算的：429 限流、401／403 權杖或權限、400 但訊息在說 reply token（逾時或已用過，換個 token 就好）、
+ * 5xx、逾時、沒有權杖（status 為 null）——這些都不是補送內容造成的，下次 /進度 換新的 token 可以再試。
+ */
+export function replyRejected(status: number | null, message?: unknown) {
+  if (status === null || status < 400 || status >= 500) return false;
+  if ([401, 403, 429].includes(status)) return false;
+  return !(typeof message === "string" && /reply ?token/i.test(message));
+}
+
+/**
+ * 收回 /進度 佔住後沒有寫回結果的通知（程序在收訊交易提交後、reply 結果寫回前中止）：
+ * 放回未送出、改寫成 replyFailedNote，下一次 /進度 或推播可以再取。正在處理的列（被鎖住）略過。
+ */
+export async function reclaimStaleClaims(c: Queryable) {
+  await c.query(
+    `UPDATE notifications u SET sent_at=NULL,last_error=$2
+     FROM (SELECT id FROM notifications WHERE last_error=$1 AND sent_message_id IS NULL AND sent_at<now()-$3::interval
+       FOR UPDATE SKIP LOCKED) s
+     WHERE u.id=s.id`,
+    [claimingNote, replyFailedNote, claimTimeout],
+  );
+}
 
 /**
  * 可以用 /進度 取回的群組通知（$1 是群組，需先 JOIN tasks t）：
  * - 本群組、未送出、7 天內；不看 attempts，推播失敗被放棄的正是要取回的。
  * - 排除很快就過時的 group_waiting；補問只取任務仍在等這一版回答的（與 answers.ts questionByQuote 相同）；
  *   group_received 只在仍待確認、group_failed 只在仍是失敗時才送。
+ * - 排除 group_triage（判讀說明「和某題是同一件事」）：它掛在被重複的那題上，若算進「每個任務只取最新一則」，
+ *   會把那題還在等回答的補問標成已被取代。
+ * - 排除以 /進度 補送已被 LINE 拒收 REPLY_FAILURE_LIMIT 次的：reply token 一次只能用一次、整批一起成敗，
+ *   一直取回同一則會讓這個群組的 /進度 永遠失敗。
  */
 const retrievable = (n: string) =>
-  `${n}.group_id=$1 AND t.group_id=$1 AND ${n}.sent_at IS NULL AND ${n}.created_at>now()-interval '7 days' AND ${n}.kind<>'group_waiting'
+  `${n}.group_id=$1 AND t.group_id=$1 AND ${n}.sent_at IS NULL AND ${n}.created_at>now()-interval '7 days' AND ${n}.kind NOT IN ('group_waiting','group_triage')
+   AND ${n}.reply_failures<${REPLY_FAILURE_LIMIT}
    AND (${n}.kind<>'group_question' OR (t.status='awaiting_approval' AND t.question IS NOT NULL AND ${n}.dedupe_key='group:question:'||t.id||':'||t.version))
    AND (${n}.kind<>'group_received' OR t.status='awaiting_approval')
    AND (${n}.kind<>'group_failed' OR t.status='failed')`;
@@ -190,6 +278,7 @@ export async function pendingGroupReplies(c: DbClient, groupId: string) {
  * flushNotifications 與另一個 /進度 都用 SKIP LOCKED，不會重複送。
  * 同一任務較舊的未送通知一併標成已被取代，下次不會再冒出來。
  * 送出後由呼叫端寫回 sent_message_id；送不出去時把 sent_at 還原。
+ * 程序在兩者之間中止時，佔住的列會停在 claimingNote，由 reclaimStaleClaims（每輪通知排程）在 2 分鐘後放回。
  */
 export async function claimPendingGroupReplies(
   c: DbClient,

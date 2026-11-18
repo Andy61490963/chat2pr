@@ -41,6 +41,39 @@ export function quotaUsageOf(detail: string | undefined) {
   return m ? { used: Number(m[1]), limit: m[2] ? Number(m[2]) : null } : null;
 }
 
+/**
+ * 本月還能推幾則：null 是不知道（還沒查過額度），Infinity 是方案沒有上限。
+ * 用量來自 line_quota 的說明（quotaUsageText 的格式）。
+ */
+export function quotaRemaining(
+  usage: { limit: number | null; used: number } | null,
+) {
+  if (!usage) return null;
+  return usage.limit === null
+    ? Infinity
+    : Math.max(0, usage.limit - usage.used);
+}
+
+/**
+ * 一則推播用掉幾則額度：群組推播依群組人數計費（人數未知時當 1），私訊（members 為 undefined）1 則。
+ * 這也是「剩餘額度夠不夠送這則」的門檻。
+ */
+export function pushCost(members?: number | null) {
+  return Math.max(1, members ?? 1);
+}
+
+/** quotaShortForGroup 的開頭：額度恢復時用它找出「因額度不夠而略過」的通知，先清掉過時的再續送。 */
+export const quotaShortPrefix = "推播額度剩 ";
+
+/** 剩餘額度不足某群組人數、本輪略過時寫進 last_error 的字；不加 attempts。 */
+export const quotaShortForGroup = (
+  remaining: number,
+  members: number | null,
+) =>
+  members === null
+    ? `${quotaShortPrefix}${remaining} 則，不足這個群組的人數，額度恢復後再送`
+    : `${quotaShortPrefix}${remaining} 則，不足這個群組 ${members} 人，額度恢復後再送`;
+
 /** line_quota 健康項：ok=false 代表額度用完、推播暫停。 */
 export function quotaBlocked(
   health: { name: string; ok: boolean }[] | undefined,
