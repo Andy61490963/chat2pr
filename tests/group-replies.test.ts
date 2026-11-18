@@ -663,6 +663,38 @@ describe("LINE 每月推播額度用完", () => {
       attempts: 0,
     });
   });
+
+  it("因額度不夠群組人數而略過的通知：額度恢復續送時，過時的標成已過期、不補送；還在略過時不動", async () => {
+    const id = await task();
+    await notifyGroup(db, id, "answered", "answered:old", "兩天前的結果");
+    await notifyGroup(db, id, "answered", "answered:new", "剛才的結果");
+    await db.query(
+      "UPDATE notifications SET created_at=now()-interval '2 days' WHERE dedupe_key='answered:old'",
+    );
+    await setQuota(true, "本月已用 195／上限 200 則");
+    const calls = billedApi({ push: delivered, quota: null, members: 8 });
+    const line = new Line(db);
+
+    // 還在略過：兩則都留著（成員仍可用 /進度 取回），不推播。
+    await line.flushNotifications();
+    expect(calls.pushes).toEqual([]);
+    expect((await rows()).map((r) => r.last_error)).toEqual([
+      "推播額度剩 5 則，不足這個群組 8 人，額度恢復後再送",
+      "推播額度剩 5 則，不足這個群組 8 人，額度恢復後再送",
+    ]);
+
+    // 換月後連線檢查寫入新用量：兩天前的不補送、標成已過期；剛才的照送。
+    await setQuota(true, "本月已用 0／上限 200 則");
+    await line.flushNotifications();
+    expect(calls.pushes).toEqual(["group-a"]);
+    const [old, fresh] = await rows();
+    expect(old.sent_at).not.toBeNull();
+    expect(old.last_error).toBe("已過期，未補送");
+    expect(old.attempts).toBe(0);
+    expect(fresh.sent_at).not.toBeNull();
+    expect(fresh.last_error).toBeNull();
+    expect((await quota())?.detail).toBe("本月已用 8／上限 200 則");
+  });
 });
 
 describe("用 reply token 取回與說實話", () => {

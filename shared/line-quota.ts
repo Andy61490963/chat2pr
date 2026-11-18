@@ -62,14 +62,17 @@ export function pushCost(members?: number | null) {
   return Math.max(1, members ?? 1);
 }
 
+/** quotaShortForGroup 的開頭：額度恢復時用它找出「因額度不夠而略過」的通知，先清掉過時的再續送。 */
+export const quotaShortPrefix = "推播額度剩 ";
+
 /** 剩餘額度不足某群組人數、本輪略過時寫進 last_error 的字；不加 attempts。 */
 export const quotaShortForGroup = (
   remaining: number,
   members: number | null,
 ) =>
   members === null
-    ? `推播額度剩 ${remaining} 則，不足這個群組的人數，額度恢復後再送`
-    : `推播額度剩 ${remaining} 則，不足這個群組 ${members} 人，額度恢復後再送`;
+    ? `${quotaShortPrefix}${remaining} 則，不足這個群組的人數，額度恢復後再送`
+    : `${quotaShortPrefix}${remaining} 則，不足這個群組 ${members} 人，額度恢復後再送`;
 
 /** line_quota 健康項：ok=false 代表額度用完、推播暫停。 */
 export function quotaBlocked(

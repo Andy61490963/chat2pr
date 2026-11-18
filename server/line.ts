@@ -39,6 +39,7 @@ import {
 } from "./answers.js";
 import {
   LineQuotaExhausted,
+  expireQuotaHeld,
   fetchLineQuota,
   groupMemberCount,
   lineQuotaBlocked,
@@ -777,6 +778,8 @@ export class Line {
     }
     // 撈取與送出在同一交易、鎖住這批通知：其他補送流程可以用 SKIP LOCKED 略過正在推送的列。
     await this.db.transaction(async (c) => {
+      // 先前因額度不夠而略過、這輪要續送的群組：過時的不補送（比照解除封鎖前的 expireStaleNotifications）。
+      await expireQuotaHeld(c, [...short]);
       type Pending = {
         id: string;
         task_id: string | null;

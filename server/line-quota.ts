@@ -7,6 +7,7 @@ import {
   LINE_QUOTA,
   expiredNote,
   quotaExhaustedDetail,
+  quotaShortPrefix,
   quotaUsageOf,
   quotaUsageText,
 } from "../shared/line-quota.js";
@@ -187,6 +188,24 @@ export async function expireStaleNotifications(c: DbClient) {
       ],
     );
   return rows.length;
+}
+
+/**
+ * 因剩餘額度不夠群組人數而略過（last_error 是 quotaShortForGroup）、現在不在 held 裡（額度夠了或人數未知，
+ * 這輪會續送）的群組通知中，已過時的標成已過期。原因：這種略過不會進入 line_quota 封鎖，
+ * syncLineQuota 解除封鎖時的 expireStaleNotifications 管不到；不先清掉，換月後會把幾週前的說明推給整個群組。
+ * 還在略過的群組（held）不動：那段期間成員仍可用 /進度（7 天內）取回。
+ */
+export async function expireQuotaHeld(c: DbClient, held: string[]) {
+  await c.query(
+    `UPDATE notifications u SET sent_at=now(),last_error=$1
+     FROM (SELECT n.id FROM notifications n LEFT JOIN tasks t ON t.id=n.task_id
+       WHERE n.sent_at IS NULL AND n.group_id IS NOT NULL AND n.group_id<>ALL($2::text[])
+         AND n.last_error LIKE $3||'%' AND ${staleNotification}
+       FOR UPDATE OF n SKIP LOCKED) s
+     WHERE u.id=s.id`,
+    [expiredNote, held, quotaShortPrefix],
+  );
 }
 
 /** 讀本月推播上限與用量；這兩支 API 不計入推播額度。limit=null 代表方案沒有上限。 */

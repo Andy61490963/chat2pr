@@ -110,6 +110,7 @@
   - 每送一則就在本地把用量加上人數（未知時 1）並寫回說明，不必每則都查額度 API；連線檢查每小時再以 LINE 的回報校正。
   - 群組撞到 429 monthly limit 時先查額度 API：還剩 1 則以上只是不夠這個群組，本輪略過群組、私訊照送，並把這個群組記成「至少剩餘＋1 人」（`markGroupTooLarge`），24 小時內不再對它撞 429；剩 0 則、查不到或私訊也撞到才整個封鎖。
   - 封鎖時要保留用量（`markQuotaExhausted` 沒給用量就沿用原說明解析出的），看板才顯示得出「本月已用 X／上限 Y」。
+  - 因人數不夠而略過的群組通知，續送前要先跑 `expireQuotaHeld`（`last_error` 以 `quotaShortPrefix` 開頭、這輪不再略過的群組，過時的標成已過期）。原因：這種略過不會進入 `line_quota` 封鎖，`syncLineQuota` 解除封鎖時的 `expireStaleNotifications` 管不到；大群組可能被略過幾週，換月額度一恢復就會把舊說明推給整個群組。還在略過的群組不動，成員仍可用 `/進度` 取回 7 天內的回覆。
 - **群組人數 API（`/v2/bot/group/{id}/members/count`、聊天室用 `/v2/bot/room/{id}/members/count`）不計推播額度，但仍要快取 24 小時**：通知排程每 20 秒跑一輪，每輪都查會無謂地打 LINE；只有剩餘額度已知且有上限時才需要人數。
 
 ## 7. AI 判讀與查詢的規則
