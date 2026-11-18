@@ -432,6 +432,60 @@ it("低記憶體時暫時讀不到資源不擋派工，也不算恢復、不通�
   }
 });
 
+// 項目 21：讀不到資源的 silent 會把 ok 寫成正常；連續判斷要比對上一次真實讀數，不能被它湊成第二次。
+it("已通知異常後中間讀不到一次，下一次單一的正常讀數不算恢復，再一次才通知", async () => {
+  const unreadable = () =>
+    checkHostResources(db, async () => {
+      throw new Error("執行器暫時無回應");
+    });
+  await clearHostHealth();
+  try {
+    await hostReading(8192);
+    await hostReading(1900);
+    await hostReading(1900);
+    expect(await notices("service_down")).toHaveLength(1);
+    expect(await unreadable()).toBeNull();
+    expect(await hostReading(2600)).toBeNull();
+    expect(await notices("service_up")).toHaveLength(0);
+    expect(await hostReading(2600)).toBeNull();
+    const up = await notices("service_up");
+    expect(up).toHaveLength(1);
+    expect(up[0].text).toBe("服務已恢復：主機資源");
+
+    // 轉異常同樣要連續兩次真實讀數：單一次低讀數不通知，中間夾一次正常讀數就重新計算。
+    expect(await hostReading(1900)).toContain("暫停派新工作");
+    expect(await notices("service_down")).toHaveLength(1);
+    expect(await hostReading(8192)).toBeNull();
+    expect(await hostReading(1900)).toContain("暫停派新工作");
+    expect(await notices("service_down")).toHaveLength(1);
+    // silent 不算一次正常讀數：前後兩次低讀數仍是連續兩次。
+    expect(await unreadable()).toBeNull();
+    expect(await notices("service_down")).toHaveLength(1);
+    expect(await hostReading(1900)).toContain("暫停派新工作");
+    expect(await notices("service_down")).toHaveLength(2);
+    expect(await notices("service_up")).toHaveLength(1);
+  } finally {
+    await clearHostHealth();
+  }
+});
+
+it("只有真實讀數會更新 reading_ok，silent 只改目前狀態", async () => {
+  await clearHostHealth();
+  try {
+    await hostReading(1900);
+    const row = () =>
+      db.one<{ ok: boolean; reading_ok: boolean | null }>(
+        "SELECT ok,reading_ok FROM service_health WHERE name=$1",
+        [hostHealthName],
+      );
+    expect(await row()).toEqual({ ok: false, reading_ok: false });
+    await checkHostResources(db, async () => null);
+    expect(await row()).toEqual({ ok: true, reading_ok: false });
+  } finally {
+    await clearHostHealth();
+  }
+});
+
 it("主機記憶體不足暫停時，系統頁回傳 holdKind 與排隊原因，任務詳情說明原因", async () => {
   const h = await harness(1);
   const t = await task(h.projects[0], "query");

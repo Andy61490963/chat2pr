@@ -130,6 +130,9 @@ app.get("/health", async () => {
   await containers.docker.ping();
   return { ok: true, instance: containers.instance, subscriptionBroker: "v1" };
 });
+// 只確認執行器程序有回應，不碰 Docker：`/system` 逾時時，系統頁靠它分辨「執行器沒回應」與「Docker 沒回應」。
+// 一樣經過上面的 x-runner-key 驗證。
+app.get("/alive", async () => ({ ok: true }));
 // 看板「系統」頁：服務容器、工作容器與工作映像狀態。
 app.get("/system", async () =>
   systemStatus(containers.docker, containers.instance),

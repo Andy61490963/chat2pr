@@ -40,19 +40,40 @@ type ContainerStatus = {
   created: string;
   runId?: string;
 };
+type WorkerImage = {
+  tag: string;
+  rev: string | null;
+  current: boolean;
+  sizeMb: number;
+  created: string;
+};
+type Volumes = { jobs: number; sourceCaches: number };
+/** 與 server/system-status.ts 的 SystemStatus 相同：讀不到 Docker 時清單為 null。 */
 type SystemStatus = {
   checkedAt: string;
   requiredWorkerRev: string;
+  runner: { state: "ok" | "docker" | "down"; detail?: string };
+  services: ContainerStatus[] | null;
+  jobs: ContainerStatus[] | null;
+  images: WorkerImage[] | null;
+  volumes: Volumes | null;
+};
+/** 上一次成功讀到的容器清單；之後讀不到時繼續顯示並標示時間。 */
+type DockerLists = {
+  checkedAt: string;
   services: ContainerStatus[];
   jobs: ContainerStatus[];
-  images: {
-    tag: string;
-    rev: string | null;
-    current: boolean;
-    sizeMb: number;
-    created: string;
-  }[];
-  volumes: { jobs: number; sourceCaches: number };
+  images: WorkerImage[];
+  volumes: Volumes;
+};
+type Tone = "good" | "warn" | "danger";
+const runnerView: Record<
+  SystemStatus["runner"]["state"],
+  { tone: Tone; label: string }
+> = {
+  ok: { tone: "good", label: "連線正常" },
+  docker: { tone: "warn", label: "Docker 沒有回應" },
+  down: { tone: "danger", label: "執行器沒有回應" },
 };
 
 const memorySource: Record<Memory["source"], string> = {
@@ -79,12 +100,22 @@ export function SystemView({
   admin?: boolean;
 }) {
   const [status, setStatus] = useState<SystemStatus | null>(null),
+    [lists, setLists] = useState<DockerLists | null>(null),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(false);
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setStatus(await request<SystemStatus>("/api/system"));
+      const s = await request<SystemStatus>("/api/system");
+      setStatus(s);
+      if (s.services && s.jobs && s.images && s.volumes)
+        setLists({
+          checkedAt: s.checkedAt,
+          services: s.services,
+          jobs: s.jobs,
+          images: s.images,
+          volumes: s.volumes,
+        });
       setError("");
     } catch (e) {
       setError(message(e));
@@ -97,6 +128,13 @@ export function SystemView({
     const t = setInterval(() => void load(), 30000);
     return () => clearInterval(t);
   }, [load]);
+  const runner = error
+    ? { tone: "danger" as Tone, label: "無法讀取狀態" }
+    : status
+      ? runnerView[status.runner.state]
+      : null;
+  // 這次沒拿到清單（執行器或 Docker 沒回應、或看板讀取失敗）：沿用上一次的清單並標示時間。
+  const stale = !!error || (!!status && !status.services);
   return (
     <div className="flex flex-col gap-6">
       <CapacityCard request={request} />
@@ -122,46 +160,71 @@ export function SystemView({
         </CardHeader>
         <CardContent className="flex flex-col gap-5">
           {error && (
-            <p className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">
-              {error}（執行器可能未啟動）
+            <p
+              role="alert"
+              className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
+            >
+              {error}
             </p>
           )}
-          {status && (
-            <>
-              <section className="flex flex-col gap-2">
-                <h3 className="text-xs font-medium text-muted-foreground">
-                  服務
-                </h3>
-                <ul className="divide-y rounded-lg border">
+          {!error && status?.runner.detail && (
+            <p
+              role="status"
+              className={cn(
+                "rounded-lg px-3 py-2 text-sm",
+                status.runner.state === "down"
+                  ? "bg-danger-soft text-danger"
+                  : "bg-warn-soft text-warn",
+              )}
+            >
+              {status.runner.detail}
+            </p>
+          )}
+          {runner && (
+            <section className="flex flex-col gap-2">
+              <h3 className="text-xs font-medium text-muted-foreground">
+                服務
+              </h3>
+              <ul className="divide-y rounded-lg border">
+                <ServiceRow
+                  name="執行器 runner"
+                  role="主機上的程序（4312），負責建立與回收工作容器"
+                  tone={runner.tone}
+                  detail={runner.label}
+                />
+                {lists?.services.map((c) => (
                   <ServiceRow
-                    name="執行器 runner"
-                    role="主機上的程序（4312），負責建立與回收工作容器"
-                    ok={!error}
-                    detail={error ? "無法連線" : "連線正常"}
+                    key={c.name}
+                    name={c.name.replace(/^line-agentflow-|-1$/g, "")}
+                    role={c.role}
+                    tone={c.state === "running" ? "good" : "danger"}
+                    detail={c.status}
                   />
-                  {status.services.map((c) => (
-                    <ServiceRow
-                      key={c.name}
-                      name={c.name.replace(/^line-agentflow-|-1$/g, "")}
-                      role={c.role}
-                      ok={c.state === "running"}
-                      detail={c.status}
-                    />
-                  ))}
-                </ul>
-              </section>
+                ))}
+              </ul>
+              {stale && (
+                <p className="text-xs text-muted-foreground">
+                  {lists
+                    ? `容器清單資料停在 ${ago(lists.checkedAt)}，恢復回應後會自動更新。`
+                    : "尚未取得容器清單，恢復回應後會自動更新。"}
+                </p>
+              )}
+            </section>
+          )}
+          {lists && (
+            <>
               <section className="flex flex-col gap-2">
                 <h3 className="text-xs font-medium text-muted-foreground">
                   執行中的工作容器
                 </h3>
-                {status.jobs.length ? (
+                {lists.jobs.length ? (
                   <ul className="divide-y rounded-lg border">
-                    {status.jobs.map((c) => (
+                    {lists.jobs.map((c) => (
                       <ServiceRow
                         key={c.name}
                         name={c.name}
                         role={`執行 ${c.runId?.slice(0, 8) ?? ""} · ${c.image}`}
-                        ok={c.state === "running"}
+                        tone={c.state === "running" ? "good" : "danger"}
                         detail={c.status}
                       />
                     ))}
@@ -175,10 +238,10 @@ export function SystemView({
               <section className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
                 <div className="flex flex-col gap-2">
                   <h3 className="text-xs font-medium text-muted-foreground">
-                    工作映像（需要版本 {status.requiredWorkerRev} 以後）
+                    工作映像（需要版本 {status?.requiredWorkerRev} 以後）
                   </h3>
                   <ul className="divide-y rounded-lg border">
-                    {status.images.map((i) => {
+                    {lists.images.map((i) => {
                       const used = state.projects
                         .filter((p) => p.image === i.tag)
                         .map((p) => p.name);
@@ -211,10 +274,10 @@ export function SystemView({
                   </h3>
                   <dl className="grid grid-cols-[1fr_auto] gap-y-2 rounded-lg border px-3 py-2.5 text-sm">
                     <dt className="text-muted-foreground">任務工作區</dt>
-                    <dd className="tabular-nums">{status.volumes.jobs} 個</dd>
+                    <dd className="tabular-nums">{lists.volumes.jobs} 個</dd>
                     <dt className="text-muted-foreground">原始碼快取</dt>
                     <dd className="tabular-nums">
-                      {status.volumes.sourceCaches} 個
+                      {lists.volumes.sourceCaches} 個
                     </dd>
                   </dl>
                   <p className="text-xs text-muted-foreground">
@@ -240,20 +303,25 @@ export function SystemView({
 function ServiceRow({
   name,
   role,
-  ok,
+  tone,
   detail,
 }: {
   name: string;
   role: string;
-  ok: boolean;
+  tone: Tone;
   detail: string;
 }) {
   return (
     <li className="flex items-center gap-3 px-3 py-2.5">
       <span
+        aria-hidden
         className={cn(
           "size-2 shrink-0 rounded-full",
-          ok ? "bg-good" : "bg-danger",
+          tone === "good"
+            ? "bg-good"
+            : tone === "warn"
+              ? "bg-warn"
+              : "bg-danger",
         )}
       />
       <span className="flex min-w-0 flex-1 flex-col">
@@ -263,7 +331,11 @@ function ServiceRow({
       <span
         className={cn(
           "shrink-0 text-xs",
-          ok ? "text-muted-foreground" : "text-danger",
+          tone === "good"
+            ? "text-muted-foreground"
+            : tone === "warn"
+              ? "text-warn"
+              : "text-danger",
         )}
       >
         {detail}

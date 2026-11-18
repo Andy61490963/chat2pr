@@ -136,6 +136,9 @@ export function CapacityCard({ request }: { request: Request }) {
                     ? `${host.dockerCpus ?? "?"} 顆 CPU、共 ${host.dockerMemMb ? gb(host.dockerMemMb) : "?"} 記憶體`
                     : "暫時讀不到"}
                   （用於建議同時執行數）
+                  {host?.vmAvailMb !== undefined &&
+                    host.vmTotalMb !== undefined &&
+                    `；可用 ${gb(host.vmAvailMb)}／共 ${gb(host.vmTotalMb)}（僅供參考，暫停判斷仍看 Windows）`}
                 </dd>
               </div>
             </dl>

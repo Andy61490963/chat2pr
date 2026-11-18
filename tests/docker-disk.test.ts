@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import type Docker from "dockerode";
 import { db, reset, fixture, session } from "./helpers.js";
+import { hash } from "../server/auth.js";
 import {
   classifyDisk,
   cleanupPlan,
@@ -1168,6 +1169,68 @@ describe("排程、提醒與看板", () => {
       const after = await get();
       expect(after.json().settings.warn_percent).toBe(20);
       expect(inventories()).toBe(3);
+    } finally {
+      await app.close();
+    }
+  });
+
+  // 第一次盤點失敗時「提醒與清理規則」整段消失；規則存在資料庫，不需要 Docker。
+  it("看板：盤點失敗時設定端點仍讀得到已儲存的規則，非管理者被拒", async () => {
+    await db.query("UPDATE docker_disk SET settings=$1 WHERE id=1", [
+      JSON.stringify({ warn_percent: 25 }),
+    ]);
+    const paths: string[] = [];
+    const { buildApp } = await import("../server/app.js");
+    const app = await buildApp(db, undefined, undefined, undefined, {
+      call: async <T>(path: string): Promise<T> => {
+        paths.push(path);
+        throw new Error("虛構的 Docker 無回應");
+      },
+    });
+    try {
+      const headers = await session();
+      const inventory = await app.inject({ url: "/api/system/disk", headers });
+      expect(inventory.statusCode).toBeGreaterThanOrEqual(500);
+
+      const settings = await app.inject({
+        url: "/api/system/disk/settings",
+        headers,
+      });
+      expect(settings.statusCode).toBe(200);
+      expect(settings.headers["cache-control"]).toBe("no-store");
+      expect(settings.json().warn_percent).toBe(25);
+      expect(settings.json().rules.workspaces.enabled).toBe(false);
+      const disk = () =>
+        paths.filter((p) => p.startsWith("maintenance/disk")).length;
+      const before = disk();
+
+      const saved = await app.inject({
+        method: "PUT",
+        url: "/api/system/disk/settings",
+        headers,
+        payload: { ...(settings.json() as DiskSettings), warn_percent: 30 },
+      });
+      expect(saved.statusCode).toBe(200);
+      const again = await app.inject({
+        url: "/api/system/disk/settings",
+        headers,
+      });
+      expect(again.json().warn_percent).toBe(30);
+      // 讀設定不呼叫執行器。
+      expect(disk()).toBe(before);
+
+      await db.query(
+        "INSERT INTO members(github_id,login,role,added_by) VALUES('900002','fictional-member','member','owner')",
+      );
+      await db.query(
+        "INSERT INTO sessions(id_hash,user_id,csrf,expires_at,login) VALUES($1,'900002','c-member',now()+interval '1 hour','fictional-member')",
+        [hash("s-member")],
+      );
+      const member = await app.inject({
+        url: "/api/system/disk/settings",
+        headers: { cookie: "af_session=s-member" },
+      });
+      expect(member.statusCode).toBe(403);
     } finally {
       await app.close();
     }

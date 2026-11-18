@@ -17,6 +17,8 @@ const critical: Record<string, string> = {
  * 第一次觀察只建立基準不通知。confirm 用於定期檢查的項目：轉異常與恢復都要連續兩次
  * 同方向的讀數才通知，避免在門檻上下徘徊時「異常／已恢復」交替洗版、耗推播額度。
  * silent 只更新目前狀態與說明，不動通知基準也不通知（例如暫時讀不到資料，不能算一次恢復）。
+ * 連續判斷比對上一次真實讀數 `reading_ok`，不比對 `ok`：silent 會把 ok 寫成正常（讀不到資源時不擋派工），
+ * 拿 ok 比對的話，已通知異常後中間讀不到一次，下一次單一的正常讀數就會被當成第二次、立刻通知「已恢復」。
  */
 export async function recordHealth(
   db: Database,
@@ -36,11 +38,13 @@ export async function recordHealth(
   const [before] = await db.query<{
     was: boolean | null;
     told: boolean | null;
+    reading: boolean | null;
   }>(
-    `WITH old AS (SELECT ok,notified_ok FROM service_health WHERE name=$1),
-     saved AS (INSERT INTO service_health(name,ok,detail) VALUES($1,$2,$3)
-       ON CONFLICT(name) DO UPDATE SET ok=$2,detail=$3,checked_at=now() RETURNING 1)
-     SELECT (SELECT ok FROM old) AS was,(SELECT notified_ok FROM old) AS told FROM saved`,
+    `WITH old AS (SELECT ok,notified_ok,reading_ok FROM service_health WHERE name=$1),
+     saved AS (INSERT INTO service_health(name,ok,detail,reading_ok) VALUES($1,$2,$3,$2)
+       ON CONFLICT(name) DO UPDATE SET ok=$2,detail=$3,reading_ok=$2,checked_at=now() RETURNING 1)
+     SELECT (SELECT ok FROM old) AS was,(SELECT notified_ok FROM old) AS told,
+       (SELECT reading_ok FROM old) AS reading FROM saved`,
     [name, ok, detail],
   );
   const label = critical[name];
@@ -55,7 +59,8 @@ export async function recordHealth(
       ]);
     return;
   }
-  if (options.confirm && was !== ok) return;
+  // 欄位新增前寫入的列沒有 reading_ok，退回比對 ok。
+  if (options.confirm && (before?.reading ?? was) !== ok) return;
   const marked = await db.query(
     "UPDATE service_health SET notified_ok=$2 WHERE name=$1 AND notified_ok IS DISTINCT FROM $2 RETURNING name",
     [name, ok],
