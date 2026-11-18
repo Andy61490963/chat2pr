@@ -37,6 +37,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Wordmark } from "@/components/brand";
 import type { Action, Project, Settings, Task } from "../shared/types.js";
+import { quotaBlocked } from "../shared/line-quota.js";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -180,8 +181,7 @@ const vital: Record<string, string> = {
   tunnel: "HTTPS 入口",
   notifications: "LINE 推播（群組回覆與私訊）",
 };
-// LINE 每月推播額度用完（批次 1 的 line_quota 健康項）：不是連線壞掉，另用黃色橫幅說明替代做法。
-const LINE_QUOTA = "line_quota";
+// LINE 每月推播額度用完（line_quota 健康項）：不是連線壞掉，另用黃色橫幅說明替代做法。
 const quotaBanner =
   "LINE 本月推播額度已用完，群組回答與私訊暫時送不出去；「收到」即時確認不受影響。請看通知鈴鐺，必要時到任務詳情複製結果貼到群組，群組成員可打 /進度 取回";
 // 登入前所在的網址：GitHub 登入回來後回到這裡（例如 LINE 通知裡的任務連結）。
@@ -517,9 +517,7 @@ export function App() {
   // 一般成員只看得到工作區；管理區（群組、專案、系統、成員、設定）限管理者。
   const admin = user.role !== "member";
   const goneProjects = (state?.projects ?? []).filter((p) => p.repo_missing_at);
-  const quotaOut = (state?.health ?? []).some(
-    (h) => h.name === LINE_QUOTA && !h.ok,
-  );
+  const quotaOut = quotaBlocked(state?.health);
   const down = (state?.health ?? []).filter(
     (h) =>
       !h.ok &&

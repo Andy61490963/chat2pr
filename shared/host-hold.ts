@@ -15,7 +15,10 @@ export interface HealthRow {
   checked_at: string;
 }
 
-/** 記憶體不足暫停派工時回傳原因（`host_resources` 的 detail）；正常或結果過期時為 null。 */
+/**
+ * 記憶體不足暫停派工時回傳原因（`host_resources` 的 detail，去掉句尾標點，看板會接著補一句）；
+ * 正常或結果過期時為 null。
+ */
 export function memoryHold(
   health: readonly HealthRow[] | undefined,
   now = Date.now(),
@@ -24,5 +27,5 @@ export function memoryHold(
   if (!h || h.ok) return null;
   const at = new Date(h.checked_at).getTime();
   if (!Number.isFinite(at) || now - at > HOST_HOLD_FRESH_MS) return null;
-  return h.detail || "主機記憶體不足，暫停派新工作";
+  return h.detail.replace(/[。；，\s]+$/, "") || "主機記憶體不足，暫停派新工作";
 }

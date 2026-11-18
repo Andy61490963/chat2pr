@@ -45,6 +45,15 @@ describe("記憶體不足自動暫停派工（memoryHold）", () => {
     expect(memoryHold([row(false, 1)], now)).toContain("暫停派新工作");
   });
 
+  it("原因去掉句尾標點，橫幅接句時不會出現「。。」", () => {
+    expect(
+      memoryHold([{ ...row(false, 1), detail: "主機記憶體不足。" }], now),
+    ).toBe("主機記憶體不足");
+    expect(memoryHold([{ ...row(false, 1), detail: "" }], now)).toBe(
+      "主機記憶體不足，暫停派新工作",
+    );
+  });
+
   it("結果過期（4 分鐘前）時不算暫停", () => {
     expect(memoryHold([row(false, 4)], now)).toBeNull();
   });
