@@ -141,6 +141,62 @@ describe("所有管理 API 的輸入格式錯誤都回看板讀得懂的格式",
     }
   });
 });
+describe("工作流程設定的活動紀錄", () => {
+  const base = {
+    paused: true,
+    ai_mode: "api",
+    daily_runs: 20,
+    codex_model: null,
+    triage_effort: "high",
+    coding_effort: "medium",
+    daily_budget: 15,
+    task_budget: 3,
+    task_minutes: 30,
+    triage_model: "gpt-5.4-mini",
+    coding_model: "gpt-6.1-sol",
+  };
+  const settingsAudits = async () =>
+    (
+      await db.query<{ detail: string }>(
+        "SELECT detail FROM audit WHERE kind='settings' ORDER BY id",
+      )
+    ).map((r) => r.detail);
+  it("寫出操作者與改了什麼；開放容器網路寫成「隔離 → 完全開放」", async () => {
+    const headers = await session(),
+      app = await buildApp(db);
+    await db.query("UPDATE sessions SET login='fictional-admin'");
+    const put = (payload: object) =>
+      app.inject({ method: "PUT", url: "/api/settings", headers, payload });
+    expect((await put({ ...base, container_network: "open" })).statusCode).toBe(
+      200,
+    );
+    const first = await settingsAudits();
+    expect(first[0]).toContain("管理者 fictional-admin 更新工作流程設定：");
+    expect(first[0]).toContain("容器網路：隔離 → 完全開放");
+    expect(first[0]).toContain("派工：自動派工 → 已暫停");
+    // 派工由進行中改成暫停時另寫一筆，方便從活動紀錄找出何時停的。
+    expect(first.slice(1)).toEqual(["暫停新派工"]);
+
+    await db.query("DELETE FROM audit WHERE kind='settings'");
+    expect(
+      (await put({ ...base, container_network: "open", daily_runs: 30 }))
+        .statusCode,
+    ).toBe(200);
+    expect(await settingsAudits()).toEqual([
+      "管理者 fictional-admin 更新工作流程設定：每日最多執行次數：20 → 30",
+    ]);
+
+    await db.query("DELETE FROM audit WHERE kind='settings'");
+    expect(
+      (await put({ ...base, container_network: "open", daily_runs: 30 }))
+        .statusCode,
+    ).toBe(200);
+    expect(await settingsAudits()).toEqual([
+      "管理者 fictional-admin 更新工作流程設定：沒有變更",
+    ]);
+    await app.close();
+  });
+});
 describe("公開 Webhook 與管理 API 邊界", () => {
   it("非管理者即使持有有效工作階段與 CSRF 仍不能讀取或修改設定", async () => {
     const headers = await session(),

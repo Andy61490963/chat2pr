@@ -1,5 +1,116 @@
 import { describe, expect, it } from "vitest";
-import { readApiResponse } from "../src/app/api-response.js";
+import {
+  expiredMessage,
+  probeService,
+  readApiResponse,
+  SessionExpiredError,
+} from "../src/app/api-response.js";
+
+const json = (body: unknown, status = 200) =>
+  new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+const html = (status: number) =>
+  new Response("<!DOCTYPE html><title>通道錯誤</title>", {
+    status,
+    headers: { "content-type": "text/html" },
+  });
+
+describe("操作中途登入過期", () => {
+  it("寫入動作說明剛才的操作沒有完成；讀取只請重新登入", async () => {
+    for (const method of ["POST", "PUT", "DELETE", "patch"])
+      await expect(
+        readApiResponse(new Response("", { status: 401 }), method),
+      ).rejects.toThrow("登入已失效，剛才的操作沒有完成，請重新登入。");
+    for (const method of ["GET", "HEAD", undefined]) {
+      const error = await readApiResponse(
+        new Response("", { status: 401 }),
+        method,
+      ).catch((e: Error) => e);
+      expect(error).toBeInstanceOf(SessionExpiredError);
+      expect((error as Error).message).toBe("登入已失效，請重新登入。");
+    }
+    expect(expiredMessage("post")).toBe(
+      "登入已失效，剛才的操作沒有完成，請重新登入。",
+    );
+  });
+});
+
+describe("登入頁判斷服務是否連得上", () => {
+  const serve =
+    (routes: Record<string, Response | Error>) => async (url: string) => {
+      const r = routes[url];
+      if (r instanceof Error) throw r;
+      return r.clone();
+    };
+  it("status 回 530 HTML 時是連不上（null），不是尚未設定", async () => {
+    expect(
+      await probeService(
+        serve({ "/api/public/status": html(530), "/api/me": html(530) }),
+      ),
+    ).toEqual({ configured: null, user: null });
+    expect(
+      await probeService(
+        serve({
+          "/api/public/status": new TypeError("fetch failed"),
+          "/api/me": html(502),
+        }),
+      ),
+    ).toEqual({ configured: null, user: null });
+  });
+  it("/api/me 回 5xx 或非 JSON 也算連不上", async () => {
+    const status = json({ githubConfigured: true });
+    expect(
+      await probeService(
+        serve({ "/api/public/status": status, "/api/me": html(502) }),
+      ),
+    ).toEqual({ configured: null, user: null });
+    expect(
+      await probeService(
+        serve({
+          "/api/public/status": status,
+          "/api/me": new Response("<!DOCTYPE html>", {
+            headers: { "content-type": "text/html" },
+          }),
+        }),
+      ),
+    ).toEqual({ configured: null, user: null });
+  });
+  it("只有服務回應 githubConfigured=false 才是尚未設定；/api/me 401 只是還沒登入", async () => {
+    expect(
+      await probeService(
+        serve({
+          "/api/public/status": json({ githubConfigured: false }),
+          "/api/me": json({ error: "請先使用 GitHub 登入" }, 401),
+        }),
+      ),
+    ).toEqual({ configured: false, user: null });
+    // 服務以 JSON 拒絕（例如已不在成員名單）是服務在線、只是沒登入。
+    expect(
+      await probeService(
+        serve({
+          "/api/public/status": json({ githubConfigured: true }),
+          "/api/me": json({ error: "需要管理者權限" }, 403),
+        }),
+      ),
+    ).toEqual({ configured: true, user: null });
+    expect(
+      await probeService(
+        serve({
+          "/api/public/status": json({ githubConfigured: true }),
+          "/api/me": json({
+            login: "fictional-member",
+            csrf: "fictional-csrf",
+          }),
+        }),
+      ),
+    ).toEqual({
+      configured: true,
+      user: { login: "fictional-member", csrf: "fictional-csrf" },
+    });
+  });
+});
 
 describe("服務中斷的看板回應", () => {
   it("隧道回 HTML 502 時顯示可理解原因，不顯示代理頁面或原始堆疊", async () => {
