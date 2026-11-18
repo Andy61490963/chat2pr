@@ -72,8 +72,15 @@ import type {
   NotificationFailures,
   NotificationRetryResult,
   Project,
+  StateTotals,
+  TaskStatus,
 } from "../shared/types.js";
-import { efforts } from "../shared/types.js";
+import {
+  countStatuses,
+  efforts,
+  UNFINISHED_LIMIT,
+  unfinishedStatuses,
+} from "../shared/types.js";
 import {
   MAX_COLLECT_EXCLUDES,
   validCollectExclude,
@@ -472,8 +479,17 @@ export async function buildApp(
       rag,
       failures,
     ] = await Promise.all([
-      db.one<{ tasks: number; activity: number }>(
-        "SELECT (SELECT count(*)::int FROM tasks) AS tasks,(SELECT count(*)::int FROM audit) AS activity",
+      // 看板的分頁數字與統計卡用資料庫的實際數量，不受清單載入範圍影響。
+      db.one<{
+        tasks: number;
+        activity: number;
+        by_status: Partial<Record<TaskStatus, number>>;
+        merged_week: number;
+      }>(
+        `SELECT (SELECT count(*)::int FROM tasks) AS tasks,(SELECT count(*)::int FROM audit) AS activity,
+           coalesce((SELECT jsonb_object_agg(status,n) FROM (SELECT status,count(*)::int AS n FROM tasks GROUP BY status) s),'{}') AS by_status,
+           (SELECT count(*)::int FROM tasks WHERE status='merged'
+             AND (updated_at AT TIME ZONE 'Asia/Taipei')::date>(now() AT TIME ZONE 'Asia/Taipei')::date-7) AS merged_week`,
       ),
       // 鈴鐺：與 LINE 私訊相同的重要通知（待審核、失敗、PR 完成、查詢回覆、額度等）。
       db.query(
@@ -490,9 +506,20 @@ export async function buildApp(
       db.query(
         "SELECT g.*,COALESCE((SELECT array_agg(gp.project_id ORDER BY gp.created_at) FROM group_projects gp WHERE gp.group_id=g.id),'{}') AS project_ids,(SELECT count(*)::int FROM tasks t WHERE t.group_id=g.id AND t.status IN ('queued','budget_wait','failed','running','reviewing')) AS affected_tasks FROM groups g ORDER BY g.created_at,g.id",
       ),
-      db.query("SELECT * FROM tasks ORDER BY updated_at DESC LIMIT $1", [
-        limits.tasks,
-      ]),
+      // 未結束的任務（待審核、失敗、等待額度、進行中、待合併）一律載入，較舊的也不會從收件匣消失；
+      // 其餘只給最近 N 筆。進行中的執行只帶階段與時間四欄，執行細節由任務詳情提供。
+      db.query(
+        `WITH picked AS (
+           (SELECT id FROM tasks WHERE status=ANY($2::text[]) ORDER BY updated_at DESC LIMIT $3)
+           UNION
+           (SELECT id FROM tasks ORDER BY updated_at DESC LIMIT $1))
+         SELECT t.*,r.status AS run_phase,r.started_at AS run_started_at,r.deadline AS run_deadline,r.heartbeat_at AS run_heartbeat_at
+         FROM tasks t JOIN picked p ON p.id=t.id
+         LEFT JOIN LATERAL (SELECT status,started_at,deadline,heartbeat_at FROM runs
+           WHERE task_id=t.id AND completed_at IS NULL ORDER BY started_at DESC LIMIT 1) r ON true
+         ORDER BY t.updated_at DESC,t.id`,
+        [limits.tasks, unfinishedStatuses, UNFINISHED_LIMIT],
+      ),
       budget.summary(),
       db.query("SELECT * FROM service_health ORDER BY name"),
       // 動態附上任務名稱，讓人不用點開就知道是哪一件事。
@@ -544,7 +571,17 @@ export async function buildApp(
         : alerts,
       alertsSeenAt: seen?.seen_at ?? null,
       // 清單總筆數與送不出去的 LINE 通知數，讓看板知道還有多少沒顯示、多少要重送。
-      totals: { tasks: totals?.tasks ?? 0, activity: totals?.activity ?? 0 },
+      totals: {
+        tasks: totals?.tasks ?? 0,
+        activity: totals?.activity ?? 0,
+        byStatus: totals?.by_status ?? {},
+        mergedWeek: totals?.merged_week ?? 0,
+        unfinishedOmitted: Math.max(
+          0,
+          countStatuses(totals?.by_status, unfinishedStatuses) -
+            UNFINISHED_LIMIT,
+        ),
+      } satisfies StateTotals,
       failedNotifications: (failures?.direct ?? 0) + (failures?.group ?? 0),
       notificationFailures: failures ?? { direct: 0, group: 0, stale: 0 },
       projects,

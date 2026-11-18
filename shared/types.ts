@@ -11,6 +11,38 @@ export type TaskStatus =
   | "merged"
   | "answered"
   | "closed";
+/**
+ * 看板依狀態分的幾組任務：需要你處理、等待額度（會自動繼續）、進行中、待合併。
+ * `/api/state` 依 `unfinishedStatuses` 完整載入這些任務（不受「最近 N 筆」限制），
+ * 改這裡等於同時改伺服器的載入範圍（docs/conventions.md 第 3 節）。
+ */
+export const taskGroups = {
+  attention: ["awaiting_approval", "failed"],
+  waiting: ["budget_wait"],
+  moving: ["queued", "running", "reviewing"],
+  ready: ["ready"],
+} satisfies Record<string, TaskStatus[]>;
+export const unfinishedStatuses: TaskStatus[] = Object.values(
+  taskGroups,
+).flat() as TaskStatus[];
+/** `/api/state` 一次最多完整載入的未結束任務數；超過的筆數記在 `StateTotals.unfinishedOmitted`。 */
+export const UNFINISHED_LIMIT = 1000;
+/** `/api/state` 的 totals：資料庫裡的實際數量，不受看板載入範圍影響。 */
+export interface StateTotals {
+  tasks: number;
+  activity: number;
+  /** 各狀態的任務數。 */
+  byStatus: Partial<Record<TaskStatus, number>>;
+  /** 近 7 天（臺北時間，含今天）合併的任務數。 */
+  mergedWeek: number;
+  /** 未結束的任務超過 UNFINISHED_LIMIT 時沒有載入的筆數；平常是 0。 */
+  unfinishedOmitted: number;
+}
+/** 依 byStatus 加總一組狀態的任務數。 */
+export const countStatuses = (
+  byStatus: Partial<Record<TaskStatus, number>> | undefined,
+  statuses: readonly TaskStatus[],
+) => statuses.reduce((n, s) => n + (byStatus?.[s] ?? 0), 0);
 export type Action =
   | "approve"
   | "reject"
@@ -133,6 +165,11 @@ export interface Task {
   answer: string | null;
   created_at: string;
   updated_at: string;
+  /** 只有 /api/state 帶：進行中執行的階段（runs.status）；沒有未完成的執行時為 null。 */
+  run_phase?: string | null;
+  run_started_at?: string | null;
+  run_deadline?: string | null;
+  run_heartbeat_at?: string | null;
 }
 export type AiMode = "subscription" | "api";
 export const efforts = [

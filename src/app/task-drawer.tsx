@@ -5,10 +5,11 @@ import { QueryReport } from "./query-report";
 import { TaskBranchPicker } from "./task-branch-picker";
 import { TaskClarification } from "./task-clarification";
 import {
-  fixFirst,
   fixPage,
   fixPageLabels,
   parseFailure,
+  primaryFix,
+  waitHint,
 } from "../../shared/failure-text.js";
 import {
   AlertCircle,
@@ -38,7 +39,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { AssignProject } from "./inbox";
+import { AssignProject, BudgetRetry } from "./inbox";
 import { ConfirmButton } from "./confirm";
 import { useUnsaved } from "./unsaved";
 import {
@@ -53,6 +54,7 @@ import {
   groupName,
   Linkified,
   projectName,
+  RunProgressLine,
   StatusBadge,
   Stepper,
 } from "./shared";
@@ -70,6 +72,8 @@ export function TaskDrawer({
   state,
   busy,
   admin,
+  startAmend,
+  amendStarted,
   close,
   go,
   act,
@@ -82,6 +86,10 @@ export function TaskDrawer({
   state: State;
   busy: boolean;
   admin: boolean;
+  /** 從收件匣「縮小需求範圍」開啟：一打開就展開補充需求編輯。 */
+  startAmend?: boolean;
+  /** 已展開補充需求編輯；呼叫端清掉這次的要求，之後再開同一個任務不會又自動展開。 */
+  amendStarted?: () => void;
   close: () => void;
   go: (v: View) => void;
   act: Act;
@@ -156,7 +164,13 @@ export function TaskDrawer({
   const [pick, setPick] = useState<number | null>(
     t.suggestions.length === 1 ? 0 : null,
   );
-  const [tab, setTab] = useState("sources");
+  // 預設分頁依打開時的狀態決定：開發或驗證中、已有執行紀錄就先看執行紀錄。
+  // 抽屜以任務 ID 為 key，只有換到另一個任務才重設；背景更新不會把使用者切過的分頁改回去。
+  const [tab, setTab] = useState(() =>
+    ["running", "reviewing"].includes(t.status) && detail.runs.length
+      ? "runs"
+      : "sources",
+  );
   const [copied, setCopied] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const [branchOpen, setBranchOpen] = useState(false);
@@ -200,9 +214,18 @@ export function TaskDrawer({
   // 自動重試排隊或重跑期間，last_error 是上一次嘗試的原因，不是目前已失敗。
   const retrying = ["queued", "running", "reviewing"].includes(t.status);
   const failure = t.status === "failed" ? parseFailure(t.last_error) : null;
-  const demoteRetry = fixFirst(failure?.category);
-  const fixTarget =
-    admin && failure && demoteRetry ? fixPage(failure.action) : null;
+  // 主動作與收件匣卡片共用 primaryFix；前往頁面只給管理者。
+  const fix = primaryFix(failure);
+  const demoteRetry = t.status === "failed" && fix.kind !== "retry";
+  const fixTarget = admin && fix.kind === "page" ? fix.page : null;
+  const amendFirst = t.status === "failed" && fix.kind === "amend";
+  // 執行中的那一次（最新且未完成）：標頭顯示階段、已跑時間與期限。
+  const live =
+    ["running", "reviewing"].includes(t.status) &&
+    detail.runs[0] &&
+    !detail.runs[0].completed_at
+      ? detail.runs[0]
+      : null;
   const hasEvidence =
     detail.contextEvidence.length > 0 ||
     detail.images.length > 0 ||
@@ -215,6 +238,12 @@ export function TaskDrawer({
         ?.scrollIntoView({ behavior: "smooth", block: "center" }),
     );
   };
+  // 從收件匣「縮小需求範圍」打開：直接展開補充需求編輯（只在剛打開時做一次）。
+  useEffect(() => {
+    if (!startAmend) return;
+    amendStarted?.();
+    if (canAmend) openAmend();
+  }, []);
   return (
     <Sheet open onOpenChange={(o) => !o && close()}>
       <SheetContent className="sm:max-w-2xl">
@@ -260,6 +289,16 @@ export function TaskDrawer({
             </div>
           )}
           <Stepper status={t.status} query={t.mode === "query"} />
+          {live && (
+            <RunProgressLine
+              run={{
+                phase: live.status,
+                startedAt: live.started_at,
+                deadline: live.deadline,
+                heartbeatAt: live.heartbeat_at,
+              }}
+            />
+          )}
         </SheetHeader>
         <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-5">
           {!!(thread?.before.length || thread?.after.length) && (
@@ -475,7 +514,8 @@ export function TaskDrawer({
             <div
               className={cn(
                 "flex gap-2 rounded-lg px-3 py-2.5 text-sm",
-                t.last_error.startsWith("AI 等你回答")
+                t.last_error.startsWith("AI 等你回答") ||
+                  t.status === "budget_wait"
                   ? "bg-warn-soft text-warn"
                   : retrying
                     ? "bg-info-soft text-info"
@@ -492,6 +532,11 @@ export function TaskDrawer({
                 <span className="whitespace-pre-wrap [overflow-wrap:anywhere]">
                   <Linkified text={t.last_error.replace(/^Error: /, "")} />
                 </span>
+                {t.status === "budget_wait" && (
+                  <p className="text-xs">
+                    {waitHint(t.last_error, state.settings.ai_mode)}
+                  </p>
+                )}
               </div>
             </div>
           )}
@@ -975,7 +1020,11 @@ export function TaskDrawer({
                 {fixPageLabels[fixTarget]}
               </Button>
             )}
-            {["failed", "budget_wait"].includes(t.status) && (
+            {amendFirst && (
+              // 逾時：首要是把需求拆小，重試留作次要。
+              <Button onClick={openAmend}>縮小需求範圍</Button>
+            )}
+            {t.status === "failed" && (
               <Button
                 // 設定、環境、專案類失敗不先處理，重試只會再失敗一次、多用一次每日次數。
                 variant={demoteRetry ? "outline" : "default"}
@@ -983,6 +1032,13 @@ export function TaskDrawer({
                 onClick={() => void act(t, "retry", {}, "已重新排程")}
               >
                 <RefreshCw /> 重試
+              </Button>
+            )}
+            {/* 等待額度會自動繼續：不放「重試」主按鈕；API 模式才給次要的「已提高預算，立即再試」。 */}
+            <BudgetRetry task={t} state={state} busy={busy} act={act} />
+            {t.status === "budget_wait" && admin && (
+              <Button variant="ghost" size="sm" onClick={() => go("settings")}>
+                調整每日次數／預算
               </Button>
             )}
             {t.status === "failed" ? (

@@ -10,6 +10,8 @@ import {
   fixFirst,
   fixPage,
   parseFailure,
+  primaryFix,
+  waitHint,
 } from "../shared/failure-text.js";
 
 // 看板把 failureNotice 的輸出拆成白話說明、建議與錯誤重點；兩邊格式必須一致（docs/conventions.md 第 3 節）。
@@ -128,5 +130,74 @@ describe("失敗卡片的主按鈕與前往頁面", () => {
     expect(fixPage("到群組頁重新啟用")).toBe("groups");
     expect(fixPage("記憶體回升後自動繼續，不用重新提出")).toBeNull();
     expect(fixPage(null)).toBeNull();
+  });
+});
+
+// 收件匣卡片與任務詳情共用 primaryFix 決定主按鈕；輸入用 failureNotice 的實際輸出。
+describe("primaryFix：失敗主按鈕依原因調整", () => {
+  const notice = (raw: string, phase = "code", retried = false) =>
+    parseFailure(failureNotice(classifyFailure(raw, phase), retried));
+
+  it("執行期間設定被變更：分類是設定問題，但主按鈕仍是重試", () => {
+    for (const raw of ["需求版本已改變", "專案設定已變更", "群組已停用"]) {
+      const parsed = notice(raw);
+      expect(parsed?.category).toBe("config");
+      expect(parsed?.plain).toContain("設定被變更");
+      expect(primaryFix(parsed)).toEqual({ kind: "retry" });
+    }
+  });
+
+  it("逾時：主按鈕是縮小需求範圍，不是前往設定", () => {
+    for (const [raw, retried] of [
+      ["Codex 執行超過 30 分鐘限制", false],
+      ["訂閱階段已超過期限", true],
+    ] as const) {
+      const parsed = notice(raw, "code", retried);
+      expect(parsed?.plain).toContain("時間限制");
+      // 建議文字提到「設定」，舊規則會把主按鈕變成「前往設定」。
+      expect(fixPage(parsed?.action)).toBe("settings");
+      expect(primaryFix(parsed)).toEqual({ kind: "amend" });
+    }
+  });
+
+  it("缺少連線：前往專案設定", () => {
+    expect(
+      primaryFix(notice("尚未登記資料庫連線：虛構專案 demo-shop")),
+    ).toEqual({ kind: "page", page: "projects" });
+  });
+
+  it("額度不足前往設定；權限問題沒有指向頁面時看詳情；暫時性與無法解析時重試", () => {
+    expect(primaryFix(notice("今日執行次數已達上限"))).toEqual({
+      kind: "page",
+      page: "settings",
+    });
+    expect(primaryFix(notice("Bad credentials"))).toEqual({ kind: "detail" });
+    expect(primaryFix(notice("執行器連線失敗：socket hang up"))).toEqual({
+      kind: "retry",
+    });
+    expect(primaryFix(notice("TypeError: 虛構的預期外錯誤"))).toEqual({
+      kind: "retry",
+    });
+    expect(primaryFix(parseFailure("Codex 執行失敗：舊格式"))).toEqual({
+      kind: "retry",
+    });
+  });
+});
+
+describe("waitHint：等待額度的恢復說明", () => {
+  it("今日執行次數用完：臺北午夜後或提高每日次數後自動繼續", () => {
+    for (const mode of ["api", "subscription"] as const)
+      expect(waitHint("今日執行次數已達上限，工作已保留", mode)).toContain(
+        "臺北時間午夜後",
+      );
+  });
+  it("API 模式預估額度：隔日自動繼續", () => {
+    expect(waitHint("今日預估額度不足，工作已保留", "api")).toContain("隔日");
+  });
+  it("Codex 訂閱額度：恢復後自動繼續", () => {
+    expect(waitHint("Codex 訂閱額度已達上限", "subscription")).toContain(
+      "額度恢復後自動繼續",
+    );
+    expect(waitHint(null, "subscription")).toContain("訂閱額度");
   });
 });
