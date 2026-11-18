@@ -204,6 +204,37 @@ export interface ClaimedReply {
 export const claimingNote = "以 /進度 回覆補送中";
 export const replyFailedNote = "以 /進度 回覆補送失敗，下次再試";
 export const supersededNote = "已有較新的回覆，未補送";
+/** 同一則通知以 /進度 補送、被 LINE 以內容問題拒收的次數上限；到了就不再取回，避免整個群組的 /進度 一直失敗。 */
+export const REPLY_FAILURE_LIMIT = 2;
+export const replyGaveUpNote =
+  "以 /進度 補送多次失敗，已停止補送，請管理者在看板查看並手動轉達";
+/** 佔住後超過這段時間仍是「補送中」，視為程序在 reply 前後中止；reply 本身 5 秒逾時，2 分鐘足以排除正常進行中的補送。 */
+export const claimTimeout = "2 minutes";
+
+/**
+ * reply 失敗是不是這批內容的問題（要計入 reply_failures）：只算 LINE 明確拒收的 4xx。
+ * 不算的：429 限流、401／403 權杖或權限、400 但訊息在說 reply token（逾時或已用過，換個 token 就好）、
+ * 5xx、逾時、沒有權杖（status 為 null）——這些都不是補送內容造成的，下次 /進度 換新的 token 可以再試。
+ */
+export function replyRejected(status: number | null, message?: unknown) {
+  if (status === null || status < 400 || status >= 500) return false;
+  if ([401, 403, 429].includes(status)) return false;
+  return !(typeof message === "string" && /reply ?token/i.test(message));
+}
+
+/**
+ * 收回 /進度 佔住後沒有寫回結果的通知（程序在收訊交易提交後、reply 結果寫回前中止）：
+ * 放回未送出、改寫成 replyFailedNote，下一次 /進度 或推播可以再取。正在處理的列（被鎖住）略過。
+ */
+export async function reclaimStaleClaims(c: Queryable) {
+  await c.query(
+    `UPDATE notifications u SET sent_at=NULL,last_error=$2
+     FROM (SELECT id FROM notifications WHERE last_error=$1 AND sent_message_id IS NULL AND sent_at<now()-$3::interval
+       FOR UPDATE SKIP LOCKED) s
+     WHERE u.id=s.id`,
+    [claimingNote, replyFailedNote, claimTimeout],
+  );
+}
 
 /**
  * 可以用 /進度 取回的群組通知（$1 是群組，需先 JOIN tasks t）：
@@ -212,9 +243,12 @@ export const supersededNote = "已有較新的回覆，未補送";
  *   group_received 只在仍待確認、group_failed 只在仍是失敗時才送。
  * - 排除 group_triage（判讀說明「和某題是同一件事」）：它掛在被重複的那題上，若算進「每個任務只取最新一則」，
  *   會把那題還在等回答的補問標成已被取代。
+ * - 排除以 /進度 補送已被 LINE 拒收 REPLY_FAILURE_LIMIT 次的：reply token 一次只能用一次、整批一起成敗，
+ *   一直取回同一則會讓這個群組的 /進度 永遠失敗。
  */
 const retrievable = (n: string) =>
   `${n}.group_id=$1 AND t.group_id=$1 AND ${n}.sent_at IS NULL AND ${n}.created_at>now()-interval '7 days' AND ${n}.kind NOT IN ('group_waiting','group_triage')
+   AND ${n}.reply_failures<${REPLY_FAILURE_LIMIT}
    AND (${n}.kind<>'group_question' OR (t.status='awaiting_approval' AND t.question IS NOT NULL AND ${n}.dedupe_key='group:question:'||t.id||':'||t.version))
    AND (${n}.kind<>'group_received' OR t.status='awaiting_approval')
    AND (${n}.kind<>'group_failed' OR t.status='failed')`;
@@ -244,6 +278,7 @@ export async function pendingGroupReplies(c: DbClient, groupId: string) {
  * flushNotifications 與另一個 /進度 都用 SKIP LOCKED，不會重複送。
  * 同一任務較舊的未送通知一併標成已被取代，下次不會再冒出來。
  * 送出後由呼叫端寫回 sent_message_id；送不出去時把 sent_at 還原。
+ * 程序在兩者之間中止時，佔住的列會停在 claimingNote，由 reclaimStaleClaims（每輪通知排程）在 2 分鐘後放回。
  */
 export async function claimPendingGroupReplies(
   c: DbClient,

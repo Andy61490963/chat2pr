@@ -113,6 +113,8 @@ CREATE TABLE IF NOT EXISTS notifications (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), task_id uuid REFERENCES tasks(id), kind text NOT NULL, dedupe_key text NOT NULL UNIQUE,
  text text NOT NULL, sent_at timestamptz, attempts integer NOT NULL DEFAULT 0, last_error text, created_at timestamptz NOT NULL DEFAULT now()
 );
+-- 以 /進度 補送被 LINE 拒收（內容問題的 4xx）的次數；到 2 次就不再取回，避免整個群組的 /進度 一直失敗。
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS reply_failures integer NOT NULL DEFAULT 0;
 CREATE TABLE IF NOT EXISTS service_health (name text PRIMARY KEY, ok boolean NOT NULL, detail text NOT NULL, checked_at timestamptz NOT NULL DEFAULT now());
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS config_version integer NOT NULL DEFAULT 1;
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS triage_failures integer NOT NULL DEFAULT 0;
@@ -443,6 +445,9 @@ CREATE TABLE IF NOT EXISTS line_members (
 );
 -- 群組名稱以 LINE 為準，記錄最後同步時間以免每則訊息都查詢。
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS name_synced_at timestamptz;
+-- 群組推播依人數計費：快取群組人數，判斷剩餘推播額度夠不夠送；24 小時更新一次，讀不到時為 NULL（未知）。
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS member_count integer;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS member_count_at timestamptz;
 -- 查詢任務：只調查並回覆，不修改程式、不開 PR；調查結果存在 answer。
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS mode text NOT NULL DEFAULT 'change';
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS answer text;

@@ -2,10 +2,44 @@ import { describe, expect, it } from "vitest";
 import {
   isMonthlyLimit,
   linePushPanel,
+  pushCost,
   quotaExhaustedDetail,
+  quotaRemaining,
+  quotaShortForGroup,
   quotaUsageOf,
   quotaUsageText,
 } from "../shared/line-quota.js";
+
+describe("剩餘額度對群組人數", () => {
+  it("剩餘則數由說明裡的用量算出；沒查過是未知，沒有上限是無限", () => {
+    expect(quotaRemaining(quotaUsageOf("本月已用 195／上限 200 則"))).toBe(5);
+    expect(quotaRemaining({ limit: 200, used: 230 })).toBe(0);
+    expect(
+      quotaRemaining(
+        quotaUsageOf(`${quotaExhaustedDetail}（本月已用 200／上限 200 則）`),
+      ),
+    ).toBe(0);
+    expect(quotaRemaining(quotaUsageOf(quotaExhaustedDetail))).toBeNull();
+    expect(quotaRemaining({ limit: null, used: 5 })).toBe(Infinity);
+  });
+  it("群組推播依人數計費，人數未知時當 1 則；私訊 1 則", () => {
+    expect(pushCost(8)).toBe(8);
+    expect(pushCost(null)).toBe(1);
+    expect(pushCost(undefined)).toBe(1);
+    expect(pushCost(0)).toBe(1);
+    // 剩 5 則、群組 8 人：不夠；私訊只要 1 則。
+    expect(5 >= pushCost(8)).toBe(false);
+    expect(5 >= pushCost()).toBe(true);
+  });
+  it("略過群組時說明剩幾則、群組幾人", () => {
+    expect(quotaShortForGroup(5, 8)).toBe(
+      "推播額度剩 5 則，不足這個群組 8 人，額度恢復後再送",
+    );
+    expect(quotaShortForGroup(3, null)).toBe(
+      "推播額度剩 3 則，不足這個群組的人數，額度恢復後再送",
+    );
+  });
+});
 
 describe("辨識 LINE 每月推播額度用完", () => {
   it("只有 429 且訊息寫明 monthly limit 才算額度用完", () => {
