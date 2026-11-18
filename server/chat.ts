@@ -6,6 +6,7 @@ import { AppError } from "./policy.js";
 import { memberNames } from "./line-members.js";
 import type { ChatMessage, ChatPage } from "../shared/chat.js";
 import { type BotMessage, deliveryState } from "../shared/group-delivery.js";
+import { lineQuotaBlocked } from "./line-quota.js";
 
 /**
  * 一頁最多帶幾則機器人訊息；成員很少發言、機器人卻說很多時避免一次回傳過大。
@@ -48,6 +49,8 @@ async function botMessages(
      ORDER BY n.created_at DESC,n.id DESC LIMIT ${botLimit + 1}`,
     [groupId, before, oldest],
   );
+  // 額度用完期間排入的通知 last_error 是空的，要靠推播暫停狀態才說得出「額度用完」。
+  const quotaBlocked = rows.length ? await lineQuotaBlocked(db) : false;
   // 原始 last_error 與 LINE 訊息 ID 只在這裡用來判斷狀態，不回傳給瀏覽器。
   return rows.reverse().map((n) => ({
     id: n.id,
@@ -56,7 +59,7 @@ async function botMessages(
     task_title: n.task_title,
     created_at: n.created_at,
     text: n.text,
-    delivery: deliveryState(n),
+    delivery: deliveryState(n, { quotaBlocked }),
   }));
 }
 

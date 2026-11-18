@@ -92,8 +92,16 @@ function reasonOf(raw: string): { reason: DeliveryReason; note: string } {
   return pick("error");
 }
 
-/** 依 sent_at、attempts、last_error 推出送達狀態。 */
-export function deliveryState(row: DeliveryRow): Delivery {
+/**
+ * 依 sent_at、attempts、last_error 推出送達狀態。
+ * quotaBlocked：LINE 每月推播額度用完、推播暫停中（service_health 的 line_quota 為 ok=false）。
+ * 暫停期間 flushNotifications 不會再碰任何一則，只有撞到 429 的那一則寫了額度原因；
+ * 之後排入或排在後面的通知 last_error 仍是空的，不帶這個旗標會被說成「正在送到群組」。
+ */
+export function deliveryState(
+  row: DeliveryRow,
+  context: { quotaBlocked?: boolean } = {},
+): Delivery {
   const error = row.last_error?.trim() || null;
   if (error === claimingNote)
     // 補送成功會清掉 last_error；萬一寫回 ID 後還留著這句，仍算已送出。
@@ -104,6 +112,12 @@ export function deliveryState(row: DeliveryRow): Delivery {
     if (!error) return { status: "sent", reason: null, note: "已送到群組" };
     return { status: "skipped", ...reasonOf(error) };
   }
+  if (
+    context.quotaBlocked &&
+    row.attempts < maxPushAttempts &&
+    !(error && /多次/.test(error))
+  )
+    return { status: "pending", reason: "quota", note: reasonNotes.quota };
   if (!error)
     return row.attempts >= maxPushAttempts
       ? { status: "failed", reason: "error", note: reasonNotes.error }

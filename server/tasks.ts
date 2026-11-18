@@ -19,6 +19,7 @@ import { notifyGroup } from "./group-replies.js";
 import { taskQueue } from "./capacity.js";
 import type { Action, Project, Task } from "../shared/types.js";
 import { deliveryState, type GroupDelivery } from "../shared/group-delivery.js";
+import { lineQuotaBlocked } from "./line-quota.js";
 export const Assignment = z.object({
   project_id: z.string().uuid(),
   remember: z.string().trim().max(1000).optional(),
@@ -469,12 +470,15 @@ export class Tasks {
       "SELECT id,kind,left(text,4500) AS text,sent_at,sent_message_id IS NOT NULL AS has_message_id,attempts,last_error,created_at FROM notifications WHERE task_id=$1 AND group_id IS NOT NULL ORDER BY created_at,id",
       [id],
     );
+    if (!rows.length) return [];
+    // 額度用完期間排入的通知 last_error 是空的，要靠推播暫停狀態才說得出「額度用完」。
+    const quotaBlocked = await lineQuotaBlocked(this.db);
     return rows.map((n) => ({
       id: n.id,
       kind: n.kind,
       created_at: n.created_at,
       text: n.text,
-      delivery: deliveryState(n),
+      delivery: deliveryState(n, { quotaBlocked }),
     }));
   }
   async runEvents(taskId: string, runId: string, before?: number) {

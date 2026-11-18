@@ -44,6 +44,58 @@ describe("群組訊息送達狀態", () => {
     );
     expect(deliveryLabel(d)).toBe("額度不足，未送出");
   });
+  it("額度用完期間排入或排在後面的通知（last_error 仍空）也說額度用完；已送出、略過、放棄的不受影響", () => {
+    const blocked = { quotaBlocked: true };
+    const queued = deliveryState(
+      { sent_at: null, attempts: 0, last_error: null },
+      blocked,
+    );
+    expect(queued).toEqual({
+      status: "pending",
+      reason: "quota",
+      note: "LINE 本月推播額度已用完",
+    });
+    expect(deliveryNotice(queued)).toBe(
+      "這則群組訊息沒有送出：LINE 本月推播額度已用完",
+    );
+    // 之前限流失敗過、還沒到 3 次：暫停期間不會再試，原因改說額度。
+    expect(
+      deliveryState(
+        {
+          sent_at: null,
+          attempts: 1,
+          last_error: `Error: ${rateLimitedPrefix}，稍後會再送（429）`,
+        },
+        blocked,
+      ).reason,
+    ).toBe("quota");
+    expect(
+      deliveryState({ sent_at: sentAt, attempts: 1, last_error: null }, blocked)
+        .status,
+    ).toBe("sent");
+    expect(
+      deliveryState(
+        { sent_at: sentAt, attempts: 0, last_error: repliesOffNote },
+        blocked,
+      ).status,
+    ).toBe("skipped");
+    expect(
+      deliveryState(
+        { sent_at: sentAt, attempts: 0, last_error: claimingNote },
+        blocked,
+      ).status,
+    ).toBe("claiming");
+    expect(
+      deliveryState(
+        {
+          sent_at: null,
+          attempts: 3,
+          last_error: "Error: LINE 通知失敗（500）",
+        },
+        blocked,
+      ),
+    ).toMatchObject({ status: "failed", reason: "error" });
+  });
   it("剩餘額度不夠群組人數也算額度原因", () => {
     const d = state({ last_error: "剩餘推播額度不足群組人數，額度恢復後再送" });
     expect(d).toMatchObject({ status: "pending", reason: "group_size" });

@@ -844,6 +844,28 @@ describe("聊天室與任務詳情顯示機器人的群組訊息與送達狀態"
       // 原始 last_error（含「下個月初重置」）不送給瀏覽器。
       expect(blocked.body).not.toContain("下個月初重置");
       expect(blocked.body).not.toContain('last_error":"LINE');
+      // 額度用完期間才排入的群組訊息：推播已暫停、沒撞過 429，last_error 是空的，仍要說額度用完。
+      await notifyGroup(
+        db,
+        task.id,
+        "failed",
+        `failed:${task.id}`,
+        "這則需求處理失敗，管理者會再確認",
+      );
+      await new Line(db).flushNotifications();
+      const later = (
+        (await app.inject({ url: `/api/tasks/${task.id}`, headers })).json()
+          .groupDeliveries as { kind: string; delivery: object }[]
+      ).find((d) => d.kind === "group_failed");
+      expect(later?.delivery).toEqual({
+        status: "pending",
+        reason: "quota",
+        note: "LINE 本月推播額度已用完",
+      });
+      const chat = await page();
+      expect(
+        chat.bot_messages.find((b) => b.kind === "group_failed")?.delivery,
+      ).toMatchObject({ status: "pending", reason: "quota" });
 
       await db.query(
         "UPDATE settings SET value=value||'{\"group_replies\":false}'::jsonb",
