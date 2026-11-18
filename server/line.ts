@@ -21,7 +21,11 @@ import {
   progressMoreNote,
   progressSummary,
   progressTasks,
+  reclaimStaleClaims,
   replyFailedNote,
+  replyGaveUpNote,
+  replyRejected,
+  REPLY_FAILURE_LIMIT,
   staleAnswerAck,
   type QuickReply,
 } from "./group-replies.js";
@@ -35,12 +39,20 @@ import {
 } from "./answers.js";
 import {
   LineQuotaExhausted,
+  fetchLineQuota,
+  groupMemberCount,
   lineQuotaBlocked,
+  lineQuotaUsage,
+  markGroupTooLarge,
   markQuotaExhausted,
+  saveQuotaUsage,
 } from "./line-quota.js";
 import {
   isMonthlyLimit,
+  pushCost,
   quotaExhaustedDetail,
+  quotaRemaining,
+  quotaShortForGroup,
   quotaTestBlocked,
 } from "../shared/line-quota.js";
 const Event = z
@@ -87,6 +99,12 @@ interface Ack {
   messages: ReplyMessage[];
   /** messages[i] 是補送的哪一則通知（沒有則為 null）：送出後依索引寫回 sent_message_id。 */
   notices?: (string | null)[];
+}
+/** Line.reply 的結果：ids 為 null 表示沒送出；status 為 null 表示沒有權杖、逾時或連不上。 */
+interface ReplyResult {
+  ids: (string | null)[] | null;
+  status: number | null;
+  message?: unknown;
 }
 const lineText = (m: ReplyMessage) => {
   const text = typeof m === "string" ? m : m.text;
@@ -483,8 +501,8 @@ export class Line {
         }
       });
     for (const a of acks) {
-      const ids = await this.reply(a.token, a.messages);
-      if (a.notices) await this.settleClaimed(a.notices, ids);
+      const result = await this.reply(a.token, a.messages);
+      if (a.notices) await this.settleClaimed(a.notices, result);
     }
     for (const a of adoptions) {
       const reply =
@@ -595,17 +613,26 @@ export class Line {
   /**
    * /進度 補送的通知：reply 成功就依索引寫回 sent_message_id（之後「詳細」、引用追問、引用作答才接得上）；
    * 失敗或逾時就把佔住的列還原成未送出，下次 /進度 或正常推播可以再試。
+   * LINE 以內容問題拒收（replyRejected）時，這批每則 reply_failures+1；到 REPLY_FAILURE_LIMIT 次就改寫成
+   * replyGaveUpNote、不再被 /進度 取回，之後的 /進度 至少能回摘要。限流、5xx、逾時、沒有權杖不計。
    */
-  private async settleClaimed(
-    notices: (string | null)[],
-    ids: (string | null)[] | null,
-  ) {
+  private async settleClaimed(notices: (string | null)[], result: ReplyResult) {
     const claimed = notices.flatMap((id, i) => (id ? [{ id, i }] : []));
     if (!claimed.length) return;
+    const { ids } = result;
     if (!ids) {
+      const blamed = replyRejected(result.status, result.message) ? 1 : 0;
       await this.db.query(
-        "UPDATE notifications SET sent_at=NULL,last_error=$2 WHERE id=ANY($1::uuid[]) AND sent_message_id IS NULL",
-        [claimed.map((n) => n.id), replyFailedNote],
+        `UPDATE notifications SET sent_at=NULL,reply_failures=reply_failures+$3,
+           last_error=CASE WHEN reply_failures+$3>=$4 THEN $5 ELSE $2 END
+         WHERE id=ANY($1::uuid[]) AND sent_message_id IS NULL`,
+        [
+          claimed.map((n) => n.id),
+          replyFailedNote,
+          blamed,
+          REPLY_FAILURE_LIMIT,
+          replyGaveUpNote,
+        ],
       );
       return;
     }
@@ -617,14 +644,15 @@ export class Line {
   }
   /**
    * 用 reply token 回覆群組；不計入推播額度，送不出去也不影響收訊。
-   * 成功時依索引回傳 LINE 給每則訊息的 ID；沒送出（沒有權杖、逾時、非 2xx）時回傳 null。
+   * 成功時 ids 依索引放 LINE 給每則訊息的 ID；沒送出時 ids 為 null，status 是 LINE 的狀態碼
+   * （沒有權杖、逾時或連不上時為 null），message 是 LINE 回應的錯誤說明，讓呼叫端分辨是不是內容被拒收。
    */
   private async reply(
     token: string,
     messages: ReplyMessage[],
-  ): Promise<(string | null)[] | null> {
+  ): Promise<ReplyResult> {
     const access = secrets().lineToken;
-    if (!access) return null;
+    if (!access) return { ids: null, status: null };
     const sent = messages.slice(0, REPLY_LIMIT);
     const response = await fetch("https://api.line.me/v2/bot/message/reply", {
       method: "POST",
@@ -635,14 +663,20 @@ export class Line {
       body: JSON.stringify({ replyToken: token, messages: sent.map(lineText) }),
       signal: AbortSignal.timeout(5000),
     }).catch(() => null);
-    if (!response?.ok) return null;
+    if (!response) return { ids: null, status: null };
     const body = (await response.json().catch(() => null)) as {
       sentMessages?: { id?: unknown }[];
+      message?: unknown;
     } | null;
-    return sent.map((_, i) => {
-      const id = body?.sentMessages?.[i]?.id;
-      return typeof id === "string" ? id : null;
-    });
+    if (!response.ok)
+      return { ids: null, status: response.status, message: body?.message };
+    return {
+      ids: sent.map((_, i) => {
+        const id = body?.sentMessages?.[i]?.id;
+        return typeof id === "string" ? id : null;
+      }),
+      status: response.status,
+    };
   }
   /** 立即送一則測試私訊，讓管理者確認配對與權杖都正常；不進通知佇列。 */
   async sendTest() {
@@ -689,6 +723,8 @@ export class Line {
       );
   }
   async flushNotifications() {
+    // /進度 佔住後程序中止、停在「補送中」的通知放回待送。不需要權杖、額度用完時也要做：那時 /進度 是唯一的取回管道。
+    await reclaimStaleClaims(this.db);
     const s = await this.db.settings(),
       access = secrets().lineToken;
     if (!access) return;
@@ -699,22 +735,86 @@ export class Line {
       );
     // 每月額度用完時不呼叫推播；由連線檢查查到有剩餘額度才解除（server/line-quota.ts）。
     if (await lineQuotaBlocked(this.db)) return;
+    // 剩餘額度（line_quota 說明裡的用量）與群組人數：群組推播依人數計費，剩下的則數不夠某群組時本輪略過那個群組，
+    // 不加 attempts，私訊與小群組照送。用量未知（還沒查過）時照舊送，由 LINE 的 429 判斷。
+    let usage = await lineQuotaUsage(this.db);
+    let usageChanged = false;
+    const members = new Map<string, number | null>();
+    const short = new Set<string>();
+    const tooFew = (group: string) => {
+      const left = quotaRemaining(usage);
+      return left !== null && left < pushCost(members.get(group));
+    };
+    const markShort = (c: DbClient, group: string) =>
+      c.query(
+        `UPDATE notifications u SET last_error=$2
+         FROM (SELECT id FROM notifications WHERE group_id=$1 AND sent_at IS NULL AND attempts<3 AND reply_failures<$3
+           FOR UPDATE SKIP LOCKED) s
+         WHERE u.id=s.id`,
+        [
+          group,
+          quotaShortForGroup(
+            quotaRemaining(usage) ?? 0,
+            members.get(group) ?? null,
+          ),
+          REPLY_FAILURE_LIMIT,
+        ],
+      );
+    if (Number.isFinite(quotaRemaining(usage) ?? Infinity)) {
+      const groups = await this.db.query<{ group_id: string }>(
+        "SELECT DISTINCT group_id FROM notifications WHERE sent_at IS NULL AND attempts<3 AND group_id IS NOT NULL LIMIT 50",
+      );
+      for (const { group_id } of groups)
+        members.set(
+          group_id,
+          await groupMemberCount(this.db, group_id, access),
+        );
+      for (const { group_id } of groups)
+        if (tooFew(group_id)) {
+          short.add(group_id);
+          await markShort(this.db.pool, group_id);
+        }
+    }
     // 撈取與送出在同一交易、鎖住這批通知：其他補送流程可以用 SKIP LOCKED 略過正在推送的列。
     await this.db.transaction(async (c) => {
-      const notifications = (
-        await c.query<{
-          id: string;
-          task_id: string | null;
-          group_id: string | null;
-          kind: string;
-          text: string;
-          quick_replies: QuickReply[] | null;
-        }>(
-          "SELECT * FROM notifications WHERE sent_at IS NULL AND attempts<3 AND (group_id IS NOT NULL OR $1::text IS NOT NULL) ORDER BY created_at LIMIT 10 FOR UPDATE SKIP LOCKED",
+      type Pending = {
+        id: string;
+        task_id: string | null;
+        group_id: string | null;
+        kind: string;
+        text: string;
+        quick_replies: QuickReply[] | null;
+        created_at: Date;
+      };
+      // 私訊與群組分開取：排在前面的群組通知（額度不夠、一直被略過）不會卡住只要 1 則額度的管理者私訊。
+      const direct = (
+        await c.query<Pending>(
+          "SELECT * FROM notifications WHERE sent_at IS NULL AND attempts<3 AND group_id IS NULL AND $1::text IS NOT NULL ORDER BY created_at LIMIT 10 FOR UPDATE SKIP LOCKED",
           [s.admin_line_id ?? null],
         )
       ).rows;
+      const grouped = (
+        await c.query<Pending>(
+          "SELECT * FROM notifications WHERE sent_at IS NULL AND attempts<3 AND group_id IS NOT NULL AND group_id<>ALL($1::text[]) ORDER BY created_at LIMIT 10 FOR UPDATE SKIP LOCKED",
+          [[...short]],
+        )
+      ).rows;
+      const notifications = [...direct, ...grouped].sort(
+        (a, b) =>
+          new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+      );
+      // 群組撞到每月上限、但額度 API 顯示還有剩：本輪其餘群組通知略過，私訊照送。
+      let groupsHeld = false;
       for (const n of notifications) {
+        // 本地估算的額度已用完：等連線檢查以 LINE 的回報更新用量（用完就會整個暫停）。
+        if ((quotaRemaining(usage) ?? 1) < 1) break;
+        if (n.group_id && (groupsHeld || short.has(n.group_id))) continue;
+        if (n.group_id && tooFew(n.group_id)) {
+          // 這一輪前面的推播用掉了額度，剩下的已不夠這個群組。
+          short.add(n.group_id);
+          await markShort(c, n.group_id);
+          continue;
+        }
         // 每則各自一個 savepoint：某則寫入失敗只退回那一則，不會讓整批已送出的紀錄一起被撤銷。
         await c.query("SAVEPOINT push");
         try {
@@ -768,6 +868,16 @@ export class Line {
                 sentMessages?: { id?: string }[];
               } | null)
             : null;
+          // 本地累加用量：群組加上人數（未知時 1），私訊 1 則；flush 結束時寫回 line_quota 說明。
+          if (usage && response.ok) {
+            usage = {
+              ...usage,
+              used:
+                usage.used +
+                (n.group_id ? pushCost(members.get(n.group_id)) : 1),
+            };
+            usageChanged = true;
+          }
           await c.query(
             "UPDATE notifications SET sent_at=now(),attempts=attempts+1,last_error=NULL,sent_message_id=$2 WHERE id=$1",
             [n.id, sent?.sentMessages?.[0]?.id ?? null],
@@ -779,13 +889,39 @@ export class Line {
         } catch (e) {
           await c.query("ROLLBACK TO SAVEPOINT push");
           if (e instanceof LineQuotaExhausted) {
-            // 額度用完不是這則通知的問題：不算失敗次數、不把 notifications 寫成連線失敗，
-            // 本輪立即停止，不再逐則撞 429。
+            // 撞到每月上限不是這則通知的問題：不算失敗次數、不把 notifications 寫成連線失敗。
+            // 先向 LINE 查用量：群組撞到、但還剩 1 則以上，只是剩下的不夠這個群組的人數——
+            // 本輪略過其餘群組、私訊照送；剩 0 則、查不到用量或私訊也撞到，才整個暫停，不再逐則撞 429。
+            const fresh = await fetchLineQuota(access).catch(() => null);
+            if (fresh) {
+              usage = fresh;
+              usageChanged = true;
+            }
+            const left = quotaRemaining(fresh);
+            if (n.group_id && left !== null && left >= 1) {
+              const known = members.get(n.group_id) ?? null;
+              if (Number.isFinite(left))
+                await markGroupTooLarge(this.db, n.group_id, left);
+              await c.query(
+                "UPDATE notifications SET last_error=$2 WHERE id=$1",
+                [
+                  n.id,
+                  quotaShortForGroup(
+                    Number.isFinite(left) ? left : 0,
+                    known !== null && known > left ? known : null,
+                  ),
+                ],
+              );
+              groupsHeld = true;
+              continue;
+            }
             await c.query(
               "UPDATE notifications SET last_error=$2 WHERE id=$1",
               [n.id, quotaExhaustedDetail],
             );
-            await markQuotaExhausted(this.db);
+            // 保留用量：剛查到的、本地累加的，都沒有就沿用原本說明裡的。
+            await markQuotaExhausted(this.db, usage);
+            usageChanged = false;
             break;
           }
           await c.query(
@@ -799,5 +935,6 @@ export class Line {
         }
       }
     });
+    if (usage && usageChanged) await saveQuotaUsage(this.db, usage);
   }
 }

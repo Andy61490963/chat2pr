@@ -104,6 +104,13 @@
 - **恢復後不得補送過時的群組訊息**：解除暫停與按「重送」前都要先跑 `expireStaleNotifications`。群組推播依人數計費，幾週前的排隊說明、舊版補問一次推出去，新月份的額度當天就會用完，成員也會收到已經不對的內容。
 - **額度狀態不可併進 `'line'` 檢查，也不放進 `server/health.ts` 的 critical 清單**：解除全域暫停要求 `'line'` 一天內正常，額度用完時收訊與「收到」其實照常，併進去會讓管理者連暫停都解不開；critical 會再排一則「服務異常」私訊，這時根本送不出去。
 - **解除暫停只看 LINE 額度 API 的回報**，不用日期推算：LINE 換月的時區與方案升級都不在我們手上。額度 API 回應看不懂時當成「讀不到」，不能當成上限 0，否則會把推播整個停掉。
+- **群組推播依人數計費，額度判斷要用剩餘則數對群組人數，不能只看 `used<limit`**：剩 5 則時推給 8 人的群組，LINE 一樣回 429 monthly limit。只看 `used<limit` 會每小時解除一次、又撞一次，排在後面的私訊也一起卡住。所以：
+  - 解除暫停的條件仍是「剩 1 則以上」（私訊可送）；群組能不能送由 `flushNotifications` 逐則用 `quotaRemaining`（`line_quota` 說明裡的用量）對 `pushCost(groups.member_count)` 判斷，不夠就略過那個群組（不加 `attempts`，`last_error` 寫 `quotaShortForGroup`）。
+  - 私訊與群組通知分開取：一起依 `created_at` 取 10 則時，被略過的群組通知會佔滿每一輪。
+  - 每送一則就在本地把用量加上人數（未知時 1）並寫回說明，不必每則都查額度 API；連線檢查每小時再以 LINE 的回報校正。
+  - 群組撞到 429 monthly limit 時先查額度 API：還剩 1 則以上只是不夠這個群組，本輪略過群組、私訊照送，並把這個群組記成「至少剩餘＋1 人」（`markGroupTooLarge`），24 小時內不再對它撞 429；剩 0 則、查不到或私訊也撞到才整個封鎖。
+  - 封鎖時要保留用量（`markQuotaExhausted` 沒給用量就沿用原說明解析出的），看板才顯示得出「本月已用 X／上限 Y」。
+- **群組人數 API（`/v2/bot/group/{id}/members/count`、聊天室用 `/v2/bot/room/{id}/members/count`）不計推播額度，但仍要快取 24 小時**：通知排程每 20 秒跑一輪，每輪都查會無謂地打 LINE；只有剩餘額度已知且有上限時才需要人數。
 
 ## 7. AI 判讀與查詢的規則
 
@@ -121,6 +128,7 @@
 - **追加修改接在同一個 PR**：修改任務有 `parent_id`、上一題 `status=ready` 且 PR 仍開著（同儲存庫、分支相同、目標分支相同）時，派工以 PR head 為 `base_sha`、沿用上一題的分支，發布改用 `GitHub.continuePr`（快轉分支、PR 說明附上追加段落）。上一題還在 queued／running／reviewing／budget_wait 時先不執行。重試時若分支是上一題的、但 PR 已不能接續，就停下來請人確認，避免把舊 PR 當成這次的結果。
 - **群組推播要記下 LINE 回傳的訊息 ID**（`sentMessages[0].id`）。少了它，成員引用機器人的回答時就認不出是哪一題。
 - **用 reply token 補送通知（`/進度`）也要寫回訊息 ID**：`Line.reply` 回傳每則的 `sentMessages[i].id`，呼叫端依陣列索引寫回對應通知的 `sent_message_id`。同一個 reply token 只能用一次，所有內容必須合併成一個最多 5 則的 `messages` 陣列，不能分兩次回。補送前在收訊交易內用 `claimPendingGroupReplies`（`FOR UPDATE OF n SKIP LOCKED` 並先設 `sent_at`）佔住，reply 失敗或逾時再把 `sent_at` 還原。原因：沒寫回 ID，補送的答案打「詳細」、補送的問題用「回覆」作答都接不上；不先佔住，`flushNotifications` 會在同一時間再推一次。
+- **`/進度` 佔住的通知要能自己回來、壞掉的那則要隔離**：佔住（收訊交易內）與寫回 reply 結果（交易提交後）之間程序可能中止，`flushNotifications` 每輪開頭以 `reclaimStaleClaims` 把停在 `claimingNote` 超過 2 分鐘、沒有 `sent_message_id` 的列放回待送（reply 本身 5 秒逾時，2 分鐘足以排除進行中的補送；額度暫停時也照做，那時 `/進度` 是唯一的取回管道）。reply 被 LINE 以內容問題拒收（`replyRejected`：4xx，但不含 429、401／403 與「reply token」失效）時這批 `reply_failures+1`，到 2 次就改寫 `replyGaveUpNote`、不再被 `retrievable` 取回；5xx、逾時、沒有權杖不加。原因：reply token 一次只能用一次、整批一起成敗，一則讓 LINE 一直回 400 的內容會讓整個群組的 `/進度` 永遠失敗；token 失效、限流則是換一個 token 就好，算進去會冤枉正常的通知。
 - **同一交易排入的通知 `created_at` 相同**（PostgreSQL 的 `now()` 是交易開始時間）：要挑「同一任務最新一則」時不能只比 `created_at`、`id`。例如 `approvalNotice` 的 `group_received` 和接著 `askInGroup` 的 `group_question` 同時間排入，`/進度` 以 `group_received` 排最後、再比時間與 `id`；標記較舊通知為已被取代時，也直接在 SQL 裡和佔住的列比較（含同一時間），不要把 `created_at` 傳回 JS 再比。原因：只比 `id`（隨機 UUID）時約一半機率挑到「收到」，補問被標成已被取代，群組再也拿不到要回答的問題；JS `Date` 只到毫秒，傳回資料庫比較會漏掉同一毫秒內的列。
 - **含憑證的補問回答不能落到追問路徑**：引用本群組補問、回答含憑證格式時，訊息只存 `redact` 後的文字、`trigger_mode='chat'`、`processed=true`，回 `credentialAnswerAck` 後直接 return。原因：落到 botReply 會被存成 `command` 交給判讀模型（判讀送的是原文），還回「收到，我接著上一題處理」讓成員以為已收下。過期補問（已有人回答或需求改版）不在此列，照舊當補充送判讀。
 - **「收到」的狀態判斷要和判讀排程一致**（`server/line.ts` 的 `honestAck`、`server/group-replies.ts` 的 `ackFor`）：沒有可用專案的條件與 `triage-window.ts` 的 `EXISTS(... p.enabled AND p.validated_at IS NOT NULL)` 相同，改一邊要同步另一邊。這些狀態只改回覆文字，不改 `eligible`、`processed`，專案恢復或解除暫停後訊息仍會被判讀。原因：兩邊條件不同時，「收到」會說已保留但永遠不處理，或說沒專案卻其實會處理。
