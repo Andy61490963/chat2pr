@@ -494,6 +494,12 @@ export function registerDockerDisk(
       .parse(req.query);
     return report(fresh === "1");
   });
+  // 提醒與清理規則存在資料庫，不需要 Docker 就讀得到：盤點失敗時看板仍要能調整與儲存。
+  app.get("/api/system/disk/settings", async (req, reply) => {
+    await requireAdmin(db, req);
+    reply.header("Cache-Control", "no-store");
+    return readDiskSettings(db);
+  });
   app.put("/api/system/disk/settings", async (req) => {
     const actor = await requireAdmin(db, req);
     const saved = await saveDiskSettings(db, req.body, actor.login ?? "管理者");

@@ -2,6 +2,8 @@
  * 主機資源：執行器回報的 CPU、記憶體（Docker 可用的部分讀得到就一併回報）。
  * `cpus`、`memTotalMb`、`memFreeMb` 是執行器所在的 Windows 主機；
  * `dockerCpus`、`dockerMemMb` 是 Docker（WSL）VM 的總量，只用於建議同時執行數。
+ * `vmTotalMb`、`vmAvailMb` 是 app 容器讀自己的 `/proc/meminfo` 得到的 Docker VM 總量與可用量，
+ * 只顯示供比對；暫停派工仍看 Windows 的 `memFreeMb`（改判斷前要先在正式主機比對兩組數字）。
  */
 export interface HostResources {
   cpus: number;
@@ -9,6 +11,8 @@ export interface HostResources {
   memFreeMb: number;
   dockerCpus?: number;
   dockerMemMb?: number;
+  vmTotalMb?: number;
+  vmAvailMb?: number;
 }
 export interface CapacityRun {
   id: string;

@@ -1,4 +1,5 @@
 import { createFollowup, relinkTask } from "./followup.js";
+import { probeSystem } from "./system-status.js";
 import { answerFromDashboard } from "./answers.js";
 import { frictionMetrics } from "./friction.js";
 import {
@@ -1391,13 +1392,9 @@ export async function buildApp(
   // 訂閱額度、重置時間與可用模型，由主機執行器以服務登入向 Codex 查詢。
   app.get("/api/system", async (req) => {
     await requireAdmin(db, req);
-    const r = await fetch(`${config().runnerUrl}/system`, {
-      headers: { "x-runner-key": secrets().runnerSecret ?? "" },
-      signal: AbortSignal.timeout(20000),
-    });
-    const data = (await r.json()) as { error?: string };
-    if (!r.ok) throw new AppError(r.status, data.error ?? "無法讀取容器狀態");
-    return data;
+    // 執行器沒回應、Docker 沒回應或逾時都回 200 與 runner.state，看板才分得出是哪一段出問題。
+    const c = config();
+    return probeSystem(c.runnerUrl, secrets().runnerSecret ?? "", c.instance);
   });
   app.get("/api/codex/account", async (req) => {
     await requireUser(db, req);

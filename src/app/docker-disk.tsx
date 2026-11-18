@@ -63,7 +63,10 @@ type CleanupResult = {
 export function DockerDiskCard({ request }: { request: Request }) {
   const [report, setReport] = useState<DiskReport | null>(null);
   const [draft, setDraft] = useState<DiskSettings | null>(null);
-  const [error, setError] = useState("");
+  // 已儲存的設定：判斷「儲存設定」能不能按，不靠盤點結果（盤點失敗時也要能改規則）。
+  const [saved, setSaved] = useState<DiskSettings | null>(null);
+  const [reportError, setReportError] = useState("");
+  const [settingsError, setSettingsError] = useState("");
   const [notice, setNotice] = useState("");
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -72,11 +75,8 @@ export function DockerDiskCard({ request }: { request: Request }) {
   const [cleaning, setCleaning] = useState(false);
 
   const dirty = useMemo(
-    () =>
-      !!report &&
-      !!draft &&
-      JSON.stringify(report.settings) !== JSON.stringify(draft),
-    [report, draft],
+    () => !!saved && !!draft && JSON.stringify(saved) !== JSON.stringify(draft),
+    [saved, draft],
   );
 
   // 打開頁面時用伺服器 60 秒內的盤點；「重新盤點」與清理前預覽一律重算。
@@ -88,10 +88,13 @@ export function DockerDiskCard({ request }: { request: Request }) {
           `/api/system/disk${fresh ? "?fresh=1" : ""}`,
         );
         setReport(r);
-        setError("");
+        setReportError("");
+        // 設定端點讀不到時的保底；已有草稿就不覆蓋管理者正在改的內容。
+        setDraft((d) => d ?? r.settings);
+        setSaved((s) => s ?? r.settings);
         return r;
       } catch (e) {
-        setError(message(e));
+        setReportError(message(e));
         return null;
       } finally {
         setLoading(false);
@@ -99,24 +102,39 @@ export function DockerDiskCard({ request }: { request: Request }) {
     },
     [request],
   );
+  // 規則存在資料庫，和 Docker 盤點分開讀：盤點失敗時規則區塊仍要出現。
+  const loadSettings = useCallback(async () => {
+    try {
+      const s = await request<DiskSettings>("/api/system/disk/settings");
+      setSaved(s);
+      setDraft(s);
+      setSettingsError("");
+    } catch (e) {
+      setSettingsError(message(e));
+    }
+  }, [request]);
   useEffect(() => {
-    void load().then((r) => r && setDraft(r.settings));
-  }, [load]);
+    void loadSettings();
+    void load();
+  }, [load, loadSettings]);
 
   const save = async () => {
     if (!draft) return;
     setSaving(true);
+    setNotice("");
     try {
-      const saved = await request<DiskSettings>(
+      const next = await request<DiskSettings>(
         "/api/system/disk/settings",
         "PUT",
         draft,
       );
-      setDraft(saved);
+      setDraft(next);
+      setSaved(next);
+      setSettingsError("");
       setNotice("設定已儲存");
       await load();
     } catch (e) {
-      setError(message(e));
+      setSettingsError(message(e));
     } finally {
       setSaving(false);
     }
@@ -148,7 +166,7 @@ export function DockerDiskCard({ request }: { request: Request }) {
       setNotice(`清理完成：${result.summary}`);
       await load();
     } catch (e) {
-      setError(message(e));
+      setReportError(message(e));
     } finally {
       setCleaning(false);
     }
@@ -181,7 +199,9 @@ export function DockerDiskCard({ request }: { request: Request }) {
           <CardDescription>
             {report
               ? `最後盤點 ${ago(report.checkedAt)}；數字與 docker system df 相同算法`
-              : "盤點中…（映像與資料卷多時需要一點時間）"}
+              : reportError
+                ? "尚未取得盤點結果"
+                : "盤點中…（映像與資料卷多時需要一點時間）"}
           </CardDescription>
         </div>
         <div className="flex shrink-0 flex-wrap justify-end gap-2">
@@ -203,9 +223,24 @@ export function DockerDiskCard({ request }: { request: Request }) {
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-5">
-        {error && (
-          <p className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">
-            {error}
+        {reportError && (
+          <div
+            role="alert"
+            className="flex flex-col gap-1 rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
+          >
+            <p>{reportError}</p>
+            <p className="text-xs">
+              目前無法盤點
+              Docker；下方提醒與清理規則仍可調整，按「重新盤點」再試。
+            </p>
+          </div>
+        )}
+        {settingsError && !draft && (
+          <p
+            role="alert"
+            className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
+          >
+            讀不到提醒與清理規則：{settingsError}
           </p>
         )}
         {notice && (
@@ -460,7 +495,12 @@ export function DockerDiskCard({ request }: { request: Request }) {
                 );
               })}
             </ul>
-            <div className="flex items-center gap-3">
+            {settingsError && (
+              <p role="alert" className="text-xs text-danger">
+                {settingsError}
+              </p>
+            )}
+            <div className="flex flex-wrap items-center gap-3">
               <Button
                 size="sm"
                 disabled={!dirty || saving}
