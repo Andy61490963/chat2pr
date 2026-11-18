@@ -15,8 +15,29 @@ import {
   pausedAck,
   progressMoreNote,
   progressSummary,
+  replyRejected,
   triageStoppedAck,
 } from "../server/group-replies.js";
+
+describe("/進度 補送失敗是不是內容被拒收", () => {
+  it("LINE 明確拒收的 4xx 才算，計入 reply_failures", () => {
+    for (const status of [400, 404, 413, 422])
+      expect(replyRejected(status, "The request body has 1 error(s)")).toBe(
+        true,
+      );
+    expect(replyRejected(400, undefined)).toBe(true);
+  });
+  it("限流、權杖、reply token 失效、5xx、逾時與沒有權杖都不算", () => {
+    expect(replyRejected(429, "Too many requests")).toBe(false);
+    expect(replyRejected(401, "Authentication failed")).toBe(false);
+    expect(replyRejected(403, "Not authorized")).toBe(false);
+    expect(replyRejected(400, "Invalid reply token")).toBe(false);
+    for (const status of [500, 502, 503])
+      expect(replyRejected(status)).toBe(false);
+    // 逾時、連不上或沒有權杖時 reply 回傳 status=null。
+    expect(replyRejected(null)).toBe(false);
+  });
+});
 
 describe("「/進度」指令的辨識", () => {
   it("必須在開頭，後接空白、換行、冒號或直接結束", () => {

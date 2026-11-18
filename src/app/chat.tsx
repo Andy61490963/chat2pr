@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ArrowUp,
+  Bot,
   ExternalLink,
   ImageOff,
   Loader2,
@@ -8,7 +9,14 @@ import {
   Settings2,
 } from "lucide-react";
 import type { ChatMessage, ChatPage } from "../../shared/chat.js";
+import {
+  type BotMessage,
+  type Delivery,
+  deliveryLabel,
+  groupKindLabels,
+} from "../../shared/group-delivery.js";
 import { statusLabels } from "../../shared/types.js";
+import { CopyButton } from "./copy-button";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
@@ -35,6 +43,36 @@ import {
   StatusIcon,
   writeQuery,
 } from "./shared";
+
+const deliveryVariant = (d: Delivery) =>
+  d.status === "sent"
+    ? "good"
+    : d.status === "failed"
+      ? "danger"
+      : d.status === "skipped"
+        ? "outline"
+        : d.reason
+          ? "warn"
+          : "info";
+
+/** 成員訊息與機器人訊息依時間交錯；同一時間成員訊息在前（機器人多半是在回應它）。 */
+type Item =
+  | { bot: false; at: number; m: ChatMessage }
+  | { bot: true; at: number; b: BotMessage };
+function timeline(rows: ChatMessage[], bots: BotMessage[]): Item[] {
+  return [
+    ...rows.map((m) => ({
+      bot: false as const,
+      at: Date.parse(m.received_at),
+      m,
+    })),
+    ...bots.map((b) => ({
+      bot: true as const,
+      at: Date.parse(b.created_at),
+      b,
+    })),
+  ].sort((x, y) => x.at - y.at || Number(x.bot) - Number(y.bot));
+}
 
 export function ChatView({
   state,
@@ -123,6 +161,7 @@ function Timeline({
   open: (id: string) => void;
 }) {
   const [rows, setRows] = useState<ChatMessage[]>([]),
+    [bots, setBots] = useState<BotMessage[]>([]),
     [pages, setPages] = useState(1),
     [next, setNext] = useState<string | null>(null),
     [error, setError] = useState(""),
@@ -144,12 +183,15 @@ function Timeline({
       try {
         let before: string | null = null;
         const all: ChatMessage[] = [];
+        const allBots: BotMessage[] = [];
         for (let i = 0; i < pages; i++) {
           const data: ChatPage = await request(
             `/api/groups/${encodeURIComponent(groupId)}/messages${before ? `?before=${encodeURIComponent(before)}` : ""}`,
           );
           if (!active) return;
           all.unshift(...data.messages);
+          // 舊版伺服器沒有 bot_messages。
+          allBots.unshift(...(data.bot_messages ?? []));
           before = data.next;
           if (!before) break;
         }
@@ -165,6 +207,7 @@ function Timeline({
             ? { id: visible.id, top: visible.getBoundingClientRect().top }
             : null;
           setRows(all);
+          setBots(allBots);
           setNext(before);
           setError("");
         }
@@ -172,6 +215,7 @@ function Timeline({
         if (active) {
           setError(message(e));
           setRows([]);
+          setBots([]);
           setPreview(null);
         }
       } finally {
@@ -185,7 +229,7 @@ function Timeline({
   // 像一般聊天軟體一樣，打開或切換群組時直接停在最新訊息；之後的刷新與載入更早訊息不搶捲動位置。
   useLayoutEffect(() => {
     const viewport = scrollRef.current;
-    if (!viewport || !rows.length) return;
+    if (!viewport || (!rows.length && !bots.length)) return;
     if (!jumped.current) {
       jumped.current = true;
       viewport.scrollTop = viewport.scrollHeight;
@@ -196,8 +240,20 @@ function Timeline({
           item.getBoundingClientRect().top - anchor.current.top;
     }
     anchor.current = null;
-  }, [rows, groupId]);
+  }, [rows, bots, groupId]);
   const shown = rows.find((m) => m.id === preview && m.has_image);
+  const items = timeline(rows, bots);
+  // 捲到被引用的那一則（成員訊息或機器人訊息）；不在已載入範圍時照一般連結處理。
+  const jump = (event: { preventDefault(): void }, id: string) => {
+    const viewport = scrollRef.current;
+    const target = document.getElementById(id);
+    if (viewport && target && listRef.current?.contains(target)) {
+      event.preventDefault();
+      viewport.scrollTop +=
+        target.getBoundingClientRect().top -
+        viewport.getBoundingClientRect().top;
+    }
+  };
   return (
     <>
       <Card className="min-h-0 flex-1 gap-0 overflow-hidden py-0">
@@ -233,7 +289,7 @@ function Timeline({
               </Button>
             </div>
           )}
-          {!loading && !error && !rows.length && (
+          {!loading && !error && !items.length && (
             <Empty icon={<MessageSquare />} title="還沒有收到訊息">
               這個群組的新訊息會自動出現在這裡。
             </Empty>
@@ -257,137 +313,147 @@ function Timeline({
             aria-label="群組訊息"
             className="space-y-5 p-4 md:p-6"
           >
-            {rows.map((m) => (
-              <li key={m.id} id={`chat-${m.id}`} className="flex min-w-0 gap-3">
-                <Initials
-                  name={m.sender ?? "群組成員"}
-                  className="mt-0.5 size-8 text-xs"
-                />
-                <div className="min-w-0 flex-1">
-                  <div className="mb-1.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                    <span className="font-medium text-foreground">
-                      {m.sender ?? "群組成員"}
-                    </span>
-                    <time dateTime={m.received_at}>{date(m.received_at)}</time>
-                    {!m.revoked && !m.expired && (
-                      <span>
-                        {m.tasks.length
-                          ? "已連結任務"
-                          : m.routing === "chat"
-                            ? "一般聊天・不派工"
-                            : m.routing === "pending"
-                              ? "等待辨識"
-                              : "已辨識"}
+            {items.map((item) => {
+              if (item.bot)
+                return (
+                  <BotItem key={`bot-${item.b.id}`} b={item.b} open={open} />
+                );
+              const m = item.m;
+              return (
+                <li
+                  key={m.id}
+                  id={`chat-${m.id}`}
+                  className="flex min-w-0 gap-3"
+                >
+                  <Initials
+                    name={m.sender ?? "群組成員"}
+                    className="mt-0.5 size-8 text-xs"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="mb-1.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                      <span className="font-medium text-foreground">
+                        {m.sender ?? "群組成員"}
                       </span>
-                    )}
-                  </div>
-                  <div className="w-fit max-w-full space-y-2 rounded-xl rounded-tl-sm border bg-muted/40 px-3.5 py-3 sm:max-w-[85%]">
-                    {m.revoked || m.expired ? (
-                      <p className="text-sm text-muted-foreground">
-                        {m.revoked ? "此訊息已撤回" : "原文已到期"}
-                      </p>
-                    ) : (
-                      <>
-                        {m.quoted_id && (
-                          <p className="rounded-md border-l-2 border-border bg-muted px-2 py-1 text-xs text-muted-foreground">
-                            {m.quoted_text ? (
-                              <>
-                                <span className="font-medium">
-                                  回覆 {m.quoted_sender ?? "成員"}：
-                                </span>
-                                <span className="line-clamp-2 [overflow-wrap:anywhere]">
-                                  {m.quoted_text}
-                                </span>
-                              </>
-                            ) : (
-                              "回覆一則已撤回、到期或較早的訊息"
-                            )}
-                            {rows.some((r) => r.id === m.quoted_id) && (
-                              <a
-                                href={`#chat-${m.quoted_id}`}
-                                onClick={(event) => {
-                                  const viewport = scrollRef.current;
-                                  const target = document.getElementById(
-                                    `chat-${m.quoted_id}`,
-                                  );
-                                  if (
-                                    viewport &&
-                                    target &&
-                                    listRef.current?.contains(target)
-                                  ) {
-                                    event.preventDefault();
-                                    viewport.scrollTop +=
-                                      target.getBoundingClientRect().top -
-                                      viewport.getBoundingClientRect().top;
-                                  }
-                                }}
-                                className="mt-0.5 block underline"
-                              >
-                                跳到那則訊息
-                              </a>
-                            )}
-                          </p>
-                        )}
-                        {m.text && (
-                          <p className="whitespace-pre-wrap break-words text-sm leading-relaxed [overflow-wrap:anywhere]">
-                            {m.text}
-                          </p>
-                        )}
-                        {m.has_image ? (
-                          <button
-                            aria-label="放大圖片"
-                            onClick={() => setPreview(m.id)}
-                            className="block rounded-lg focus-visible:outline-2 focus-visible:outline-ring"
-                          >
-                            <img
-                              loading="lazy"
-                              className="max-h-64 max-w-full rounded-lg object-contain"
-                              src={`/api/messages/${encodeURIComponent(m.id)}/image`}
-                              alt="LINE 群組圖片"
-                            />
-                          </button>
-                        ) : m.type === "image" ? (
-                          <p className="flex items-center gap-2 text-sm text-muted-foreground">
-                            <ImageOff className="size-4" />
-                            {m.image_state === "failed"
-                              ? "圖片無法取得（下載重試已結束）"
-                              : "圖片下載中…"}
-                          </p>
-                        ) : (
-                          m.type !== "text" && (
-                            <p className="text-sm text-muted-foreground">
-                              {m.type === "sticker"
-                                ? "貼圖（不提供預覽）"
-                                : "附件（不支援預覽）"}
-                            </p>
-                          )
-                        )}
-                      </>
-                    )}
-                  </div>
-                  {!!m.tasks.length && (
-                    <div className="mt-2 flex flex-col items-start gap-1.5">
-                      {m.tasks.map((t) => (
-                        <button
-                          key={t.id}
-                          className="flex max-w-full items-center gap-2 rounded-lg border bg-card py-1.5 pr-3 pl-1.5 text-left text-sm transition-colors hover:border-brand/40"
-                          onClick={() => open(t.id)}
-                        >
-                          <StatusIcon small status={t.status} />
-                          <span className="min-w-0 truncate font-medium">
-                            {t.title}
-                          </span>
-                          <span className="shrink-0 text-xs text-muted-foreground">
-                            {statusLabels[t.status]}
-                          </span>
-                          <ExternalLink className="size-3.5 shrink-0 text-muted-foreground" />
-                        </button>
-                      ))}
+                      <time dateTime={m.received_at}>
+                        {date(m.received_at)}
+                      </time>
+                      {!m.revoked && !m.expired && (
+                        <span>
+                          {m.tasks.length
+                            ? "已連結任務"
+                            : m.routing === "chat"
+                              ? "一般聊天・不派工"
+                              : m.routing === "pending"
+                                ? "等待辨識"
+                                : "已辨識"}
+                        </span>
+                      )}
                     </div>
-                  )}
-                </div>
-              </li>
-            ))}
+                    <div className="w-fit max-w-full space-y-2 rounded-xl rounded-tl-sm border bg-muted/40 px-3.5 py-3 sm:max-w-[85%]">
+                      {m.revoked || m.expired ? (
+                        <p className="text-sm text-muted-foreground">
+                          {m.revoked ? "此訊息已撤回" : "原文已到期"}
+                        </p>
+                      ) : (
+                        <>
+                          {m.quoted_id && (
+                            <p className="rounded-md border-l-2 border-border bg-muted px-2 py-1 text-xs text-muted-foreground">
+                              {m.quoted_text ? (
+                                <>
+                                  <span className="font-medium">
+                                    回覆 {m.quoted_sender ?? "成員"}：
+                                  </span>
+                                  <span className="line-clamp-2 [overflow-wrap:anywhere]">
+                                    {m.quoted_text}
+                                  </span>
+                                </>
+                              ) : (
+                                "回覆一則已撤回、到期或較早的訊息"
+                              )}
+                              {(() => {
+                                const target = rows.some(
+                                  (r) => r.id === m.quoted_id,
+                                )
+                                  ? `chat-${m.quoted_id}`
+                                  : m.quoted_bot_id &&
+                                      bots.some((b) => b.id === m.quoted_bot_id)
+                                    ? `chat-bot-${m.quoted_bot_id}`
+                                    : null;
+                                return (
+                                  target && (
+                                    <a
+                                      href={`#${target}`}
+                                      onClick={(event) => jump(event, target)}
+                                      className="mt-0.5 block underline"
+                                    >
+                                      跳到那則訊息
+                                    </a>
+                                  )
+                                );
+                              })()}
+                            </p>
+                          )}
+                          {m.text && (
+                            <p className="whitespace-pre-wrap break-words text-sm leading-relaxed [overflow-wrap:anywhere]">
+                              {m.text}
+                            </p>
+                          )}
+                          {m.has_image ? (
+                            <button
+                              aria-label="放大圖片"
+                              onClick={() => setPreview(m.id)}
+                              className="block rounded-lg focus-visible:outline-2 focus-visible:outline-ring"
+                            >
+                              <img
+                                loading="lazy"
+                                className="max-h-64 max-w-full rounded-lg object-contain"
+                                src={`/api/messages/${encodeURIComponent(m.id)}/image`}
+                                alt="LINE 群組圖片"
+                              />
+                            </button>
+                          ) : m.type === "image" ? (
+                            <p className="flex items-center gap-2 text-sm text-muted-foreground">
+                              <ImageOff className="size-4" />
+                              {m.image_state === "failed"
+                                ? "圖片無法取得（下載重試已結束）"
+                                : "圖片下載中…"}
+                            </p>
+                          ) : (
+                            m.type !== "text" && (
+                              <p className="text-sm text-muted-foreground">
+                                {m.type === "sticker"
+                                  ? "貼圖（不提供預覽）"
+                                  : "附件（不支援預覽）"}
+                              </p>
+                            )
+                          )}
+                        </>
+                      )}
+                    </div>
+                    {!!m.tasks.length && (
+                      <div className="mt-2 flex flex-col items-start gap-1.5">
+                        {m.tasks.map((t) => (
+                          <button
+                            key={t.id}
+                            className="flex max-w-full items-center gap-2 rounded-lg border bg-card py-1.5 pr-3 pl-1.5 text-left text-sm transition-colors hover:border-brand/40"
+                            onClick={() => open(t.id)}
+                          >
+                            <StatusIcon small status={t.status} />
+                            <span className="min-w-0 truncate font-medium">
+                              {t.title}
+                            </span>
+                            <span className="shrink-0 text-xs text-muted-foreground">
+                              {statusLabels[t.status]}
+                            </span>
+                            <ExternalLink className="size-3.5 shrink-0 text-muted-foreground" />
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
           </ol>
         </div>
       </Card>
@@ -407,5 +473,61 @@ function Timeline({
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+/**
+ * 機器人送到群組的訊息：用品牌色底與成員訊息區分，並標出送達狀態。
+ * 沒送到的提供「複製文字」，讓管理者手動貼到 LINE；原文到期後只顯示「原文已到期」。
+ */
+function BotItem({ b, open }: { b: BotMessage; open: (id: string) => void }) {
+  const d = b.delivery;
+  return (
+    <li id={`chat-bot-${b.id}`} className="flex min-w-0 gap-3">
+      <span
+        aria-hidden
+        className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-brand-soft text-brand-foreground"
+      >
+        <Bot className="size-4" />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="mb-1.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          <span className="font-medium text-foreground">機器人</span>
+          <time dateTime={b.created_at}>{date(b.created_at)}</time>
+          <span>{groupKindLabels[b.kind] ?? "群組訊息"}</span>
+          <Badge variant={deliveryVariant(d)}>{deliveryLabel(d)}</Badge>
+        </div>
+        <div className="w-fit max-w-full space-y-2 rounded-xl rounded-tl-sm border border-brand/30 bg-brand-soft/60 px-3.5 py-3 sm:max-w-[85%]">
+          {b.text === null ? (
+            <p className="text-sm text-muted-foreground">原文已到期</p>
+          ) : (
+            <p className="whitespace-pre-wrap break-words text-sm leading-relaxed [overflow-wrap:anywhere]">
+              {b.text}
+            </p>
+          )}
+          {d.status !== "sent" && (
+            <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
+              {d.note}
+            </p>
+          )}
+          {d.status !== "sent" && b.text !== null && (
+            <CopyButton text={b.text} label="複製文字" />
+          )}
+        </div>
+        {b.task_id && b.task_title && (
+          <div className="mt-2">
+            <button
+              className="flex max-w-full items-center gap-2 rounded-lg border bg-card py-1.5 pr-3 pl-2.5 text-left text-sm transition-colors hover:border-brand/40"
+              onClick={() => open(b.task_id!)}
+            >
+              <span className="min-w-0 truncate font-medium">
+                {b.task_title}
+              </span>
+              <ExternalLink className="size-3.5 shrink-0 text-muted-foreground" />
+            </button>
+          </div>
+        )}
+      </div>
+    </li>
   );
 }

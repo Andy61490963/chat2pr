@@ -40,6 +40,12 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { AssignProject, BudgetRetry } from "./inbox";
+import { CopyButton } from "./copy-button";
+import {
+  deliveryNotice,
+  groupKindLabels,
+  undelivered,
+} from "../../shared/group-delivery.js";
 import { ConfirmButton } from "./confirm";
 import { useUnsaved } from "./unsaved";
 import {
@@ -58,6 +64,76 @@ import {
   StatusBadge,
   Stepper,
 } from "./shared";
+
+/**
+ * 群組訊息沒送到時的提示：推播額度用完期間看板顯示「已回覆」，群組卻什麼都沒收到，
+ * 管理者要看得出來，並能複製內容代為轉達。每種訊息只看最新一則；已送出、已被較新回覆取代的不顯示。
+ */
+function GroupDeliveryNotes({
+  deliveries,
+  kinds,
+}: {
+  deliveries: Detail["groupDeliveries"];
+  kinds: string[];
+}) {
+  const latest = kinds.flatMap((kind) => {
+    const d = deliveries?.filter((x) => x.kind === kind).at(-1);
+    return d &&
+      (undelivered(d.delivery) ||
+        (d.delivery.status === "skipped" && d.delivery.reason !== "superseded"))
+      ? [d]
+      : [];
+  });
+  if (!latest.length) return null;
+  return (
+    <>
+      {latest.map((d) => {
+        const pending = undelivered(d.delivery);
+        return (
+          <div
+            key={d.id}
+            role="status"
+            aria-label="群組訊息送達狀態"
+            className={cn(
+              "flex gap-2 rounded-lg px-3 py-2.5 text-sm",
+              !pending
+                ? "bg-muted text-muted-foreground"
+                : d.delivery.status === "failed"
+                  ? "bg-danger-soft text-danger"
+                  : d.delivery.reason
+                    ? "bg-warn-soft text-warn"
+                    : "bg-info-soft text-info",
+            )}
+          >
+            {d.delivery.status === "failed" || d.delivery.reason ? (
+              <AlertCircle className="mt-0.5 size-4 shrink-0" />
+            ) : (
+              <Clock className="mt-0.5 size-4 shrink-0" />
+            )}
+            <div className="flex min-w-0 flex-1 flex-col gap-1">
+              <p className="[overflow-wrap:anywhere]">
+                <span className="font-medium">
+                  {groupKindLabels[d.kind] ?? "群組訊息"}：
+                </span>
+                {deliveryNotice(d.delivery)}
+              </p>
+              {pending && d.kind === "group_question" && (
+                <p className="text-xs [overflow-wrap:anywhere]">
+                  成員可能還沒看到這則補問。可以在下方直接「送出回答」，或複製後貼到群組請成員回覆。
+                </p>
+              )}
+              {pending && (
+                <div>
+                  <CopyButton text={d.text} label="複製群組訊息" />
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+    </>
+  );
+}
 
 const clock = (v: string) =>
   new Date(v).toLocaleTimeString("zh-TW", {
@@ -550,6 +626,13 @@ export function TaskDrawer({
               </div>
             </div>
           )}
+          <GroupDeliveryNotes
+            deliveries={detail.groupDeliveries}
+            kinds={[
+              "group_answered",
+              ...(t.status === "failed" ? ["group_failed"] : []),
+            ]}
+          />
           {t.answer && (
             <section className="flex flex-col gap-2">
               <div className="flex items-center justify-between gap-2">
@@ -681,6 +764,12 @@ export function TaskDrawer({
                 ))}
               </ul>
             </section>
+          )}
+          {t.status === "awaiting_approval" && t.question && (
+            <GroupDeliveryNotes
+              deliveries={detail.groupDeliveries}
+              kinds={["group_question"]}
+            />
           )}
           <TaskClarification
             key={t.id}
