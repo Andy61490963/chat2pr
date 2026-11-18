@@ -13,7 +13,8 @@ import { GitHub, BranchUnavailable } from "../server/github.js";
 import { Line } from "../server/line.js";
 import { Budget } from "../server/budget.js";
 import { Tasks } from "../server/tasks.js";
-import { recoverInterrupted } from "../server/jobs.js";
+import { recoverInterrupted, startJobs } from "../server/jobs.js";
+import { AppError } from "../server/policy.js";
 import { syncProjectRepos } from "../server/repo-missing.js";
 import type { Project, Task } from "../shared/types.js";
 import sharp from "sharp";
@@ -810,6 +811,73 @@ it.each(["install", "test"])(
     expect(paths.at(-1)).toBe("dispose");
   },
 );
+// 專案頁沒有「重試」按鈕也沒有任務的執行紀錄：驗證失敗要用白話分類、錯誤重點與專案頁找得到的建議。
+it.each([
+  {
+    name: "安裝失敗",
+    phase: "install",
+    output:
+      "npm ERR! code E404\nnpm ERR! 404 Not Found - GET https://registry.npmjs.org/@contoso%2fmissing",
+    label: "環境問題（安裝階段）",
+    key: "@contoso%2fmissing",
+    advice: "進階設定改安裝指令或映像後按「驗證環境」",
+  },
+  {
+    name: "測試失敗",
+    phase: "test",
+    output:
+      "[xUnit.net 00:00:00.58]     Fictional.Tests.OrderTests.KeepsIdentity [FAIL]\nAssert.Equal() Failure\nFailed!  - Failed:     1, Passed:     5",
+    label: "專案問題（測試階段）",
+    key: "Failed:     1, Passed:     5",
+    advice: "修好儲存庫的建置或測試，或在進階設定調整測試指令後重新驗證",
+  },
+  {
+    name: "指令不存在",
+    phase: "test",
+    output: "sh: 1: dotnet: not found",
+    label: "環境問題（測試階段）",
+    key: "dotnet: not found",
+    advice: "工作容器可能缺少此指令或工具鏈",
+  },
+])(
+  "驗證$name：專案的錯誤說明有分類、錯誤重點與專案頁的建議，不以 Error: 開頭",
+  async ({ phase, output, label, key, advice }) => {
+    const s = await scenario();
+    await db.query("UPDATE projects SET enabled=false,validated_at=NULL");
+    const project = await db.one<Project>("SELECT * FROM projects");
+    const call = s.runner.call.bind(s.runner);
+    s.runner.call = async <T>(path: string, raw: unknown): Promise<T> => {
+      if (path === "phase" && (raw as { phase: string }).phase === phase)
+        return { exitCode: 1, stdout: output, stderr: "" } as T;
+      return call<T>(path, raw);
+    };
+    await expect(s.execution.validate(project)).rejects.toThrow("失敗");
+    const error = (await db.one<Project>("SELECT * FROM projects"))
+      .validation_error!;
+    expect(error).not.toMatch(/^Error:/);
+    expect(error.startsWith(label)).toBe(true);
+    const [summary, digest] = error.split("\n\n--- 原始輸出摘要 ---\n");
+    expect(summary).toContain("錯誤重點：");
+    expect(summary).toContain(key);
+    expect(summary).toContain("建議：");
+    expect(summary).toContain(advice);
+    // 任務用的建議在專案頁找不到對應按鈕。
+    expect(summary).not.toMatch(/按「重試」|到執行紀錄/);
+    // 原始輸出摘要仍附在後面，畫面可以收合顯示。
+    expect(digest).toContain(output.split("\n")[0]);
+  },
+);
+it("驗證時其他已整理過的錯誤照原文保存，只去掉 Error: 前綴、不再分類", async () => {
+  const s = await scenario();
+  await db.query("UPDATE projects SET test_command=''");
+  await expect(
+    s.execution.validate(await db.one<Project>("SELECT * FROM projects")),
+  ).rejects.toThrow("尚未設定測試命令");
+  const error = (await db.one<Project>("SELECT * FROM projects"))
+    .validation_error!;
+  expect(error.startsWith("尚未設定測試命令")).toBe(true);
+  expect(error).not.toContain("系統發生預期外的錯誤");
+});
 it("驗證期間管理者停用專案，成功結果保留較新的停用選擇", async () => {
   const s = await scenario();
   const project = await db.one<Project>("SELECT * FROM projects");
@@ -913,6 +981,205 @@ it("快速重新啟動也會回收中斷工作，保留人工重試", async () =
   expect(
     (await db.query("SELECT * FROM runs WHERE completed_at IS NULL")).length,
   ).toBe(0);
+});
+it("中斷回收時執行器連不上：同一輪照樣排通知、更新佇列心跳，執行器恢復後下一輪收尾", async () => {
+  const s = await scenario();
+  const reservation = await s.budget.reserve(3, s.task.id);
+  await db.query("UPDATE tasks SET status='running'");
+  await db.query(
+    "INSERT INTO runs(task_id,version,reservation_id,model,deadline,token_hash,proxy_active) VALUES($1,1,$2,'gpt-6.1-sol',now()+interval '30 minutes','fictional-hash',true)",
+    [s.task.id, reservation],
+  );
+  await db.query("DELETE FROM service_health WHERE name='queue'");
+  await db.query("DROP SCHEMA IF EXISTS pgboss CASCADE");
+  let runnerDown = true;
+  const cancels: (number | undefined)[] = [];
+  const call = s.runner.call.bind(s.runner);
+  s.runner.call = async <T>(
+    path: string,
+    raw: unknown,
+    timeoutMs?: number,
+  ): Promise<T> => {
+    if (path === "cancel") {
+      cancels.push(timeoutMs);
+      if (runnerDown)
+        throw new Error(
+          "執行器連線失敗（ECONNREFUSED）；請檢查執行器、網路及逾時紀錄",
+        );
+    }
+    if (path.startsWith("checks/environments")) return { removed: [] } as T;
+    return call<T>(path, raw);
+  };
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.stubEnv("DATABASE_URL", db.pool.options.connectionString!);
+  let jobs: Awaited<ReturnType<typeof startJobs>> | undefined;
+  try {
+    jobs = await startJobs(db, { runner: s.runner, github: s.github });
+    // 取消只等 20 秒，不沿用執行的 30 分鐘期限。
+    expect(cancels).toEqual([20000]);
+    const queued = await db.query<{ name: string }>(
+      "SELECT name FROM pgboss.job",
+    );
+    expect(queued.some((j) => j.name === "notifications")).toBe(true);
+    expect(
+      await db.one(
+        "SELECT ok,checked_at>now()-interval '1 minute' AS fresh FROM service_health WHERE name='queue'",
+      ),
+    ).toEqual({ ok: true, fresh: true });
+  } finally {
+    await jobs?.stop();
+    vi.unstubAllEnvs();
+    warn.mockRestore();
+  }
+  // 憑證先收回；取消沒成功就保留未完成紀錄，任務也還沒被判定中斷。
+  expect(
+    await db.query(
+      "SELECT proxy_active,token_hash FROM runs WHERE completed_at IS NULL",
+    ),
+  ).toEqual([{ proxy_active: false, token_hash: null }]);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("running");
+  runnerDown = false;
+  await recoverInterrupted(db, s.runner, s.budget, s.line);
+  expect(
+    await db.query("SELECT 1 FROM runs WHERE completed_at IS NULL"),
+  ).toHaveLength(0);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("failed");
+  expect(
+    await db.query("SELECT 1 FROM notifications WHERE kind='interrupted'"),
+  ).toHaveLength(1);
+});
+it("收尾時取消失敗留下的紀錄：任務已回答就只收尾，不通知「執行曾中斷」", async () => {
+  const s = await scenario();
+  await db.query("UPDATE tasks SET status='answered'");
+  await db.query(
+    "INSERT INTO runs(task_id,version,model,deadline,outcome) VALUES($1,1,'gpt-6.1-sol',now()+interval '30 minutes','answered')",
+    [s.task.id],
+  );
+  await recoverInterrupted(db, s.runner, s.budget, s.line);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("answered");
+  expect(
+    await db.one(
+      "SELECT outcome,completed_at IS NOT NULL AS completed FROM runs",
+    ),
+  ).toEqual({ outcome: "answered", completed: true });
+  expect(
+    await db.query("SELECT 1 FROM notifications WHERE kind='interrupted'"),
+  ).toHaveLength(0);
+  expect(
+    await db.query("SELECT 1 FROM audit WHERE kind='interrupted'"),
+  ).toHaveLength(0);
+});
+// 管理者按暫停、補登資料庫連線或時間到時，監看計時器會停掉容器，執行器只回「工作已取消」。
+const stopDuringCode = (
+  s: Awaited<ReturnType<typeof scenario>>,
+  before: () => Promise<unknown>,
+) => {
+  const call = s.runner.call.bind(s.runner);
+  let stopped = false;
+  s.runner.call = async <T>(path: string, raw: unknown): Promise<T> => {
+    if (
+      !stopped &&
+      path === "phase" &&
+      (raw as { phase?: string }).phase === "code"
+    ) {
+      stopped = true;
+      await before();
+      throw new AppError(409, "工作已取消");
+    }
+    return call<T>(path, raw);
+  };
+};
+it("執行中系統暫停：工作放回排隊、不算失敗也不推失敗通知，恢復後重新派工", async () => {
+  const s = await scenario();
+  stopDuringCode(s, () =>
+    db.query("UPDATE settings SET value=jsonb_set(value,'{paused}','true')"),
+  );
+  await s.execution.execute(s.task.id);
+  const task = await db.one<Task>("SELECT * FROM tasks");
+  expect(task.status).toBe("queued");
+  expect(task.last_error).toContain("恢復派工後自動繼續");
+  expect(
+    await db.query(
+      "SELECT 1 FROM notifications WHERE kind IN ('failed','group_failed')",
+    ),
+  ).toHaveLength(0);
+  expect(
+    await db.query("SELECT 1 FROM audit WHERE kind='paused_requeue'"),
+  ).toHaveLength(1);
+  expect(
+    await db.query("SELECT 1 FROM audit WHERE kind='auto_retry'"),
+  ).toHaveLength(0);
+  expect(
+    await db.query("SELECT 1 FROM notifications WHERE kind='group_waiting'"),
+  ).toHaveLength(1);
+  // 執行紀錄仍留著原始訊息與真正的停止原因。
+  expect(
+    (
+      await db.one<{ detail: string }>(
+        "SELECT detail FROM run_events WHERE kind='error'",
+      )
+    ).detail,
+  ).toMatch(/工作已取消[\s\S]*停止原因：系統已暫停派工/);
+  await db.query(
+    "UPDATE settings SET value=jsonb_set(value,'{paused}','false')",
+  );
+  await s.execution.execute(s.task.id);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("ready");
+  expect(await db.query("SELECT 1 FROM runs")).toHaveLength(2);
+});
+it("執行中群組停用：說明是設定被變更，不是預期外的錯誤", async () => {
+  const s = await scenario();
+  stopDuringCode(s, () => db.query("UPDATE groups SET enabled=false"));
+  await s.execution.execute(s.task.id);
+  const task = await db.one<Task>("SELECT * FROM tasks");
+  expect(task.status).toBe("failed");
+  expect(task.last_error).toContain("設定問題");
+  expect(task.last_error).toContain("設定被變更");
+  expect(task.last_error).not.toContain("預期外的錯誤");
+  expect(
+    (
+      await db.one<{ detail: string }>(
+        "SELECT detail FROM run_events WHERE kind='error'",
+      )
+    ).detail,
+  ).toContain("停止原因：群組已停用");
+});
+it("執行中專案設定變更（config_version+1）：任務回到待確認並說明設定已變更，不推失敗", async () => {
+  const s = await scenario();
+  stopDuringCode(s, () =>
+    db.query("UPDATE projects SET config_version=config_version+1"),
+  );
+  await s.execution.execute(s.task.id);
+  // 資料庫觸發器先把任務改回待確認並寫下原因；執行結束時不能再蓋成「預期外的錯誤」或推失敗。
+  const task = await db.one<Task>("SELECT * FROM tasks");
+  expect(task.status).toBe("awaiting_approval");
+  expect(task.last_error).toContain("專案設定已變更");
+  expect(task.last_error).not.toContain("預期外的錯誤");
+  expect(
+    await db.query(
+      "SELECT 1 FROM notifications WHERE kind IN ('failed','group_failed')",
+    ),
+  ).toHaveLength(0);
+});
+it("逾時訊息寫出設定的單次執行時間", async () => {
+  const s = await scenario();
+  await db.query(
+    "UPDATE settings SET value=jsonb_set(value,'{task_minutes}','5')",
+  );
+  const now = Date.now();
+  stopDuringCode(s, async () => {
+    vi.spyOn(Date, "now").mockReturnValue(now + 6 * 60000);
+  });
+  try {
+    await s.execution.execute(s.task.id);
+  } finally {
+    vi.restoreAllMocks();
+  }
+  const task = await db.one<Task>("SELECT * FROM tasks");
+  expect(task.status).toBe("failed");
+  expect(task.last_error).toContain("任務超過 5 分鐘限制");
+  expect(task.last_error).not.toContain("30 分鐘限制");
+  expect(task.last_error).toContain("縮小需求範圍");
 });
 it("核對遠端 PR 時取消，不會被舊結果覆蓋", async () => {
   const s = await scenario();
@@ -1796,12 +2063,15 @@ async function draftScenario(
   );
   const call = s.runner.call.bind(s.runner);
   s.runner.call = async <T>(path: string, raw: unknown): Promise<T> => {
-    if (path === "phase" && (raw as { phase?: string }).phase === "code")
+    const body = raw as { phase?: string; job?: { prompt: string } };
+    if (path === "phase" && body.phase === "code") {
+      s.prompts.push(body.job!.prompt);
       return {
         exitCode: 0,
         stdout: JSON.stringify({ final }),
         stderr: "",
       } as T;
+    }
     if (path === "checks/run")
       return {
         result: { ok: true, status: 200, ms: 8 },
@@ -1869,13 +2139,38 @@ const httpDraft = `AGENTFLOW_CHECK: ${JSON.stringify({
   target: "http://10.0.0.5/health",
   condition: {},
 })}`;
-it("擬定檢查時專案沒有資料庫連線：回答提醒到看板設定", async () => {
+it("擬定檢查時專案沒有資料庫連線：提示告訴 Codex 優先用 HTTP／TCP；擬出 HTTP 就不附連線提醒", async () => {
   const s = await draftScenario(httpDraft);
+  const prompt = JSON.parse(s.prompts[0]);
+  expect(prompt.checkDraft.databaseConnection).toBe(false);
+  expect(prompt.checkDraft.databaseNote).toContain("優先用 http 或 tcp");
   const task = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [
     s.task.id,
   ]);
-  expect(task.answer).toContain(noConnectionHint);
+  expect(task.answer).toContain("已擬好定期檢查");
+  expect(task.answer).not.toContain(noConnectionHint);
 });
+it.each([
+  [
+    "擬出 SQL",
+    `AGENTFLOW_CHECK: ${JSON.stringify({
+      name: "未完工單",
+      kind: "sql",
+      target: "SELECT count(*) AS n FROM work_orders",
+      condition: { column: "n", op: ">", value: 0 },
+    })}`,
+  ],
+  ["沒有擬出定義", "看不出可以檢查什麼，請管理者手動建立。"],
+])(
+  "擬定檢查時專案沒有資料庫連線且%s：回答提醒到看板設定",
+  async (_name, final) => {
+    const s = await draftScenario(final);
+    const task = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [
+      s.task.id,
+    ]);
+    expect(task.answer).toContain(noConnectionHint);
+  },
+);
 it("專案已登記資料庫連線：不提醒", async () => {
   const s = await draftScenario(httpDraft, (projectId) =>
     db.query(

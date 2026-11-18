@@ -7,6 +7,9 @@ import { saveProjectConfirmation } from "./project-routing.js";
 import {
   assertReadOnlySelect,
   evaluateSql,
+  hostRetryMinutes,
+  hostUnavailableAlertHours,
+  hostUnavailablePrefix,
   inQuietHours,
   isTime,
   minIntervalMinutes,
@@ -137,8 +140,40 @@ async function assertScope(c: DbClient, input: CheckInput) {
 
 type ListedCheck = ScheduledCheck & {
   last_summary: string | null;
+  /** SQL 檢查的專案沒有登記資料庫連線：不能核准或恢復。 */
+  missing_connection: boolean;
+  /** 目前這段連續「系統暫時無法執行」從何時開始；最近一次不是系統問題時為 null。 */
+  host_unavailable_since: string | null;
   environment?: CheckEnvironmentView;
 };
+
+/** SQL 檢查沒有登記資料庫連線時，核准與恢復的錯誤（與 LINE 擬定檢查時的提醒同義）。 */
+export const missingConnectionText =
+  "這個專案還沒有登記資料庫連線，請先到專案頁設定資料庫連線再核准";
+
+/** 核准或恢復前確認 SQL 檢查的專案有資料庫連線；沒有就不讓它啟用，以免每次執行都失敗。 */
+async function assertSqlConnection(db: Database, id: string) {
+  const row = await db.one<{ kind: string; connected: boolean }>(
+    `SELECT c.kind,EXISTS(SELECT 1 FROM project_connections pc WHERE pc.project_id=c.project_id) AS connected
+     FROM scheduled_checks c WHERE c.id=$1`,
+    [id],
+  );
+  if (row?.kind === "sql" && !row.connected)
+    throw new AppError(409, missingConnectionText);
+}
+
+/**
+ * 主機端暫時無法執行：執行器連不上（沒有狀態碼的連線錯誤），或執行器、檢查環境回 502／503
+ * （回應不完整、環境建立失敗、啟動逾時、檢查容器連不上、環境已停止）。
+ * 504「檢查執行逾時」、4xx 與 500（SQL 或目標連線錯誤）仍算檢查本身的錯誤。
+ */
+export function isHostUnavailable(e: unknown) {
+  const status = (e as { statusCode?: unknown } | null)?.statusCode;
+  if (status !== undefined) return status === 502 || status === 503;
+  return e instanceof Error && e.message.includes("執行器連線失敗");
+}
+
+const hostRunSql = `r.outcome='error' AND starts_with(r.summary,'${hostUnavailablePrefix}')`;
 
 /** 檢查清單；給了執行器時附上每個檢查的環境狀態（讀不到執行器時標示未知）。 */
 export async function listChecks(
@@ -146,18 +181,34 @@ export async function listChecks(
   call?: RunnerCall,
 ): Promise<ListedCheck[]> {
   const rows = await db.query<
-    ScheduledCheck & {
-      last_summary: string | null;
+    Omit<ListedCheck, "environment" | "host_unavailable_since"> & {
+      host_unavailable_since: Date | string | null;
       conn_updated_at: Date | null;
       conn_host_key: string | null;
     }
   >(
     `SELECT c.*,(SELECT summary FROM scheduled_check_runs r WHERE r.check_id=c.id ORDER BY started_at DESC LIMIT 1) AS last_summary,
+       (c.kind='sql' AND pc.project_id IS NULL) AS missing_connection,
+       (SELECT min(r.started_at) FROM scheduled_check_runs r WHERE r.check_id=c.id AND r.version=c.version AND ${hostRunSql}
+          AND r.id>COALESCE((SELECT max(r.id) FROM scheduled_check_runs r WHERE r.check_id=c.id AND r.version=c.version AND NOT (${hostRunSql})),0)
+       ) AS host_unavailable_since,
        pc.updated_at AS conn_updated_at,pc.ssh_host_key AS conn_host_key
      FROM scheduled_checks c LEFT JOIN project_connections pc ON pc.project_id=c.project_id ORDER BY c.created_at DESC`,
   );
-  if (!call)
-    return rows.map(({ conn_updated_at: _a, conn_host_key: _b, ...c }) => c);
+  const plain = rows.map(
+    ({ conn_updated_at, conn_host_key, host_unavailable_since, ...c }) => ({
+      check: {
+        ...c,
+        host_unavailable_since: host_unavailable_since
+          ? new Date(host_unavailable_since).toISOString()
+          : null,
+      },
+      connection: conn_updated_at
+        ? { updated_at: conn_updated_at, ssh_host_key: conn_host_key }
+        : null,
+    }),
+  );
+  if (!call) return plain.map((p) => p.check);
   const policy = checkEnvironmentPolicy(await db.settings());
   let state:
     | { environments: KeptEnvironment[]; failures: EnvironmentFailure[] }
@@ -167,16 +218,11 @@ export async function listChecks(
   } catch {
     state = undefined;
   }
-  return rows.map(({ conn_updated_at, conn_host_key, ...c }) => ({
+  return plain.map(({ check: c, connection }) => ({
     ...c,
     environment: state
       ? environmentView(
-          checkEnvironmentKey(
-            c,
-            conn_updated_at
-              ? { updated_at: conn_updated_at, ssh_host_key: conn_host_key }
-              : null,
-          ),
+          checkEnvironmentKey(c, connection),
           state.environments.find((e) => e.checkId === c.id),
           state.failures.find((f) => f.checkId === c.id),
           policy,
@@ -304,6 +350,7 @@ export async function approveCheck(
   version: number,
   actor: string,
 ) {
+  await assertSqlConnection(db, id);
   const row = await db.one<ScheduledCheck>(
     `UPDATE scheduled_checks SET status='active',approved_version=version,approved_by=$3,next_run_at=now(),consecutive_errors=0,updated_at=now()
      WHERE id=$1 AND version=$2 AND status='awaiting_approval' RETURNING *`,
@@ -324,6 +371,8 @@ export async function setCheckPaused(
   paused: boolean,
   actor: string,
 ) {
+  // 連線可能在核准後被刪除；恢復前再確認一次，免得恢復後又連續失敗。
+  if (!paused) await assertSqlConnection(db, id);
   const row = await db.one<ScheduledCheck>(
     paused
       ? "UPDATE scheduled_checks SET status='paused',next_run_at=NULL,updated_at=now() WHERE id=$1 AND status IN ('active','failed') RETURNING *"
@@ -492,13 +541,17 @@ async function notifyCheck(
   return true;
 }
 
-/** 異常時建立唯讀查詢任務請 AI 調查原因；每個檢查每天最多一次。 */
+/**
+ * 異常時建立唯讀查詢任務請 AI 調查原因；每個檢查每天最多一次（由呼叫端判斷）。
+ * 專案停用、未驗證或群組不可用時不建立，回傳 false；通知文字依回傳值決定要不要承諾回報。
+ */
 async function investigate(
   db: Database,
   c: DbClient,
   check: ScheduledCheck,
   summary: string,
-) {
+  now: Date,
+): Promise<boolean> {
   const project = (
     await c.query<{ binding_version: number }>(
       `SELECT g.binding_version FROM projects p JOIN group_projects gp ON gp.project_id=p.id JOIN groups g ON g.id=gp.group_id
@@ -506,7 +559,7 @@ async function investigate(
       [check.project_id, check.group_id],
     )
   ).rows[0];
-  if (!project) return;
+  if (!project) return false;
   const how =
     check.kind === "sql"
       ? `執行的唯讀查詢：\n${check.target.slice(0, 1500)}`
@@ -550,10 +603,12 @@ async function investigate(
     `定期檢查「${check.name}」異常，自動建立調查`,
     c,
   );
+  // 與 24 小時判斷用同一個時間來源（傳入的 now）。
   await c.query(
-    "UPDATE scheduled_checks SET last_investigated_at=now() WHERE id=$1",
-    [check.id],
+    "UPDATE scheduled_checks SET last_investigated_at=$2 WHERE id=$1",
+    [check.id, now],
   );
+  return true;
 }
 
 /** 執行一個到期的檢查並更新狀態；狀態改變才通知。 */
@@ -566,13 +621,17 @@ export async function runCheck(
   const started = Date.now();
   let outcome: "ok" | "alert" | "error";
   let summary: string;
+  let host = false;
   try {
     const r = await probe(db, call, check);
     outcome = r.alert ? "alert" : "ok";
     summary = redact(r.summary).slice(0, 500);
   } catch (e) {
     outcome = "error";
-    summary = redact(e instanceof Error ? e.message : String(e)).slice(0, 300);
+    host = isHostUnavailable(e);
+    summary =
+      (host ? hostUnavailablePrefix : "") +
+      redact(e instanceof Error ? e.message : String(e)).slice(0, 300);
   }
   await db.transaction(async (c) => {
     const current = (
@@ -590,11 +649,55 @@ export async function runCheck(
       return;
     const run = (
       await c.query<{ id: string }>(
-        "INSERT INTO scheduled_check_runs(check_id,version,duration_ms,outcome,summary) VALUES($1,$2,$3,$4,$5) RETURNING id",
-        [check.id, check.version, Date.now() - started, outcome, summary],
+        "INSERT INTO scheduled_check_runs(check_id,version,started_at,duration_ms,outcome,summary) VALUES($1,$2,$3,$4,$5,$6) RETURNING id",
+        [check.id, check.version, now, Date.now() - started, outcome, summary],
       )
     ).rows[0];
     const next = nextRunAt(current, now);
+    if (host) {
+      // 系統問題和檢查本身無關：不累計、不歸零連續失敗，不改狀態；退避後重試，恢復後自動繼續。
+      const recent = (
+        await c.query<{ outcome: string; summary: string; started_at: Date }>(
+          "SELECT outcome,summary,started_at FROM scheduled_check_runs WHERE check_id=$1 AND version=$2 ORDER BY id DESC LIMIT 50",
+          [check.id, check.version],
+        )
+      ).rows;
+      const streak: Date[] = [];
+      for (const r of recent) {
+        if (
+          r.outcome !== "error" ||
+          !r.summary.startsWith(hostUnavailablePrefix)
+        )
+          break;
+        streak.push(new Date(r.started_at));
+      }
+      const retry = new Date(
+        Math.min(
+          next.getTime(),
+          now.getTime() + hostRetryMinutes(streak.length) * 60000,
+        ),
+      );
+      await c.query(
+        "UPDATE scheduled_checks SET last_run_at=$2,next_run_at=$3,updated_at=now() WHERE id=$1",
+        [check.id, now, retry],
+      );
+      // 連續超過門檻時寫一次稽核（剛跨過門檻的那一次），看板也會標示需要處理；仍不暫停。
+      const limit = hostUnavailableAlertHours * 3600000;
+      const since = streak.at(-1)!.getTime();
+      const previous = streak[1]?.getTime();
+      if (
+        now.getTime() - since > limit &&
+        previous !== undefined &&
+        previous - since <= limit
+      )
+        await db.audit(
+          null,
+          "check_host_unavailable",
+          `定期檢查「${current.name}」已超過 ${hostUnavailableAlertHours} 小時因系統問題無法執行（不計入連續失敗、未暫停）：${summary.slice(hostUnavailablePrefix.length)}\n請到系統頁確認執行器與 Docker。`,
+          c,
+        );
+      return;
+    }
     if (outcome === "error") {
       const errors = current.consecutive_errors + 1;
       const stop = errors >= errorLimit;
@@ -629,8 +732,20 @@ export async function runCheck(
     );
     if (!turnedBad && !recovered) return;
     const quiet = inQuietHours(current, now);
+    // 先決定會不會真的調查，再組通知文字：只在實際建立調查時才承諾「結果會再回報」。
+    let investigation = "";
+    if (turnedBad && current.investigate && current.project_id) {
+      const recent =
+        current.last_investigated_at !== null &&
+        now.getTime() - new Date(current.last_investigated_at).getTime() <=
+          86400000;
+      if (recent)
+        investigation = "\n今天稍早已調查過這項檢查，這次不重複調查。";
+      else if (await investigate(db, c, current, summary, now))
+        investigation = "\nAI 正在調查可能原因，結果會再回報。";
+    }
     const text = turnedBad
-      ? `⚠️ ${current.alert_text || `定期檢查「${current.name}」發現異常`}\n${summary}${current.investigate && current.project_id ? "\nAI 正在調查可能原因，結果會再回報。" : ""}`
+      ? `⚠️ ${current.alert_text || `定期檢查「${current.name}」發現異常`}\n${summary}${investigation}`
       : `✅ ${current.recovered_text || `定期檢查「${current.name}」已恢復正常`}`;
     const sent = await notifyCheck(c, current, `${run.id}`, text, quiet);
     if (!sent)
@@ -640,15 +755,6 @@ export async function runCheck(
         `定期檢查「${current.name}」今天的通知已達上限，這次狀態改變未通知`,
         c,
       );
-    if (
-      turnedBad &&
-      current.investigate &&
-      current.project_id &&
-      (!current.last_investigated_at ||
-        now.getTime() - new Date(current.last_investigated_at).getTime() >
-          86400000)
-    )
-      await investigate(db, c, current, summary);
   });
 }
 

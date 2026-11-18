@@ -39,13 +39,25 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { type Request, type Run, type State, Empty, date } from "./shared";
+import {
+  type Request,
+  type Run,
+  type State,
+  Empty,
+  date,
+  message,
+} from "./shared";
+import {
+  takenRepos,
+  validationErrorParts,
+  validationKind,
+} from "./project-form";
 import { InstallReviewList } from "./egress";
 import { ConfirmButton } from "./confirm";
 import { useUnsaved, useGuard } from "./unsaved";
 import { ProjectContextEditor } from "./project-context";
 import { ProjectDatabase } from "./project-database";
-import { verificationLabel } from "../../shared/project-setup.js";
+import { isRepoNotice, verificationLabel } from "../../shared/project-setup.js";
 import {
   DEFAULT_COLLECT_EXCLUDES,
   MAX_COLLECT_EXCLUDES,
@@ -156,10 +168,23 @@ export function ProjectsView({
                         p.setup_mode !== "auto" &&
                           !p.test_command &&
                           "text-warn",
+                        p.setup_mode !== "auto" &&
+                          validationFailed(p) &&
+                          "text-danger",
                       )}
                     >
                       {p.setup_mode === "auto" ? (
                         p.setup_status || "AI 自動設定"
+                      ) : validationFailed(p) ? (
+                        <>
+                          驗證失敗
+                          {p.test_command && (
+                            <>
+                              {" · "}
+                              <code className="text-xs">{p.test_command}</code>
+                            </>
+                          )}
+                        </>
                       ) : p.test_command ? (
                         <code className="text-xs">{p.test_command}</code>
                       ) : (
@@ -315,9 +340,23 @@ export function ProjectsView({
               {open.setup_plan && open.setup_mode === "auto" && (
                 <div className="space-y-2 text-sm">
                   {verificationLabel(open.setup_plan).caution && (
-                    <p className="text-warn">
-                      {verificationLabel(open.setup_plan).caution}
-                    </p>
+                    <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
+                      <p className="text-warn">
+                        {verificationLabel(open.setup_plan).caution}
+                      </p>
+                      {/* 推測結構代表驗證當下還沒有結構快照；擷取快照會讓設定作廢、重新驗證。 */}
+                      {open.setup_plan.dataSource === "inferred" && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="shrink-0"
+                          onClick={jumpToDatabase}
+                        >
+                          登記資料庫連線
+                        </Button>
+                      )}
+                    </div>
                   )}
                   {open.setup_plan.sqlServer && (
                     <p>
@@ -374,9 +413,18 @@ export function ProjectsView({
                 </div>
               )}
               {open.validation_error && !open.repo_missing_at && (
-                <p className="rounded-lg bg-danger-soft px-3 py-2 text-xs break-all text-danger">
-                  {open.validation_error}
-                </p>
+                <ValidationError
+                  text={open.validation_error}
+                  // 已驗證的專案重新驗證遇到暫時性問題時沿用先前的設定；儲存庫接回後的
+                  // 「請重新驗證」也只是提醒。這兩種都不算失敗。
+                  tone={
+                    isRepoNotice(open.validation_error)
+                      ? "notice"
+                      : open.validated_at
+                        ? "transient"
+                        : "failed"
+                  }
+                />
               )}
               <Separator />
               <ProjectContextEditor
@@ -464,6 +512,57 @@ function missingGroups(p: Project, state: State) {
   return names.length ? `（${names.join("、")}），接回後會自動綁回去` : "";
 }
 
+// 沒有通過驗證、而且留有失敗原因；儲存庫接回後的「請重新驗證」提醒不算失敗。
+const validationFailed = (p: Project) => validationKind(p) === "failed";
+
+// 「登記資料庫連線」按鈕：捲到詳情裡的資料庫連線區塊並聚焦第一個欄位。
+function jumpToDatabase() {
+  const section = document.getElementById("project-database");
+  section?.scrollIntoView({ behavior: "smooth", block: "start" });
+  section
+    ?.querySelector<HTMLElement>(
+      "input:enabled, textarea:enabled, button:enabled",
+    )
+    ?.focus({ preventScroll: true });
+}
+
+function ValidationError({
+  text,
+  tone,
+}: {
+  text: string;
+  tone: "failed" | "transient" | "notice";
+}) {
+  const { headline, body, detail, advice } = validationErrorParts(text);
+  return (
+    <div
+      role={tone === "failed" ? "alert" : "status"}
+      className={cn(
+        "space-y-1 whitespace-pre-wrap break-words rounded-lg px-3 py-2 text-xs",
+        tone === "failed"
+          ? "bg-danger-soft text-danger"
+          : "bg-warn-soft text-warn",
+      )}
+    >
+      <p className="text-sm font-medium">
+        {tone === "transient" ? `上次重新驗證未完成：${headline}` : headline}
+      </p>
+      {body.map((line, i) => (
+        <p key={i}>{line}</p>
+      ))}
+      {detail.length > 0 && (
+        <details>
+          <summary className="cursor-pointer">錯誤重點</summary>
+          <p className="mt-1 font-mono">{detail.join("\n")}</p>
+        </details>
+      )}
+      {advice.map((line, i) => (
+        <p key={i}>{line}</p>
+      ))}
+    </div>
+  );
+}
+
 // 可派工還要有群組使用；沒有群組綁定的專案收不到任何需求。
 function ProjectBadge({
   project: p,
@@ -481,6 +580,15 @@ function ProjectBadge({
         title="GitHub 上找不到這個儲存庫（可能已刪除、搬家或改名），專案先停用並暫時解除群組綁定"
       >
         找不到儲存庫
+      </Badge>
+    );
+  if (validationFailed(p))
+    return (
+      <Badge
+        variant="danger"
+        title={validationErrorParts(p.validation_error ?? "").headline}
+      >
+        驗證失敗
       </Badge>
     );
   if (ready && !bound)
@@ -732,6 +840,10 @@ export function ProjectForm({
   const [repos, setRepos] = useState<
     { full_name: string; default_branch: string; description: string }[] | null
   >(null);
+  // 讀取失敗和「真的沒有儲存庫」分開：金鑰或連線問題不能被說成沒安裝 App。
+  const [reposError, setReposError] = useState("");
+  const [reposReload, setReposReload] = useState(0);
+  const [taken, setTaken] = useState<Set<string>>(new Set());
   const [scopeError, setScopeError] = useState("");
   const [excludeError, setExcludeError] = useState("");
   const [form, setForm] = useState({
@@ -757,11 +869,24 @@ export function ProjectForm({
   // 找不到儲存庫的專案可以改選；其他既有專案不能換儲存庫。
   const pickRepo = !p.id || !!p.repo_missing_at;
   useEffect(() => {
-    if (pickRepo)
-      void request<NonNullable<typeof repos>>("/api/repositories")
-        .then(setRepos)
-        .catch(() => setRepos([]));
-  }, [pickRepo, request]);
+    if (!pickRepo) return;
+    let active = true;
+    setRepos(null);
+    setReposError("");
+    void request<NonNullable<typeof repos>>("/api/repositories")
+      .then((list) => active && setRepos(list))
+      .catch((e) => active && setReposError(message(e)));
+    // 已被其他專案使用的儲存庫標「已加入」並停用。表單由 App.tsx 開啟、拿不到看板 state，
+    // 所以另外讀一次精簡的 /api/state；讀不到時只少了標示，資料庫的唯一限制仍會擋下重複。
+    void request<{ projects: Pick<Project, "id" | "repo">[] }>(
+      "/api/state?tasks=1&activity=1",
+    )
+      .then((s) => active && setTaken(takenRepos(s.projects, p.id)))
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [pickRepo, request, reposReload]);
   // 依擁有者（個人或組織）分組，組內只顯示儲存庫名稱，清單才不會擠成一長串。
   const owners = useMemo(() => {
     const groups = new Map<string, NonNullable<typeof repos>>();
@@ -842,7 +967,20 @@ export function ProjectForm({
       }}
     >
       <div className="flex flex-col gap-2">
-        <Label>GitHub 儲存庫</Label>
+        <div className="flex items-center justify-between gap-2">
+          <Label>GitHub 儲存庫</Label>
+          {pickRepo && repos && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onClick={() => setReposReload((v) => v + 1)}
+            >
+              <RefreshCw /> 重新整理清單
+            </Button>
+          )}
+        </div>
         {!pickRepo ? (
           <Input value={form.repo} readOnly />
         ) : (
@@ -851,7 +989,11 @@ export function ProjectForm({
               {/* 清單內只列儲存庫名稱，選定後這裡仍顯示含擁有者的完整名稱。 */}
               <SelectValue
                 placeholder={
-                  repos ? "選擇已安裝 GitHub App 的儲存庫" : "載入中…"
+                  repos
+                    ? "選擇已安裝 GitHub App 的儲存庫"
+                    : reposError
+                      ? "無法取得儲存庫清單"
+                      : "載入中…"
                 }
               >
                 {form.repo}
@@ -874,25 +1016,48 @@ export function ProjectForm({
                         {list.length} 個
                       </span>
                     </SelectLabel>
-                    {list.map((r) => (
-                      <SelectItem
-                        key={r.full_name}
-                        value={r.full_name}
-                        className="pl-4"
-                      >
-                        {r.full_name.slice(owner.length + 1)}
-                      </SelectItem>
-                    ))}
+                    {list.map((r) => {
+                      const added = taken.has(r.full_name.toLowerCase());
+                      return (
+                        <SelectItem
+                          key={r.full_name}
+                          value={r.full_name}
+                          className="pl-4"
+                          disabled={added}
+                        >
+                          {r.full_name.slice(owner.length + 1)}
+                          {added && "（已加入）"}
+                        </SelectItem>
+                      );
+                    })}
                   </SelectGroup>
                 </Fragment>
               ))}
-              {repos?.length === 0 && (
-                <p className="px-2 py-1.5 text-sm text-muted-foreground">
-                  沒有可選的儲存庫。請先在 GitHub 把 App 安裝到儲存庫。
-                </p>
-              )}
             </SelectContent>
           </Select>
+        )}
+        {pickRepo && reposError && (
+          <div
+            role="alert"
+            className="space-y-2 rounded-lg bg-danger-soft px-3 py-2.5 text-sm text-danger"
+          >
+            <p className="break-words">無法取得儲存庫清單：{reposError}</p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={busy}
+              onClick={() => setReposReload((v) => v + 1)}
+            >
+              重新取得
+            </Button>
+          </div>
+        )}
+        {pickRepo && repos?.length === 0 && (
+          <p className="text-xs text-muted-foreground" role="status">
+            沒有可選的儲存庫。請先在 GitHub 把 App
+            安裝到儲存庫，裝好後按「重新整理清單」。
+          </p>
         )}
         {p.id && pickRepo && (
           <p className="text-xs text-muted-foreground">

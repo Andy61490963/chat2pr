@@ -254,6 +254,21 @@ export const statusLabels: Record<TaskStatus, string> = {
   answered: "已回覆",
   closed: "已關閉",
 };
+/**
+ * /api/state 的 notificationFailures：重試 3 次仍送不出去、還沒過期的私訊與群組通知，
+ * 以及重送時會標成「已過期，未補送」略過的通知數。
+ */
+export interface NotificationFailures {
+  direct: number;
+  group: number;
+  stale: number;
+}
+/** POST /api/notifications/retry 的結果：重新排入的私訊、群組通知與略過的過期通知數。 */
+export interface NotificationRetryResult {
+  direct: number;
+  group: number;
+  expired: number;
+}
 export interface Knowledge {
   id: string;
   project_id: string;

@@ -300,6 +300,123 @@ describe("清單筆數與失敗通知", () => {
   });
 });
 
+const blockQuota = () =>
+  recordHealth(
+    db,
+    "line_quota",
+    false,
+    "LINE 本月推播額度已用完，下個月初重置；群組的『收到』與看板鈴鐺不受影響（本月已用 200／上限 200 則）",
+  );
+// reset() 不清 service_health；留著 line_quota 會讓之後其他測試檔的推播全部暫停。
+const clearQuota = () =>
+  db.query("DELETE FROM service_health WHERE name='line_quota'");
+
+describe("LINE 推播額度與重送", () => {
+  const retry = async () =>
+    app.inject({
+      method: "POST",
+      url: "/api/notifications/retry",
+      headers: await session(),
+    });
+  afterEach(clearQuota);
+
+  /** 還有效與過時的群組通知、私訊各一則都重試 3 次失敗；另一則私訊還在自動重試。 */
+  const failures = async () => {
+    await fixture();
+    const answered = await task("answered", "quota-answered");
+    const waiting = await task("queued", "quota-waiting");
+    await db.query(
+      `INSERT INTO notifications(task_id,kind,dedupe_key,text,group_id,attempts,last_error,created_at) VALUES
+        ($1,'group_answered','r1','查詢結果','group-a',3,'LINE 通知失敗（500）',now()-interval '1 hour'),
+        ($2,'group_waiting','r2','排在第 2 位','group-a',3,'LINE 通知失敗（500）',now()-interval '7 hours')`,
+      [answered.id, waiting.id],
+    );
+    await db.query(
+      `INSERT INTO notifications(kind,dedupe_key,text,attempts,last_error,created_at) VALUES
+        ('service_down','r3','服務異常',3,'LINE 通知失敗（500）',now()-interval '2 hours'),
+        ('service_down','r4','服務異常二',1,'LINE 通知失敗（500）',now())`,
+    );
+  };
+
+  it("狀態把送不出去的通知分成私訊、群組與重送時會略過的過期通知", async () => {
+    await failures();
+    const s = await state();
+    expect(s.notificationFailures).toEqual({ direct: 1, group: 1, stale: 1 });
+    expect(s.failedNotifications).toBe(2);
+  });
+
+  it("額度用完時拒絕重送並說明，不歸零任何通知", async () => {
+    await failures();
+    await blockQuota();
+    const response = await retry();
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toBe(
+      "LINE 本月推播額度已用完，額度恢復前重送也會失敗",
+    );
+    expect(
+      await db.query("SELECT 1 FROM notifications WHERE attempts=0"),
+    ).toHaveLength(0);
+  });
+
+  it("重送先略過過期通知，只重排重試 3 次仍失敗的；還在自動重試的不受影響", async () => {
+    await failures();
+    const response = await retry();
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ direct: 1, group: 1, expired: 1 });
+    const rows = await db.query<{
+      dedupe_key: string;
+      attempts: number;
+      sent_at: Date | null;
+      last_error: string | null;
+    }>(
+      "SELECT dedupe_key,attempts,sent_at,last_error FROM notifications WHERE dedupe_key LIKE 'r_' ORDER BY dedupe_key",
+    );
+    expect(rows.map((r) => [r.dedupe_key, r.attempts, r.last_error])).toEqual([
+      ["r1", 0, null],
+      ["r2", 3, "已過期，未補送"],
+      ["r3", 0, null],
+      ["r4", 1, "LINE 通知失敗（500）"],
+    ]);
+    expect(rows[1].sent_at).not.toBeNull();
+    const [audit] = await db.query<{ detail: string }>(
+      "SELECT detail FROM audit WHERE kind='notification_retry'",
+    );
+    expect(audit.detail).toContain("私訊 1 則、群組 1 則，略過已過期 1 則");
+  });
+
+  it("過期的私訊不逐則補送，改排一則彙整請管理者到看板查看", async () => {
+    await db.query(
+      `INSERT INTO notifications(kind,dedupe_key,text,attempts,created_at) VALUES
+        ('service_down','old-1','舊通知一',3,now()-interval '3 days'),
+        ('service_down','old-2','舊通知二',3,now()-interval '2 days')`,
+    );
+    expect((await retry()).json()).toEqual({
+      direct: 0,
+      group: 0,
+      expired: 2,
+    });
+    const backlog = await notices("line_backlog");
+    expect(backlog).toHaveLength(1);
+    expect(backlog[0].text).toContain("有 2 則通知");
+    expect(backlog[0].text).toContain("看板鈴鐺");
+  });
+
+  it("額度用完時鈴鐺清單頂端多一行提示；恢復後消失", async () => {
+    await blockQuota();
+    const alerts = (await state()).alerts;
+    expect(alerts[0]).toMatchObject({
+      kind: "line_quota",
+      text: "LINE 推播額度用完，群組回覆與私訊暫停，看板通知照常",
+    });
+    await recordHealth(db, "line_quota", true, "本月已用 3／上限 200 則");
+    expect(
+      (await state()).alerts.some(
+        (a: { kind: string }) => a.kind === "line_quota",
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("測試通知", () => {
   const send = async () =>
     app.inject({
@@ -341,6 +458,39 @@ describe("測試通知", () => {
     const response = await send();
     expect(response.statusCode).toBe(409);
     expect(response.json().error).toContain("LINE 沒有收下測試通知（401）");
+  });
+
+  it("額度用完時不推播，說明是額度問題、權杖沒有問題", async () => {
+    await pair();
+    await blockQuota();
+    const upstream = vi.fn();
+    vi.stubGlobal("fetch", upstream);
+    const response = await send();
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toBe("LINE 本月推播額度已用完，權杖沒有問題");
+    expect(upstream).not.toHaveBeenCalled();
+    await clearQuota();
+  });
+
+  it("推播回每月上限時同樣說明，並記下額度用完", async () => {
+    await pair();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json(
+          { message: "You have reached your monthly limit." },
+          { status: 429 },
+        ),
+      ),
+    );
+    const response = await send();
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toBe("LINE 本月推播額度已用完，權杖沒有問題");
+    const quota = (await state()).health.find(
+      (h: { name: string }) => h.name === "line_quota",
+    );
+    expect(quota.ok).toBe(false);
+    await clearQuota();
   });
 });
 

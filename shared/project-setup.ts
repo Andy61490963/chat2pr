@@ -35,21 +35,31 @@ export interface SqlServerPlan {
 
 type Verified = Pick<SetupPlan, "verification" | "dataSource" | "limitations">;
 
+const inferredCaution =
+  "測試用的資料庫結構由 AI 推測，登記資料庫連線並擷取結構快照可提高可信度。";
+
 /** 驗證結果的白話標示：看板狀態、專案詳情與 PR 共用，避免把部分驗證呈現成完整驗證。 */
 export function verificationLabel(plan: Verified | null | undefined): {
   status: string;
   caution: string | null;
 } {
+  // 部分驗證與只有建置時也要說出結構是推測的：測試範圍被縮小，常常就是因為缺少真實資料庫，
+  // 這時最需要提醒管理者登記資料庫連線。
+  const inferred = plan?.dataSource === "inferred";
+  const mark = (status: string, caution: string) =>
+    inferred
+      ? {
+          status: `${status}（資料庫結構由 AI 推測）`,
+          caution: `${caution}${/[。！？.!?]$/.test(caution) ? "" : "。"}${inferredCaution}`,
+        }
+      : { status, caution };
   if (plan?.verification === "build")
-    return {
-      status: "建置通過；未執行自動測試",
-      caution: "僅確認可建置，未執行自動測試。",
-    };
+    return mark("建置通過；未執行自動測試", "僅確認可建置，未執行自動測試。");
   if (plan?.verification === "partial")
-    return {
-      status: "部分測試通過；AI 依環境限制縮小了測試範圍",
-      caution: `只執行了部分測試。未涵蓋：${plan.limitations?.trim() || "AI 未說明"}`,
-    };
+    return mark(
+      "部分測試通過；AI 依環境限制縮小了測試範圍",
+      `只執行了部分測試。未涵蓋：${plan.limitations?.trim() || "AI 未說明"}`,
+    );
   if (plan?.dataSource === "inferred")
     return {
       status: "安裝與測試通過（資料庫結構由 AI 推測）",
@@ -60,3 +70,16 @@ export function verificationLabel(plan: Verified | null | undefined): {
     return { status: "安裝與測試通過（資料庫以結構快照模擬）", caution: null };
   return { status: "安裝與測試通過", caution: null };
 }
+
+/**
+ * 儲存庫接回後寫進 validation_error 的提醒（server/repo-missing.ts）。這是「請重新驗證」的提示，
+ * 不是驗證失敗；看板靠這兩句分辨，不能標成「驗證失敗」。
+ */
+export const repoNotice = {
+  found:
+    "GitHub 上又找得到這個儲存庫了；請重新驗證環境，再到群組重新勾選這個專案。",
+  changed: "儲存庫已接回，但這段期間改過設定；請重新驗證環境後再啟用。",
+} as const;
+
+export const isRepoNotice = (text: string | null | undefined) =>
+  text === repoNotice.found || text === repoNotice.changed;
