@@ -19,8 +19,8 @@ export function TaskClarification({
   busy: boolean;
   act: Act;
   amend: () => void;
-  /** 直接回答補問；系統把回答併進需求。 */
-  answer: (task: Task, text: string) => Promise<unknown>;
+  /** 直接回答補問；系統把回答併進需求。成功才回傳 true，失敗時保留輸入。 */
+  answer: (task: Task, text: string) => Promise<boolean>;
 }) {
   const [reply, setReply] = useState("");
   useUnsaved("task-answer", reply.trim().length > 0);
@@ -74,8 +74,8 @@ export function TaskClarification({
               className="flex flex-col gap-2"
               onSubmit={async (event) => {
                 event.preventDefault();
-                await answer(task, reply.trim());
-                setReply("");
+                // 送出失敗（例如 409、連線中斷）時保留原字，離開提醒也跟著保留。
+                if (await answer(task, reply.trim())) setReply("");
               }}
             >
               <Label htmlFor="question-answer">回答這個問題</Label>

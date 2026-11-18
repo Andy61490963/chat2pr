@@ -68,7 +68,8 @@ export function MembersView({
         <CardHeader>
           <CardTitle>加入成員</CardTitle>
           <CardDescription>
-            輸入同事的 GitHub 帳號。對方之後用 GitHub 登入看板即可，不需要另外設定密碼。
+            輸入同事的 GitHub 帳號。對方之後用 GitHub
+            登入看板即可，不需要另外設定密碼。
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -79,7 +80,10 @@ export function MembersView({
               void act(
                 () => request("/api/members", "POST", { login, role }),
                 `已加入 ${login}`,
-              ).then(() => setLogin(""));
+              ).then((ok) => {
+                // 加入失敗時保留帳號，改一個字就能再送。
+                if (ok) setLogin("");
+              });
             }}
           >
             <Input

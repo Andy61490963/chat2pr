@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
   ArrowRight,
+  BellOff,
   Bot,
   Brain,
   CircleCheck,
@@ -14,6 +15,7 @@ import {
   ListChecks,
   Loader2,
   LogOut,
+  MemoryStick,
   MessageSquare,
   RefreshCw,
   Server,
@@ -58,6 +60,7 @@ import {
   attention,
   cash,
   Initials,
+  memoryHold,
   message,
 } from "./app/shared";
 import { TaskDrawer } from "./app/task-drawer";
@@ -175,8 +178,12 @@ const vital: Record<string, string> = {
   openai: "OpenAI API",
   runner: "隔離執行器",
   tunnel: "HTTPS 入口",
-  notifications: "LINE 私訊通知",
+  notifications: "LINE 推播（群組回覆與私訊）",
 };
+// LINE 每月推播額度用完（批次 1 的 line_quota 健康項）：不是連線壞掉，另用黃色橫幅說明替代做法。
+const LINE_QUOTA = "line_quota";
+const quotaBanner =
+  "LINE 本月推播額度已用完，群組回答與私訊暫時送不出去；「收到」即時確認不受影響。請看通知鈴鐺，必要時到任務詳情複製結果貼到群組，群組成員可打 /進度 取回";
 // 登入前所在的網址：GitHub 登入回來後回到這裡（例如 LINE 通知裡的任務連結）。
 const returnKey = "agentflow-return";
 
@@ -420,14 +427,24 @@ export function App() {
     const t = setTimeout(() => setToast(null), toast.error ? 12000 : 4500);
     return () => clearTimeout(t);
   }, [toast]);
+  // 回傳是否成功：表單只在成功時清空輸入。請求已成功但重新整理失敗仍算成功，
+  // 否則輸入留著，使用者再按一次就會重複送出（例如重複追問）。
   const run: Run = async (fn, done = "已儲存") => {
     setBusy(true);
     try {
-      await fn();
+      try {
+        await fn();
+      } catch (e) {
+        setToast({ text: message(e), error: true });
+        return false;
+      }
       setToast({ text: done });
-      await refresh();
-    } catch (e) {
-      setToast({ text: message(e), error: true });
+      try {
+        await refresh();
+      } catch {
+        // refresh 自己會把錯誤顯示在畫面上；這裡不改變送出結果。
+      }
+      return true;
     } finally {
       setBusy(false);
     }
@@ -500,16 +517,23 @@ export function App() {
   // 一般成員只看得到工作區；管理區（群組、專案、系統、成員、設定）限管理者。
   const admin = user.role !== "member";
   const goneProjects = (state?.projects ?? []).filter((p) => p.repo_missing_at);
+  const quotaOut = (state?.health ?? []).some(
+    (h) => h.name === LINE_QUOTA && !h.ok,
+  );
   const down = (state?.health ?? []).filter(
     (h) =>
       !h.ok &&
       vital[h.name] &&
+      // 額度用完時推播失敗是預期中的，由下方黃色橫幅說明，不算「連線異常」。
+      !(quotaOut && h.name === "notifications") &&
       (!["codex", "openai"].includes(h.name) ||
         (h.name === "codex") === (state?.settings.ai_mode === "subscription")),
   );
   const visible = views.filter((v) => admin || v.section === "工作區");
   const current = visible.find((v) => v.id === view) ?? visible[0];
-  const live = state && !state.settings.paused;
+  // 記憶體不足時系統自己暫停派新工作；手動暫停時以手動暫停為準。
+  const hold = state && !state.settings.paused ? memoryHold(state) : null;
+  const live = state && !state.settings.paused && !hold;
   return (
     <div
       className={cn(
@@ -677,9 +701,11 @@ export function App() {
                 title={
                   state.settings.paused
                     ? "目前只接收訊息，不辨識與派工；點此開始"
-                    : state.settings.triage_paused
-                      ? "新需求判讀已暫停，已核准任務仍可執行；點此暫停派工"
-                      : "已確認修改與明確查詢會依序派工；點此暫停"
+                    : hold
+                      ? hold
+                      : state.settings.triage_paused
+                        ? "新需求判讀已暫停，已核准任務仍可執行；點此暫停派工"
+                        : "已確認修改與明確查詢會依序派工；點此暫停"
                 }
                 className="font-normal"
               >
@@ -691,9 +717,11 @@ export function App() {
                 />
                 {state.settings.paused
                   ? "已暫停"
-                  : state.settings.triage_paused
-                    ? "判讀暫停中"
-                    : "自動派工中"}
+                  : hold
+                    ? "派工自動暫停"
+                    : state.settings.triage_paused
+                      ? "判讀暫停中"
+                      : "自動派工中"}
               </Button>
               <AlertBell
                 alerts={state.alerts ?? []}
@@ -776,6 +804,33 @@ export function App() {
                   </Button>
                 )
               ))}
+          </p>
+        )}
+        {hold && (
+          <p
+            role="status"
+            className="mb-4 flex flex-wrap items-center gap-2 rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn"
+          >
+            <MemoryStick className="size-4 shrink-0" />
+            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+              {hold}。排隊中的工作會在恢復後自動開始，不需手動操作
+            </span>
+            {admin && view !== "system" && (
+              <Button variant="outline" size="xs" onClick={() => go("system")}>
+                查看系統頁
+              </Button>
+            )}
+          </p>
+        )}
+        {quotaOut && (
+          <p
+            role="status"
+            className="mb-4 flex flex-wrap items-center gap-2 rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn"
+          >
+            <BellOff className="size-4 shrink-0" />
+            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+              {quotaBanner}
+            </span>
           </p>
         )}
         {offline && (

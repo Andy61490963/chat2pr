@@ -25,6 +25,13 @@ import {
 } from "lucide-react";
 import type { Project, Task } from "../../shared/types.js";
 import { statusLabels } from "../../shared/types.js";
+import {
+  failureBrief,
+  fixFirst,
+  fixPage,
+  fixPageLabels,
+  parseFailure,
+} from "../../shared/failure-text.js";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -37,11 +44,13 @@ import {
   type State,
   type View,
   ago,
+  Clamped,
   collapseRepeats,
   Empty,
   groupName,
   Linkified,
   LoadMore,
+  memoryHold,
   moving,
   projectName,
   SectionTitle,
@@ -235,11 +244,7 @@ export function InboxView({
                   />
                 ))
               ) : (
-                <Empty
-                  compact
-                  icon={<Loader2 />}
-                  title="目前沒有執行中的工作"
-                >
+                <Empty compact icon={<Loader2 />} title="目前沒有執行中的工作">
                   核准的需求會在這裡顯示開發進度。
                 </Empty>
               )}
@@ -274,7 +279,11 @@ export function InboxView({
                   </div>
                 ))
               ) : (
-                <Empty compact icon={<GitPullRequest />} title="沒有等待合併的 PR">
+                <Empty
+                  compact
+                  icon={<GitPullRequest />}
+                  title="沒有等待合併的 PR"
+                >
                   Codex 完成並通過驗證後，PR 會出現在這裡。
                 </Empty>
               )}
@@ -326,7 +335,8 @@ const dayLabel = (v: string) => {
 // 失敗的完整原因在「需要你處理」的卡片與任務詳情裡；動態只留一句，避免同一段文字重複出現。
 const brief = (a: Audit) => {
   if (a.kind !== "verification" && a.kind !== "error") return a.detail;
-  if (a.detail.startsWith("驗證未通過，請修正：")) return "驗證未通過，交回修正";
+  if (a.detail.startsWith("驗證未通過，請修正："))
+    return "驗證未通過，交回修正";
   const gaveUp = "一次自動修復後仍未通過驗證";
   const at = a.detail.indexOf(gaveUp);
   if (at >= 0) return a.detail.slice(0, at + gaveUp.length);
@@ -479,12 +489,19 @@ function DecisionCard({
   go?: (v: View) => void;
 }) {
   const pick = t.status === "awaiting_approval" && !t.project_id;
+  // 失敗說明拆成白話說明、建議與錯誤重點：建議固定排在最後，整段截兩行一定看不到。
+  const failure = t.status === "failed" ? parseFailure(t.last_error) : null;
+  const demoteRetry = fixFirst(failure?.category);
+  // go 只在管理者時提供；成員看不到前往設定頁的按鈕，改用「詳情」當主按鈕。
+  const target = go && failure && demoteRetry ? fixPage(failure.action) : null;
   const reason =
     t.status === "awaiting_approval"
       ? pick
         ? "AI 無法判斷要改哪個專案"
         : (t.risk_reasons[0] ?? t.missing[0] ?? "需求等待確認")
-      : (t.last_error?.replace(/^Error: /, "") ?? statusLabels[t.status]);
+      : failure
+        ? failure.headline
+        : (t.last_error?.replace(/^Error: /, "") ?? statusLabels[t.status]);
   return (
     <Card className="gap-0 py-4">
       <CardContent>
@@ -511,9 +528,24 @@ function DecisionCard({
             )}
           >
             <AlertCircle className="mt-0.5 size-4 shrink-0" />
-            <span className="line-clamp-2 [overflow-wrap:anywhere]">{reason}</span>
+            <span className="line-clamp-2 [overflow-wrap:anywhere]">
+              {reason}
+            </span>
           </span>
         </button>
+        {failure && (
+          <div className="mt-1.5 flex flex-col gap-1.5 pl-[1.375rem] text-sm">
+            <p className="font-medium [overflow-wrap:anywhere]">
+              建議：{failure.action}
+            </p>
+            {failure.detail && (
+              <div className="flex min-w-0 flex-col gap-0.5 text-xs text-muted-foreground">
+                <span className="font-medium">錯誤重點</span>
+                <Clamped text={failure.detail} lines={2} />
+              </div>
+            )}
+          </div>
+        )}
         {pick ? (
           <AssignProject task={t} state={state} busy={busy} act={act} go={go} />
         ) : (
@@ -523,10 +555,7 @@ function DecisionCard({
             )}
             <div className="mt-4 flex flex-wrap gap-2">
               {t.status === "awaiting_approval" && !t.missing.length && (
-                <Button
-                  disabled={busy}
-                  onClick={() => open(t.id)}
-                >
+                <Button disabled={busy} onClick={() => open(t.id)}>
                   <Check /> 檢視專案並確認
                 </Button>
               )}
@@ -538,16 +567,28 @@ function DecisionCard({
                   {t.suggestions.length ? "都不是，自己補充" : "補充需求"}
                 </Button>
               )}
+              {target && go && (
+                <Button onClick={() => go(target)}>
+                  {fixPageLabels[target]}
+                </Button>
+              )}
               {["failed", "budget_wait"].includes(t.status) && (
                 <Button
+                  // 設定、環境、專案類失敗不先處理，重試只會再失敗一次、多用一次每日次數。
+                  variant={demoteRetry ? "outline" : "default"}
                   disabled={busy}
                   onClick={() => void act(t, "retry", {}, "已重新排程")}
                 >
                   <RefreshCw /> 重試
                 </Button>
               )}
-              {t.status === "awaiting_approval" && <RejectButton task={t} busy={busy} act={act} />}
-              <Button variant="ghost" onClick={() => open(t.id)}>
+              {t.status === "awaiting_approval" && (
+                <RejectButton task={t} busy={busy} act={act} />
+              )}
+              <Button
+                variant={demoteRetry && !target ? "default" : "ghost"}
+                onClick={() => open(t.id)}
+              >
                 詳情
               </Button>
               {t.status === "failed" && (
@@ -590,39 +631,36 @@ export function SuggestionList({
         </span>
       </span>
       <div className="grid gap-2 @2xl:grid-cols-3">
-      {t.suggestions.map((s, i) => (
-        <div
-          key={i}
-          className="flex flex-col gap-3 rounded-lg border p-3"
-        >
-          <div className="min-w-0 flex-1">
-            <p className="font-medium">
-              <span className="mr-1.5 text-muted-foreground tabular-nums">
-                {i + 1}.
-              </span>
-              {s.label}
-            </p>
-            <p className="mt-1 text-sm text-muted-foreground">{s.summary}</p>
-            {s.acceptance.length > 0 && (
-              <ul className="mt-1.5 list-disc pl-5 text-xs text-muted-foreground">
-                {s.acceptance.map((a, j) => (
-                  <li key={j}>{a}</li>
-                ))}
-              </ul>
-            )}
+        {t.suggestions.map((s, i) => (
+          <div key={i} className="flex flex-col gap-3 rounded-lg border p-3">
+            <div className="min-w-0 flex-1">
+              <p className="font-medium">
+                <span className="mr-1.5 text-muted-foreground tabular-nums">
+                  {i + 1}.
+                </span>
+                {s.label}
+              </p>
+              <p className="mt-1 text-sm text-muted-foreground">{s.summary}</p>
+              {s.acceptance.length > 0 && (
+                <ul className="mt-1.5 list-disc pl-5 text-xs text-muted-foreground">
+                  {s.acceptance.map((a, j) => (
+                    <li key={j}>{a}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              className="w-full"
+              disabled={busy || sensitive}
+              title={sensitive ? "涉及敏感範圍，請補充後再核准" : undefined}
+              onClick={open}
+            >
+              檢視專案與方案
+            </Button>
           </div>
-          <Button
-            size="sm"
-            variant="outline"
-            className="w-full"
-            disabled={busy || sensitive}
-            title={sensitive ? "涉及敏感範圍，請補充後再核准" : undefined}
-            onClick={open}
-          >
-            檢視專案與方案
-          </Button>
-        </div>
-      ))}
+        ))}
       </div>
     </div>
   );
@@ -769,6 +807,10 @@ export function TaskRow({
     t.issue_number && `Issue #${t.issue_number}`,
     `更新於 ${ago(t.updated_at)}`,
   ].filter(Boolean);
+  // 失敗的列多一行簡短原因，不必逐筆打開才知道哪件為什麼失敗。
+  const why = t.status === "failed" ? failureBrief(t.last_error) : "";
+  // 記憶體不足自動暫停派工時，排隊中的列說明為什麼還沒開始。
+  const held = t.status === "queued" && !!memoryHold(state);
   return (
     <button
       className="flex w-full items-center gap-3 border-b px-5 py-3 text-left transition-colors last:border-0 hover:bg-muted/50"
@@ -780,6 +822,12 @@ export function TaskRow({
         <span className="text-sm text-muted-foreground">
           {meta.join(" · ")}
         </span>
+        {why && <span className="truncate text-sm text-danger">{why}</span>}
+        {held && (
+          <span className="truncate text-sm text-warn">
+            待執行（暫停派工中）
+          </span>
+        )}
         {steps && <Stepper status={t.status} query={t.mode === "query"} />}
       </span>
       <StatusBadge status={t.status} />
