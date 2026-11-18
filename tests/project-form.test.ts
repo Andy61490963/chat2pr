@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
+  configChanged,
+  offersValidation,
   portError,
+  repoListStatus,
+  saveProject,
   takenRepos,
+  validateLabel,
   validationErrorParts,
   validationKind,
+  type ProjectFormFields,
 } from "../src/app/project-form.js";
+import type { Project } from "../shared/types.js";
 import { repoNotice, verificationLabel } from "../shared/project-setup.js";
 import { prReport } from "../server/pr-body.js";
 import { ConnectionBody } from "../server/project-database.js";
@@ -236,5 +243,178 @@ describe("選儲存庫時標出已加入的儲存庫", () => {
   });
   it("排除正在編輯的這筆，找不到儲存庫的專案可以改選原本的位置", () => {
     expect(takenRepos(projects, "p1").has("example-org/orders")).toBe(false);
+  });
+});
+
+describe("儲存庫清單的三種狀態", () => {
+  it("讀取失敗時說出伺服器原因，不說成沒有安裝 App", () => {
+    const s = repoListStatus(
+      null,
+      "服務暫時無法連線（HTTP 502），請稍後再試。",
+    );
+    expect(s.error).toBe(
+      "無法取得儲存庫清單：服務暫時無法連線（HTTP 502），請稍後再試。",
+    );
+    expect(s.empty).toBe(false);
+    expect(s.placeholder).toBe("無法取得儲存庫清單");
+  });
+  it("載入中不是空清單，也沒有錯誤", () => {
+    expect(repoListStatus(null, "")).toEqual({
+      placeholder: "載入中…",
+      error: null,
+      empty: false,
+    });
+  });
+  it("成功但沒有儲存庫才提示去安裝 App", () => {
+    expect(repoListStatus([], "").empty).toBe(true);
+    expect(repoListStatus([{ full_name: "fictional-org/a" }], "").empty).toBe(
+      false,
+    );
+  });
+});
+
+describe("存檔後接著驗證環境", () => {
+  const project = (o: Partial<Project> = {}) =>
+    ({
+      id: "11111111-1111-4111-8111-111111111111",
+      name: "虛構專案",
+      repo: "fictional-org/orders",
+      base_branch: "main",
+      image: "line-agentflow-worker:local",
+      setup_mode: "auto",
+      sql_server: "auto",
+      install_command: "",
+      test_command: "",
+      sensitive_paths: [],
+      index_paths: [],
+      setup_input: null,
+      repo_missing_at: null,
+      ...o,
+    }) as Project;
+  // 假的看板 request：記下呼叫順序，驗證 API 可以設定成失敗。
+  const fake = (saved: Project, validateError?: string) => {
+    const calls: string[] = [];
+    const request = async <T>(url: string, method = "GET") => {
+      calls.push(`${method} ${url}`);
+      if (url.endsWith("/validate") && validateError)
+        throw new Error(validateError);
+      return (url.endsWith("/validate") ? { ok: true } : saved) as T;
+    };
+    return { calls, request };
+  };
+  const fields = (p: Project, o: Partial<ProjectFormFields> = {}) => ({
+    repo: p.repo,
+    base_branch: p.base_branch,
+    image: p.image,
+    setup_mode: p.setup_mode ?? "manual",
+    sql_server: p.sql_server ?? "auto",
+    install_command: p.install_command,
+    test_command: p.test_command,
+    sensitive_paths: p.sensitive_paths.join("\n"),
+    index_paths: p.index_paths ?? [],
+    ...o,
+  });
+
+  it("新增專案按「儲存並驗證環境」：先建立、再呼叫一次驗證，回傳 id 讓詳情打開", async () => {
+    const saved = project();
+    const { calls, request } = fake(saved);
+    const result = await saveProject(request, undefined, {}, true);
+    expect(calls).toEqual([
+      "POST /api/projects",
+      `POST /api/projects/${saved.id}/validate`,
+    ]);
+    expect(result.saved.id).toBe(saved.id);
+    expect(result.notice).toEqual({
+      text: "專案已儲存，已開始驗證環境，通過後會自動啟用派工",
+    });
+  });
+  it("按「只儲存」：詳情照樣打開，但不呼叫驗證", async () => {
+    const saved = project();
+    const { calls, request } = fake(saved);
+    const result = await saveProject(request, undefined, {}, false);
+    expect(calls).toEqual(["POST /api/projects"]);
+    expect(result.saved.id).toBe(saved.id);
+    expect(result.notice.text).toBe("專案已儲存");
+  });
+  it("驗證排程失敗不算儲存失敗，提示原因與詳情裡的按鈕名稱", async () => {
+    const saved = project();
+    const { calls, request } = fake(saved, "工作佇列尚未啟動");
+    const result = await saveProject(request, saved.id, {}, true);
+    expect(calls).toEqual([
+      `PUT /api/projects/${saved.id}`,
+      `POST /api/projects/${saved.id}/validate`,
+    ]);
+    expect(result.notice).toEqual({
+      error: true,
+      text: "專案已儲存，但驗證沒有排上：工作佇列尚未啟動，可在詳情按「AI 自動設定並驗證」重試",
+    });
+    expect(
+      (
+        await saveProject(
+          fake(project({ setup_mode: "manual" }), "服務暫時無法連線。").request,
+          saved.id,
+          {},
+          true,
+        )
+      ).notice.text,
+    ).toBe(
+      "專案已儲存，但驗證沒有排上：服務暫時無法連線，可在詳情按「驗證環境」重試",
+    );
+  });
+  it("存檔本身失敗時丟出錯誤，不呼叫驗證", async () => {
+    const calls: string[] = [];
+    const request = async <T>(url: string, method = "GET"): Promise<T> => {
+      calls.push(`${method} ${url}`);
+      throw new Error("已經有專案「虛構專案」使用這個儲存庫");
+    };
+    await expect(saveProject(request, undefined, {}, true)).rejects.toThrow(
+      "已經有專案「虛構專案」使用這個儲存庫",
+    );
+    expect(calls).toEqual(["POST /api/projects"]);
+  });
+  it("找不到儲存庫或等你回答的專案不自動驗證", async () => {
+    for (const saved of [
+      project({ repo_missing_at: "2026-11-01T00:00:00Z" }),
+      project({ setup_input: { question: "要用哪個測試命令？" } as never }),
+    ]) {
+      const { calls, request } = fake(saved);
+      const result = await saveProject(request, saved.id, {}, true);
+      expect(calls).toEqual([`PUT /api/projects/${saved.id}`]);
+      expect(result.notice.error).toBeUndefined();
+      expect(result.notice.text).toMatch(/^專案已儲存；/);
+    }
+  });
+  it("新增專案一律提供「儲存並驗證環境」", () => {
+    const blank = { repo: "", name: "" } as Partial<Project>;
+    expect(offersValidation(blank, fields(project(), { repo: "x/y" }))).toBe(
+      true,
+    );
+  });
+  it("只改名稱或說明不提供驗證；改基底分支、映像或指令才提供", () => {
+    const p = project();
+    // 表單欄位裡沒有名稱與說明：它們不影響驗證。
+    expect(configChanged(p, fields(p))).toBe(false);
+    expect(offersValidation(p, fields(p))).toBe(false);
+    for (const change of [
+      { base_branch: "develop" },
+      { image: "fictional-image:dev" },
+      { test_command: "npm test" },
+      { install_command: "npm ci" },
+      { setup_mode: "manual" },
+      { sensitive_paths: "src/auth/" },
+      { index_paths: ["docs"] },
+    ])
+      expect(offersValidation(p, fields(p, change))).toBe(true);
+  });
+  it("詳情按鈕的名稱依狀態：找不到儲存庫是重新檢查", () => {
+    expect(
+      validateLabel({ repo_missing_at: "2026-11-01", setup_mode: "auto" }),
+    ).toBe("重新檢查");
+    expect(validateLabel({ repo_missing_at: null, setup_mode: "auto" })).toBe(
+      "AI 自動設定並驗證",
+    );
+    expect(validateLabel({ repo_missing_at: null, setup_mode: "manual" })).toBe(
+      "驗證環境",
+    );
   });
 });

@@ -62,6 +62,134 @@ export function validationErrorParts(text: string): {
   return { headline, body, detail, advice };
 }
 
+/** 專案表單裡會影響環境驗證的欄位（存檔後伺服器會清掉驗證結果、停用派工）。 */
+export type ProjectFormFields = {
+  repo: string;
+  base_branch: string;
+  image: string;
+  setup_mode: string;
+  sql_server: string;
+  install_command: string;
+  test_command: string;
+  sensitive_paths: string;
+  index_paths: string[];
+};
+
+/**
+ * 既有專案改了執行設定或索引範圍：存檔後要重新驗證才能派工。
+ * 只改名稱、說明或收集排除規則不算，與 server/app.ts 的 PUT /api/projects/:id 判斷一致。
+ */
+export function configChanged(
+  p: Partial<Project>,
+  form: ProjectFormFields,
+): boolean {
+  return (
+    !!p.id &&
+    (form.repo !== p.repo ||
+      form.base_branch !== p.base_branch ||
+      form.image !== p.image ||
+      form.setup_mode !== (p.setup_mode ?? "manual") ||
+      form.sql_server !== (p.sql_server ?? "auto") ||
+      form.install_command !== p.install_command ||
+      form.test_command !== p.test_command ||
+      form.sensitive_paths !== (p.sensitive_paths?.join("\n") ?? "") ||
+      JSON.stringify(form.index_paths) !== JSON.stringify(p.index_paths ?? []))
+  );
+}
+
+/** 表單底部要不要提供「儲存並驗證環境」：新增專案，或改了需要重新驗證的設定。 */
+export function offersValidation(
+  p: Partial<Project>,
+  form: ProjectFormFields,
+): boolean {
+  return !p.id || configChanged(p, form);
+}
+
+/** 詳情側欄驗證按鈕的文字；存檔後提示重試時也用同一個名稱，管理者才找得到。 */
+export function validateLabel(
+  p: Pick<Project, "repo_missing_at" | "setup_mode">,
+): string {
+  if (p.repo_missing_at) return "重新檢查";
+  return p.setup_mode === "auto" ? "AI 自動設定並驗證" : "驗證環境";
+}
+
+/**
+ * 存檔後不自動驗證的原因；可以驗證時回 null。
+ * 等你回答（setup_input）與詳情驗證按鈕的停用條件相同；找不到儲存庫的專案要先在詳情「重新檢查」或改選位置。
+ */
+export function autoValidateBlocked(
+  p: Pick<Project, "setup_input" | "repo_missing_at">,
+): string | null {
+  if (p.repo_missing_at)
+    return "GitHub 上仍找不到這個儲存庫，請在詳情按「重新檢查」或改選位置後再驗證";
+  if (p.setup_input) return "AI 自動設定還在等你回答問題，請先在詳情回答";
+  return null;
+}
+
+type SaveRequest = <T>(
+  url: string,
+  method?: string,
+  body?: unknown,
+) => Promise<T>;
+
+/**
+ * 儲存專案；validate 為真時，存檔成功後才排入環境驗證（走既有的佇列、鎖、預算與 config_version 檢查）。
+ * 驗證沒排上不算儲存失敗：回傳存好的專案與要顯示的提示，呼叫端照樣關表單、打開詳情。
+ * 存檔本身失敗時照常丟出錯誤，表單保持開著。
+ */
+export async function saveProject(
+  request: SaveRequest,
+  id: string | undefined,
+  body: unknown,
+  validate: boolean,
+): Promise<{ saved: Project; notice: { text: string; error?: boolean } }> {
+  const saved = await request<Project>(
+    id ? `/api/projects/${id}` : "/api/projects",
+    id ? "PUT" : "POST",
+    body,
+  );
+  if (!validate) return { saved, notice: { text: "專案已儲存" } };
+  const blocked = autoValidateBlocked(saved);
+  if (blocked) return { saved, notice: { text: `專案已儲存；${blocked}` } };
+  try {
+    await request(`/api/projects/${saved.id}/validate`, "POST");
+  } catch (e) {
+    const reason = String(e)
+      .replace(/^Error: /, "")
+      .replace(/[。.]+$/, "");
+    return {
+      saved,
+      notice: {
+        error: true,
+        text: `專案已儲存，但驗證沒有排上：${reason}，可在詳情按「${validateLabel(saved)}」重試`,
+      },
+    };
+  }
+  return {
+    saved,
+    notice: { text: "專案已儲存，已開始驗證環境，通過後會自動啟用派工" },
+  };
+}
+
+/** 選儲存庫清單的三種狀態：載入中、讀取失敗（附伺服器原因）、成功（可能是空清單）。 */
+export function repoListStatus(
+  repos: unknown[] | null,
+  error: string,
+): { placeholder: string; error: string | null; empty: boolean } {
+  if (error)
+    return {
+      placeholder: "無法取得儲存庫清單",
+      error: `無法取得儲存庫清單：${error}`,
+      empty: false,
+    };
+  if (!repos) return { placeholder: "載入中…", error: null, empty: false };
+  return {
+    placeholder: "選擇已安裝 GitHub App 的儲存庫",
+    error: null,
+    empty: repos.length === 0,
+  };
+}
+
 /** 已被其他專案使用的儲存庫（不分大小寫，排除正在編輯的這筆）。 */
 export function takenRepos(
   projects: { id: string; repo: string }[],
