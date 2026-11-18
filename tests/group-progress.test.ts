@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { isProgressCommand, isTaskCommand } from "../shared/chat.js";
 import {
+  answerPostback,
+  answerPostbackData,
+  questionButtons,
+} from "../server/answers.js";
+import type { Task } from "../shared/types.js";
+import {
   ackFor,
   aiQuotaAck,
   commandAck,
@@ -9,6 +15,7 @@ import {
   pausedAck,
   progressMoreNote,
   progressSummary,
+  triageStoppedAck,
 } from "../server/group-replies.js";
 
 describe("「/進度」指令的辨識", () => {
@@ -43,6 +50,7 @@ describe("「收到」依狀態選文字", () => {
   const normal = {
     base: commandAck,
     paused: false,
+    triageStopped: false,
     noProject: false,
     aiQuotaOut: false,
     undelivered: 0,
@@ -51,16 +59,33 @@ describe("「收到」依狀態選文字", () => {
     expect(ackFor(normal)).toBe(commandAck);
     expect(ackFor({ ...normal, base: followupAck })).toBe(followupAck);
   });
-  it("優先序：暫停 → 沒有可用專案 → AI 額度", () => {
-    expect(
-      ackFor({ ...normal, paused: true, noProject: true, aiQuotaOut: true }),
-    ).toBe(pausedAck);
+  it("優先序：暫停 → 判讀停止 → 沒有可用專案 → AI 額度", () => {
+    const all = {
+      ...normal,
+      paused: true,
+      triageStopped: true,
+      noProject: true,
+      aiQuotaOut: true,
+    };
+    expect(ackFor(all)).toBe(pausedAck);
+    expect(ackFor({ ...all, paused: false })).toBe(triageStoppedAck);
     expect(ackFor({ ...normal, noProject: true, aiQuotaOut: true })).toBe(
       noProjectAck,
     );
     expect(ackFor({ ...normal, aiQuotaOut: true })).toBe(aiQuotaAck);
-    // 暫停或額度用完時不再承諾「處理完會在這裡回報」。
-    for (const text of [pausedAck, noProjectAck, aiQuotaAck]) {
+    expect(ackFor({ ...normal, triageStopped: true, base: followupAck })).toBe(
+      triageStoppedAck,
+    );
+    expect(triageStoppedAck).toBe(
+      "收到，但這個群組的需求判讀目前因連續錯誤暫停，訊息已保留；管理者排除問題後會接著整理，不用重新提出。",
+    );
+    // 暫停、判讀停止或額度用完時不再承諾「處理完會在這裡回報」。
+    for (const text of [
+      pausedAck,
+      triageStoppedAck,
+      noProjectAck,
+      aiQuotaAck,
+    ]) {
       expect(text).not.toContain("處理完會在這裡回報");
       expect(text).toContain("不用重新提出");
     }
@@ -72,6 +97,53 @@ describe("「收到」依狀態選文字", () => {
     expect(ackFor({ ...normal, paused: true, undelivered: 1 })).toBe(
       `${pausedAck}\n有 1 則先前沒送達的回覆，打 /進度 取回。`,
     );
+  });
+});
+
+describe("補問的常見答案按鈕（純函式）", () => {
+  const task = (choices: string[]) =>
+    ({
+      id: "00000000-0000-4000-8000-000000000001",
+      version: 3,
+      question: { text: "要匯出哪一種格式？", choices },
+    }) as unknown as Task;
+  it("標籤截到 20 字、顯示文字保留完整選項、data 綁定任務與版本", () => {
+    const long = "一二三四五六七八九十".repeat(3);
+    expect(questionButtons(task(["CSV", long]))).toEqual([
+      {
+        label: "CSV",
+        data: "answer:00000000-0000-4000-8000-000000000001:3:0",
+        displayText: "CSV",
+      },
+      {
+        label: long.slice(0, 20),
+        data: "answer:00000000-0000-4000-8000-000000000001:3:1",
+        displayText: long,
+      },
+    ]);
+  });
+  it("沒有常見答案、空白或含憑證格式的選項不給按鈕，索引仍對應原本位置", () => {
+    expect(questionButtons(task([]))).toEqual([]);
+    expect(
+      questionButtons(
+        task(["  ", "ghp_abcdefghijklmnopqrstuvwxyz123456", "Excel"]),
+      ).map((b) => b.data),
+    ).toEqual(["answer:00000000-0000-4000-8000-000000000001:3:2"]);
+  });
+  it("ingest 的比對規則認得 askInGroup 產生的 data，其他格式一律不認", () => {
+    const data = answerPostbackData(task([]), 2);
+    expect(answerPostback.exec(data)?.slice(1)).toEqual([
+      "00000000-0000-4000-8000-000000000001",
+      "3",
+      "2",
+    ]);
+    for (const bad of [
+      "adopt:00000000-0000-4000-8000-000000000001:3:0",
+      "answer:------------------------------------:3:0",
+      "answer:00000000-0000-4000-8000-000000000001:3:10",
+      "answer:00000000-0000-4000-8000-000000000001:x:0",
+    ])
+      expect(answerPostback.test(bad)).toBe(false);
   });
 });
 

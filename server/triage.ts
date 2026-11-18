@@ -1,5 +1,12 @@
 import { Assumptions, Question, clarifyDecision } from "./clarification.js";
 import { askInGroup } from "./answers.js";
+import {
+  notifyGroupDirect,
+  triageDuplicateText,
+  triageIgnoredText,
+  triageKnownMemoryText,
+  triageRememberedText,
+} from "./group-replies.js";
 import { scheduleRepoIndex } from "./repo-index.js";
 import { dueTriageGroups, isFollowupBatch } from "./triage-window.js";
 import { BranchChoice, assessBranch } from "./task-branch.js";
@@ -1169,6 +1176,45 @@ export class Triage {
       await saveImageObservations(c, messages, observations);
       const reviewedTasks = new Set<string>();
       const selectedSources = new Map<string, string[]>();
+      // 用 /任務 提出、卻沒有建立新任務（重複、記住、無事項）時，告訴群組一聲，不要讓人以為機器人沒反應。
+      // 只回指令模式的本批訊息（自動模式不打擾一般聊天）；判讀通常超過 reply token 時效，所以用推播，
+      // 依第一則指令來源去重，同一則訊息最多回一次。
+      // 「無事項」只回沒有被其他決定處理到的來源：同一則訊息若另有需求或補問，就不說沒看到事項。
+      const handled = new Set(
+        decisions
+          .filter(
+            (d) =>
+              !["ignore", "defer"].includes(d.kind) &&
+              !(
+                d.kind === "memory" &&
+                d.title.trim().toLowerCase() === "inferred"
+              ),
+          )
+          .flatMap((d) => d.sourceIds),
+      );
+      const tellCommand = async (
+        d: TriageDecision,
+        kind: "duplicate" | "memory" | "ignore",
+        text: string,
+        taskId: string | null = null,
+      ) => {
+        const source = messages.find(
+          (m) =>
+            !m.contextOnly &&
+            m.trigger_mode === "command" &&
+            d.sourceIds.includes(m.id) &&
+            (kind !== "ignore" || !handled.has(m.id)),
+        );
+        if (source)
+          await notifyGroupDirect(
+            c,
+            group.id,
+            taskId,
+            "triage",
+            `triage:${kind}:${source.id}`,
+            text,
+          );
+      };
       for (const d of decisions) {
         const unsupported = messages.filter(
           (m) =>
@@ -1177,8 +1223,13 @@ export class Triage {
               (m.type === "image" && !m.image)),
         );
         if (d.kind === "defer") continue;
-        if (d.kind === "ignore" && !unsupported.some((m) => m.type === "image"))
+        if (
+          d.kind === "ignore" &&
+          !unsupported.some((m) => m.type === "image")
+        ) {
+          await tellCommand(d, "ignore", triageIgnoredText);
           continue;
+        }
         if (d.kind === "memory" && !unsupported.length) {
           // 群組成員要求記住或 AI 自行歸納的指路規則直接生效，管理者可在看板修改或刪除。
           const inferred = d.title.trim().toLowerCase() === "inferred";
@@ -1188,7 +1239,14 @@ export class Triage {
             "SELECT 1 FROM group_memories WHERE group_id=$1 AND lower(regexp_replace(content,'\\s','','g'))=lower(regexp_replace($2,'\\s','','g'))",
             [group.id, content],
           );
-          if (known.rowCount) continue;
+          // AI 自行歸納的記憶不是成員要求的，不在群組回報。
+          if (known.rowCount) {
+            if (!inferred)
+              await tellCommand(d, "memory", triageKnownMemoryText);
+            continue;
+          }
+          if (!inferred)
+            await tellCommand(d, "memory", triageRememberedText(content));
           await c.query(
             "INSERT INTO group_memories(group_id,project_id,content,source,source_message_id) VALUES($1,$2,$3,$4,$5)",
             [
@@ -1273,6 +1331,12 @@ export class Triage {
             "duplicate",
             "已辨識重複需求，未重複派工",
             c,
+          );
+          await tellCommand(
+            d,
+            "duplicate",
+            triageDuplicateText(related.title),
+            related.id,
           );
           continue;
         }
