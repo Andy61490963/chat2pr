@@ -164,8 +164,14 @@ const retrievable = (n: string) =>
    AND (${n}.kind<>'group_question' OR (t.status='awaiting_approval' AND t.question IS NOT NULL AND ${n}.dedupe_key='group:question:'||t.id||':'||t.version))
    AND (${n}.kind<>'group_received' OR t.status='awaiting_approval')
    AND (${n}.kind<>'group_failed' OR t.status='failed')`;
-/** 每個任務只取最新一則：同一任務有較新、也可取回的通知時，舊的不送。 */
-const newestOfTask = `NOT EXISTS(SELECT 1 FROM notifications m WHERE m.task_id=n.task_id AND ${retrievable("m")} AND (m.created_at,m.id)>(n.created_at,n.id))`;
+/**
+ * 每個任務只取最新一則：同一任務有較新、也可取回的通知時，舊的不送。
+ * group_received 排最後：它和補問常在同一個交易排入（approvalNotice 後接 askInGroup），created_at 相同，
+ * 只比時間與 id 會隨機挑到「收到」而把補問標成已被取代，群組就再也拿不到要回答的問題。
+ */
+const newer = (a: string, b: string) =>
+  `(${a}.kind<>'group_received',${a}.created_at,${a}.id)>(${b}.kind<>'group_received',${b}.created_at,${b}.id)`;
+const newestOfTask = `NOT EXISTS(SELECT 1 FROM notifications m WHERE m.task_id=n.task_id AND ${retrievable("m")} AND ${newer("m", "n")})`;
 const pendingFrom = `FROM notifications n JOIN tasks t ON t.id=n.task_id WHERE ${retrievable("n")} AND ${newestOfTask}`;
 
 /** 本群組可用 /進度 取回的通知數，以及其中是否有推播失敗過的。 */
@@ -191,8 +197,8 @@ export async function claimPendingGroupReplies(
   limit: number,
 ) {
   const rows = (
-    await c.query<ClaimedReply & { task_id: string; created_at: Date }>(
-      `SELECT n.id,n.task_id,n.text,n.quick_replies,n.created_at ${pendingFrom}
+    await c.query<ClaimedReply>(
+      `SELECT n.id,n.text,n.quick_replies ${pendingFrom}
        ORDER BY n.created_at,n.id FOR UPDATE OF n SKIP LOCKED`,
       [groupId],
     )
@@ -203,28 +209,18 @@ export async function claimPendingGroupReplies(
       "UPDATE notifications SET sent_at=now(),last_error=$2 WHERE id=ANY($1::uuid[])",
       [picked.map((r) => r.id), claimingNote],
     );
+    // 直接在 SQL 裡和佔住的列比時間：JS Date 只到毫秒，傳回資料庫比較會漏掉同一毫秒內較舊的列；
+    // 同一交易排入（created_at 相同）的「收到」也一併標成已被取代。
     await c.query(
-      `UPDATE notifications u SET sent_at=now(),last_error=$4
-       FROM (SELECT o.id FROM notifications o JOIN unnest($2::uuid[],$3::timestamptz[]) p(task_id,created_at) ON o.task_id=p.task_id
-         WHERE o.group_id=$1 AND o.sent_at IS NULL AND o.kind<>'group_waiting' AND o.created_at<p.created_at
+      `UPDATE notifications u SET sent_at=now(),last_error=$3
+       FROM (SELECT o.id FROM notifications o JOIN notifications p ON p.task_id=o.task_id AND p.id=ANY($2::uuid[])
+         WHERE o.group_id=$1 AND o.sent_at IS NULL AND o.kind<>'group_waiting' AND o.id<>p.id AND o.created_at<=p.created_at
          FOR UPDATE OF o SKIP LOCKED) s
        WHERE u.id=s.id`,
-      [
-        groupId,
-        picked.map((r) => r.task_id),
-        picked.map((r) => r.created_at),
-        supersededNote,
-      ],
+      [groupId, picked.map((r) => r.id), supersededNote],
     );
   }
-  return {
-    replies: picked.map(({ id, text, quick_replies }) => ({
-      id,
-      text,
-      quick_replies,
-    })),
-    remaining: rows.length - picked.length,
-  };
+  return { replies: picked, remaining: rows.length - picked.length };
 }
 
 /** 本群組還沒結束或 7 天內有變動的任務，只讀 group_id 等於本群組的資料。 */

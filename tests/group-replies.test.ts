@@ -34,6 +34,7 @@ import {
   undeliveredHint,
 } from "../server/group-replies.js";
 import { askInGroup } from "../server/answers.js";
+import { approvalNotice } from "../server/project-routing.js";
 import { dueTriageGroups } from "../server/triage-window.js";
 import { GitHub } from "../server/github.js";
 import type { Task } from "../shared/types.js";
@@ -693,6 +694,51 @@ describe("用 reply token 取回與說實話", () => {
 
     await send("p3", "/進度");
     expect(lastReply()).toHaveLength(1);
+  });
+
+  it("「收到需求」和補問在同一交易排入時，/進度 送的是補問，不會把補問當成已被取代", async () => {
+    await settings({ reply_mode: "all" });
+    // 判讀建立需要人工確認、又帶補問的任務時，approvalNotice 與 askInGroup 在同一交易，created_at 相同。
+    const ids: string[] = [];
+    for (const n of [1, 2, 3, 4]) {
+      const t = await db.one<Task>(
+        `INSERT INTO tasks(project_id,group_id,title,summary,acceptance,status,mode,missing,question,dedupe_key)
+         VALUES($1,'group-a',$2,'匯出怪怪的','["說明匯出問題"]','awaiting_approval','query','[]',
+         '{"text":"是按了沒下載，還是內容不對？","choices":[]}',$3) RETURNING *`,
+        [project, `同批補問 ${n}`, `dedupe-same-${n}`],
+      );
+      await db.transaction(async (c) => {
+        await approvalNotice(c, t!);
+        await askInGroup(c, t!);
+      });
+      ids.push(t!.id);
+    }
+    expect(
+      await db.query(
+        "SELECT 1 FROM notifications WHERE group_id='group-a' AND kind='group_received'",
+      ),
+    ).toHaveLength(4);
+
+    await send("p1", "/進度");
+    const notes = lastReply().slice(1);
+    expect(notes).toHaveLength(4);
+    for (const text of notes) {
+      expect(text).toContain("是按了沒下載，還是內容不對？");
+      expect(text).not.toContain("等管理者確認後開始處理");
+    }
+    // 補問都寫回了訊息 ID，可以直接「回覆」作答；同批的「收到」標成已被取代，不會下次再冒出來。
+    for (const id of ids)
+      expect(
+        (
+          await db.one<{ sent_message_id: string | null }>(
+            "SELECT sent_message_id FROM notifications WHERE task_id=$1 AND kind='group_question'",
+            [id],
+          )
+        )?.sent_message_id,
+      ).toMatch(/^reply-1-/);
+    await send("p2", "/進度");
+    expect(lastReply()).toHaveLength(1);
+    expect(lastReply()[0]).toContain("目前沒有待取回的結果");
   });
 
   it("/進度 與推播同時執行不會重複送出；reply 失敗時通知回到未送出", async () => {
