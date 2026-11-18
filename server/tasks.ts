@@ -18,6 +18,8 @@ import { assertContextText } from "./project-context.js";
 import { notifyGroup } from "./group-replies.js";
 import { taskQueue } from "./capacity.js";
 import type { Action, Project, Task } from "../shared/types.js";
+import { deliveryState, type GroupDelivery } from "../shared/group-delivery.js";
+import { lineQuotaBlocked } from "./line-quota.js";
 export const Assignment = z.object({
   project_id: z.string().uuid(),
   remember: z.string().trim().max(1000).optional(),
@@ -447,7 +449,37 @@ export class Tasks {
       thread: await threadOf(this.db, task),
       // 排隊中為什麼還沒開始；只對這一個任務計算，不放進 /api/state。
       queue: task.status === "queued" ? await taskQueue(this.db, id) : null,
+      groupDeliveries: await this.groupDeliveries(id),
     };
+  }
+  /**
+   * 這個任務送到群組的訊息與送達狀態。推播額度用完時群組可能什麼都沒收到，
+   * 管理者要看得出來並能複製內容代為轉達；原始 last_error 與 LINE 訊息 ID 不回傳。
+   */
+  private async groupDeliveries(id: string): Promise<GroupDelivery[]> {
+    const rows = await this.db.query<{
+      id: string;
+      kind: string;
+      text: string;
+      sent_at: string | null;
+      has_message_id: boolean;
+      attempts: number;
+      last_error: string | null;
+      created_at: string;
+    }>(
+      "SELECT id,kind,left(text,4500) AS text,sent_at,sent_message_id IS NOT NULL AS has_message_id,attempts,last_error,created_at FROM notifications WHERE task_id=$1 AND group_id IS NOT NULL ORDER BY created_at,id",
+      [id],
+    );
+    if (!rows.length) return [];
+    // 額度用完期間排入的通知 last_error 是空的，要靠推播暫停狀態才說得出「額度用完」。
+    const quotaBlocked = await lineQuotaBlocked(this.db);
+    return rows.map((n) => ({
+      id: n.id,
+      kind: n.kind,
+      created_at: n.created_at,
+      text: n.text,
+      delivery: deliveryState(n, { quotaBlocked }),
+    }));
   }
   async runEvents(taskId: string, runId: string, before?: number) {
     const run = await this.db.one(

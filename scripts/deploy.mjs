@@ -405,8 +405,9 @@ async function apply(before) {
       "主機執行器沒有恢復，請查看 .local\\runner.log 與排程工作 LINE-AgentFlow",
     );
   console.log("  執行器已恢復。");
-  if (plan.host === "all") {
-    // 通道重新連線、狀態檔更新需要一點時間。
+  if (existsSync(".local/tunnel-status.json")) {
+    // 通道重新連線、狀態檔更新需要一點時間。只重啟 app 時也要等：通道程序每 30 秒探測一次公開網址，
+    // 剛好在 app 重建期間探測會寫下「尚未就緒」，不等下一次更新冒煙測試就會誤報失敗。
     await until(async () => {
       try {
         const state = JSON.parse(
