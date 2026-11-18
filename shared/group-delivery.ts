@@ -52,7 +52,8 @@ export interface DeliveryRow {
 const reasonNotes: Record<DeliveryReason, string> = {
   quota: "LINE 本月推播額度已用完",
   group_size: "LINE 剩餘推播額度不夠這個群組的人數",
-  rate: "LINE 暫時限制推播速度，稍後會再送",
+  // 不寫「稍後會再送」：重試 3 次後就不再送，這句也會出現在「送不出去」的說明裡。
+  rate: "LINE 暫時限制推播速度",
   replies_off: repliesOffNote,
   expired: expiredNote,
   superseded: supersededNote,
@@ -60,8 +61,12 @@ const reasonNotes: Record<DeliveryReason, string> = {
   error: "LINE 沒有收下這則訊息",
 };
 
-/** 把 last_error 的固定文字對到原因；認不得的一律當成一般錯誤，只留狀態碼。 */
-function reasonOf(error: string): { reason: DeliveryReason; note: string } {
+/**
+ * 把 last_error 的固定文字對到原因；認不得的一律當成一般錯誤，只留狀態碼。
+ * flushNotifications 寫入的是 redact(String(e))，前面會帶「Error: 」，比對前先去掉。
+ */
+function reasonOf(raw: string): { reason: DeliveryReason; note: string } {
+  const error = raw.replace(/^[A-Za-z]*Error:\s*/, "");
   const pick = (reason: DeliveryReason, note = reasonNotes[reason]) => ({
     reason,
     note,
@@ -76,7 +81,15 @@ function reasonOf(error: string): { reason: DeliveryReason; note: string } {
     return pick("quota");
   // 其他錯誤已經過 redact，但仍可能夾帶內部細節：只取狀態碼。
   const code = error.match(/（(\d{3})）/)?.[1];
-  return pick("error", code ? `LINE 回應錯誤（${code}）` : reasonNotes.error);
+  if (code) return pick("error", `LINE 回應錯誤（${code}）`);
+  // 逾時或連線失敗（fetch 的 TimeoutError、ECONNREFUSED 等）：LINE 沒有回應，不是拒收。
+  if (
+    /^(Timeout|Abort)Error:|timeout|fetch failed|ECONN|ENOTFOUND|ETIMEDOUT/i.test(
+      raw,
+    )
+  )
+    return pick("error", "連不上 LINE");
+  return pick("error");
 }
 
 /** 依 sent_at、attempts、last_error 推出送達狀態。 */
@@ -157,6 +170,9 @@ export const groupKindLabels: Record<string, string> = {
   group_received: "收到需求",
   group_waiting: "等待說明",
   group_check: "定期檢查",
+  group_ready: "修改完成",
+  group_merged: "已合併",
+  group_closed: "已結束",
 };
 
 /** 任務詳情要提醒送達狀態的群組訊息種類。 */

@@ -762,6 +762,34 @@ describe("聊天室與任務詳情顯示機器人的群組訊息與送達狀態"
     expect(bots).not.toContain("別群組");
   });
 
+  it("一段時間內機器人訊息超過一頁上限時縮短成員訊息頁，較舊的機器人訊息落到下一頁而不是被丟掉", async () => {
+    // 成員 10 則、每 10 分鐘一則；機器人 300 則、每 20 秒一則（橫跨約 100 分鐘）。
+    await db.query(
+      `WITH m AS (
+         INSERT INTO messages(id,group_id,type,text,received_at)
+         SELECT 'ov-'||lpad(i::text,2,'0'),'group-a','text','測試',now()-make_interval(mins=>i*10)
+         FROM generate_series(1,10) i RETURNING id)
+       INSERT INTO notifications(kind,dedupe_key,text,group_id,sent_at,created_at)
+       SELECT 'group_check','ov:'||j,'機器人 '||j,'group-a',now(),now()-make_interval(secs=>j*20)
+       FROM generate_series(0,299) j`,
+    );
+    const members: string[] = [];
+    const bots: string[] = [];
+    const sizes: number[] = [];
+    let next: string | null = null;
+    do {
+      const p = await page(next ?? undefined);
+      members.push(...p.messages.map((m) => m.id));
+      bots.push(...p.bot_messages.map((b) => b.text!));
+      sizes.push(p.bot_messages.length);
+      next = p.next;
+    } while (next);
+    // 第 200 新的機器人訊息約在 66 分鐘前：第一頁只留 60 分鐘內的 6 則成員訊息。
+    expect(sizes).toEqual([181, 119]);
+    expect(new Set(members).size).toBe(10);
+    expect(new Set(bots).size).toBe(300);
+  });
+
   it("推播額度用完時任務詳情標示群組訊息沒送出；總開關關閉後改為略過", async () => {
     await db.query("DELETE FROM service_health WHERE name='line_quota'");
     try {

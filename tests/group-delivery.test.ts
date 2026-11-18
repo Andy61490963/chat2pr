@@ -50,15 +50,25 @@ describe("群組訊息送達狀態", () => {
     expect(deliveryNotice(d)).toContain("這則群組訊息沒有送出");
   });
   it("一般限流與其他錯誤：未滿 3 次是送出中，滿 3 次是送不出去", () => {
+    // flushNotifications 寫入的是 redact(String(e))：前面帶「Error: 」。
+    const stored = (message: string) => String(new Error(message));
     const rate = state({
       attempts: 1,
-      last_error: `${rateLimitedPrefix}，稍後會再送（429）`,
+      last_error: stored(`${rateLimitedPrefix}，稍後會再送（429）`),
     });
     expect(rate).toMatchObject({ status: "pending", reason: "rate" });
-    expect(deliveryNotice(rate)).toMatch(/^正在送到群組/);
+    expect(deliveryNotice(rate)).toBe("正在送到群組：LINE 暫時限制推播速度");
+    expect(
+      deliveryNotice(
+        state({
+          attempts: 3,
+          last_error: stored(`${rateLimitedPrefix}，稍後會再送（429）`),
+        }),
+      ),
+    ).toBe("重試 3 次仍沒送出（LINE 暫時限制推播速度）");
     const failed = state({
       attempts: 3,
-      last_error: "LINE 通知失敗（500）",
+      last_error: stored("LINE 通知失敗（500）"),
     });
     expect(failed).toEqual({
       status: "failed",
@@ -80,8 +90,21 @@ describe("群組訊息送達狀態", () => {
       attempts: 3,
       last_error: "Error: connect ECONNREFUSED 10.0.0.5:443 token=[已遮罩]",
     });
-    expect(d.note).toBe("LINE 沒有收下這則訊息");
+    expect(d.note).toBe("連不上 LINE");
     expect(JSON.stringify(d)).not.toContain("10.0.0.5");
+    expect(
+      state({
+        attempts: 1,
+        last_error:
+          "TimeoutError: The operation was aborted due to timeout at fictional-host",
+      }).note,
+    ).toBe("連不上 LINE");
+    const other = state({
+      attempts: 3,
+      last_error: "Error: 意外的內部訊息 fictional-secret-path",
+    });
+    expect(other.note).toBe("LINE 沒有收下這則訊息");
+    expect(JSON.stringify(other)).not.toContain("fictional-secret-path");
   });
   it("以 /進度 補送中、補送失敗、補送多次失敗", () => {
     const claiming = state({ sent_at: sentAt, last_error: claimingNote });

@@ -7,7 +7,10 @@ import { memberNames } from "./line-members.js";
 import type { ChatMessage, ChatPage } from "../shared/chat.js";
 import { type BotMessage, deliveryState } from "../shared/group-delivery.js";
 
-/** 一頁最多帶幾則機器人訊息；成員很少發言、機器人卻說很多時避免一次回傳過大。 */
+/**
+ * 一頁最多帶幾則機器人訊息；成員很少發言、機器人卻說很多時避免一次回傳過大。
+ * 超過時不是丟掉較舊的，而是把本頁的成員訊息縮短（見 registerChat），讓較舊的機器人訊息落到下一頁。
+ */
 const botLimit = 200;
 
 /**
@@ -15,6 +18,7 @@ const botLimit = 200;
  * 上限是 before 那則（上一頁最舊一則）的時間，不含；下限是本頁最舊一則的時間，含。
  * 相鄰兩頁共用同一個界線，所以不重複也不遺漏；最後一頁（next 為 null）不設下限。
  * 時間比較都在 SQL 內完成，不把 received_at 傳回 JS（Date 只到毫秒，會漏掉同一毫秒的列）。
+ * 最多取 botLimit+1 則（由舊到新），多出的那一則讓呼叫端知道超量了。
  */
 async function botMessages(
   db: Database,
@@ -41,7 +45,7 @@ async function botMessages(
      WHERE n.group_id=$1
        AND ($2::text IS NULL OR n.created_at<(SELECT received_at FROM messages WHERE id=$2 AND group_id=$1))
        AND ($3::text IS NULL OR n.created_at>=(SELECT received_at FROM messages WHERE id=$3 AND group_id=$1))
-     ORDER BY n.created_at DESC,n.id DESC LIMIT ${botLimit}`,
+     ORDER BY n.created_at DESC,n.id DESC LIMIT ${botLimit + 1}`,
     [groupId, before, oldest],
   );
   // 原始 last_error 與 LINE 訊息 ID 只在這裡用來判斷狀態，不回傳給瀏覽器。
@@ -116,7 +120,27 @@ export function registerChat(app: FastifyInstance, db: Database) {
       ORDER BY m.received_at DESC,m.id DESC LIMIT 51`,
       [id, before ?? null],
     );
-    const visible = rows.slice(0, 50);
+    let visible = rows.slice(0, 50);
+    let next = rows.length > 50 ? rows[49].id : null;
+    let bots = await botMessages(db, id, before ?? null, next);
+    if (bots.length > botLimit && visible.length) {
+      // 這段時間機器人訊息太多：把本頁成員訊息縮到「第 botLimit 新的機器人訊息」之後，
+      // 下一頁從那裡接著，較舊的機器人訊息才不會因為上限被丟掉。
+      const cut = await db.one<{ id: string }>(
+        `SELECT m.id FROM messages m
+         WHERE m.group_id=$1 AND m.id=ANY($2::text[])
+           AND m.received_at>=(SELECT created_at FROM notifications WHERE id=$3)
+         ORDER BY m.received_at,m.id LIMIT 1`,
+        [id, visible.map((m) => m.id), bots[bots.length - botLimit].id],
+      );
+      // 本頁成員訊息全都比那則機器人訊息舊時，至少留最新一則，分頁才會往前推進。
+      const keep = cut ? visible.findIndex((m) => m.id === cut.id) + 1 : 1;
+      if (keep > 0 && (keep < visible.length || !next)) {
+        visible = visible.slice(0, keep);
+        next = visible[keep - 1].id;
+        bots = await botMessages(db, id, before ?? null, next);
+      }
+    }
     // LINE 使用者 ID 只在伺服器端用來查名稱，不回傳給瀏覽器。
     const names = await memberNames(
       db,
@@ -131,10 +155,10 @@ export function registerChat(app: FastifyInstance, db: Database) {
       quoted_sender:
         (quoted_user_id && names.get(quoted_user_id)) || m.quoted_sender,
     }));
-    const next = rows.length > 50 ? rows[49].id : null;
     return {
       messages: messages.reverse(),
-      bot_messages: await botMessages(db, id, before ?? null, next),
+      // 縮不了（本頁沒有成員訊息可縮）時只留最新的 botLimit 則。
+      bot_messages: bots.slice(-botLimit),
       next,
     };
   });
