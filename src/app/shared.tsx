@@ -146,6 +146,8 @@ export type Detail = {
   runs: RunView[];
   /** 排隊中為什麼還沒開始；不在排隊中或舊版伺服器沒有這個欄位時為 null／undefined。 */
   queue?: TaskQueue | null;
+  /** 這個任務送到群組的訊息與送達狀態（由舊到新）；舊版伺服器沒有這個欄位。 */
+  groupDeliveries?: import("../../shared/group-delivery").GroupDelivery[];
   /** 對話串：這一題之前的各題（由舊到新）與之後的追問。 */
   thread?: {
     before: ThreadItem[];
