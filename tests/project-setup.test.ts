@@ -1263,6 +1263,46 @@ it("部分測試必須說明排除範圍，通過後狀態與 PR 都標示不是
   ).toContain("資料庫結構由 AI 從程式碼推測");
 });
 
+it("部分測試或只有建置時用了推測結構，看板狀態與 PR 都標示 AI 推測", async () => {
+  const s = await scenario();
+  s.change({
+    verification: "partial",
+    dataSource: "inferred",
+    test: "npm test -- --exclude integration",
+    limitations: "整合測試需要真實資料庫，已排除",
+  });
+  await s.validate();
+  const partial = await s.project();
+  expect(partial.enabled).toBe(true);
+  expect(partial.setup_status).toBe(
+    "部分測試通過；AI 依環境限制縮小了測試範圍（資料庫結構由 AI 推測）",
+  );
+  const body = prReport({
+    codexSummary: "調整報表",
+    testCommand: partial.setup_plan!.test,
+    testOutput: "",
+    verification: partial.setup_plan!.verification,
+    dataSource: partial.setup_plan!.dataSource,
+    limitations: partial.setup_plan!.limitations,
+  });
+  expect(body).toContain("測試：部分通過");
+  expect(body).toContain("資料庫結構由 AI 推測");
+});
+
+it("只有建置且用了推測結構時，看板狀態標示 AI 推測", async () => {
+  const s = await scenario();
+  s.change({
+    verification: "build",
+    dataSource: "inferred",
+    test: "npm run build",
+    explanation: "只有建置檢查，未執行自動測試",
+  });
+  expect((await s.validate()).statusCode).toBe(202);
+  expect((await s.project()).setup_status).toBe(
+    "建置通過；未執行自動測試（資料庫結構由 AI 推測）",
+  );
+});
+
 it("有結構快照時掛進工作容器並告訴規劃器，驗證結果標示以快照模擬", async () => {
   const s = await scenario();
   await db.query(

@@ -14,12 +14,16 @@ vi.mock("../server/config.js", async (original) => ({
 import { db, reset, fixture, session } from "./helpers.js";
 import { buildApp } from "../server/app.js";
 import { seal } from "../server/project-database.js";
+import { AppError } from "../server/policy.js";
 import {
   approveCheck,
   checkProblem,
   CheckInput,
   createCheck,
   dailyNoticeLimit,
+  isHostUnavailable,
+  listChecks,
+  runCheck,
   runDueChecks,
   setCheckPaused,
   syncCheckEnvironments,
@@ -31,6 +35,7 @@ import {
   asksForSchedule,
   assertReadOnlySelect,
   evaluateSql,
+  hostRetryMinutes,
   inQuietHours,
   nextRunAt,
   parseSchedule,
@@ -102,6 +107,80 @@ describe("檢查定義", () => {
       evaluateSql({ column: "$rows", op: ">", value: 5 }, rows).alert,
     ).toBe(false);
   });
+  it("判定欄位不存在時丟出錯誤，訊息列出可用欄位", () => {
+    expect(() =>
+      evaluateSql({ column: "stale", op: ">", value: 0 }, [
+        { stale_count: 3, eqm: "M01" },
+      ]),
+    ).toThrow(
+      "查詢結果沒有欄位「stale」，可用欄位：stale_count、eqm（請修改判定欄位或 SELECT 別名）",
+    );
+    // 大小寫不同但有兩個候選時無法判斷，也算找不到。
+    expect(() =>
+      evaluateSql({ column: "stale", op: ">", value: 0 }, [
+        { STALE: 1, Stale: 2 },
+      ]),
+    ).toThrow("可用欄位：STALE、Stale");
+  });
+  it("判定欄位只差大小寫時照樣判定", () => {
+    expect(
+      evaluateSql({ column: "stale", op: ">", value: 0 }, [{ STALE: 2 }]),
+    ).toEqual({ alert: true, summary: "stale=2" });
+    expect(
+      evaluateSql({ column: "stale", op: ">", value: 0 }, [{ STALE: 0 }]).alert,
+    ).toBe(false);
+    // 精確符合優先於不分大小寫的候選。
+    expect(
+      evaluateSql({ column: "stale", op: ">", value: 0 }, [
+        { stale: 0, STALE: 5 },
+      ]).alert,
+    ).toBe(false);
+  });
+  it("查詢沒有回傳資料時維持「（無資料）」，不丟錯誤", () => {
+    expect(
+      evaluateSql(
+        { column: "stale", op: ">", value: 0, listColumn: "eqm" },
+        [],
+      ),
+    ).toEqual({ alert: false, summary: "stale=（無資料）" });
+  });
+  it("列出欄位找不到時不丟錯誤，摘要加上提示；只差大小寫時照樣列出", () => {
+    expect(
+      evaluateSql({ column: "stale", op: ">", value: 0, listColumn: "eqm" }, [
+        { stale: 1, machine: "M01" },
+      ]),
+    ).toEqual({
+      alert: true,
+      summary: "stale=1（找不到列出欄位「eqm」）",
+    });
+    expect(
+      evaluateSql({ column: "stale", op: ">", value: 0, listColumn: "eqm" }, [
+        { stale: 1, EQM: "M01" },
+      ]).summary,
+    ).toBe("stale=1：M01");
+  });
+  it("系統暫時無法執行的分類與重試間隔", () => {
+    expect(
+      isHostUnavailable(new AppError(503, "檢查環境建立失敗，請稍後再試")),
+    ).toBe(true);
+    expect(
+      isHostUnavailable(new AppError(502, "執行器回應不是完整的 JSON")),
+    ).toBe(true);
+    expect(
+      isHostUnavailable(
+        new Error(
+          "執行器連線失敗（ECONNREFUSED）；請檢查執行器、網路及逾時紀錄",
+        ),
+      ),
+    ).toBe(true);
+    expect(isHostUnavailable(new AppError(504, "檢查執行逾時"))).toBe(false);
+    expect(isHostUnavailable(new AppError(500, "連不上資料庫"))).toBe(false);
+    expect(isHostUnavailable(new AppError(409, "專案沒有登記資料庫連線"))).toBe(
+      false,
+    );
+    expect(isHostUnavailable(new Error("連不上資料庫"))).toBe(false);
+    expect([1, 2, 3, 4, 9].map(hostRetryMinutes)).toEqual([5, 15, 30, 60, 60]);
+  });
   it("排程、條件與目標格式不對時拒絕", () => {
     const base = CheckInput.parse({
       group_id: "group-a",
@@ -128,7 +207,7 @@ describe("檢查定義", () => {
  * 模擬執行器：依序回傳指定結果；error 表示執行失敗。
  * 環境以 checkId＋環境鍵記住，鍵相同就算重用（created=false）；calls 只記錄檢查執行。
  */
-function fakeRunner(results: ("ok" | "alert" | "error")[]) {
+function fakeRunner(results: ("ok" | "alert" | "error" | Error)[]) {
   const calls: { path: string; body: unknown }[] = [];
   const syncs: { valid: { checkId: string; key: string }[] }[] = [];
   const kept = new Map<string, string>();
@@ -166,6 +245,7 @@ function fakeRunner(results: ("ok" | "alert" | "error")[]) {
     const created = kept.get(b.checkId as string) !== b.key;
     kept.set(b.checkId as string, b.key as string);
     const r = results.shift() ?? "ok";
+    if (r instanceof Error) throw r;
     if (r === "error") throw new Error("連不上資料庫");
     const result =
       b.kind === "sql"
@@ -253,6 +333,138 @@ describe("排程與通知", () => {
     expect(c.status).toBe("failed");
     expect(await notes("group_check")).toHaveLength(0);
     expect((await notes("check"))[0].text).toContain("連續 3 次執行失敗");
+  });
+  const gapMinutes = (c: ScheduledCheck) =>
+    (new Date(c.next_run_at!).getTime() - new Date(c.last_run_at!).getTime()) /
+    60000;
+  it.each([
+    [
+      "檢查環境建立失敗（503）",
+      () => new AppError(503, "檢查環境建立失敗，請稍後再試"),
+    ],
+    [
+      "執行器連線失敗",
+      () =>
+        new Error(
+          "執行器連線失敗（ECONNREFUSED）；請檢查執行器、網路及逾時紀錄",
+        ),
+    ],
+  ])(
+    "系統暫時無法執行（%s）不計入連續失敗，依退避延後重試",
+    async (_, error) => {
+      await activeHttp({ interval_minutes: 120 });
+      const r = fakeRunner(Array.from({ length: 5 }, error));
+      const gaps: number[] = [];
+      for (let i = 0; i < 5; i++) {
+        await due();
+        await runDueChecks(db, r.call);
+        const c = await one();
+        expect(c.status).toBe("active");
+        expect(c.consecutive_errors).toBe(0);
+        expect(c.next_run_at).not.toBeNull();
+        gaps.push(gapMinutes(c));
+      }
+      expect(gaps).toEqual([5, 15, 30, 60, 60]);
+      const runs = await db.query<{ outcome: string; summary: string }>(
+        "SELECT outcome,summary FROM scheduled_check_runs ORDER BY id",
+      );
+      expect(runs).toHaveLength(5);
+      expect(runs[0].outcome).toBe("error");
+      expect(runs[0].summary).toMatch(/^系統暫時無法執行（不計入連續失敗）：/);
+      expect(await notes("check")).toHaveLength(0);
+      // 主機恢復後照常執行，退避從頭算。
+      await due();
+      await runDueChecks(db, r.call);
+      expect(gapMinutes(await one())).toBe(120);
+    },
+  );
+  it("退避不晚於原本的下次排程；系統問題不歸零檢查本身的連續失敗", async () => {
+    await activeHttp();
+    const r = fakeRunner([
+      "error",
+      "error",
+      new AppError(503, "檢查環境啟動逾時"),
+      new AppError(503, "檢查環境啟動逾時"),
+    ]);
+    for (let i = 0; i < 4; i++) {
+      await due();
+      await runDueChecks(db, r.call);
+    }
+    const c = await one();
+    expect(c.status).toBe("active");
+    expect(c.consecutive_errors).toBe(2);
+    // 第 2 次系統問題的退避是 15 分鐘，和 15 分鐘的間隔取較早者。
+    expect(gapMinutes(c)).toBe(15);
+  });
+  it.each([
+    ["500", () => new AppError(500, "連不上資料庫")],
+    ["504", () => new AppError(504, "檢查執行逾時")],
+  ])("檢查本身的錯誤（%s）連續 3 次仍暫停", async (_, error) => {
+    await activeHttp();
+    const r = fakeRunner(Array.from({ length: 3 }, error));
+    for (let i = 0; i < 3; i++) {
+      await due();
+      await runDueChecks(db, r.call);
+    }
+    const c = await one();
+    expect(c.status).toBe("failed");
+    expect(c.next_run_at).toBeNull();
+  });
+  it("系統問題持續超過 6 小時寫一次稽核並在清單標示開始時間，但不暫停", async () => {
+    await activeHttp({ interval_minutes: 120 });
+    const r = fakeRunner(
+      Array.from({ length: 4 }, () => new AppError(503, "檢查環境已停止")),
+    );
+    const t0 = new Date("2026-11-14T00:00:00Z");
+    for (const hours of [0, 5, 7, 8])
+      await runCheck(
+        db,
+        r.call,
+        await one(),
+        new Date(t0.getTime() + hours * 3600000),
+      );
+    const audits = await db.query<{ detail: string }>(
+      "SELECT detail FROM audit WHERE kind='check_host_unavailable'",
+    );
+    expect(audits).toHaveLength(1);
+    expect(audits[0].detail).toContain("已超過 6 小時因系統問題無法執行");
+    const [listed] = await listChecks(db);
+    expect(listed.host_unavailable_since).toBe(t0.toISOString());
+    expect(listed.status).toBe("active");
+    // 一次正常執行後就不再標示。
+    await runCheck(db, fakeRunner(["ok"]).call, await one());
+    expect((await listChecks(db))[0].host_unavailable_since).toBeNull();
+  });
+  it("24 小時內第二次轉為異常：不再承諾回報，也不重複建立調查", async () => {
+    await activeHttp();
+    const r = fakeRunner(["alert", "ok", "alert"]);
+    for (let i = 0; i < 3; i++) {
+      await due();
+      await runDueChecks(db, r.call);
+    }
+    const texts = (await notes("group_check")).map((n) => n.text);
+    expect(texts).toHaveLength(3);
+    expect(texts[0]).toContain("AI 正在調查可能原因，結果會再回報。");
+    expect(texts[2]).not.toContain("結果會再回報");
+    expect(texts[2]).toContain("今天稍早已調查過這項檢查，這次不重複調查。");
+    expect((await notes("check")).at(-1)?.text).toBe(texts[2]);
+    expect(
+      await db.query("SELECT 1 FROM tasks WHERE title LIKE '調查：%'"),
+    ).toHaveLength(1);
+  });
+  it("專案未驗證時異常通知不提調查，也不建立調查任務", async () => {
+    await db.query("UPDATE projects SET validated_at=NULL WHERE id=$1", [
+      project,
+    ]);
+    await activeHttp();
+    await runDueChecks(db, fakeRunner(["alert"]).call);
+    const [text] = (await notes("group_check")).map((n) => n.text);
+    expect(text).toContain("機台服務");
+    expect(text).not.toContain("AI 正在調查");
+    expect(text).not.toContain("調查過");
+    expect(
+      await db.query("SELECT 1 FROM tasks WHERE title LIKE '調查：%'"),
+    ).toHaveLength(0);
   });
   it("靜音時段只通知管理者；每天通知有上限", async () => {
     await activeHttp({
@@ -662,6 +874,133 @@ describe("看板 API：檢查環境（#19）", () => {
     });
     expect(saved.statusCode).toBe(200);
     await vi.waitFor(() => expect(r.kept.has(c.id)).toBe(false));
+  });
+});
+
+describe("看板 API：試跑與資料庫連線", () => {
+  let app: Awaited<ReturnType<typeof buildApp>>;
+  let headers: Awaited<ReturnType<typeof session>>;
+  let runner: RunnerCall;
+  /** 執行器：檢查一律回傳指定的結果。 */
+  const returning =
+    (result: unknown): RunnerCall =>
+    async <T>(path: string) => {
+      if (path === "checks/run")
+        return { result, environment: { created: false } } as T;
+      if (path === "checks/environments")
+        return { environments: [], failures: [] } as T;
+      return { removed: [] } as T;
+    };
+  beforeEach(async () => {
+    runner = returning({ rows: [] });
+    app = await buildApp(db, undefined, undefined, undefined, {
+      call: <T>(path: string, body: unknown, timeoutMs?: number) =>
+        runner<T>(path, body, timeoutMs),
+    });
+    headers = await session();
+  });
+  afterEach(() => app.close());
+  const connect = () =>
+    db.query(
+      "INSERT INTO project_connections(project_id,engine,host,port,database_name,username,secret) VALUES($1,'sqlserver','db.example.test',1433,'mes','reader',$2)",
+      [project, seal({ password: "fictional-password" })],
+    );
+  const sqlCheck = (condition: Record<string, unknown> = {}) =>
+    createCheck(
+      db,
+      {
+        group_id: "group-a",
+        project_id: project,
+        name: "機台回報",
+        kind: "sql",
+        target: "SELECT COUNT(*) AS stale FROM EQM",
+        condition: { column: "stale", op: ">", value: 0, ...condition },
+        interval_minutes: 30,
+        investigate: false,
+      },
+      "管理者",
+    );
+  const post = (url: string, payload?: Record<string, unknown>) =>
+    app.inject({ method: "POST", url, headers, payload });
+
+  it("試跑回傳結果與已遮罩的摘要，不寫入執行紀錄", async () => {
+    const c = await activeHttp();
+    runner = returning({
+      ok: false,
+      status: 0,
+      ms: 5,
+      error: "連線被拒（sk-fictional-key-1234567890）",
+    });
+    const res = await post(`/api/checks/${c.id}/test`);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      outcome: "alert",
+      summary: "HTTP 連線被拒（[已遮蔽金鑰]）",
+    });
+    expect(await db.query("SELECT 1 FROM scheduled_check_runs")).toHaveLength(
+      0,
+    );
+  });
+
+  it("試跑時判定欄位不存在：結果是執行失敗並列出可用欄位", async () => {
+    await connect();
+    const c = await sqlCheck();
+    runner = returning({ rows: [{ STALE_COUNT: 3, eqm: "M01" }] });
+    const res = await post(`/api/checks/${c.id}/test`);
+    expect(res.json().outcome).toBe("error");
+    expect(res.json().summary).toContain("可用欄位：STALE_COUNT、eqm");
+    expect(await db.query("SELECT 1 FROM scheduled_check_runs")).toHaveLength(
+      0,
+    );
+  });
+
+  it("沒有資料庫連線的 SQL 檢查：可以建立與試跑，但核准、恢復回 409；登記連線後可核准", async () => {
+    const c = await sqlCheck();
+    const listed = (await app.inject({ url: "/api/checks", headers })).json();
+    expect(listed[0]).toMatchObject({
+      missing_connection: true,
+      host_unavailable_since: null,
+    });
+    const test = await post(`/api/checks/${c.id}/test`);
+    expect(test.json()).toMatchObject({ outcome: "error" });
+    const approve = await post(`/api/checks/${c.id}/approve`, {
+      version: c.version,
+    });
+    expect(approve.statusCode).toBe(409);
+    expect(approve.json().error ?? approve.body).toContain(
+      "這個專案還沒有登記資料庫連線",
+    );
+    expect((await one()).status).toBe("awaiting_approval");
+
+    await connect();
+    expect(
+      (await app.inject({ url: "/api/checks", headers })).json()[0]
+        .missing_connection,
+    ).toBe(false);
+    const ok = await post(`/api/checks/${c.id}/approve`, {
+      version: c.version,
+    });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json().status).toBe("active");
+
+    // 核准後連線被刪除：暫停後不能恢復。
+    expect((await post(`/api/checks/${c.id}/pause`)).statusCode).toBe(200);
+    await db.query("DELETE FROM project_connections WHERE project_id=$1", [
+      project,
+    ]);
+    const resume = await post(`/api/checks/${c.id}/resume`);
+    expect(resume.statusCode).toBe(409);
+    expect(resume.body).toContain("資料庫連線");
+    expect((await one()).status).toBe("paused");
+  });
+
+  it("沒有執行器時清單也標示缺少連線；HTTP 檢查不受影響", async () => {
+    await sqlCheck();
+    await activeHttp();
+    const rows = await listChecks(db);
+    expect(
+      Object.fromEntries(rows.map((r) => [r.kind, r.missing_connection])),
+    ).toEqual({ sql: true, http: false });
   });
 });
 

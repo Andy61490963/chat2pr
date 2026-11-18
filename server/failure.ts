@@ -36,9 +36,26 @@ interface Rule {
   plain: string;
   action: string;
   group: string;
+  /**
+   * 專案環境驗證失敗時的建議處理。驗證沒有「重試」按鈕也沒有任務的執行紀錄，
+   * 建議要對應專案頁的按鈕（「驗證環境」「AI 自動設定並驗證」、進階設定）；沒寫時依分類套用預設。
+   */
+  validation?: string;
   /** 訊息本身就是整理過的說明（審查意見、上限說明），整段保留而不是只挑錯誤行。 */
   keep?: boolean;
 }
+
+/** 失敗發生在哪裡：任務執行，或專案頁的環境驗證。 */
+export type FailureContext = "task" | "validation";
+
+const validationDefaults: Record<FailureCategory, string> = {
+  transient: "通常稍後就會恢復，請稍後在專案頁再按「驗證環境」",
+  environment:
+    "確認工作映像有需要的工具，或在專案頁進階設定改安裝指令、映像後按「驗證環境」",
+  project: "修好儲存庫的建置或測試，或在進階設定調整測試指令後重新驗證",
+  config: "依錯誤重點補上設定或權限後，在專案頁按「驗證環境」",
+  system: "稍後在專案頁再按「驗證環境」；仍發生時回報給維護者",
+};
 const matches = (pattern: RegExp) => (body: string) => pattern.test(body);
 
 // 規則依序比對，先中先贏：先認「專案／設定」這類明確的訊息，
@@ -62,6 +79,8 @@ const rules: Rule[] = [
       "系統套件的安裝計畫或下載來源沒有通過目前的白名單（可能是白名單在驗證後被改過）",
     action:
       "請管理者到「系統 → 下載來源白名單」確認需要的來源，或到專案頁按「AI 自動設定並驗證」讓 AI 依目前的白名單重新規劃",
+    validation:
+      "到「系統 → 下載來源白名單」確認需要的來源，或在專案頁按「AI 自動設定並驗證」讓 AI 依目前的白名單重新規劃",
     group: "專案需要的系統套件來源目前不在允許清單，請管理者處理。",
   },
   {
@@ -70,6 +89,8 @@ const rules: Rule[] = [
     plain: "安裝前審查放行的系統套件沒有裝起來",
     action:
       "到執行紀錄查看安裝輸出（套件名稱、版本或來源），再到專案頁按「AI 自動設定並驗證」重新規劃後重試",
+    validation:
+      "依錯誤重點檢查套件名稱、版本或來源，再到專案頁按「AI 自動設定並驗證」重新規劃",
     group: "專案需要的系統工具沒有裝起來，請管理者處理專案的執行環境。",
   },
   {
@@ -93,6 +114,7 @@ const rules: Rule[] = [
     test: matches(/沒有找到可執行的測試/),
     plain: "測試命令沒有跑到任何測試，不能當成測試通過",
     action: "請管理者到看板專案頁調整測試命令或測試範圍，重新驗證後重試",
+    validation: "在專案頁進階設定調整測試指令或測試範圍後重新驗證",
     group: "專案的測試命令沒有跑到任何測試，請管理者調整專案的測試設定。",
   },
   {
@@ -101,6 +123,8 @@ const rules: Rule[] = [
     plain: "安裝或基底驗證的過程改動了專案檔案",
     action:
       "把建置產物加入專案頁進階設定的「收集時排除」或專案的 .gitignore，重新驗證專案後重試",
+    validation:
+      "把建置產物加入專案頁進階設定的「收集時排除」或專案的 .gitignore 後重新驗證",
     group: "專案的安裝或測試會改動專案檔案，請管理者調整專案設定。",
   },
   {
@@ -113,9 +137,13 @@ const rules: Rule[] = [
   },
   {
     category: "project",
-    test: matches(/超過\s*\d*\s*分鐘限制|超過時間限制|執行超過時間/),
+    // 訂閱代理在階段期限到了會回「訂閱階段已超過期限」（runner-main、subscription-broker）。
+    test: matches(/超過\s*\d*\s*分鐘限制|超過時間限制|執行超過時間|已超過期限/),
     plain: "工作沒有在單次執行的時間限制內完成",
-    action: "縮小需求範圍，或請管理者到「設定」調高單次執行時間後重試",
+    // 單次執行時間上限是 30 分鐘；已經設成 30 的管理者調不上去，先建議縮小範圍。
+    action:
+      "縮小需求範圍或拆成較小的需求後重試；單次執行時間可在「設定」調整（上限 30 分鐘）",
+    validation: "稍後在專案頁再按「驗證環境」；仍逾時請在進階設定縮小測試範圍",
     group: "工作沒有在時間限制內完成，請管理者縮小範圍或調整時間限制後重試。",
   },
   {
@@ -127,6 +155,8 @@ const rules: Rule[] = [
     plain: "AI 額度不足或呼叫次數受到限制",
     action:
       "請管理者到「設定」確認每次任務預算、每日額度與次數，額度足夠後到看板重試",
+    validation:
+      "到「設定」確認 AI 額度與每日次數，額度足夠後在專案頁再按「驗證環境」",
     group: "AI 額度不足，請管理者處理額度。",
   },
   {
@@ -137,6 +167,8 @@ const rules: Rule[] = [
     plain: "外部服務拒絕存取，可能是登入過期、憑證失效或權限不足",
     action:
       "請管理者到看板檢查 GitHub 授權、Codex 登入、API 金鑰或套件來源的權限，修正後重試",
+    validation:
+      "檢查 GitHub 授權、Codex 登入、API 金鑰或私有套件來源的權限，修正後在專案頁按「驗證環境」",
     group: "外部服務的登入或權限有問題，請管理者檢查服務授權。",
   },
   {
@@ -146,15 +178,18 @@ const rules: Rule[] = [
     ),
     plain: "缺少必要的連線或憑證設定",
     action: "請管理者到看板專案頁補上連線或憑證設定後重試",
+    validation: "在專案頁補上連線或憑證設定後按「驗證環境」",
     group: "專案缺少連線或憑證設定，請管理者到看板補上。",
   },
   {
     category: "config",
+    // 執行中途停止的原因（Execution.assertCurrent 的各種訊息），以及容器被停時執行器回的「工作已取消」。
     test: matches(
-      /任務已取消、暫停或需求版本已改變|環境設定已變更|請重新驗證|目標專案尚未確認/,
+      /任務已取消|需求版本已改變|系統已暫停派工|群組已停用|群組已不再綁定|目標專案已改變|專案已停用|專案設定已變更|工作已取消|環境設定已變更|請重新驗證|目標專案尚未確認/,
     ),
     plain: "執行期間任務、群組或專案的設定被變更，已停止這次執行",
     action: "到看板確認目前的需求版本、專案與群組設定後再重試",
+    validation: "確認專案設定後，在專案頁重新按「驗證環境」",
     group: "處理期間設定有變更，請管理者確認設定後重試。",
   },
   {
@@ -165,6 +200,8 @@ const rules: Rule[] = [
     plain: "工作容器缺少需要的指令、工具或映像",
     action:
       "請管理者確認工作映像已安裝對應工具（或改用專案專屬映像），重新驗證專案後重試",
+    validation:
+      "確認工作映像已安裝對應工具，或在專案頁進階設定改用專案專屬映像、調整指令後按「驗證環境」",
     group: "工作環境缺少需要的工具，請管理者處理專案的執行環境。",
   },
   {
@@ -200,6 +237,8 @@ const rules: Rule[] = [
     plain: "安裝依賴失敗，程式無法建置或執行",
     action:
       "依錯誤重點修正套件設定（名稱、版本、套件來源或私有套件權限），或到看板專案頁重新驗證環境後重試",
+    validation:
+      "修正套件設定（名稱、版本、套件來源或私有套件權限），或在進階設定改安裝指令或映像後按「驗證環境」",
     group: "專案的依賴安裝失敗，請管理者處理專案的套件設定。",
   },
   {
@@ -207,6 +246,7 @@ const rules: Rule[] = [
     test: (_body, phase) => phase === "test",
     plain: "建置或測試失敗",
     action: "到執行紀錄查看測試輸出，修好專案的建置或測試後重試",
+    validation: "修好儲存庫的建置或測試，或在進階設定調整測試指令後重新驗證",
     group: "專案的建置或測試沒有通過，請管理者查看原因後處理。",
   },
 ];
@@ -289,8 +329,13 @@ export function failureDigest(output: string, limit = 2000) {
 /**
  * 依失敗階段與原始錯誤分類，並附上白話說明與建議處理。
  * `phase` 是執行階段代號（install、test、code…），`raw` 是原始錯誤訊息。
+ * `context` 為 validation 時，建議處理改成專案頁上找得到的按鈕與設定。
  */
-export function classifyFailure(raw: string, phase = ""): FailureExplanation {
+export function classifyFailure(
+  raw: string,
+  phase = "",
+  context: FailureContext = "task",
+): FailureExplanation {
   const body = redact(raw.replace(ansi, ""));
   const rule = rules.find((r) => r.test(body, phase)) ?? fallback;
   // 摘要只放錯誤重點；開頭的「安裝失敗：」這類前綴已經由白話說明表達。
@@ -307,7 +352,10 @@ export function classifyFailure(raw: string, phase = ""): FailureExplanation {
   return {
     category: rule.category,
     plain: rule.plain,
-    action: rule.action,
+    action:
+      context === "validation"
+        ? (rule.validation ?? validationDefaults[rule.category])
+        : rule.action,
     group: rule.group,
     detail,
   };

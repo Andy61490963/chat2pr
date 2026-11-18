@@ -16,6 +16,7 @@ import { TargetBranch } from "./task-branch.js";
 import { AppError, assertTransition } from "./policy.js";
 import { assertContextText } from "./project-context.js";
 import { notifyGroup } from "./group-replies.js";
+import { taskQueue } from "./capacity.js";
 import type { Action, Project, Task } from "../shared/types.js";
 export const Assignment = z.object({
   project_id: z.string().uuid(),
@@ -444,6 +445,8 @@ export class Tasks {
       contextEvidence: await readTaskContextEvidence(this.db, id),
       references: await referencedSources(this.db, id, task.group_id),
       thread: await threadOf(this.db, task),
+      // 排隊中為什麼還沒開始；只對這一個任務計算，不放進 /api/state。
+      queue: task.status === "queued" ? await taskQueue(this.db, id) : null,
     };
   }
   async runEvents(taskId: string, runId: string, before?: number) {

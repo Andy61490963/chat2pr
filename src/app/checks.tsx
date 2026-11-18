@@ -1,10 +1,19 @@
-import { useCallback, useEffect, useState } from "react";
-import type {
-  CheckRunView,
-  ScheduledCheck,
-  SqlCondition,
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent,
+} from "react";
+import {
+  hostUnavailableAlertHours,
+  hostUnavailablePrefix,
+  type CheckRunView,
+  type ScheduledCheck,
+  type SqlCondition,
 } from "../../shared/checks";
 import type { CheckEnvironmentView } from "../../shared/check-environment";
+import type { ProjectDatabaseView } from "../../shared/project-database";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,14 +26,67 @@ import {
 import { Input } from "@/components/ui/input";
 import { Checkbox, Label, Textarea } from "@/components/ui/form-controls";
 import { type Request, type State, ago, date, message } from "./shared";
+import { ConfirmButton } from "./confirm";
+import { useGuard, useUnsaved } from "./unsaved";
 
 type Listed = ScheduledCheck & {
   last_summary: string | null;
+  /** SQL 檢查的專案沒有登記資料庫連線。 */
+  missing_connection?: boolean;
+  /** 目前這段連續「系統暫時無法執行」的開始時間。 */
+  host_unavailable_since?: string | null;
   environment?: CheckEnvironmentView;
 };
 
+/** 試跑結果只留在畫面上（伺服器不記錄），依檢查與版本保存。 */
+type Trial = {
+  outcome: "ok" | "alert" | "error";
+  summary: string;
+  at: string;
+  version: number;
+};
+const trialLabel = { ok: "正常", alert: "異常", error: "執行失敗" };
+const trialTone = {
+  ok: "bg-good-soft text-good",
+  alert: "bg-danger-soft text-danger",
+  error: "bg-warn-soft text-warn",
+};
+type Note = { text: string; tone: "info" | "error" };
+
+const hhmm = (v: string) =>
+  new Date(v).toLocaleTimeString("zh-TW", {
+    timeZone: "Asia/Taipei",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+
+/** 最近一次是系統暫時無法執行（執行器或檢查環境的問題，不計入連續失敗）。 */
+function hostTrouble(c: Listed) {
+  if (
+    c.status !== "active" ||
+    !c.host_unavailable_since ||
+    !c.last_summary?.startsWith(hostUnavailablePrefix)
+  )
+    return null;
+  return {
+    reason: c.last_summary.slice(hostUnavailablePrefix.length),
+    overdue:
+      Date.now() - new Date(c.host_unavailable_since).getTime() >
+      hostUnavailableAlertHours * 3600000,
+  };
+}
+
+/** 換到專案頁（經 App 的換頁流程，未存修改會先詢問）。 */
+const toProjects = (e: MouseEvent) => {
+  e.preventDefault();
+  history.pushState(null, "", "/projects");
+  window.dispatchEvent(new PopStateEvent("popstate"));
+};
+
 /** 檢查環境（#19）：每個檢查專用的檢查容器與網路，保留重用、閒置逾時才清除。 */
-function environmentText(e: CheckEnvironmentView | undefined) {
+function environmentText(e: CheckEnvironmentView | undefined, c: Listed) {
+  if (c.missing_connection) return "缺少資料庫連線，無法建立";
   if (!e) return null;
   if (e.state === "kept")
     return `保留中・上次使用 ${ago(e.lastUsedAt)}・預計 ${date(e.expiresAt)} 清除`;
@@ -139,28 +201,65 @@ const toBody = (d: Draft) => ({
 
 const field = "rounded-md border bg-background px-2 py-1.5 text-sm";
 
+/**
+ * 新增或修改表單。由父層以檢查 id 當 key：換成另一個檢查時重新掛載、欄位換成該檢查的內容；
+ * 有未存修改時向 useUnsaved 回報，切換或取消前由父層先詢問。
+ */
 function CheckForm({
   state,
+  request,
   initial,
   busy,
   submit,
   cancel,
 }: {
   state: State;
+  request: Request;
   initial: Draft;
   busy: boolean;
   submit: (d: Draft) => void;
   cancel: () => void;
 }) {
   const [d, setD] = useState(initial);
+  const [saved] = useState(() => JSON.stringify(initial));
+  useUnsaved("check-form", JSON.stringify(d) !== saved);
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) =>
     setD((x) => ({ ...x, [k]: v }));
   const projects = state.projects.filter((p) =>
     state.groups.find((g) => g.id === d.group_id)?.project_ids?.includes(p.id),
   );
+  // 從清單下方點「修改」時表單在畫面外；掛載時捲到表單並聚焦第一個欄位。
+  const ref = useRef<HTMLFormElement>(null);
+  useEffect(() => {
+    ref.current?.scrollIntoView({ block: "start" });
+    ref.current
+      ?.querySelector<HTMLElement>("input,select,textarea")
+      ?.focus({ preventScroll: true });
+  }, []);
+  // SQL 檢查要用專案登記的資料庫連線：標示哪些專案還沒登記（只是提示，仍可先儲存）。
+  const [connected, setConnected] = useState<Record<string, boolean>>({});
+  const ids = projects.map((p) => p.id).join(",");
+  useEffect(() => {
+    if (d.kind !== "sql" || !ids) return;
+    let active = true;
+    for (const id of ids.split(","))
+      void request<ProjectDatabaseView>(`/api/projects/${id}/database`)
+        .then(
+          (v) =>
+            active && setConnected((m) => ({ ...m, [id]: !!v.connection })),
+        )
+        .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [d.kind, ids, request]);
+  const noConnection = (id: string) =>
+    d.kind === "sql" && connected[id] === false;
   return (
     <form
-      className="flex flex-col gap-3"
+      ref={ref}
+      id="check-form"
+      className="flex scroll-mt-4 flex-col gap-3"
       onSubmit={(e) => {
         e.preventDefault();
         submit(d);
@@ -214,9 +313,19 @@ function CheckForm({
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
+                {noConnection(p.id) ? "（未登記資料庫連線）" : ""}
               </option>
             ))}
           </select>
+          {d.project_id && noConnection(d.project_id) && (
+            <span className="text-xs font-normal text-danger">
+              這個專案還沒有登記資料庫連線：可以先儲存，但要先到
+              <a href="/projects" className="underline" onClick={toProjects}>
+                專案頁
+              </a>
+              設定連線才能核准。
+            </span>
+          )}
         </Label>
       </div>
       <Label className="flex flex-col gap-1">
@@ -398,17 +507,24 @@ export function ChecksView({
   request: Request;
   admin: boolean;
 }) {
-  const [checks, setChecks] = useState<Listed[]>([]);
+  // null 表示還沒載入成功過：不能顯示「還沒有定期檢查」。
+  const [checks, setChecks] = useState<Listed[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [runs, setRuns] = useState<CheckRunView[]>([]);
   const [editing, setEditing] = useState<ScheduledCheck | "new" | null>(null);
-  const [note, setNote] = useState("");
+  const [note, setNote] = useState<Note | null>(null);
   const [busy, setBusy] = useState(false);
+  const [trials, setTrials] = useState<Record<string, Trial>>({});
+  const [testing, setTesting] = useState<string | null>(null);
+  const guard = useGuard();
   const load = useCallback(async () => {
     try {
       setChecks(await request<Listed[]>("/api/checks"));
+      setLoadError(null);
     } catch (e) {
-      setNote(message(e));
+      // 輪詢失敗時保留原本的列表與試跑結果，只另外顯示錯誤。
+      setLoadError(message(e));
     }
   }, [request]);
   useEffect(() => {
@@ -422,17 +538,47 @@ export function ChecksView({
       .then((d) => setRuns(d.runs))
       .catch(() => setRuns([]));
   }, [open, request, checks]);
-  const act = async (fn: () => Promise<unknown>, done: string) => {
+  /** fn 回傳字串就用它當提示，否則用 done；兩者都沒有就不覆蓋目前的提示。 */
+  const act = async (fn: () => Promise<unknown>, done?: string) => {
     setBusy(true);
     try {
-      await fn();
-      setNote(done);
+      const r = await fn();
+      const text = typeof r === "string" && r ? r : done;
+      if (text) setNote({ text, tone: "info" });
       await load();
     } catch (e) {
-      setNote(message(e));
+      setNote({ text: message(e), tone: "error" });
     } finally {
       setBusy(false);
     }
+  };
+  const trial = (c: Listed) =>
+    void act(async () => {
+      setTesting(c.id);
+      try {
+        const r = await request<{ outcome: Trial["outcome"]; summary: string }>(
+          `/api/checks/${c.id}/test`,
+          "POST",
+        );
+        setTrials((t) => ({
+          ...t,
+          [c.id]: { ...r, at: new Date().toISOString(), version: c.version },
+        }));
+      } finally {
+        setTesting(null);
+      }
+    });
+  const edit = (next: ScheduledCheck | "new" | null) => {
+    // 再點同一個檢查的「修改」：表單已經是它，只捲回表單，不丟掉正在改的內容。
+    if (next !== null && next !== "new" && editing !== null) {
+      if (editing !== "new" && editing.id === next.id) {
+        document.getElementById("check-form")?.scrollIntoView({
+          block: "start",
+        });
+        return;
+      }
+    }
+    guard(() => setEditing(next), { prefixes: ["check-form"] });
   };
   const groupName = (id: string) =>
     state.groups.find((g) => g.id === id)?.name ?? id;
@@ -445,25 +591,54 @@ export function ChecksView({
             <CardDescription>
               核准後依排程自動執行，不呼叫
               AI；狀態改變（變成異常、恢復正常）時才通知。檢查本身連續失敗 3
-              次會暫停並通知管理者。每個檢查在自己的檢查容器執行，網路只通到該檢查的目標；環境保留重用，閒置逾時（系統頁設定）或檢查、連線變更時清除。
+              次會暫停並通知管理者；執行器或檢查環境的系統問題不計入，會延後自動重試。SQL
+              檢查要先在專案頁登記資料庫連線才能核准。每個檢查在自己的檢查容器執行，網路只通到該檢查的目標；環境保留重用，閒置逾時（系統頁設定）或檢查、連線變更時清除。
             </CardDescription>
           </div>
           {admin && editing === null && (
-            <Button onClick={() => setEditing("new")}>新增定期檢查</Button>
+            <Button onClick={() => edit("new")}>新增定期檢查</Button>
           )}
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
-          {note && (
-            <p role="status" className="rounded-lg bg-muted px-3 py-2 text-sm">
-              {note}
-            </p>
+          {note &&
+            (note.tone === "error" ? (
+              <p
+                role="alert"
+                className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
+              >
+                {note.text}
+              </p>
+            ) : (
+              <p
+                role="status"
+                className="rounded-lg bg-muted px-3 py-2 text-sm"
+              >
+                {note.text}
+              </p>
+            ))}
+          {loadError && (
+            <div
+              role="alert"
+              className="flex flex-wrap items-center gap-2 rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
+            >
+              <span className="min-w-0 flex-1">
+                {checks === null
+                  ? `讀不到定期檢查：${loadError}`
+                  : `重新整理失敗，以下是上次載入的內容：${loadError}`}
+              </span>
+              <Button size="sm" variant="outline" onClick={() => void load()}>
+                重試
+              </Button>
+            </div>
           )}
           {editing && (
             <CheckForm
+              key={editing === "new" ? "new" : editing.id}
               state={state}
+              request={request}
               busy={busy}
               initial={editing === "new" ? blank : toDraft(editing)}
-              cancel={() => setEditing(null)}
+              cancel={() => edit(null)}
               submit={(d) =>
                 void act(async () => {
                   if (editing === "new")
@@ -478,128 +653,155 @@ export function ChecksView({
               }
             />
           )}
-          {!checks.length && !editing && (
+          {checks === null && !loadError && (
+            <p className="text-sm text-muted-foreground">載入中…</p>
+          )}
+          {checks !== null && !checks.length && !editing && (
             <p className="text-sm text-muted-foreground">
               還沒有定期檢查。可以在群組說「/任務
               每小時檢查一次機台連線」，或由管理者在這裡新增。
             </p>
           )}
           <ul className="flex flex-col gap-2">
-            {checks.map((c) => (
-              <li key={c.id} className="rounded-lg border">
-                <button
-                  type="button"
-                  className="flex w-full flex-wrap items-center gap-2 px-3 py-2 text-left"
-                  onClick={() => setOpen(open === c.id ? null : c.id)}
-                >
-                  <span className="min-w-0 flex-1 truncate font-medium">
-                    {c.name}
-                  </span>
-                  <Badge variant={stateLabel[c.state][1]}>
-                    {stateLabel[c.state][0]}
-                  </Badge>
-                  <Badge variant={statusLabel[c.status][1]}>
-                    {statusLabel[c.status][0]}
-                  </Badge>
-                  <span className="text-xs text-muted-foreground">
-                    {kindLabel[c.kind]}・{schedule(c)}・{groupName(c.group_id)}
-                  </span>
-                </button>
-                {open === c.id && (
-                  <div className="flex flex-col gap-2 border-t px-3 py-3 text-sm">
-                    <p className="break-all font-mono text-xs">{c.target}</p>
-                    {c.rationale && (
-                      <p className="text-muted-foreground">
-                        判斷依據：{c.rationale}
-                      </p>
+            {(checks ?? []).map((c) => {
+              const tried =
+                trials[c.id]?.version === c.version ? trials[c.id] : null;
+              const host = hostTrouble(c);
+              return (
+                <li key={c.id} className="rounded-lg border">
+                  <button
+                    type="button"
+                    className="flex w-full flex-wrap items-center gap-2 px-3 py-2 text-left"
+                    onClick={() => setOpen(open === c.id ? null : c.id)}
+                  >
+                    <span className="min-w-0 flex-1 truncate font-medium">
+                      {c.name}
+                    </span>
+                    <Badge variant={stateLabel[c.state][1]}>
+                      {stateLabel[c.state][0]}
+                    </Badge>
+                    <Badge variant={statusLabel[c.status][1]}>
+                      {statusLabel[c.status][0]}
+                    </Badge>
+                    {c.missing_connection && (
+                      <Badge variant="danger">缺少資料庫連線</Badge>
                     )}
-                    <p className="text-xs text-muted-foreground">
-                      上次：
-                      {c.last_run_at
-                        ? `${ago(c.last_run_at)}・${c.last_summary ?? ""}`
-                        : "尚未執行"}
-                      {c.next_run_at && `　下次：${date(c.next_run_at)}`}
-                      　第 {c.version} 版
-                      {c.approved_by ? `・${c.approved_by} 核准` : ""}
-                    </p>
-                    {c.environment && (
-                      <p
-                        className={`text-xs ${c.environment.state === "failed" ? "text-danger" : "text-muted-foreground"}`}
-                      >
-                        檢查環境：{environmentText(c.environment)}
-                      </p>
+                    {host && (
+                      <Badge variant={host.overdue ? "danger" : "warn"}>
+                        {host.overdue ? "系統問題需要處理" : "系統暫時無法執行"}
+                      </Badge>
                     )}
-                    {runs.length > 0 && (
-                      <ol
-                        className="flex flex-wrap gap-1"
-                        aria-label="最近結果"
-                      >
-                        {[...runs].reverse().map((r) => (
-                          <li
-                            key={r.id}
-                            title={`${date(r.started_at)} ${r.summary}`}
-                            className={`size-3 rounded-full ${r.outcome === "ok" ? "bg-good" : r.outcome === "alert" ? "bg-danger" : "bg-warn"}`}
-                          />
-                        ))}
-                      </ol>
-                    )}
-                    {admin && (
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={busy}
-                          onClick={() =>
-                            void act(async () => {
-                              const r = await request<{
-                                outcome: string;
-                                summary: string;
-                              }>(`/api/checks/${c.id}/test`, "POST");
-                              setNote(
-                                `試跑結果：${r.outcome === "ok" ? "正常" : r.outcome === "alert" ? "異常" : "執行失敗"}・${r.summary}`,
-                              );
-                            }, "")
-                          }
-                        >
-                          試跑
-                        </Button>
-                        {c.status === "awaiting_approval" && (
-                          <Button
-                            size="sm"
-                            disabled={busy}
-                            onClick={() =>
-                              void act(
-                                () =>
-                                  request(
-                                    `/api/checks/${c.id}/approve`,
-                                    "POST",
-                                    { version: c.version },
-                                  ),
-                                "已核准，開始依排程執行",
-                              )
-                            }
+                    <span className="text-xs text-muted-foreground">
+                      {kindLabel[c.kind]}・{schedule(c)}・
+                      {groupName(c.group_id)}
+                    </span>
+                  </button>
+                  {open === c.id && (
+                    <div className="flex flex-col gap-2 border-t px-3 py-3 text-sm">
+                      <p className="break-all font-mono text-xs">{c.target}</p>
+                      {c.rationale && (
+                        <p className="text-muted-foreground">
+                          判斷依據：{c.rationale}
+                        </p>
+                      )}
+                      {c.missing_connection && (
+                        <p className="rounded-lg bg-danger-soft px-3 py-2 text-danger">
+                          這個專案還沒有登記資料庫連線，檢查無法執行，也不能核准或恢復。
+                          <a
+                            href="/projects"
+                            className="underline"
+                            onClick={toProjects}
                           >
-                            核准並啟用
-                          </Button>
-                        )}
-                        {(c.status === "active" || c.status === "failed") && (
+                            前往專案頁設定資料庫連線
+                          </a>
+                        </p>
+                      )}
+                      {host && (
+                        <p
+                          className={`rounded-lg px-3 py-2 ${host.overdue ? "bg-danger-soft text-danger" : "bg-warn-soft text-warn"}`}
+                        >
+                          系統暫時無法執行（{host.reason}）
+                          {c.next_run_at
+                            ? `，將於 ${hhmm(c.next_run_at)} 重試`
+                            : ""}
+                          。這類問題不計入連續失敗，恢復後自動繼續。
+                          {host.overdue &&
+                            `已超過 ${hostUnavailableAlertHours} 小時，請到系統頁確認執行器與 Docker。`}
+                        </p>
+                      )}
+                      <p className="text-xs text-muted-foreground">
+                        上次：
+                        {c.last_run_at
+                          ? `${ago(c.last_run_at)}・${c.last_summary ?? ""}`
+                          : "尚未執行"}
+                        {c.next_run_at && `　下次：${date(c.next_run_at)}`}
+                        　第 {c.version} 版
+                        {c.approved_by ? `・${c.approved_by} 核准` : ""}
+                      </p>
+                      {(c.environment || c.missing_connection) && (
+                        <p
+                          className={`text-xs ${c.missing_connection || c.environment?.state === "failed" ? "text-danger" : "text-muted-foreground"}`}
+                        >
+                          檢查環境：{environmentText(c.environment, c)}
+                        </p>
+                      )}
+                      {runs.length > 0 && (
+                        <ol
+                          className="flex flex-wrap gap-1"
+                          aria-label="最近結果"
+                        >
+                          {[...runs].reverse().map((r) => (
+                            <li
+                              key={r.id}
+                              title={`${date(r.started_at)} ${r.summary}`}
+                              className={`size-3 rounded-full ${r.outcome === "ok" ? "bg-good" : r.outcome === "alert" ? "bg-danger" : "bg-warn"}`}
+                            />
+                          ))}
+                        </ol>
+                      )}
+                      {admin && tried && (
+                        <p
+                          role="status"
+                          className={`rounded-lg px-3 py-2 ${trialTone[tried.outcome]}`}
+                        >
+                          試跑結果（{date(tried.at)}）：
+                          {trialLabel[tried.outcome]}・{tried.summary}
+                          {c.status === "awaiting_approval" &&
+                            (tried.outcome === "ok"
+                              ? "　試跑正常，可以核准。"
+                              : "　試跑未通過，建議先修改。")}
+                        </p>
+                      )}
+                      {admin && (
+                        <div className="flex flex-wrap gap-2">
                           <Button
                             size="sm"
                             variant="outline"
                             disabled={busy}
-                            onClick={() =>
-                              void act(
-                                () =>
-                                  request(`/api/checks/${c.id}/pause`, "POST"),
-                                "已暫停",
-                              )
-                            }
+                            onClick={() => trial(c)}
                           >
-                            暫停
+                            {testing === c.id ? "試跑中…" : "試跑"}
                           </Button>
-                        )}
-                        {(c.status === "paused" || c.status === "failed") &&
-                          c.approved_version === c.version && (
+                          {c.status === "awaiting_approval" && (
+                            <Button
+                              size="sm"
+                              disabled={busy || c.missing_connection}
+                              onClick={() =>
+                                void act(
+                                  () =>
+                                    request(
+                                      `/api/checks/${c.id}/approve`,
+                                      "POST",
+                                      { version: c.version },
+                                    ),
+                                  "已核准，開始依排程執行",
+                                )
+                              }
+                            >
+                              核准並啟用
+                            </Button>
+                          )}
+                          {(c.status === "active" || c.status === "failed") && (
                             <Button
                               size="sm"
                               variant="outline"
@@ -608,63 +810,86 @@ export function ChecksView({
                                 void act(
                                   () =>
                                     request(
-                                      `/api/checks/${c.id}/resume`,
+                                      `/api/checks/${c.id}/pause`,
                                       "POST",
                                     ),
-                                  "已恢復",
+                                  "已暫停",
                                 )
                               }
                             >
-                              恢復
+                              暫停
                             </Button>
                           )}
-                        {c.environment?.state === "kept" && (
+                          {(c.status === "paused" || c.status === "failed") &&
+                            c.approved_version === c.version && (
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                disabled={busy || c.missing_connection}
+                                onClick={() =>
+                                  void act(
+                                    () =>
+                                      request(
+                                        `/api/checks/${c.id}/resume`,
+                                        "POST",
+                                      ),
+                                    "已恢復",
+                                  )
+                                }
+                              >
+                                恢復
+                              </Button>
+                            )}
+                          {c.environment?.state === "kept" && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              disabled={busy}
+                              onClick={() =>
+                                void act(
+                                  () =>
+                                    request(
+                                      `/api/checks/${c.id}/environment/clear`,
+                                      "POST",
+                                    ),
+                                  "已清除檢查環境，下次執行時重新建立",
+                                )
+                              }
+                            >
+                              立即清除環境
+                            </Button>
+                          )}
                           <Button
                             size="sm"
-                            variant="outline"
+                            variant="ghost"
                             disabled={busy}
-                            onClick={() =>
-                              void act(
-                                () =>
-                                  request(
-                                    `/api/checks/${c.id}/environment/clear`,
-                                    "POST",
-                                  ),
-                                "已清除檢查環境，下次執行時重新建立",
+                            onClick={() => edit(c)}
+                          >
+                            修改
+                          </Button>
+                          <ConfirmButton
+                            size="sm"
+                            variant="ghost"
+                            disabled={busy}
+                            title="刪除定期檢查？"
+                            description={`刪除「${c.name}」後不會再依排程執行，它的執行紀錄會一併刪除，檢查環境也會清除。這個動作無法復原。`}
+                            confirm="刪除檢查"
+                            onConfirm={() =>
+                              act(
+                                () => request(`/api/checks/${c.id}`, "DELETE"),
+                                "已刪除",
                               )
                             }
                           >
-                            立即清除環境
-                          </Button>
-                        )}
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={busy}
-                          onClick={() => setEditing(c)}
-                        >
-                          修改
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={busy}
-                          onClick={() => {
-                            if (confirm(`刪除「${c.name}」？`))
-                              void act(
-                                () => request(`/api/checks/${c.id}`, "DELETE"),
-                                "已刪除",
-                              );
-                          }}
-                        >
-                          刪除
-                        </Button>
-                      </div>
-                    )}
-                  </div>
-                )}
-              </li>
-            ))}
+                            刪除
+                          </ConfirmButton>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
           </ul>
         </CardContent>
       </Card>

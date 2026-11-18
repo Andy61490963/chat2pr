@@ -69,6 +69,9 @@ export async function recoverInterrupted(
       if (!owned) continue;
       try {
         await recoverRun(db, runner, budget, line, r);
+      } catch (e) {
+        // 執行器連不上或逾時：這筆留到下一輪再回收，不讓整輪排程（通知、派工、心跳）停下來。
+        console.warn("中斷回收：", redact(String(e)));
       } finally {
         await lock.query("SELECT pg_advisory_unlock($1,hashtext($2))", [
           RUN_LOCK,
@@ -89,15 +92,29 @@ async function recoverRun(
   line: Line,
   r: { id: string; task_id: string; reservation_id: string },
 ) {
-  await runner.call("cancel", { runId: r.id });
+  // 先收回這次執行的憑證，再請執行器停掉容器；停不掉（執行器沒回應）就保留未完成紀錄，下一輪再試。
   await db.query(
-    "UPDATE runs SET completed_at=now(),proxy_active=false,token_hash=NULL,outcome='interrupted' WHERE id=$1",
+    "UPDATE runs SET proxy_active=false,token_hash=NULL WHERE id=$1",
+    [r.id],
+  );
+  // 與 Execution 收尾的取消一樣等 20 秒；沿用預設的 30 分鐘會讓整個排程器停住。
+  await runner.call("cancel", { runId: r.id }, 20000);
+  // 收尾時取消失敗留下的紀錄已寫好結果（answered、ready…），不要覆寫成 interrupted。
+  await db.query(
+    "UPDATE runs SET completed_at=now(),outcome=CASE WHEN outcome IS NULL OR outcome IN ('running','reviewing') THEN 'interrupted' ELSE outcome END WHERE id=$1",
     [r.id],
   );
   await budget.recoverExpired(r.reservation_id);
-  await db.query(
-    "UPDATE tasks SET status='failed',last_error='服務曾中斷；重試前會先核對 GitHub PR',updated_at=now() WHERE id=$1 AND status IN ('running','reviewing')",
+  const failed = await db.query(
+    "UPDATE tasks SET status='failed',last_error='服務曾中斷；重試前會先核對 GitHub PR',updated_at=now() WHERE id=$1 AND status IN ('running','reviewing') RETURNING id",
     [r.task_id],
+  );
+  // 任務已經完成（已回答、待合併…）就只是收尾，不叫管理者重試；仍維持人工重試，不自動重跑。
+  if (!failed.length) return;
+  await db.audit(
+    r.task_id,
+    "interrupted",
+    "執行曾中斷，已回收執行環境；重試前會先核對 GitHub PR",
   );
   await line.notify(
     r.task_id,
@@ -302,7 +319,10 @@ export async function startJobs(
     if (busy) return;
     busy = true;
     try {
-      await recoverInterrupted(db, runner, budget, line);
+      // 回收失敗（例如執行器沒回應）只記錄，後面的通知、派工與心跳照常執行。
+      await recoverInterrupted(db, runner, budget, line).catch((e) =>
+        console.warn("中斷回收：", redact(String(e))),
+      );
       // 定期檢查不呼叫 AI；失敗只影響該次檢查，不中斷其他排程。
       await runDueChecks(db, (path, body, timeoutMs) =>
         runner.call(path, body, timeoutMs),
