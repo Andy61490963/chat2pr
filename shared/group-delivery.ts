@@ -5,14 +5,21 @@
  *
  * last_error 的固定文字由這些地方寫入，改字時要同步這裡的對照（見 docs/conventions.md 第 3 節）：
  * - server/line.ts 的 flushNotifications：額度用完（quotaExhaustedDetail）、限流、群組回覆總開關關閉、其他狀態碼。
- * - server/group-replies.ts：以 /進度 補送中、補送失敗、已有較新的回覆。
+ * - server/group-replies.ts：以 /進度 補送中、補送失敗、補送多次失敗已停止、已有較新的回覆。
+ * - server/line.ts 的 flushNotifications：剩餘額度不夠群組人數（shared/line-quota.ts 的 quotaShortForGroup）。
  * - server/line-quota.ts 的 expireStaleNotifications：已過期，未補送（expiredNote）。
  */
-import { expiredNote, quotaExhaustedDetail } from "./line-quota.js";
+import {
+  expiredNote,
+  quotaExhaustedDetail,
+  quotaShortPrefix,
+} from "./line-quota.js";
 
 /** 與 server/group-replies.ts 的同名常數相同；tests/group-delivery.test.ts 會核對。 */
 export const claimingNote = "以 /進度 回覆補送中";
 export const replyFailedNote = "以 /進度 回覆補送失敗，下次再試";
+export const replyGaveUpNote =
+  "以 /進度 補送多次失敗，已停止補送，請管理者在看板查看並手動轉達";
 export const supersededNote = "已有較新的回覆，未補送";
 /** server/line.ts flushNotifications 在總開關關閉時寫入的字。 */
 export const repliesOffNote = "群組回覆已關閉，未送出";
@@ -74,9 +81,14 @@ function reasonOf(raw: string): { reason: DeliveryReason; note: string } {
   if (error === repliesOffNote) return pick("replies_off");
   if (error === expiredNote) return pick("expired");
   if (error === supersededNote) return pick("superseded");
-  if (error.startsWith("以 /進度 回覆補送失敗")) return pick("reply_failed");
+  // 補送中（claimingNote）已在 deliveryState 先處理；其餘以 /進度 開頭的都是補送失敗（含 replyGaveUpNote）。
+  if (error.startsWith("以 /進度")) return pick("reply_failed");
   if (error.startsWith(rateLimitedPrefix)) return pick("rate");
-  if (/額度/.test(error) && /人數/.test(error)) return pick("group_size");
+  if (
+    error.startsWith(quotaShortPrefix) ||
+    (/額度/.test(error) && /人數/.test(error))
+  )
+    return pick("group_size");
   if (error === quotaExhaustedDetail || /額度已用完/.test(error))
     return pick("quota");
   // 其他錯誤已經過 redact，但仍可能夾帶內部細節：只取狀態碼。
