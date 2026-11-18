@@ -255,17 +255,21 @@ describe("重新開啟任務", () => {
 });
 
 describe("清單筆數與失敗通知", () => {
-  it("群組儲存警告包含未載入清單的受影響任務", async () => {
+  // 未結束的任務一律載入（不受 ?tasks 限制），已結束的才只給最近 N 筆；
+  // 群組儲存警告的受影響任務數仍由資料庫計算。
+  it("較舊的未結束任務仍會載入，群組儲存警告計入受影響任務", async () => {
     await fixture();
-    const pending = await task("queued", "outside-loaded-tasks");
+    const old = await task("merged", "old-merged-task");
+    const pending = await task("queued", "older-pending-task");
     await db.query(
-      "UPDATE tasks SET updated_at=now()-interval '1 day' WHERE id=$1",
-      [pending.id],
+      "UPDATE tasks SET updated_at=now()-interval '1 day' WHERE id=ANY($1)",
+      [[old.id, pending.id]],
     );
-    await task("merged", "latest-task");
+    const latest = await task("merged", "latest-task");
     const limited = await state("?tasks=1");
-    expect(limited.tasks).toHaveLength(1);
-    expect(limited.tasks[0].id).not.toBe(pending.id);
+    expect(limited.tasks.map((t: { id: string }) => t.id).sort()).toEqual(
+      [latest.id, pending.id].sort(),
+    );
     expect(
       limited.groups.find((g: { id: string }) => g.id === "group-a")
         .affected_tasks,

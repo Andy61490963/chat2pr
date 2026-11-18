@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Search } from "lucide-react";
-import type { Task } from "../../shared/types.js";
+import type { Task, TaskStatus } from "../../shared/types.js";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/form-controls";
@@ -16,33 +16,35 @@ import { TaskRow } from "./inbox";
 import {
   type State,
   attention,
+  countOf,
   Empty,
   LoadMore,
   moving,
+  ready,
   SectionTitle,
+  waiting,
   writeQuery,
 } from "./shared";
 
-const filters = [
-  { id: "all", label: "全部", match: () => true },
-  {
-    id: "todo",
-    label: "待處理",
-    match: (t: Task) => attention.includes(t.status),
-  },
-  {
-    id: "moving",
-    label: "進行中",
-    match: (t: Task) => moving.includes(t.status),
-  },
-  { id: "ready", label: "待合併", match: (t: Task) => t.status === "ready" },
-  {
-    id: "closed",
-    label: "已結束",
-    match: (t: Task) =>
-      ["merged", "answered", "closed", "rejected", "cancelled"].includes(t.status),
-  },
-] as const;
+const ended: TaskStatus[] = [
+  "merged",
+  "answered",
+  "closed",
+  "rejected",
+  "cancelled",
+];
+// statuses 為 null 代表全部。分頁上的數字用伺服器的實際數量；清單、搜尋與群組篩選只看已載入的任務。
+const filters: { id: string; label: string; statuses: TaskStatus[] | null }[] =
+  [
+    { id: "all", label: "全部", statuses: null },
+    { id: "todo", label: "待處理", statuses: attention },
+    { id: "waiting", label: "等待額度", statuses: waiting },
+    { id: "moving", label: "進行中", statuses: moving },
+    { id: "ready", label: "待合併", statuses: ready },
+    { id: "closed", label: "已結束", statuses: ended },
+  ];
+const matcher = (statuses: TaskStatus[] | null) => (t: Task) =>
+  !statuses || statuses.includes(t.status);
 type By = "project" | "group" | "none";
 
 export function TasksView({
@@ -57,7 +59,11 @@ export function TasksView({
   // 篩選條件放在網址，重新整理、上一頁或把連結傳給別人都會看到同一份清單。
   const read = () => {
     const q = new URLSearchParams(location.search);
-    const pick = (key: string, ok: (v: string) => boolean, fallback: string) => {
+    const pick = (
+      key: string,
+      ok: (v: string) => boolean,
+      fallback: string,
+    ) => {
       const v = q.get(key);
       return v && ok(v) ? v : fallback;
     };
@@ -69,7 +75,11 @@ export function TasksView({
         (v) => v === "none" || state.projects.some((p) => p.id === v),
         "all",
       ),
-      by: pick("by", (v) => ["project", "group", "none"].includes(v), "project") as By,
+      by: pick(
+        "by",
+        (v) => ["project", "group", "none"].includes(v),
+        "project",
+      ) as By,
       search: q.get("q") ?? "",
     };
   };
@@ -109,7 +119,13 @@ export function TasksView({
     setProject("all");
     setSearch("");
   };
-  const match = filters.find((f) => f.id === filter)!.match;
+  const match = matcher(filters.find((f) => f.id === filter)!.statuses);
+  // 分頁數字：全部用總筆數，其餘依伺服器的各狀態數量加總。
+  const tabCount = (statuses: TaskStatus[] | null) =>
+    statuses
+      ? countOf(state, statuses)
+      : (state.totals?.tasks ?? state.tasks.length);
+  const omitted = state.totals?.unfinishedOmitted ?? 0;
   const list = state.tasks.filter(
     (t) =>
       match(t) &&
@@ -135,17 +151,24 @@ export function TasksView({
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-3">
         <Tabs value={filter} onValueChange={setFilter}>
-          <TabsList>
+          {/* 六個分頁在手機上放不下要左右捲；置中排列時左邊超出的部分捲不到，改靠左。 */}
+          <TabsList className="justify-start">
             {filters.map((f) => (
               <TabsTrigger key={f.id} value={f.id}>
                 {f.label}
                 <span className="text-xs text-muted-foreground">
-                  {state.tasks.filter(f.match).length}
+                  {tabCount(f.statuses)}
                 </span>
               </TabsTrigger>
             ))}
           </TabsList>
         </Tabs>
+        {omitted > 0 && (
+          <p role="status" className="text-sm text-warn">
+            未結束的任務太多，較舊的 {omitted}{" "}
+            個沒有載入；先處理或關閉一部分後就會出現。
+          </p>
+        )}
         <div className="flex flex-wrap gap-2">
           <Select value={group} onValueChange={setGroup}>
             <SelectTrigger className="w-40" aria-label="群組">
@@ -220,16 +243,14 @@ export function TasksView({
           {narrowed ? (
             <Empty title="沒有符合條件的任務">
               <span className="flex flex-col items-center gap-3">
-                換個篩選或搜尋字詞試試；目前共有 {state.tasks.length} 個任務。
+                換個篩選或搜尋字詞試試；目前已載入 {state.tasks.length} 個任務。
                 <Button variant="outline" size="sm" onClick={clear}>
                   清除篩選
                 </Button>
               </span>
             </Empty>
           ) : (
-            <Empty title="還沒有任務">
-              群組裡的需求整理好後會出現在這裡。
-            </Empty>
+            <Empty title="還沒有任務">群組裡的需求整理好後會出現在這裡。</Empty>
           )}
         </Card>
       )}
