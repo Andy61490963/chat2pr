@@ -59,8 +59,9 @@ export async function recordHealth(
       ]);
     return;
   }
-  // 欄位新增前寫入的列沒有 reading_ok，退回比對 ok。
-  if (options.confirm && (before?.reading ?? was) !== ok) return;
+  // 沒有上一次真實讀數（欄位新增前的舊列，或只被 silent 寫過）時不算第一次，不退回比對 ok：
+  // 舊列的 ok 可能正是 silent 寫的「正常」，退回比對會讓部署後第一次單一的正常讀數就通知「已恢復」。
+  if (options.confirm && before?.reading !== ok) return;
   const marked = await db.query(
     "UPDATE service_health SET notified_ok=$2 WHERE name=$1 AND notified_ok IS DISTINCT FROM $2 RETURNING name",
     [name, ok],

@@ -486,6 +486,23 @@ it("只有真實讀數會更新 reading_ok，silent 只改目前狀態", async (
   }
 });
 
+// 欄位新增前的舊列沒有 reading_ok，ok 可能正是 silent 寫的「正常」：部署後第一次正常讀數也不能直接算恢復。
+it("沒有 reading_ok 的舊列：已通知異常時，單一次正常讀數不通知，再一次才通知", async () => {
+  await clearHostHealth();
+  try {
+    await db.query(
+      "INSERT INTO service_health(name,ok,detail,notified_ok) VALUES($1,true,'暫時讀不到主機資源',false)",
+      [hostHealthName],
+    );
+    expect(await hostReading(2600)).toBeNull();
+    expect(await notices("service_up")).toHaveLength(0);
+    expect(await hostReading(2600)).toBeNull();
+    expect(await notices("service_up")).toHaveLength(1);
+  } finally {
+    await clearHostHealth();
+  }
+});
+
 it("主機記憶體不足暫停時，系統頁回傳 holdKind 與排隊原因，任務詳情說明原因", async () => {
   const h = await harness(1);
   const t = await task(h.projects[0], "query");
