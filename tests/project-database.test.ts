@@ -223,6 +223,31 @@ describe("專案資料庫連線", () => {
     ).toBe(422);
   });
 
+  it("格式錯誤回 400，details 帶看板可以直接顯示的中文欄位提示", async () => {
+    const s = await scenario();
+    const wrongHost = await s.request("PUT", "", {
+      ...connectionBody,
+      host: "sqlserver://db:1433",
+    });
+    expect(wrongHost.statusCode).toBe(400);
+    expect(wrongHost.json()).toMatchObject({ error: "輸入格式錯誤" });
+    expect(wrongHost.json().details.join("\n")).toContain(
+      "主機只能是主機名稱或 IP",
+    );
+    const zeroPort = await s.request("PUT", "", { ...connectionBody, port: 0 });
+    expect(zeroPort.statusCode).toBe(400);
+    expect(zeroPort.json().details).toContain("port: 連接埠請填 1–65535");
+    const sshPort = await s.request("PUT", "", {
+      ...connectionBody,
+      ssh: { ...connectionBody.ssh, port: 0 },
+    });
+    expect(sshPort.json().details).toContain(
+      "ssh.port: SSH 連接埠請填 1–65535",
+    );
+    // 格式錯誤不會寫入任何連線。
+    expect((await s.request("GET")).json().connection).toBeNull();
+  });
+
   it("測試連線由執行器進行，記下第一次看到的 SSH 主機金鑰，回應不含機密", async () => {
     const s = await scenario();
     expect((await s.request("POST", "/test")).statusCode).toBe(404);
@@ -249,8 +274,18 @@ describe("專案資料庫連線", () => {
     s.fail(new AppError(422, "資料庫拒絕登入，請檢查帳號、密碼與資料庫名稱。"));
     const tested = await s.request("POST", "/test");
     expect(tested.statusCode).toBe(422);
-    expect(tested.body).toContain("資料庫拒絕登入");
+    // 看板只讀 error 欄位；不能是 Fastify 預設的「Unprocessable Entity」。
+    expect(tested.json()).toEqual({
+      error: "資料庫拒絕登入，請檢查帳號、密碼與資料庫名稱。",
+    });
     expect(tested.body).not.toContain(password);
+    // 伺服器內部錯誤不露出原始訊息。
+    s.fail(new Error(`內部錯誤 ${password}`));
+    const broken = await s.request("POST", "/test");
+    expect(broken.statusCode).toBe(500);
+    expect(broken.json()).toEqual({
+      error: "服務暫時無法完成操作，請檢查設定與服務狀態",
+    });
   });
 
   it("擷取快照後顯示版本與物件數量；自動模式的專案作廢舊驗證並重新排程", async () => {

@@ -1,6 +1,8 @@
 import type { Database, DbClient } from "./db.js";
 import type { GitHub } from "./github.js";
 import type { Project, RepoMissingState } from "../shared/types.js";
+// 看板靠這兩句分辨「接回後請重新驗證」和真正的驗證失敗（src/app/project-form.ts）。
+import { repoNotice } from "../shared/project-setup.js";
 
 export type RepoGoneReason = "deleted" | "access" | "missing";
 export type RepoLocation = { id: number; full_name: string };
@@ -214,10 +216,7 @@ export async function repoFound(
     // 舊版標記時沒有記下原狀，只能請管理者重新驗證並勾回群組。
     await c.query(
       "UPDATE projects SET repo_missing_at=NULL,validation_error=$2 WHERE id=$1",
-      [
-        p.id,
-        "GitHub 上又找得到這個儲存庫了；請重新驗證環境，再到群組重新勾選這個專案。",
-      ],
+      [p.id, repoNotice.found],
     );
     await announce(
       c,
@@ -235,9 +234,7 @@ export async function repoFound(
       p.id,
       same && s.enabled,
       same ? s.validated_at : null,
-      same
-        ? null
-        : "儲存庫已接回，但這段期間改過設定；請重新驗證環境後再啟用。",
+      same ? null : repoNotice.changed,
     ],
   );
   const restored = await restoreMissing(c, p.id, s);
