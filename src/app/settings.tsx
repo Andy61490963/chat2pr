@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Copy, RefreshCw, Send } from "lucide-react";
-import type { Settings } from "../../shared/types.js";
+import type { NotificationFailures, Settings } from "../../shared/types.js";
+import { LINE_QUOTA, linePushPanel } from "../../shared/line-quota.js";
+import { ConfirmButton } from "./confirm";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -111,8 +113,13 @@ const services = [
   { key: "line", name: "LINE", hint: "接收群組訊息與私訊通知" },
   {
     key: "notifications",
-    name: "LINE 私訊通知",
-    hint: "最近一次私訊通知有沒有送達",
+    name: "LINE 推播（群組回覆與私訊）",
+    hint: "最近一次推播有沒有送達",
+  },
+  {
+    key: LINE_QUOTA,
+    name: "LINE 推播額度",
+    hint: "本月推播用量；額度用完時推播暫停",
   },
   { key: "github", name: "GitHub App", hint: "讀取專案、建立 Issue 與 PR" },
   {
@@ -598,7 +605,15 @@ export function SettingsView({
   const s = state.settings;
   const [pairing, setPairing] = useState("");
   const [copied, setCopied] = useState(false);
-  const failed = state.failedNotifications ?? 0;
+  // 私訊與群組分開計數（群組依人數計入額度）；過期的重送時略過。
+  const failures: NotificationFailures = (
+    state as State & { notificationFailures?: NotificationFailures }
+  ).notificationFailures ?? {
+    direct: state.failedNotifications ?? 0,
+    group: 0,
+    stale: 0,
+  };
+  const push = linePushPanel(state.health, failures);
   return (
     <div className="grid items-start gap-4 lg:grid-cols-2">
       <div className="flex flex-col gap-4">
@@ -764,9 +779,10 @@ export function SettingsView({
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>LINE 私訊通知</CardTitle>
+            <CardTitle>LINE 推播（群組回覆與私訊）</CardTitle>
             <CardDescription>
-              只在需要你決定、執行異常或 PR 完成時私訊你
+              私訊只在需要你決定、執行異常或 PR
+              完成時送出；私訊與群組回覆（「收到」除外）都計入 LINE 每月推播額度
             </CardDescription>
             {s.admin_line_id && (
               <CardAction>
@@ -775,6 +791,19 @@ export function SettingsView({
             )}
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
+            {push.usage && (
+              <p className="text-sm text-muted-foreground tabular-nums">
+                {push.usage}
+              </p>
+            )}
+            {push.notice && (
+              <p
+                role="status"
+                className="rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn"
+              >
+                {push.notice}
+              </p>
+            )}
             <div className="flex flex-wrap gap-2">
               <Button
                 variant="outline"
@@ -793,7 +822,8 @@ export function SettingsView({
               {s.admin_line_id && (
                 <Button
                   variant="outline"
-                  disabled={busy}
+                  disabled={busy || push.testDisabled}
+                  title="每送一則測試通知會用掉一則推播額度"
                   onClick={() =>
                     void run(
                       () => request("/api/notifications/test", "POST"),
@@ -805,28 +835,28 @@ export function SettingsView({
                 </Button>
               )}
             </div>
-            {failed > 0 && (
+            {push.failedText && (
               <div
                 role="status"
                 className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn"
               >
-                <span className="min-w-0 flex-1">
-                  有 {failed} 則通知重試 3 次仍送不出去。請先用「服務連線」確認
-                  LINE 正常，再重送。
-                </span>
-                <Button
+                <span className="min-w-0 flex-1">{push.failedText}</span>
+                <ConfirmButton
                   variant="outline"
                   size="sm"
-                  disabled={busy}
-                  onClick={() =>
-                    void run(
+                  disabled={busy || push.retryDisabled}
+                  title="重送失敗的 LINE 通知？"
+                  description={push.confirm}
+                  confirm="重送"
+                  onConfirm={() =>
+                    run(
                       () => request("/api/notifications/retry", "POST"),
-                      `已重新排入 ${failed} 則通知`,
+                      `已重新排入私訊 ${failures.direct} 則、群組 ${failures.group} 則`,
                     )
                   }
                 >
-                  重送 {failed} 則
-                </Button>
+                  重送 {push.failed} 則
+                </ConfirmButton>
               </div>
             )}
             {pairing && (

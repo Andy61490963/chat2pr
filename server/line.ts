@@ -16,6 +16,16 @@ import {
   groupRepliesOn,
 } from "./group-replies.js";
 import { applyAnswer, questionByQuote } from "./answers.js";
+import {
+  LineQuotaExhausted,
+  lineQuotaBlocked,
+  markQuotaExhausted,
+} from "./line-quota.js";
+import {
+  isMonthlyLimit,
+  quotaExhaustedDetail,
+  quotaTestBlocked,
+} from "../shared/line-quota.js";
 const Event = z
   .object({
     webhookEventId: z.string(),
@@ -420,6 +430,9 @@ export class Line {
       access = secrets().lineToken;
     if (!access) throw new AppError(409, "尚未設定 LINE 權杖");
     if (!s.admin_line_id) throw new AppError(409, "請先完成 LINE 配對");
+    // 額度用完時每按一次都會白打一次推播；直接說明原因，不叫管理者去檢查權杖。
+    if (await lineQuotaBlocked(this.db))
+      throw new AppError(409, quotaTestBlocked);
     const response = await fetch("https://api.line.me/v2/bot/message/push", {
       method: "POST",
       headers: {
@@ -437,6 +450,17 @@ export class Line {
       }),
       signal: AbortSignal.timeout(10000),
     }).catch(() => null);
+    if (response && !response.ok) {
+      const body = (await response.json().catch(() => null)) as {
+        message?: unknown;
+      } | null;
+      if (isMonthlyLimit(response.status, body?.message)) {
+        await markQuotaExhausted(this.db);
+        throw new AppError(409, quotaTestBlocked);
+      }
+      if (response.status === 429)
+        throw new AppError(409, "LINE 推播太頻繁，請稍後再試（429）");
+    }
     if (!response?.ok)
       // 用 409 回覆，看板才會顯示這段可以照著處理的說明（5xx 一律只顯示通用訊息）。
       throw new AppError(
@@ -453,75 +477,107 @@ export class Line {
       await this.db.query(
         "UPDATE notifications SET sent_at=now(),last_error='群組回覆已關閉，未送出' WHERE group_id IS NOT NULL AND sent_at IS NULL",
       );
-    const notifications = await this.db.query<{
-      id: string;
-      task_id: string | null;
-      group_id: string | null;
-      kind: string;
-      text: string;
-      quick_replies:
-        { label: string; data: string; displayText: string }[] | null;
-    }>(
-      "SELECT * FROM notifications WHERE sent_at IS NULL AND attempts<3 AND (group_id IS NOT NULL OR $1::text IS NOT NULL) ORDER BY created_at LIMIT 10",
-      [s.admin_line_id ?? null],
-    );
-    for (const n of notifications) {
-      try {
-        const response = await fetch(
-          "https://api.line.me/v2/bot/message/push",
-          {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${access}`,
-              "Content-Type": "application/json",
-              "X-Line-Retry-Key": n.id,
-            },
-            body: JSON.stringify({
-              // 群組成員沒有看板帳號，群組訊息不附看板連結。
-              to: n.group_id ?? s.admin_line_id,
-              messages: [
-                {
-                  type: "text",
-                  text: n.group_id
-                    ? n.text
-                    : `${n.text}\n${config().publicUrl}/${n.task_id ? `tasks?task=${n.task_id}` : (notificationView(n.kind) ?? "")}`,
-                },
-              ],
-            }),
-            signal: AbortSignal.timeout(10000),
-          },
-        );
-        if (
-          !response.ok &&
-          !(
-            response.status === 409 &&
-            response.headers.get("x-line-accepted-request-id")
-          )
+    // 每月額度用完時不呼叫推播；由連線檢查查到有剩餘額度才解除（server/line-quota.ts）。
+    if (await lineQuotaBlocked(this.db)) return;
+    // 撈取與送出在同一交易、鎖住這批通知：其他補送流程可以用 SKIP LOCKED 略過正在推送的列。
+    await this.db.transaction(async (c) => {
+      const notifications = (
+        await c.query<{
+          id: string;
+          task_id: string | null;
+          group_id: string | null;
+          kind: string;
+          text: string;
+          quick_replies:
+            { label: string; data: string; displayText: string }[] | null;
+        }>(
+          "SELECT * FROM notifications WHERE sent_at IS NULL AND attempts<3 AND (group_id IS NOT NULL OR $1::text IS NOT NULL) ORDER BY created_at LIMIT 10 FOR UPDATE SKIP LOCKED",
+          [s.admin_line_id ?? null],
         )
-          throw new Error(`LINE 通知失敗（${response.status}）`);
-        // 記下 LINE 給這則訊息的 ID：之後有人「回覆」引用它，就知道是在接續哪個任務。
-        const sent = response.ok
-          ? ((await response.json().catch(() => null)) as {
-              sentMessages?: { id?: string }[];
-            } | null)
-          : null;
-        await this.db.query(
-          "UPDATE notifications SET sent_at=now(),attempts=attempts+1,last_error=NULL,sent_message_id=$2 WHERE id=$1",
-          [n.id, sent?.sentMessages?.[0]?.id ?? null],
-        );
-        await this.db.query(
-          "INSERT INTO service_health(name,ok,detail) VALUES('notifications',true,'最近一次 LINE 通知已送達') ON CONFLICT(name) DO UPDATE SET ok=true,detail=EXCLUDED.detail,checked_at=now()",
-        );
-      } catch (e) {
-        await this.db.query(
-          "UPDATE notifications SET attempts=attempts+1,last_error=$2 WHERE id=$1",
-          [n.id, redact(String(e))],
-        );
-        await this.db.query(
-          "INSERT INTO service_health(name,ok,detail) VALUES('notifications',false,$1) ON CONFLICT(name) DO UPDATE SET ok=false,detail=$1,checked_at=now()",
-          [redact(String(e))],
-        );
+      ).rows;
+      for (const n of notifications) {
+        // 每則各自一個 savepoint：某則寫入失敗只退回那一則，不會讓整批已送出的紀錄一起被撤銷。
+        await c.query("SAVEPOINT push");
+        try {
+          const response = await fetch(
+            "https://api.line.me/v2/bot/message/push",
+            {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${access}`,
+                "Content-Type": "application/json",
+                "X-Line-Retry-Key": n.id,
+              },
+              body: JSON.stringify({
+                // 群組成員沒有看板帳號，群組訊息不附看板連結。
+                to: n.group_id ?? s.admin_line_id,
+                messages: [
+                  {
+                    type: "text",
+                    text: n.group_id
+                      ? n.text
+                      : `${n.text}\n${config().publicUrl}/${n.task_id ? `tasks?task=${n.task_id}` : (notificationView(n.kind) ?? "")}`,
+                  },
+                ],
+              }),
+              signal: AbortSignal.timeout(10000),
+            },
+          );
+          if (
+            !response.ok &&
+            !(
+              response.status === 409 &&
+              response.headers.get("x-line-accepted-request-id")
+            )
+          ) {
+            const body = (await response.json().catch(() => null)) as {
+              message?: unknown;
+            } | null;
+            // 每月額度用完和一般限流都是 429，只能看回應訊息分辨。
+            if (isMonthlyLimit(response.status, body?.message))
+              throw new LineQuotaExhausted();
+            throw new Error(
+              response.status === 429
+                ? "LINE 推播太頻繁，稍後會再送（429）"
+                : `LINE 通知失敗（${response.status}）`,
+            );
+          }
+          // 記下 LINE 給這則訊息的 ID：之後有人「回覆」引用它，就知道是在接續哪個任務。
+          const sent = response.ok
+            ? ((await response.json().catch(() => null)) as {
+                sentMessages?: { id?: string }[];
+              } | null)
+            : null;
+          await c.query(
+            "UPDATE notifications SET sent_at=now(),attempts=attempts+1,last_error=NULL,sent_message_id=$2 WHERE id=$1",
+            [n.id, sent?.sentMessages?.[0]?.id ?? null],
+          );
+          await this.db.query(
+            "INSERT INTO service_health(name,ok,detail) VALUES('notifications',true,'最近一次 LINE 通知已送達') ON CONFLICT(name) DO UPDATE SET ok=true,detail=EXCLUDED.detail,checked_at=now()",
+          );
+          await c.query("RELEASE SAVEPOINT push");
+        } catch (e) {
+          await c.query("ROLLBACK TO SAVEPOINT push");
+          if (e instanceof LineQuotaExhausted) {
+            // 額度用完不是這則通知的問題：不算失敗次數、不把 notifications 寫成連線失敗，
+            // 本輪立即停止，不再逐則撞 429。
+            await c.query(
+              "UPDATE notifications SET last_error=$2 WHERE id=$1",
+              [n.id, quotaExhaustedDetail],
+            );
+            await markQuotaExhausted(this.db);
+            break;
+          }
+          await c.query(
+            "UPDATE notifications SET attempts=attempts+1,last_error=$2 WHERE id=$1",
+            [n.id, redact(String(e))],
+          );
+          await this.db.query(
+            "INSERT INTO service_health(name,ok,detail) VALUES('notifications',false,$1) ON CONFLICT(name) DO UPDATE SET ok=false,detail=$1,checked_at=now()",
+            [redact(String(e))],
+          );
+        }
       }
-    }
+    });
   }
 }

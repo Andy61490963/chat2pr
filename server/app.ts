@@ -45,6 +45,16 @@ import { HttpRunner, type Runner } from "./execution.js";
 import { clientAddress } from "./client-address.js";
 import { AppError, verifySignature, redact } from "./policy.js";
 import { Line } from "./line.js";
+import {
+  expireStaleNotifications,
+  lineQuotaBlocked,
+  staleNotification,
+} from "./line-quota.js";
+import {
+  LINE_QUOTA,
+  quotaBellNotice,
+  quotaRetryBlocked,
+} from "../shared/line-quota.js";
 import { Tasks } from "./tasks.js";
 import { Budget } from "./budget.js";
 import { GitHub } from "./github.js";
@@ -57,7 +67,12 @@ import {
   syncProjectRepos,
   type RepoLocation,
 } from "./repo-missing.js";
-import type { Action, Project } from "../shared/types.js";
+import type {
+  Action,
+  NotificationFailures,
+  NotificationRetryResult,
+  Project,
+} from "../shared/types.js";
 import { efforts } from "../shared/types.js";
 import {
   MAX_COLLECT_EXCLUDES,
@@ -455,9 +470,10 @@ export async function buildApp(
       knowledge,
       runsToday,
       rag,
+      failures,
     ] = await Promise.all([
-      db.one<{ tasks: number; activity: number; failed: number }>(
-        "SELECT (SELECT count(*)::int FROM tasks) AS tasks,(SELECT count(*)::int FROM audit) AS activity,(SELECT count(*)::int FROM notifications WHERE sent_at IS NULL AND attempts>=3) AS failed",
+      db.one<{ tasks: number; activity: number }>(
+        "SELECT (SELECT count(*)::int FROM tasks) AS tasks,(SELECT count(*)::int FROM audit) AS activity",
       ),
       // 鈴鐺：與 LINE 私訊相同的重要通知（待審核、失敗、PR 完成、查詢回覆、額度等）。
       db.query(
@@ -494,18 +510,43 @@ export async function buildApp(
       db.one(
         "SELECT active,completed_at,coalesce((SELECT jsonb_object_agg(kind,n) FROM (SELECT kind,count(*)::int n FROM embeddings GROUP BY kind) counts),'{}') AS counts FROM rag_backfill WHERE id",
       ),
+      // 送不出去的通知分私訊與群組（群組依人數計入額度）；過時的重送時會略過，另外計數。
+      db.one<NotificationFailures>(
+        `SELECT count(*) FILTER (WHERE NOT stale AND attempts>=3 AND group_id IS NULL)::int AS direct,
+           count(*) FILTER (WHERE NOT stale AND attempts>=3 AND group_id IS NOT NULL)::int AS "group",
+           count(*) FILTER (WHERE stale)::int AS stale
+         FROM (SELECT n.group_id,n.attempts,${staleNotification} AS stale FROM notifications n
+           LEFT JOIN tasks t ON t.id=n.task_id WHERE n.sent_at IS NULL) x`,
+      ),
     ]);
     const s = secrets();
+    // 推播額度用完時，鈴鐺清單頂端放一行提示；鈴鐺讀資料庫，不需要推播。
+    const quota = (
+      health as { name: string; ok: boolean; checked_at: string }[]
+    ).find((h) => h.name === LINE_QUOTA && !h.ok);
     return {
       settings: {
         ...settings,
         admin_line_id: settings.admin_line_id ? "已綁定" : null,
       },
-      alerts,
+      alerts: quota
+        ? [
+            {
+              id: LINE_QUOTA,
+              task_id: null,
+              kind: LINE_QUOTA,
+              text: quotaBellNotice,
+              created_at: quota.checked_at,
+              title: null,
+            },
+            ...alerts,
+          ]
+        : alerts,
       alertsSeenAt: seen?.seen_at ?? null,
       // 清單總筆數與送不出去的 LINE 通知數，讓看板知道還有多少沒顯示、多少要重送。
       totals: { tasks: totals?.tasks ?? 0, activity: totals?.activity ?? 0 },
-      failedNotifications: totals?.failed ?? 0,
+      failedNotifications: (failures?.direct ?? 0) + (failures?.group ?? 0),
+      notificationFailures: failures ?? { direct: 0, group: 0, stale: 0 },
       projects,
       groups,
       tasks,
@@ -1245,12 +1286,26 @@ export async function buildApp(
     return { ok: true };
   });
   app.post("/api/notifications/retry", async (req) => {
-    await requireAdmin(db, req);
-    await db.query(
-      "UPDATE notifications SET attempts=0,last_error=NULL WHERE sent_at IS NULL",
+    const actor = await requireAdmin(db, req);
+    // 額度用完時歸零只會讓通知再失敗 3 次，先說明原因。
+    if (await lineQuotaBlocked(db)) throw new AppError(409, quotaRetryBlocked);
+    const result = await db.transaction<NotificationRetryResult>(async (c) => {
+      // 先略過過時的通知（舊的排隊說明、舊版補問、超過一天的訊息），再只重排重試 3 次仍失敗的。
+      const expired = await expireStaleNotifications(c);
+      const reset = (
+        await c.query<{ group_id: string | null }>(
+          "UPDATE notifications SET attempts=0,last_error=NULL WHERE sent_at IS NULL AND attempts>=3 RETURNING group_id",
+        )
+      ).rows;
+      const group = reset.filter((r) => r.group_id).length;
+      return { direct: reset.length - group, group, expired };
+    });
+    await db.audit(
+      null,
+      "notification_retry",
+      `${actor.login} 重送失敗的 LINE 通知：私訊 ${result.direct} 則、群組 ${result.group} 則，略過已過期 ${result.expired} 則`,
     );
-    await db.audit(null, "notification_retry", "管理者重送失敗的 LINE 通知");
-    return { ok: true };
+    return result;
   });
   app.post("/api/notifications/test", async (req) => {
     await requireAdmin(db, req);

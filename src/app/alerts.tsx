@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bell,
   BellRing,
@@ -22,6 +22,7 @@ import {
   notificationView,
   type NotificationView,
 } from "../../shared/notifications.js";
+import { LINE_QUOTA } from "../../shared/line-quota.js";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -86,6 +87,11 @@ const kinds: Record<
     tone: "text-danger",
     label: "Docker 磁碟空間不足",
   },
+  line_backlog: {
+    icon: Unplug,
+    tone: "text-warn",
+    label: "LINE 通知未送出",
+  },
   disk_ok: {
     icon: HardDrive,
     tone: "text-good",
@@ -110,7 +116,7 @@ const desktopEnabled = () => {
 };
 
 export function AlertBell({
-  alerts,
+  alerts: all,
   seenAt,
   request,
   open: openTask,
@@ -130,6 +136,10 @@ export function AlertBell({
     if (a.task_id) void openTask(a.task_id);
     else if (view) void openView?.(view);
   };
+  // 推播額度用完的提示由伺服器依 service_health 附上，固定放在清單頂端，不算未讀、不跳桌面通知。
+  const quota = all.find((a) => a.kind === LINE_QUOTA);
+  // 只在清單真的變了才換新陣列，下面的桌面通知 effect 才不會每次重繪都跑。
+  const alerts = useMemo(() => all.filter((a) => a.kind !== LINE_QUOTA), [all]);
   const [seen, setSeen] = useState(seenAt);
   const [menuOpen, setMenuOpen] = useState(false);
   const [desktop, setDesktop] = useState(desktopEnabled);
@@ -232,6 +242,17 @@ export function AlertBell({
             </Button>
           )}
         </div>
+        {quota && (
+          <p
+            role="status"
+            className="flex gap-2 border-b bg-warn-soft px-3 py-2 text-xs text-warn"
+          >
+            <Unplug className="mt-0.5 size-4 shrink-0" />
+            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+              {quota.text}
+            </span>
+          </p>
+        )}
         <ul className="max-h-[26rem] overflow-y-auto">
           {alerts.length ? (
             alerts.map((a) => {
