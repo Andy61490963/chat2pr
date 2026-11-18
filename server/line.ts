@@ -22,11 +22,17 @@ import {
   progressSummary,
   progressTasks,
   replyFailedNote,
+  staleAnswerAck,
   type QuickReply,
 } from "./group-replies.js";
 import { subscriptionGateName } from "./subscription-gate.js";
 import { LINE_QUOTA } from "../shared/line-quota.js";
-import { applyAnswer, questionByQuote } from "./answers.js";
+import {
+  answerByPostback,
+  answerPostback,
+  applyAnswer,
+  questionByQuote,
+} from "./answers.js";
 import {
   LineQuotaExhausted,
   lineQuotaBlocked,
@@ -197,10 +203,42 @@ export class Line {
         // 與群組設定使用同一把鎖，收訊不會跨過切換模式的邊界。
         const settings = (
           await c.query(
-            `SELECT enabled,trigger_mode,reply_mode,${groupRepliesOn} AS replies FROM groups WHERE id=$1 FOR UPDATE`,
+            `SELECT enabled,left_at,trigger_mode,reply_mode,${groupRepliesOn} AS replies FROM groups WHERE id=$1 FOR UPDATE`,
             [group],
           )
         ).rows[0];
+        // 群組成員點了補問的常見答案按鈕：比照用「回覆」作答，只在任務仍在等這一版回答時收下。
+        // 重複點擊由上方 events 去重與版本比對擋下（作答後版本 +1，舊按鈕不再符合）。
+        if (e.type === "postback") {
+          const data = e.postback?.data ?? "";
+          if (
+            !settings?.enabled ||
+            settings.left_at ||
+            !answerPostback.test(data)
+          )
+            return;
+          const replyOn =
+            !!e.replyToken && settings.reply_mode !== "off" && settings.replies;
+          const t = await answerByPostback(
+            this.db,
+            c,
+            group,
+            data,
+            e.webhookEventId,
+          );
+          if (replyOn)
+            acks.push({
+              token: e.replyToken!,
+              messages: [
+                !t
+                  ? staleAnswerAck
+                  : t.status === "queued"
+                    ? answerAck
+                    : answerHeldAck,
+              ],
+            });
+          return;
+        }
         if (e.type === "unsend" && e.unsend) {
           await c.query(
             "INSERT INTO messages(id,group_id,type,revoked,processed) VALUES($1,$2,'unsend',true,true) ON CONFLICT(id) DO UPDATE SET text=NULL,image=NULL,image_mime=NULL,user_id=NULL,revoked=true,processed=true",
@@ -523,18 +561,20 @@ export class Line {
   }
   /**
    * 「收到」依收訊當下的系統狀態說實話（只改文字，不改審核、派工、判讀規則）：
-   * 系統或判讀暫停、群組沒有可用專案（條件同 triage-window.ts）、訂閱模式的 Codex 額度關卡關閉。
+   * 系統或判讀暫停、本群組判讀連續失敗停止、群組沒有可用專案（條件同 triage-window.ts）、訂閱模式的 Codex 額度關卡關閉。
    * 推播額度用完或本群組有推播失敗的回覆時，再提醒可以打 /進度 取回，但不附完整內容。
    */
   private async honestAck(c: DbClient, group: string, base: string) {
     const s = (
       await c.query<{
         paused: boolean;
+        triage_stopped: boolean;
         ai_out: boolean;
         no_project: boolean;
         push_out: boolean;
       }>(
         `SELECT COALESCE((s.value->>'paused')::boolean,false) OR COALESCE((s.value->>'triage_paused')::boolean,false) AS paused,
+           COALESCE((SELECT g.triage_failures>=3 FROM groups g WHERE g.id=$1),false) AS triage_stopped,
            COALESCE(s.value->>'ai_mode','')='subscription' AND COALESCE((SELECT NOT ok FROM service_health WHERE name=$2),false) AS ai_out,
            NOT EXISTS(SELECT 1 FROM group_projects gp JOIN projects p ON p.id=gp.project_id WHERE gp.group_id=$1 AND p.enabled AND p.validated_at IS NOT NULL) AS no_project,
            COALESCE((SELECT NOT ok FROM service_health WHERE name=$3),false) AS push_out
@@ -546,6 +586,7 @@ export class Line {
     return ackFor({
       base,
       paused: !!s?.paused,
+      triageStopped: !!s?.triage_stopped,
       noProject: !!s?.no_project,
       aiQuotaOut: !!s?.ai_out,
       undelivered: s?.push_out || pending.failed ? pending.count : 0,
@@ -667,8 +708,7 @@ export class Line {
           group_id: string | null;
           kind: string;
           text: string;
-          quick_replies:
-            { label: string; data: string; displayText: string }[] | null;
+          quick_replies: QuickReply[] | null;
         }>(
           "SELECT * FROM notifications WHERE sent_at IS NULL AND attempts<3 AND (group_id IS NOT NULL OR $1::text IS NOT NULL) ORDER BY created_at LIMIT 10 FOR UPDATE SKIP LOCKED",
           [s.admin_line_id ?? null],
@@ -690,13 +730,14 @@ export class Line {
               body: JSON.stringify({
                 // 群組成員沒有看板帳號，群組訊息不附看板連結。
                 to: n.group_id ?? s.admin_line_id,
+                // 群組補問附常見答案按鈕（quickReply）；管理者私訊不帶按鈕。
                 messages: [
-                  {
-                    type: "text",
-                    text: n.group_id
-                      ? n.text
-                      : `${n.text}\n${config().publicUrl}/${n.task_id ? `tasks?task=${n.task_id}` : (notificationView(n.kind) ?? "")}`,
-                  },
+                  n.group_id
+                    ? lineText({ text: n.text, quick: n.quick_replies })
+                    : {
+                        type: "text",
+                        text: `${n.text}\n${config().publicUrl}/${n.task_id ? `tasks?task=${n.task_id}` : (notificationView(n.kind) ?? "")}`,
+                      },
                 ],
               }),
               signal: AbortSignal.timeout(10000),

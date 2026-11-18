@@ -1,6 +1,6 @@
 import type { Database, DbClient } from "./db.js";
 import { AppError, classifyRisk, queryRisk, redact } from "./policy.js";
-import { notifyGroup } from "./group-replies.js";
+import { notifyGroup, type QuickReply } from "./group-replies.js";
 import { approvalNotice, saveProjectConfirmation } from "./project-routing.js";
 import { withAssumptions } from "../shared/clarification.js";
 import type { Task } from "../shared/types.js";
@@ -15,19 +15,99 @@ import { assertContextText } from "./project-context.js";
 const questionKey = (t: Pick<Task, "id" | "version">) =>
   `question:${t.id}:${t.version}`;
 
+/**
+ * 常見答案按鈕的 postback data：`answer:<taskId>:<version>:<index>`。
+ * 必須與 line.ts 群組 postback 分支的比對規則（answerPostback）一起改。
+ */
+export const answerPostbackData = (
+  t: Pick<Task, "id" | "version">,
+  index: number,
+) => `answer:${t.id}:${t.version}:${index}`;
+/** 解析常見答案按鈕的 postback data；索引只有一位數（常見答案最多三個）。 */
+export const answerPostback =
+  /^answer:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):(\d+):(\d)$/;
+
+/** LINE 快速回覆按鈕：標籤最多 20 字，按下後以使用者身分顯示的文字最多 300 字。 */
+const chars = (s: string, max: number) => Array.from(s).slice(0, max).join("");
+
+/**
+ * 每個常見答案一個按鈕。空白或含憑證格式的選項不給按鈕（ingest 也不會收），
+ * 索引沿用 question.choices 的位置，作答時以任務上的選項原文為準，不信任按鈕帶來的文字。
+ */
+export function questionButtons(t: Task): QuickReply[] {
+  return (t.question?.choices ?? []).flatMap((choice, i) =>
+    i <= 9 && choice.trim() && redact(choice) === choice
+      ? [
+          {
+            label: chars(choice.trim(), 20),
+            data: answerPostbackData(t, i),
+            displayText: chars(choice, 300),
+          },
+        ]
+      : [],
+  );
+}
+
 /** 在群組發出補問；群組設定不回覆時不發，仍由管理者私訊與看板處理。 */
 export async function askInGroup(c: DbClient, t: Task) {
   if (!t.question) return;
+  const buttons = questionButtons(t);
   const choices = t.question.choices.length
     ? `\n常見答案：${t.question.choices.join("／")}`
     : "";
+  // 按鈕在群組有新訊息後就會消失，所以仍要說明可以用「回覆」作答。
+  const how = buttons.length
+    ? "點下方的常見答案，也可以直接「回覆」這則訊息回答。"
+    : "直接「回覆」這則訊息回答就可以。";
   await notifyGroup(
     c,
     t.id,
     "question",
     questionKey(t),
-    `想跟你確認一件事（${t.title}）：\n${t.question.text}${choices}\n直接「回覆」這則訊息回答就可以。`,
+    `想跟你確認一件事（${t.title}）：\n${t.question.text}${choices}\n${how}`,
     "results",
+    buttons,
+  );
+}
+
+/**
+ * 群組成員點了常見答案按鈕（呼叫端已鎖定群組設定、確認群組啟用）。
+ * 鎖定任務並核對：同群組、版本與按鈕相同、仍在等回答、選項存在且不含憑證格式；
+ * 全部符合才以任務上的選項原文作答，權限與用「回覆」作答相同（修改仍等管理者確認）。
+ * 回傳更新後的任務；不符合時回傳 null。
+ */
+export async function answerByPostback(
+  db: Database,
+  c: DbClient,
+  groupId: string,
+  data: string,
+  eventId: string,
+) {
+  const m = answerPostback.exec(data);
+  if (!m) return null;
+  const t = (
+    await c.query<Task>(
+      "SELECT * FROM tasks WHERE id=$1 AND group_id=$2 FOR UPDATE",
+      [m[1], groupId],
+    )
+  ).rows[0];
+  const choice = t?.question?.choices[Number(m[3])];
+  if (
+    !t ||
+    t.version !== Number(m[2]) ||
+    t.status !== "awaiting_approval" ||
+    !choice?.trim() ||
+    redact(choice) !== choice
+  )
+    return null;
+  return applyAnswer(
+    db,
+    c,
+    t,
+    choice,
+    "群組成員（LINE）",
+    false,
+    `postback:${eventId}`,
   );
 }
 
