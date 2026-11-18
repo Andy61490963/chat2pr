@@ -31,6 +31,13 @@ describe("系統設定問題的辨識規則", () => {
       kind,
     );
   });
+  it("位址重疊只能換網段：處理方式不叫人減少保留環境", () => {
+    const fix = systemIssueOf(
+      new AppError(503, systemIssueText.subnetOverlap),
+    )?.fix;
+    expect(fix).toMatch(/CHECK_SUBNET_POOL/);
+    expect(fix).not.toMatch(/保留/);
+  });
   it("自訂映像名稱也認得", () =>
     expect(
       systemIssueOf(

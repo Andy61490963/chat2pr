@@ -330,10 +330,13 @@ export interface SystemIssue {
   fix: string;
 }
 
-const deployFix =
-  "請在部署目錄執行 npm run deploy，會重建定期檢查映像；完成後檢查會自動繼續。";
-const subnetFix =
-  "請到「系統」頁減少保留的檢查環境數，或在主機執行器的環境變數調整 CHECK_SUBNET_POOL 後以 npm run deploy 重新部署；完成後檢查會自動繼續。";
+// 排除後不會立刻重跑（間隔至少 6 小時），所以要說清楚何時繼續、怎麼立刻確認。
+const resumeHint =
+  "排除後會在下次重試時自動繼續，想立刻確認可按該檢查的「試跑」。";
+const deployFix = `請在部署目錄執行 npm run deploy，會重建定期檢查映像；${resumeHint}`;
+const subnetFix = `請到「系統」頁的「定期檢查環境」調低保留數上限或閒置時間，或在主機執行器的環境變數把 CHECK_SUBNET_POOL 改成更大的網段後以 npm run deploy 重新部署；${resumeHint}`;
+// 位址重疊與保留環境數無關，減少環境解決不了，只能換網段。
+const overlapFix = `請在主機執行器的環境變數把 CHECK_SUBNET_POOL 改成不和公司內網、其他 Docker 網路重疊的網段，再以 npm run deploy 重新部署；${resumeHint}`;
 
 export const systemIssueRules: (SystemIssue & { pattern: RegExp })[] = [
   {
@@ -358,7 +361,7 @@ export const systemIssueRules: (SystemIssue & { pattern: RegExp })[] = [
     kind: "subnet_overlap",
     pattern: /^定期檢查網路位址與其他網路重疊/,
     label: "定期檢查網路位址與其他網路重疊",
-    fix: subnetFix,
+    fix: overlapFix,
   },
 ];
 
