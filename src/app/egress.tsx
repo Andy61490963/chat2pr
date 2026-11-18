@@ -16,6 +16,28 @@ import {
 } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/form-controls";
 import { type Request, message } from "./shared";
+import { egressResetRemovals } from "../../shared/settings-diff";
+import { ConfirmButton } from "./confirm";
+
+// 還原會直接丟掉自訂網域，先列出會被移除的是哪些，避免誤觸讓安裝與下載失敗。
+function resetDescription(data: EgressSettings) {
+  const tail = "之後安裝與開發下載只能連預設清單上的網域。";
+  const removed = egressResetRemovals(data.domains, data.defaults);
+  if (!removed) return `會丟棄目前 ${data.domains.length} 個自訂網域。${tail}`;
+  if (!removed.length)
+    return `目前清單沒有預設以外的網域，會改回預設的 ${data.defaults.length} 個網域。`;
+  return (
+    <span className="flex flex-col gap-2">
+      <span>會移除這 {removed.length} 個不在預設清單的網域：</span>
+      <span className="flex max-h-40 flex-col overflow-y-auto rounded-md bg-muted px-2 py-1.5 font-mono text-xs break-all text-foreground">
+        {removed.map((d) => (
+          <span key={d}>{d}</span>
+        ))}
+      </span>
+      <span>{tail}</span>
+    </span>
+  );
+}
 
 /** 系統頁：安裝階段、系統套件與開發下載共用的下載來源白名單（#18）。 */
 export function EgressCard({ request }: { request: Request }) {
@@ -105,13 +127,16 @@ export function EgressCard({ request }: { request: Request }) {
               >
                 儲存
               </Button>
-              <Button
+              <ConfirmButton
                 variant="outline"
                 disabled={busy || !data.custom}
-                onClick={() => void save(true)}
+                title="還原預設白名單？"
+                description={resetDescription(data)}
+                confirm="還原預設"
+                onConfirm={() => save(true)}
               >
                 還原預設
-              </Button>
+              </ConfirmButton>
               <span className="text-xs text-muted-foreground">
                 {data.custom ? "已自訂" : "使用預設清單"}，共{" "}
                 {data.domains.length} 個（最多 {data.max}）。變更會寫入稽核。

@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import type { Database } from "./db.js";
 import type { Settings } from "../shared/types.js";
 import { recordHealth } from "./health.js";
@@ -113,6 +114,51 @@ export function memoryHold(r: HostResources, paused = false): string | null {
 }
 
 /**
+ * 解析 Linux `/proc/meminfo`（純函式）：回傳 Docker（WSL2）VM 的總量與可用量（MB）。
+ * 可用量優先用 `MemAvailable`（含可回收的快取），舊核心沒有時退回 `MemFree`。
+ * 欄位缺少或格式不是「數字 kB」時就不填，不猜測。
+ */
+export function parseMeminfo(
+  text: string,
+): Pick<HostResources, "vmTotalMb" | "vmAvailMb"> {
+  const kb = (key: string) => {
+    const m = new RegExp(`^${key}:[ \\t]+(\\d+)[ \\t]+kB[ \\t]*$`, "m").exec(
+      text,
+    );
+    return m ? Number(m[1]) : undefined;
+  };
+  const mb = (v: number | undefined) =>
+    v === undefined || !Number.isFinite(v) ? undefined : Math.round(v / 1024);
+  const total = mb(kb("MemTotal"));
+  const avail = mb(kb("MemAvailable") ?? kb("MemFree"));
+  const out: Pick<HostResources, "vmTotalMb" | "vmAvailMb"> = {};
+  if (total !== undefined && total > 0) out.vmTotalMb = total;
+  if (avail !== undefined && (out.vmTotalMb === undefined || avail <= total!))
+    out.vmAvailMb = avail;
+  return out;
+}
+
+/**
+ * app 容器跑在 Docker（WSL2）VM 內，讀自己的 `/proc/meminfo` 就是 VM 的數字；
+ * 不經執行器、不做 docker exec。讀不到（例如在 Windows 上跑測試）就不填。
+ * 只供系統頁顯示與比對，暫停派工仍以 Windows 主機的 `memFreeMb` 判斷（`memoryHold`）。
+ */
+export async function withVmMemory(
+  r: HostResources,
+  read: () => Promise<string> = () => readFile("/proc/meminfo", "utf8"),
+): Promise<HostResources> {
+  try {
+    return { ...r, ...parseMeminfo(await read()) };
+  } catch {
+    return r;
+  }
+}
+const vmText = (r: HostResources) =>
+  r.vmAvailMb !== undefined && r.vmTotalMb !== undefined
+    ? `；Docker VM 可用 ${gbText(r.vmAvailMb)}／共 ${gbText(r.vmTotalMb)}（僅供參考）`
+    : "";
+
+/**
  * 排程器每輪讀一次主機資源並寫進系統狀態；記憶體不足時回傳暫停原因。
  * 讀不到資源（執行器暫時無回應）不擋派工，仍有每個容器的記憶體與程序數上限；
  * 這時只靜默更新狀態，不算一次「恢復」，也不通知。
@@ -120,6 +166,7 @@ export function memoryHold(r: HostResources, paused = false): string | null {
 export async function checkHostResources(
   db: Database,
   read: () => Promise<unknown>,
+  readMeminfo?: () => Promise<string>,
 ): Promise<string | null> {
   let resources: HostResources | null = null;
   try {
@@ -137,6 +184,7 @@ export async function checkHostResources(
     );
     return null;
   }
+  resources = await withVmMemory(resources, readMeminfo);
   // 目前是否在暫停中：上一次讀數要求暫停，或管理者最後收到的是「異常」（中間讀不到資源時
   // 狀態會被靜默改成正常，仍要沿用恢復門檻，避免剛過 2 GB 就恢復又暫停）。
   const previous = await db.one<{ ok: boolean; notified_ok: boolean | null }>(
@@ -151,7 +199,7 @@ export async function checkHostResources(
     hostHealthName,
     !hold,
     hold ??
-      `Windows 主機可用記憶體 ${gbText(resources.memFreeMb)}／共 ${gbText(resources.memTotalMb)}`,
+      `Windows 主機可用記憶體 ${gbText(resources.memFreeMb)}／共 ${gbText(resources.memTotalMb)}${vmText(resources)}`,
     { confirm: true },
   );
   return hold;

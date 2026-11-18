@@ -1,4 +1,5 @@
 import { createFollowup, relinkTask } from "./followup.js";
+import { probeSystem } from "./system-status.js";
 import { answerFromDashboard } from "./answers.js";
 import { frictionMetrics } from "./friction.js";
 import {
@@ -73,9 +74,11 @@ import type {
   NotificationFailures,
   NotificationRetryResult,
   Project,
+  Settings,
   StateTotals,
   TaskStatus,
 } from "../shared/types.js";
+import { describeChanges, settingsDiff } from "../shared/settings-diff.js";
 import {
   countStatuses,
   efforts,
@@ -1280,7 +1283,7 @@ export async function buildApp(
     return { ok: true };
   });
   app.put("/api/settings", async (req) => {
-    await requireAdmin(db, req);
+    const admin = await requireAdmin(db, req);
     const b = z
       .object({
         paused: z.boolean(),
@@ -1324,14 +1327,21 @@ export async function buildApp(
       );
       if (!checked.ok) throw new AppError(409, "請先執行串接檢查");
     }
-    await db.query("UPDATE settings SET value=value || $1::jsonb WHERE id=1", [
-      JSON.stringify(b),
-    ]);
+    // 同一個語句先鎖住、讀出舊值再更新，稽核寫的差異才對得上這次實際的改動。
+    // CTE 不叫 old：PostgreSQL 18 起 RETURNING 的 old／new 是保留別名。
+    const { before } = await db.one<{ before: Partial<Settings> }>(
+      `WITH prev AS (SELECT value FROM settings WHERE id=1 FOR UPDATE)
+       UPDATE settings s SET value=s.value || $1::jsonb FROM prev WHERE s.id=1
+       RETURNING prev.value AS before`,
+      [JSON.stringify(b)],
+    );
     await db.audit(
       null,
       "settings",
-      b.paused ? "已暫停新派工" : "工作流程設定已更新",
+      `管理者 ${admin.login} 更新工作流程設定：${describeChanges(settingsDiff(before, b))}`,
     );
+    if (b.paused && !before.paused)
+      await db.audit(null, "settings", "暫停新派工");
     return { ok: true };
   });
   app.post("/api/notifications/retry", async (req) => {
@@ -1382,13 +1392,9 @@ export async function buildApp(
   // 訂閱額度、重置時間與可用模型，由主機執行器以服務登入向 Codex 查詢。
   app.get("/api/system", async (req) => {
     await requireAdmin(db, req);
-    const r = await fetch(`${config().runnerUrl}/system`, {
-      headers: { "x-runner-key": secrets().runnerSecret ?? "" },
-      signal: AbortSignal.timeout(20000),
-    });
-    const data = (await r.json()) as { error?: string };
-    if (!r.ok) throw new AppError(r.status, data.error ?? "無法讀取容器狀態");
-    return data;
+    // 執行器沒回應、Docker 沒回應或逾時都回 200 與 runner.state，看板才分得出是哪一段出問題。
+    const c = config();
+    return probeSystem(c.runnerUrl, secrets().runnerSecret ?? "", c.instance);
   });
   app.get("/api/codex/account", async (req) => {
     await requireUser(db, req);

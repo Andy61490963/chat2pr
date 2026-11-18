@@ -10,6 +10,7 @@ import {
   parseResources,
   queueSnapshot,
   suggestedMaxRuns,
+  withVmMemory,
 } from "./capacity.js";
 import type { Capacity, CapacityQueued } from "../shared/capacity.js";
 
@@ -24,7 +25,9 @@ export function registerCapacity(
 ) {
   app.get("/api/capacity", async (req): Promise<Capacity> => {
     await requireUser(db, req);
-    const host = parseResources(await readResources().catch(() => null));
+    const windows = parseResources(await readResources().catch(() => null));
+    // Docker VM 可用記憶體由 app 自己讀 /proc/meminfo，只顯示、不影響暫停判斷。
+    const host = windows && (await withVmMemory(windows));
     // 排隊原因與任務詳情共用同一套判斷（queueSnapshot）。
     const snapshot = await queueSnapshot(db);
     return {
