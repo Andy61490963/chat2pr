@@ -14,8 +14,13 @@ import {
   isTime,
   minIntervalMinutes,
   nextRunAt,
+  systemIssueOf,
+  systemIssueOfSummary,
+  systemIssuePrefix,
+  systemIssueRetryHours,
   type ScheduledCheck,
   type SqlCondition,
+  type SystemIssue,
 } from "../shared/checks.js";
 import type { Task } from "../shared/types.js";
 import {
@@ -144,6 +149,8 @@ type ListedCheck = ScheduledCheck & {
   missing_connection: boolean;
   /** 目前這段連續「系統暫時無法執行」從何時開始；最近一次不是系統問題時為 null。 */
   host_unavailable_since: string | null;
+  /** 最近一次執行卡在需要管理者處理的系統設定問題（映像缺失、子網路用完等）；不是時為 null。 */
+  system_issue: SystemIssue | null;
   environment?: CheckEnvironmentView;
 };
 
@@ -166,6 +173,7 @@ async function assertSqlConnection(db: Database, id: string) {
  * 主機端暫時無法執行：執行器連不上（沒有狀態碼的連線錯誤），或執行器、檢查環境回 502／503
  * （回應不完整、環境建立失敗、啟動逾時、檢查容器連不上、環境已停止）。
  * 504「檢查執行逾時」、4xx 與 500（SQL 或目標連線錯誤）仍算檢查本身的錯誤。
+ * 503 裡的系統設定問題（shared/checks.ts 的 systemIssueOf）另外處理，runCheck 先判斷它。
  */
 export function isHostUnavailable(e: unknown) {
   const status = (e as { statusCode?: unknown } | null)?.statusCode;
@@ -181,7 +189,10 @@ export async function listChecks(
   call?: RunnerCall,
 ): Promise<ListedCheck[]> {
   const rows = await db.query<
-    Omit<ListedCheck, "environment" | "host_unavailable_since"> & {
+    Omit<
+      ListedCheck,
+      "environment" | "host_unavailable_since" | "system_issue"
+    > & {
       host_unavailable_since: Date | string | null;
       conn_updated_at: Date | null;
       conn_host_key: string | null;
@@ -202,6 +213,9 @@ export async function listChecks(
         host_unavailable_since: host_unavailable_since
           ? new Date(host_unavailable_since).toISOString()
           : null,
+        // 只有執行中的檢查算「等待系統問題排除」；暫停或待核准的不會被排程，也就不受影響。
+        system_issue:
+          c.status === "active" ? systemIssueOfSummary(c.last_summary) : null,
       },
       connection: conn_updated_at
         ? { updated_at: conn_updated_at, ssh_host_key: conn_host_key }
@@ -611,6 +625,33 @@ async function investigate(
   return true;
 }
 
+/** 臺北日期（YYYY-MM-DD），系統設定問題的通知一天一則用。 */
+const taipeiDate = (d: Date) =>
+  new Date(d.getTime() + 8 * 3600000).toISOString().slice(0, 10);
+
+/**
+ * 系統設定問題第一次發生時私訊管理者一次並寫稽核。去重以「問題種類＋臺北日期」：
+ * 同一個問題會讓所有檢查一起失敗，不能每個檢查各發一則；多個檢查同時遇到時，
+ * notifications.dedupe_key 的唯一限制保證只有一筆寫入成功，稽核跟著它寫。
+ */
+async function notifySystemIssue(
+  db: Database,
+  c: DbClient,
+  issue: SystemIssue,
+  summary: string,
+  now: Date,
+) {
+  const detail = summary.slice(systemIssuePrefix.length);
+  const text = `定期檢查因系統設定問題暫停執行：${issue.label}。${issue.fix}\n詳細訊息：${detail}\n檢查狀態不變、不計入連續失敗，問題排除前至少間隔 ${systemIssueRetryHours} 小時才重試；今天同一個問題不再通知。`;
+  const inserted = (
+    await c.query(
+      "INSERT INTO notifications(task_id,kind,dedupe_key,text) VALUES(NULL,'check',$1,$2) ON CONFLICT DO NOTHING",
+      [`check-system:${issue.kind}:${taipeiDate(now)}`, text],
+    )
+  ).rowCount;
+  if (inserted) await db.audit(null, "check_system_issue", text, c);
+}
+
 /** 執行一個到期的檢查並更新狀態；狀態改變才通知。 */
 export async function runCheck(
   db: Database,
@@ -622,15 +663,18 @@ export async function runCheck(
   let outcome: "ok" | "alert" | "error";
   let summary: string;
   let host = false;
+  let issue: SystemIssue | null = null;
   try {
     const r = await probe(db, call, check);
     outcome = r.alert ? "alert" : "ok";
     summary = redact(r.summary).slice(0, 500);
   } catch (e) {
     outcome = "error";
-    host = isHostUnavailable(e);
+    // 系統設定問題也是 503，要先認出來，不能落到暫時性的主機問題。
+    issue = systemIssueOf(e);
+    host = !issue && isHostUnavailable(e);
     summary =
-      (host ? hostUnavailablePrefix : "") +
+      (issue ? systemIssuePrefix : host ? hostUnavailablePrefix : "") +
       redact(e instanceof Error ? e.message : String(e)).slice(0, 300);
   }
   await db.transaction(async (c) => {
@@ -654,6 +698,22 @@ export async function runCheck(
       )
     ).rows[0];
     const next = nextRunAt(current, now);
+    if (issue) {
+      // 需要管理者處理的系統問題：和檢查本身無關，不累計、不歸零連續失敗、不改狀態；
+      // 不會自己好，重試間隔拉長到下次排程與 6 小時取較晚者，避免每小時白跑。
+      const retry = new Date(
+        Math.max(
+          next.getTime(),
+          now.getTime() + systemIssueRetryHours * 3600000,
+        ),
+      );
+      await c.query(
+        "UPDATE scheduled_checks SET last_run_at=$2,next_run_at=$3,updated_at=now() WHERE id=$1",
+        [check.id, now, retry],
+      );
+      await notifySystemIssue(db, c, issue, summary, now);
+      return;
+    }
     if (host) {
       // 系統問題和檢查本身無關：不累計、不歸零連續失敗，不改狀態；退避後重試，恢復後自動繼續。
       const recent = (
