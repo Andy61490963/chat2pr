@@ -7,6 +7,10 @@ import {
   keyErrorLines,
   stripInternals,
 } from "../server/failure.js";
+import {
+  ValidationPhaseError,
+  validationOutputMark,
+} from "../server/execution.js";
 import { codexSdkCrash, codexSdkStackOnly } from "./failure-samples.js";
 
 // 正式環境近 30 天看得到、但使用者看不懂的失敗訊息（#22），各自固定分類與白話說明。
@@ -113,6 +117,19 @@ describe("其他分類", () => {
     ["Codex 執行失敗：本機代理回應 429", "code", "config"],
     ["HttpError: Bad credentials", "publish", "config"],
     ["任務已取消、暫停或需求版本已改變", "code", "config"],
+    ["任務超過 5 分鐘限制", "code", "project"],
+    // 訂閱代理在階段期限到了回的訊息（runner-main、subscription-broker）。
+    ["訂閱階段已超過期限", "code", "project"],
+    // 容器被停時執行器只回這句；沒有記到真正原因時也不能說成「預期外的錯誤」。
+    ["工作已取消", "code", "config"],
+    ["系統已暫停派工，執行中的工作已保留", "code", "config"],
+    ["需求版本已改變，已停止這次執行", "code", "config"],
+    ["任務已取消或狀態已改變，已停止這次執行", "review", "config"],
+    ["群組已停用，已停止這次執行", "code", "config"],
+    ["群組已不再綁定這個專案，已停止這次執行", "code", "config"],
+    ["任務的目標專案已改變，已停止這次執行", "code", "config"],
+    ["專案已停用，已停止這次執行", "test", "config"],
+    ["專案設定已變更，需要重新驗證環境，已停止這次執行", "install", "config"],
     ["建置設定 README.md 過大，請使用進階設定", "starting", "system"],
     ["上游回應 503 Service Unavailable", "review", "transient"],
     // 測試輸出裡的連線錯誤是專案問題，不能當成網路問題重試。
@@ -125,6 +142,79 @@ describe("其他分類", () => {
     ["安裝失敗：npm ERR! code ETIMEDOUT", "install", "transient"],
   ])("%s → %s 階段 → %s", (raw, phase, category) => {
     expect(classifyFailure(raw, phase).category).toBe(category);
+  });
+});
+
+describe("逾時的建議", () => {
+  it("不建議做不到的「調高時間」，先建議縮小範圍並說明上限", () => {
+    const f = classifyFailure("任務超過 30 分鐘限制", "code");
+    expect(f.action).toContain("縮小需求範圍");
+    expect(f.action).toContain("上限 30 分鐘");
+    expect(f.action).not.toContain("調高");
+  });
+});
+
+// 環境驗證失敗顯示在專案頁：那裡沒有「重試」按鈕也沒有任務的執行紀錄，建議要對應專案頁的按鈕。
+describe("環境驗證的建議處理", () => {
+  it.each([
+    ["安裝失敗：npm ERR! code ETIMEDOUT", "install", "transient", "驗證環境"],
+    [
+      "安裝失敗：npm ERR! 404 Not Found - GET https://registry.npmjs.org/@contoso%2fmissing",
+      "install",
+      "environment",
+      "進階設定改安裝指令",
+    ],
+    [
+      "測試失敗：Assert.Equal() Failure",
+      "test",
+      "project",
+      "修好儲存庫的建置或測試",
+    ],
+    [
+      "測試失敗：sh: 1: dotnet: not found",
+      "test",
+      "environment",
+      "專案專屬映像",
+    ],
+    [
+      "命令沒有找到可執行的測試，不能標示為測試通過；請檢查測試範圍",
+      "test",
+      "project",
+      "調整測試指令",
+    ],
+    [
+      "測試環境問題（不是程式沒過）：容器內的 SQL Server 沒有啟動成功。",
+      "test",
+      "environment",
+      "驗證環境",
+    ],
+  ])("%s（%s）→ %s，建議提到「%s」", (raw, phase, category, hint) => {
+    const f = classifyFailure(raw, phase, "validation");
+    expect(f.category).toBe(category);
+    expect(f.action).toContain(hint);
+    expect(f.action).not.toMatch(/按「重試」|執行紀錄/);
+  });
+
+  it("沒有專屬驗證建議的分類也不會叫人按「重試」或看執行紀錄", () => {
+    for (const raw of [
+      "TypeError: Cannot read properties of undefined (reading 'x')",
+      "HttpError: Bad credentials",
+      "任務超過 30 分鐘限制",
+      "環境設定已變更，請重新驗證",
+      "Codex 執行失敗：stream disconnected",
+    ])
+      expect(classifyFailure(raw, "", "validation").action).not.toMatch(
+        /按「重試」|執行紀錄/,
+      );
+  });
+
+  it("安裝指令沒有任何輸出就失敗：不叫人看執行紀錄，也不附空的原始摘要", () => {
+    const { text } = new ValidationPhaseError("安裝", "install", "\n").notice();
+    expect(text.startsWith("環境問題（安裝階段）")).toBe(true);
+    expect(text).toContain("錯誤重點：指令沒有留下任何輸出");
+    expect(text).toContain("建議：");
+    expect(text).not.toContain("執行紀錄");
+    expect(text).not.toContain(validationOutputMark.trim());
   });
 });
 
