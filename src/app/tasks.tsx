@@ -151,7 +151,8 @@ export function TasksView({
     <div className="flex flex-col gap-6">
       <div className="flex flex-col gap-3">
         <Tabs value={filter} onValueChange={setFilter}>
-          <TabsList>
+          {/* 六個分頁在手機上放不下要左右捲；置中排列時左邊超出的部分捲不到，改靠左。 */}
+          <TabsList className="justify-start">
             {filters.map((f) => (
               <TabsTrigger key={f.id} value={f.id}>
                 {f.label}

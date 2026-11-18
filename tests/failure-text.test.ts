@@ -200,4 +200,12 @@ describe("waitHint：等待額度的恢復說明", () => {
     );
     expect(waitHint(null, "subscription")).toContain("訂閱額度");
   });
+  it("查不到訂閱額度時不說額度已用完", () => {
+    const hint = waitHint(
+      "無法確認 Codex 訂閱額度，已保留訊息與工作；稍後重新檢查",
+      "subscription",
+    );
+    expect(hint).toContain("暫時無法確認");
+    expect(hint).not.toContain("已達上限");
+  });
 });
