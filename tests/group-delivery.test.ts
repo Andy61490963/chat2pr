@@ -8,10 +8,15 @@ import {
   rateLimitedPrefix,
   repliesOffNote,
   replyFailedNote,
+  replyGaveUpNote,
   supersededNote,
   undelivered,
 } from "../shared/group-delivery.js";
-import { expiredNote, quotaExhaustedDetail } from "../shared/line-quota.js";
+import {
+  expiredNote,
+  quotaExhaustedDetail,
+  quotaShortForGroup,
+} from "../shared/line-quota.js";
 import * as server from "../server/group-replies.js";
 
 const sentAt = "2026-11-18T01:00:00.000Z";
@@ -100,6 +105,25 @@ describe("群組訊息送達狀態", () => {
     const d = state({ last_error: "剩餘推播額度不足群組人數，額度恢復後再送" });
     expect(d).toMatchObject({ status: "pending", reason: "group_size" });
     expect(deliveryNotice(d)).toContain("這則群組訊息沒有送出");
+    // flushNotifications 實際寫入的字（人數已知與未知兩種）。
+    for (const members of [12, null])
+      expect(
+        state({ last_error: quotaShortForGroup(3, members) }),
+      ).toMatchObject({ status: "pending", reason: "group_size" });
+  });
+  it("伺服器實際寫入的「補送多次失敗」算送不出去", () => {
+    expect(state({ last_error: replyGaveUpNote })).toMatchObject({
+      status: "failed",
+      reason: "reply_failed",
+      note: "以 /進度 補送多次失敗",
+    });
+    // 額度用完期間也一樣：/進度 已不再取回，要管理者代為轉達。
+    expect(
+      deliveryState(
+        { sent_at: null, attempts: 0, last_error: replyGaveUpNote },
+        { quotaBlocked: true },
+      ).status,
+    ).toBe("failed");
   });
   it("一般限流與其他錯誤：未滿 3 次是送出中，滿 3 次是送不出去", () => {
     // flushNotifications 寫入的是 redact(String(e))：前面帶「Error: 」。
@@ -204,6 +228,7 @@ describe("群組訊息送達狀態", () => {
   it("固定文字與伺服器寫入的字一致", () => {
     expect(claimingNote).toBe(server.claimingNote);
     expect(replyFailedNote).toBe(server.replyFailedNote);
+    expect(replyGaveUpNote).toBe(server.replyGaveUpNote);
     expect(supersededNote).toBe(server.supersededNote);
     // 總開關關閉與一般限流的字直接寫在 flushNotifications 裡。
     const line = readFileSync(
