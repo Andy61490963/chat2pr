@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/select";
 import { readApiResponse } from "./api-response";
 import { duration } from "./shared";
+import { pickRun, pinFor } from "../../shared/run-pick.js";
 
 type Page = {
   events: RunEvent[];
@@ -52,12 +53,18 @@ export function RunObserver({
   taskId: string;
   runs: RunView[];
 }) {
-  const [selected, setSelected] = useState(runs[0]?.id ?? "");
-  const [before, setBefore] = useState<number | undefined>();
+  // null 代表跟隨最新：重試後新執行排到最前面，畫面自動切過去；手動選了舊紀錄才固定在那次。
+  const [pinned, setPinned] = useState<string | null>(null);
+  // 「較早紀錄」的游標綁在當時那次執行上，切到別次執行時不會沿用。
+  const [cursor, setCursor] = useState<{ run: string; before: number } | null>(
+    null,
+  );
   const [page, setPage] = useState<Page | null>(null);
   const [error, setError] = useState("");
   const [received, setReceived] = useState<string | null>(null);
-  const run = runs.find((r) => r.id === selected) ?? runs[0];
+  const run = pickRun(runs, pinned);
+  const before = cursor && cursor.run === run?.id ? cursor.before : undefined;
+  const newer = !!run && !!runs[0] && runs[0].id !== run.id;
   useEffect(() => {
     if (!run) return;
     let disposed = false,
@@ -133,8 +140,8 @@ export function RunObserver({
             <Select
               value={run.id}
               onValueChange={(v) => {
-                setSelected(v);
-                setBefore(undefined);
+                setPinned(pinFor(runs, v));
+                setCursor(null);
               }}
             >
               <SelectTrigger
@@ -152,6 +159,19 @@ export function RunObserver({
                 ))}
               </SelectContent>
             </Select>
+            {newer && (
+              <Button
+                variant="link"
+                size="xs"
+                className="h-auto self-start p-0"
+                onClick={() => {
+                  setPinned(null);
+                  setCursor(null);
+                }}
+              >
+                有較新的執行，切換到最新
+              </Button>
+            )}
           </div>
           <dl className="mt-3 grid grid-cols-[5rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs">
             <dt>執行 ID</dt>
@@ -229,7 +249,9 @@ export function RunObserver({
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setBefore(page.nextBefore!)}
+                onClick={() =>
+                  setCursor({ run: run.id, before: page.nextBefore! })
+                }
               >
                 較早紀錄
               </Button>
@@ -238,7 +260,7 @@ export function RunObserver({
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setBefore(undefined)}
+                onClick={() => setCursor(null)}
               >
                 回到最新
               </Button>

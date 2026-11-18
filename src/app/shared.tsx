@@ -1,6 +1,8 @@
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import type { RunView } from "../../shared/observation.js";
 import type { ContextEvidence } from "../../shared/context-evidence.js";
+import type { TaskQueue } from "../../shared/capacity.js";
+import { memoryHold as hostMemoryHold } from "../../shared/host-hold.js";
 import {
   Ban,
   CircleHelp,
@@ -127,6 +129,8 @@ export type Detail = {
     tasks: { id: string; title: string }[];
   }[];
   runs: RunView[];
+  /** 排隊中為什麼還沒開始；不在排隊中或舊版伺服器沒有這個欄位時為 null／undefined。 */
+  queue?: TaskQueue | null;
   /** 對話串：這一題之前的各題（由舊到新）與之後的追問。 */
   thread?: {
     before: ThreadItem[];
@@ -168,11 +172,24 @@ export type Request = <T>(
   method?: string,
   body?: unknown,
 ) => Promise<T>;
+/**
+ * 送出並顯示結果。回傳 true 代表請求成功（之後的重新整理失敗也算成功，避免使用者重送）；
+ * false 代表失敗並已顯示錯誤。表單只在 true 時清空輸入，失敗時保留原字。
+ */
 export type Run = (
   fn: () => Promise<unknown>,
   message?: string,
-) => Promise<void>;
-export type Act = (t: Task, a: Action, b?: object, done?: string) => unknown;
+) => Promise<boolean>;
+export type Act = (
+  t: Task,
+  a: Action,
+  b?: object,
+  done?: string,
+) => Promise<boolean>;
+
+/** 主機記憶體不足而自動暫停派工的原因；沒有暫停或檢查結果已過期時為 null。 */
+export const memoryHold = (state: State | null | undefined) =>
+  hostMemoryHold(state?.health);
 
 export const attention = ["awaiting_approval", "failed", "budget_wait"];
 export const moving = ["queued", "running", "reviewing"];

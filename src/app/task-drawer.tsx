@@ -5,9 +5,16 @@ import { QueryReport } from "./query-report";
 import { TaskBranchPicker } from "./task-branch-picker";
 import { TaskClarification } from "./task-clarification";
 import {
+  fixFirst,
+  fixPage,
+  fixPageLabels,
+  parseFailure,
+} from "../../shared/failure-text.js";
+import {
   AlertCircle,
   Check,
   CheckCircle2,
+  Clock,
   ExternalLink,
   FolderGit2,
   RefreshCw,
@@ -50,6 +57,14 @@ import {
   Stepper,
 } from "./shared";
 
+const clock = (v: string) =>
+  new Date(v).toLocaleTimeString("zh-TW", {
+    timeZone: "Asia/Taipei",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+
 export function TaskDrawer({
   detail,
   state,
@@ -73,9 +88,9 @@ export function TaskDrawer({
   /** 開啟對話串中的另一題。 */
   open: (id: string) => void;
   /** 對已回答的查詢追問，建立新的一題。 */
-  followup: (t: Detail["task"], text: string) => unknown;
-  /** 直接回答補問。 */
-  answer: (t: Detail["task"], text: string) => Promise<unknown>;
+  followup: (t: Detail["task"], text: string) => Promise<boolean>;
+  /** 直接回答補問；成功才回傳 true，失敗時呼叫端保留輸入。 */
+  answer: (t: Detail["task"], text: string) => Promise<boolean>;
   /** 接錯題時改接到另一題，或改成新話題（null）。 */
   relink: (t: Detail["task"], parentId: string | null) => unknown;
 }) {
@@ -178,6 +193,16 @@ export function TaskDrawer({
   const options =
     deciding && t.mode === "change" && !t.question && t.suggestions.length > 0;
   const sensitive = t.risk_reasons.length > 0;
+  // 排隊原因（PR #42 的任務詳情 queue 欄位）；舊版伺服器沒有這個欄位時不顯示。
+  const queue = t.status === "queued" ? (detail.queue ?? null) : null;
+  // 建議指向的頁面只給管理者連結；成員進不了那些頁面。
+  const queuePage = admin && queue ? fixPage(queue.hint) : null;
+  // 自動重試排隊或重跑期間，last_error 是上一次嘗試的原因，不是目前已失敗。
+  const retrying = ["queued", "running", "reviewing"].includes(t.status);
+  const failure = t.status === "failed" ? parseFailure(t.last_error) : null;
+  const demoteRetry = fixFirst(failure?.category);
+  const fixTarget =
+    admin && failure && demoteRetry ? fixPage(failure.action) : null;
   const hasEvidence =
     detail.contextEvidence.length > 0 ||
     detail.images.length > 0 ||
@@ -412,15 +437,63 @@ export function TaskDrawer({
               />
             )}
           </section>
-          {t.last_error && (
-            <p
-              className={`flex gap-2 rounded-lg px-3 py-2.5 text-sm ${t.last_error.startsWith("AI 等你回答") ? "bg-warn-soft text-warn" : "bg-danger-soft text-danger"}`}
+          {queue && (
+            <div
+              role="status"
+              aria-label="排隊原因"
+              className="flex gap-2 rounded-lg bg-info-soft px-3 py-2.5 text-sm text-info"
             >
-              <AlertCircle className="mt-0.5 size-4 shrink-0" />
-              <span className="whitespace-pre-wrap [overflow-wrap:anywhere]">
-                <Linkified text={t.last_error.replace(/^Error: /, "")} />
-              </span>
-            </p>
+              <Clock className="mt-0.5 size-4 shrink-0" />
+              <div className="flex min-w-0 flex-1 flex-col gap-1">
+                <p className="[overflow-wrap:anywhere]">
+                  排隊中（第 {queue.position} 位）：{queue.text}
+                </p>
+                {queue.hint && (
+                  <p className="flex flex-wrap items-center gap-x-2 text-xs [overflow-wrap:anywhere]">
+                    <span>建議：{queue.hint}</span>
+                    {queuePage && (
+                      <Button
+                        variant="link"
+                        size="xs"
+                        className="h-auto p-0 text-info"
+                        onClick={() => go(queuePage)}
+                      >
+                        {fixPageLabels[queuePage]}
+                      </Button>
+                    )}
+                  </p>
+                )}
+                {queue.retry_at && queue.code !== "retry" && (
+                  <p className="text-xs">
+                    將於 {clock(queue.retry_at)} 自動重試
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+          {t.last_error && (
+            <div
+              className={cn(
+                "flex gap-2 rounded-lg px-3 py-2.5 text-sm",
+                t.last_error.startsWith("AI 等你回答")
+                  ? "bg-warn-soft text-warn"
+                  : retrying
+                    ? "bg-info-soft text-info"
+                    : "bg-danger-soft text-danger",
+              )}
+            >
+              {retrying ? (
+                <RefreshCw className="mt-0.5 size-4 shrink-0" />
+              ) : (
+                <AlertCircle className="mt-0.5 size-4 shrink-0" />
+              )}
+              <div className="flex min-w-0 flex-col gap-0.5">
+                {retrying && <p className="font-medium">上一次嘗試</p>}
+                <span className="whitespace-pre-wrap [overflow-wrap:anywhere]">
+                  <Linkified text={t.last_error.replace(/^Error: /, "")} />
+                </span>
+              </div>
+            </div>
           )}
           {notes.length > 0 && (
             <div className="flex gap-2 rounded-lg bg-warn-soft px-3 py-2.5 text-sm text-warn">
@@ -497,8 +570,8 @@ export function TaskDrawer({
                 <Button
                   disabled={busy || !ask.trim()}
                   onClick={async () => {
-                    await followup(t, ask.trim());
-                    setAsk("");
+                    // 送出失敗（例如 409、連線中斷）時保留原字，離開提醒也跟著保留。
+                    if (await followup(t, ask.trim())) setAsk("");
                   }}
                 >
                   {adding ? "送出追加" : "追問"}
@@ -897,8 +970,15 @@ export function TaskDrawer({
                 拒絕
               </ConfirmButton>
             )}
+            {fixTarget && (
+              <Button onClick={() => go(fixTarget)}>
+                {fixPageLabels[fixTarget]}
+              </Button>
+            )}
             {["failed", "budget_wait"].includes(t.status) && (
               <Button
+                // 設定、環境、專案類失敗不先處理，重試只會再失敗一次、多用一次每日次數。
+                variant={demoteRetry ? "outline" : "default"}
                 disabled={busy}
                 onClick={() => void act(t, "retry", {}, "已重新排程")}
               >
