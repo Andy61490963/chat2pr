@@ -8,6 +8,7 @@
  * 「/任務」訊息的立即回覆使用 reply token，不計入推播額度，off 以外都會回。
  */
 import type { DbClient } from "./db.js";
+import { redact } from "./policy.js";
 import type { TaskStatus } from "../shared/types.js";
 
 export type ReplyMode = "off" | "results" | "all";
@@ -73,8 +74,9 @@ export async function notifyGroupDirect(
 /** 判讀沒有建立新任務時，回給用 /任務 提出的群組的說明（推播，不用 reply token）。 */
 export const triageDuplicateText = (title: string) =>
   `這則和「${title}」是同一件事，已記在那題，處理完會一起回報，不用重新提出。`;
+/** 記住的內容回到群組前先遮罩憑證格式，並以字元（非 UTF-16 單位）截到 100 字，避免切壞表情符號。 */
 export const triageRememberedText = (content: string) =>
-  `已記住：${content.slice(0, 100)}`;
+  `已記住：${Array.from(redact(content)).slice(0, 100).join("")}`;
 export const triageKnownMemoryText = "這條已經記住了。";
 export const triageIgnoredText =
   "這則沒有看到要處理的事項，請在 /任務 後寫清楚要查或要改什麼。";
