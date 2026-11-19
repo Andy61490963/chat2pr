@@ -95,6 +95,24 @@ describe("實際錯誤樣本的分類", () => {
     expect(fetch.category).toBe("transient");
     expect(fetch.plain).toContain("網路連線中斷");
   });
+  it("測試在容器裡仍連 LocalDB（SqlClient error 25）：專案問題，指出原始碼位置，不當成網路問題", () => {
+    const output = [
+      "Unhandled exception. Microsoft.Data.SqlClient.SqlException (0x80131904): A network-related or instance-specific error occurred while establishing a connection to SQL Server. The server was not found or was not accessible. (provider: TCP Provider, error: 25 - Connection string is not valid)",
+      "   at Microsoft.Data.SqlClient.SqlConnectionFactory.CreateConnection(DbConnectionOptions options)",
+      "   at Program.<Main>$(String[] args) in /workspace/obj/Release/Generated.cs:line 2",
+      "   at Program.<Main>$(String[] args) in /workspace/tests/StorageChecks/Program.cs:line 13",
+      "ClientConnectionId:00000000-0000-0000-0000-000000000000",
+    ].join("\n");
+    const f = classifyFailure(output, "test", "validation");
+    expect(f.category).toBe("project");
+    expect(f.plain).toContain("LocalDB");
+    expect(f.action).toContain("AGENTFLOW_SQLSERVER_CONNECTION");
+    expect(f.detail.split("\n")[0]).toBe(
+      "位置：tests/StorageChecks/Program.cs 第 13 行",
+    );
+    expect(f.group).not.toContain("/workspace");
+    expect(classifyFailure(output, "test").category).toBe("project");
+  });
 });
 
 describe("其他分類", () => {
