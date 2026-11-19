@@ -238,6 +238,43 @@ describe("LocalDB 連線改寫", () => {
     expect(xml.databases).toEqual(["Legacy"]);
   });
 
+  it("SqlConnectionStringBuilder 只寫伺服器名稱時只換位址，整合驗證改成 sa 帳號", () => {
+    // 實際案例（虛構化）：測試程式以屬性寫死 LocalDB。整串連線字串塞進 DataSource 會是 SqlClient error 25。
+    const initializer = [
+      "var builder = new SqlConnectionStringBuilder",
+      "{",
+      String.raw`    DataSource = @"(localdb)\MSSQLLocalDB", InitialCatalog = "master",`,
+      "    IntegratedSecurity = true, TrustServerCertificate = true, Pooling = false",
+      "};",
+    ].join("\n");
+    const a = rewriteLocalDb(initializer, password);
+    expect(a.count).toBe(1);
+    expect(a.text).toContain('DataSource = @"127.0.0.1,1433", InitialCatalog');
+    expect(a.text).toContain(
+      `IntegratedSecurity = false, UserID = "sa", Password = "${password}", TrustServerCertificate = true, Pooling`,
+    );
+    // 已經設定 TrustServerCertificate：不重複指定（物件初始設定式重複指定會編譯失敗）。
+    expect(a.text.match(/TrustServerCertificate/g)).toHaveLength(1);
+
+    const statements = [
+      String.raw`var b = new SqlConnectionStringBuilder { DataSource = "(localdb)\\MSSQLLocalDB" };`,
+      "b.IntegratedSecurity = true;",
+    ].join("\n");
+    const s = rewriteLocalDb(statements, password);
+    expect(s.text).toContain('DataSource = "127.0.0.1,1433"');
+    expect(s.text).toContain(
+      `b.IntegratedSecurity = false; b.UserID = "sa"; b.Password = "${password}"; b.TrustServerCertificate = true;`,
+    );
+
+    // 完整連線字串的寫法維持原本的改寫，也不會加上屬性帳號。
+    const full = rewriteLocalDb(
+      String.raw`var c = "Server=(localdb)\\MSSQLLocalDB;Database=Orders;Trusted_Connection=True";`,
+      password,
+    );
+    expect(full.text).toContain(`Server=${target};Database=Orders`);
+    expect(full.text).not.toContain("UserID =");
+  });
+
   it("沒有 LocalDB 的內容原樣保留", () => {
     const text = '{"Main":"Server=db.example.test;Database=X"}';
     expect(rewriteLocalDb(text, password)).toEqual({
