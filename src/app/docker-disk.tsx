@@ -190,7 +190,7 @@ export function DockerDiskCard({ request }: { request: Request }) {
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-start justify-between gap-3">
+      <CardHeader className="flex flex-col items-start gap-3 sm:flex-row sm:justify-between">
         <div className="flex flex-col gap-1">
           <CardTitle className="flex items-center gap-2">
             <HardDrive className="size-4" /> Docker 磁碟
