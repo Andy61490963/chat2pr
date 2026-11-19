@@ -651,7 +651,7 @@ export function App() {
               {section !== visible[i - 1]?.section && (
                 <p
                   className={cn(
-                    "hidden px-3 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground/80 md:block",
+                    "hidden px-3 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground md:block",
                     i > 0 && "md:mt-4",
                   )}
                 >

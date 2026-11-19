@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button";
 import {
   Label,
   Tabs,
+  TabsContent,
   TabsList,
   TabsTrigger,
   Textarea,
@@ -782,22 +783,35 @@ export function TaskDrawer({
           />
           {options && (
             <section className="flex flex-col gap-2">
-              <h3 className="text-xs font-medium text-muted-foreground">
+              <h3
+                id="task-suggestions-title"
+                className="text-xs font-medium text-muted-foreground"
+              >
                 可選方案 · 選一個後在下方派工
               </h3>
-              <div role="radiogroup" className="flex flex-col gap-2">
+              <div
+                role="radiogroup"
+                aria-labelledby="task-suggestions-title"
+                className="flex flex-col gap-2"
+              >
                 {t.suggestions.map((o, i) => (
-                  <button
+                  <div
                     key={i}
-                    type="button"
-                    role="radio"
-                    aria-checked={pick === i}
-                    onClick={() => setPick(i)}
                     className={cn(
-                      "flex gap-3 rounded-lg border px-3.5 py-3 text-left transition-colors hover:bg-muted/40",
+                      "relative flex gap-3 rounded-lg border px-3.5 py-3 text-left transition-colors hover:bg-muted/40 has-focus-visible:outline-2 has-focus-visible:outline-offset-2",
                       pick === i && "border-primary bg-primary/5",
                     )}
                   >
+                    <input
+                      id={`suggestion-${i}`}
+                      type="radio"
+                      name="task-suggestion"
+                      value={i}
+                      checked={pick === i}
+                      onChange={() => setPick(i)}
+                      aria-describedby={`suggestion-description-${i}`}
+                      className="sr-only"
+                    />
                     <span
                       className={cn(
                         "mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border",
@@ -807,20 +821,28 @@ export function TaskDrawer({
                     >
                       {pick === i && <Check className="size-3" />}
                     </span>
-                    <span className="flex min-w-0 flex-col gap-0.5">
-                      <span className="flex items-center gap-2 text-sm font-medium">
+                    <div className="flex min-w-0 flex-col gap-0.5">
+                      <label
+                        htmlFor={`suggestion-${i}`}
+                        className="flex cursor-pointer items-center gap-2 text-sm font-medium after:absolute after:inset-0"
+                      >
                         {o.label}
                         {o.recommended && <Badge variant="info">推薦</Badge>}
-                      </span>
-                      {o.reason && (
-                        <span className="text-xs text-muted-foreground">
-                          {o.recommended ? "推薦理由：" : "適合情況："}
-                          {o.reason}
+                      </label>
+                      <div
+                        id={`suggestion-description-${i}`}
+                        className="flex flex-col gap-0.5"
+                      >
+                        {o.reason && (
+                          <span className="text-xs text-muted-foreground">
+                            {o.recommended ? "推薦理由：" : "適合情況："}
+                            {o.reason}
+                          </span>
+                        )}
+                        <span className="text-sm text-muted-foreground">
+                          {o.summary}
                         </span>
-                      )}
-                      <span className="text-sm text-muted-foreground">
-                        {o.summary}
-                      </span>
+                      </div>
                       {pick === i && o.acceptance.length > 0 && (
                         <ul className="mt-1.5 flex flex-col gap-1 text-xs text-muted-foreground">
                           {o.acceptance.map((a, j) => (
@@ -831,8 +853,8 @@ export function TaskDrawer({
                           ))}
                         </ul>
                       )}
-                    </span>
-                  </button>
+                    </div>
+                  </div>
                 ))}
               </div>
               {sensitive && (
@@ -928,7 +950,7 @@ export function TaskDrawer({
             </details>
           )}
           <Tabs value={tab} onValueChange={setTab} className="gap-4">
-            <TabsList className="w-full">
+            <TabsList aria-label="任務紀錄" className="w-full">
               <TabsTrigger value="sources">
                 來源訊息
                 <span className="text-xs text-muted-foreground">
@@ -948,8 +970,8 @@ export function TaskDrawer({
                 <TabsTrigger value="evidence">判讀依據</TabsTrigger>
               )}
             </TabsList>
-            {tab === "sources" &&
-              (detail.sources.length ? (
+            <TabsContent value="sources">
+              {detail.sources.length ? (
                 <div className="flex flex-col gap-2">
                   {detail.sources.map((m) => (
                     <div
@@ -986,8 +1008,9 @@ export function TaskDrawer({
                 <p className="text-sm text-muted-foreground">
                   原始內容已到期。
                 </p>
-              ))}
-            {tab === "history" && (
+              )}
+            </TabsContent>
+            <TabsContent value="history">
               <ol className="flex flex-col gap-3">
                 {collapseRepeats(detail.history).map((a) => (
                   <li key={a.id} className="flex flex-col gap-0.5 text-sm">
@@ -1004,10 +1027,15 @@ export function TaskDrawer({
                   </li>
                 )}
               </ol>
-            )}
-            {tab === "runs" && <RunObserver taskId={t.id} runs={detail.runs} />}
-            {tab === "evidence" && hasEvidence && (
-              <div className="flex flex-col gap-4">
+            </TabsContent>
+            <TabsContent value="runs">
+              <RunObserver taskId={t.id} runs={detail.runs} />
+            </TabsContent>
+            {hasEvidence && (
+              <TabsContent
+                value="evidence"
+                className="data-[state=active]:flex flex-col gap-4"
+              >
                 <TaskContextEvidence detail={detail} />
                 {detail.references.length > 0 && (
                   <section className="min-w-0 text-sm">
@@ -1034,7 +1062,7 @@ export function TaskDrawer({
                     ))}
                   </section>
                 )}
-              </div>
+              </TabsContent>
             )}
           </Tabs>
         </div>

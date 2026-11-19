@@ -2,6 +2,7 @@ import * as React from "react";
 import { XIcon } from "lucide-react";
 import { Dialog as SheetPrimitive } from "radix-ui";
 import { cn } from "@/lib/utils";
+import { useDialogFocus } from "./use-dialog-focus";
 
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
   return <SheetPrimitive.Root data-slot="sheet" {...props} />;
@@ -11,10 +12,13 @@ function SheetContent({
   className,
   children,
   side = "right",
+  onOpenAutoFocus,
+  onCloseAutoFocus,
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Content> & {
   side?: "top" | "right" | "bottom" | "left";
 }) {
+  const focus = useDialogFocus(onOpenAutoFocus, onCloseAutoFocus);
   return (
     <SheetPrimitive.Portal data-slot="sheet-portal">
       <SheetPrimitive.Overlay
@@ -23,6 +27,7 @@ function SheetContent({
       />
       <SheetPrimitive.Content
         data-slot="sheet-content"
+        {...focus}
         className={cn(
           "fixed z-50 flex flex-col bg-background shadow-lg transition ease-in-out data-[state=closed]:animate-out data-[state=closed]:duration-200 data-[state=open]:animate-in data-[state=open]:duration-300",
           side === "right" &&

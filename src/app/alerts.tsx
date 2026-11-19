@@ -220,7 +220,7 @@ export function AlertBell({
         >
           {unread.length ? <BellRing /> : <Bell />}
           {unread.length > 0 && (
-            <span className="absolute top-1 right-1 min-w-4 rounded-full bg-danger px-1 text-[10px] leading-4 font-semibold text-white tabular-nums">
+            <span className="absolute top-1 right-1 min-w-4 rounded-full bg-danger px-1 text-[10px] leading-4 font-semibold text-danger-soft tabular-nums">
               {unread.length > 9 ? "9+" : unread.length}
             </span>
           )}
@@ -301,7 +301,7 @@ export function AlertBell({
                       {a.text}
                     </span>
                     {why && (
-                      <span className="text-[11px] text-muted-foreground/80">
+                      <span className="text-[11px] text-muted-foreground">
                         {why}
                       </span>
                     )}
