@@ -121,6 +121,19 @@ describe("工作流程設定的中文差異", () => {
     ])
       expect(text).not.toContain(secret);
   });
+  it("更換模型時，稽核差異不回顯誤填在新舊模型欄位的憑證", () => {
+    const oldValue = "ghp_" + "fictionalOnly1234";
+    const newValue = "sk-" + "fictionalOnly5678";
+    const [change] = settingsDiff(
+      { codex_model: oldValue },
+      { codex_model: newValue },
+    );
+    expect(change).toMatchObject({
+      key: "codex_model",
+      from: "已遮蔽",
+      to: "已遮蔽",
+    });
+  });
 });
 
 describe("白名單還原預設會移除的網域", () => {

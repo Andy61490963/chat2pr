@@ -208,8 +208,13 @@ export const supersededNote = "已有較新的回覆，未補送";
 export const REPLY_FAILURE_LIMIT = 2;
 export const replyGaveUpNote =
   "以 /進度 補送多次失敗，已停止補送，請管理者在看板查看並手動轉達";
-/** 佔住後超過這段時間仍是「補送中」，視為程序在 reply 前後中止；reply 本身 5 秒逾時，2 分鐘足以排除正常進行中的補送。 */
+/** 尚未開始送出且超過這段時間的領取可被回收；正在傳送的通知另以列鎖保護到寫回。 */
 export const claimTimeout = "2 minutes";
+export interface GroupReplyClaim {
+  ids: string[];
+  /** 保留 PostgreSQL 的微秒精度，用來核對目前仍是同一輪領取。 */
+  claimedAt: string;
+}
 
 /**
  * reply 失敗是不是這批內容的問題（要計入 reply_failures）：只算 LINE 明確拒收的 4xx。
@@ -293,11 +298,14 @@ export async function claimPendingGroupReplies(
     )
   ).rows;
   const picked = rows.slice(0, limit);
+  let claim: GroupReplyClaim | undefined;
   if (picked.length) {
-    await c.query(
-      "UPDATE notifications SET sent_at=now(),last_error=$2 WHERE id=ANY($1::uuid[])",
-      [picked.map((r) => r.id), claimingNote],
+    const ids = picked.map((r) => r.id);
+    const stamped = await c.query<{ claimed_at: string }>(
+      "UPDATE notifications SET sent_at=statement_timestamp(),last_error=$2 WHERE id=ANY($1::uuid[]) RETURNING sent_at::text AS claimed_at",
+      [ids, claimingNote],
     );
+    claim = { ids, claimedAt: stamped.rows[0].claimed_at };
     // 直接在 SQL 裡和佔住的列比時間：JS Date 只到毫秒，傳回資料庫比較會漏掉同一毫秒內較舊的列；
     // 同一交易排入（created_at 相同）的「收到」也一併標成已被取代。
     await c.query(
@@ -309,7 +317,7 @@ export async function claimPendingGroupReplies(
       [groupId, picked.map((r) => r.id), supersededNote],
     );
   }
-  return { replies: picked, remaining: rows.length - picked.length };
+  return { replies: picked, remaining: rows.length - picked.length, claim };
 }
 
 /** 本群組還沒結束或 7 天內有變動的任務，只讀 group_id 等於本群組的資料。 */

@@ -6,6 +6,7 @@ import { prices } from "./budget.js";
 import { redact } from "./policy.js";
 import { recordHealth } from "./health.js";
 import { syncLineQuota } from "./line-quota.js";
+import { fetchLine } from "./line-http.js";
 
 // 檢查外部服務連線並寫入 service_health。管理者按「檢查連線」與每小時維護共用，
 // 讓設定頁的「正常」代表近期確認過，而不是上次有人手動檢查的結果。
@@ -46,7 +47,7 @@ export async function checkIntegrations(
     },
     line: async () => {
       if (!s.lineToken || !s.lineSecret) throw new Error("尚未設定");
-      const r = await fetch("https://api.line.me/v2/bot/info", {
+      const r = await fetchLine("https://api.line.me/v2/bot/info", {
         headers: { Authorization: `Bearer ${s.lineToken}` },
         signal: AbortSignal.timeout(10000),
       });

@@ -7,18 +7,13 @@ import {
   type InputQuestion,
   type ProjectInputRequest,
 } from "../shared/project-context.js";
-import { AppError, redact } from "./policy.js";
+import { AppError, containsCredential, redact } from "./policy.js";
 import { requireAdmin } from "./auth.js";
 import { Database } from "./db.js";
 
 // 不把常見憑證格式存入長期資訊。錯誤訊息不回顯輸入值。
 export function assertContextText(text: string) {
-  if (
-    redact(text) !== text ||
-    /(?:password|passwd|pwd|secret|token|api[_ -]?key|密碼|驗證碼|一次性密碼)\s*[=:：]\s*\S+|-----BEGIN [^-]*PRIVATE KEY-----|:\/\/[^\s/:]+:[^\s/@]+@|^\s*\d{6,8}\s*$/im.test(
-      text,
-    )
-  )
+  if (containsCredential(text))
     throw new AppError(
       422,
       "請勿在專案資訊或回覆填入密碼、金鑰或驗證碼。請在對應服務完成登入／驗證，再回來繼續。",

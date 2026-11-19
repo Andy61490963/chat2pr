@@ -425,9 +425,7 @@ export class Triage {
     private retrieval = new Retrieval(db),
   ) {}
   async process(groupId: string, scheduled = false) {
-    const snapshot = await this.db.one<{ value: Settings; revision: string }>(
-      "SELECT value,revision FROM settings WHERE id=1",
-    );
+    const snapshot = await this.db.settingsSnapshot();
     const s = snapshot.value;
     if (s.paused || s.triage_paused) return;
     const group = await this.db.one<Group>("SELECT * FROM groups WHERE id=$1", [

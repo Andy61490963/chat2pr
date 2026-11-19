@@ -1,4 +1,5 @@
 import type { Settings } from "./types.js";
+import { containsCredential } from "./credentials.js";
 
 /**
  * 工作流程設定（`PUT /api/settings`）的中文差異，看板確認對話框與稽核共用。
@@ -51,7 +52,10 @@ const fields = {
   codex_model: {
     label: "Codex 模型",
     fallback: null,
-    value: (v) => (typeof v === "string" && v ? v : "Codex 預設"),
+    value: (v) => {
+      if (typeof v !== "string" || !v) return "Codex 預設";
+      return containsCredential(v) ? "已遮蔽" : v;
+    },
   },
   triage_effort: {
     label: "需求判讀思考程度",

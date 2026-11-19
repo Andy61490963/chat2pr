@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { fetchLineQuota, groupMemberCount } from "../server/line-quota.js";
+import type { Database } from "../server/db.js";
 import {
   isMonthlyLimit,
   linePushPanel,
@@ -9,6 +11,37 @@ import {
   quotaUsageOf,
   quotaUsageText,
 } from "../shared/line-quota.js";
+
+describe("LINE 查詢錯誤只留下安全訊息", () => {
+  afterEach(() => vi.unstubAllGlobals());
+  it("額度 API 連線例外不帶外部診斷內容，HTTP 錯誤仍保留狀態碼", async () => {
+    const fetch = vi.fn().mockRejectedValue(new Error("外部診斷用的虛構標記"));
+    vi.stubGlobal("fetch", fetch);
+    await expect(fetchLineQuota("虛構權杖")).rejects.toThrow(
+      /^無法連線至 LINE$/,
+    );
+    fetch.mockResolvedValue(
+      Response.json({ message: "外部診斷用的虛構標記" }, { status: 403 }),
+    );
+    await expect(fetchLineQuota("虛構權杖")).rejects.toThrow(
+      /^讀不到本月推播用量（403）$/,
+    );
+  });
+  it("人數 API 連線失敗維持既有快取，也不儲存外部錯誤", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValue(new Error("外部診斷用的虛構標記")),
+    );
+    const query = vi.fn();
+    const db = {
+      one: async () => ({ member_count: 7, fresh: false }),
+      query,
+    } as unknown as Database;
+    expect(await groupMemberCount(db, "group-demo", "虛構權杖")).toBe(7);
+    expect(query).toHaveBeenCalledOnce();
+    expect(query.mock.calls[0][1]).toEqual(["group-demo"]);
+  });
+});
 
 describe("剩餘額度對群組人數", () => {
   it("剩餘則數由說明裡的用量算出；沒查過是未知，沒有上限是無限", () => {

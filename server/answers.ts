@@ -1,5 +1,11 @@
 import type { Database, DbClient } from "./db.js";
-import { AppError, classifyRisk, queryRisk, redact } from "./policy.js";
+import {
+  AppError,
+  classifyRisk,
+  containsCredential,
+  queryRisk,
+  redact,
+} from "./policy.js";
 import { notifyGroup, type QuickReply } from "./group-replies.js";
 import { approvalNotice, saveProjectConfirmation } from "./project-routing.js";
 import { withAssumptions } from "../shared/clarification.js";
@@ -36,7 +42,7 @@ const chars = (s: string, max: number) => Array.from(s).slice(0, max).join("");
  */
 export function questionButtons(t: Task): QuickReply[] {
   return (t.question?.choices ?? []).flatMap((choice, i) =>
-    i <= 9 && choice.trim() && redact(choice) === choice
+    i <= 9 && choice.trim() && !containsCredential(choice)
       ? [
           {
             label: chars(choice.trim(), 20),
@@ -52,8 +58,8 @@ export function questionButtons(t: Task): QuickReply[] {
 export async function askInGroup(c: DbClient, t: Task) {
   if (!t.question) return;
   const buttons = questionButtons(t);
-  const choices = t.question.choices.length
-    ? `\n常見答案：${t.question.choices.join("／")}`
+  const choices = buttons.length
+    ? `\n常見答案：${buttons.map((b) => b.displayText).join("／")}`
     : "";
   // 按鈕在群組有新訊息後就會消失，所以仍要說明可以用「回覆」作答。
   const how = buttons.length
@@ -97,7 +103,7 @@ export async function answerByPostback(
     t.version !== Number(m[2]) ||
     t.status !== "awaiting_approval" ||
     !choice?.trim() ||
-    redact(choice) !== choice
+    containsCredential(choice)
   )
     return null;
   return applyAnswer(
@@ -148,6 +154,7 @@ export async function applyAnswer(
   if (!text) throw new AppError(422, "請輸入回答");
   if (text.length > 2000)
     throw new AppError(422, "回答請在 2,000 字內，較長的內容請改用補充需求");
+  assertContextText(text);
   const assumptions = task.assumptions ?? [];
   const body = withAssumptions(task.summary, [], assumptions);
   const summary = withAssumptions(
@@ -236,7 +243,6 @@ export async function answerFromDashboard(
       throw new AppError(409, "需求已經更新，請重新整理後再回答");
     if (t.status !== "awaiting_approval" || !t.question)
       throw new AppError(409, "這個需求目前沒有待回答的問題");
-    assertContextText(answer);
     const updated = await applyAnswer(db, c, t, answer, actor, true);
     return { id: updated.id, status: updated.status };
   });
