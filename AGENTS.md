@@ -14,7 +14,7 @@
 
 ### 任務追蹤
 
-規格及開發任務使用本儲存庫 GitHub Issues，規則見 `docs/agents/issue-tracker.md`。
+規格及開發任務使用本儲存庫 GitHub Issues，規則見 `docs/agents/issue-tracker.md`。Issue、留言與 PR 一律用本機 `gh` 建立，不用 AI 工具內建的 GitHub 連線（可能是別人的帳號）。
 
 ### 領域文件
 

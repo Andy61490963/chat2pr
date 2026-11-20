@@ -41,6 +41,7 @@ import { approvalNotice } from "../server/project-routing.js";
 import { dueTriageGroups } from "../server/triage-window.js";
 import { GitHub } from "../server/github.js";
 import { quotaExhaustedDetail } from "../shared/line-quota.js";
+import { syncLineQuota } from "../server/line-quota.js";
 import type { Task } from "../shared/types.js";
 
 let app: Awaited<ReturnType<typeof buildApp>>;
@@ -694,6 +695,61 @@ describe("LINE 每月推播額度用完", () => {
     expect(fresh.sent_at).not.toBeNull();
     expect(fresh.last_error).toBeNull();
     expect((await quota())?.detail).toBe("本月已用 8／上限 200 則");
+  });
+
+  it("從沒查過額度就撞到每月上限：當場查一次用量，說明仍含「本月已用 X／上限 Y 則」", async () => {
+    const id = await task();
+    await notifyGroup(db, id, "answered", "answered:first", "結果");
+    lineApi({ push: monthlyLimit, quota: { limit: 200, used: 200 } });
+    await new Line(db).flushNotifications();
+    expect(await quota()).toEqual({
+      ok: false,
+      detail: `${quotaExhaustedDetail}（本月已用 200／上限 200 則）`,
+    });
+  });
+
+  it("查額度失敗後才撞到上限：說明保留上次查到的用量，不被錯誤訊息洗掉", async () => {
+    await db.query(
+      "INSERT INTO service_health(name,ok,detail) VALUES('line_quota',true,'本月已用 150／上限 200 則')",
+    );
+    // 額度 API 連不上：說明寫出錯誤，但留著上次的用量。
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("fetch failed");
+      }),
+    );
+    await syncLineQuota(db, "fictional-line-token");
+    expect(await quota()).toEqual({
+      ok: true,
+      detail: "Error: 無法連線至 LINE（上次查到本月已用 150／上限 200 則）",
+    });
+    // 接著推播撞到上限，額度 API 仍不通：沿用說明裡的用量。
+    const id = await task();
+    await notifyGroup(db, id, "answered", "answered:later", "結果");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.endsWith("/v2/bot/message/push")) return monthlyLimit();
+        throw new TypeError("fetch failed");
+      }),
+    );
+    await new Line(db).flushNotifications();
+    expect(await quota()).toEqual({
+      ok: false,
+      detail: `${quotaExhaustedDetail}（本月已用 150／上限 200 則）`,
+    });
+    // 暫停期間再查一次仍失敗：說明維持「已用完（用量）」。
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("fetch failed");
+      }),
+    );
+    await syncLineQuota(db, "fictional-line-token");
+    expect((await quota())?.detail).toBe(
+      `${quotaExhaustedDetail}（本月已用 150／上限 200 則）`,
+    );
   });
 });
 

@@ -147,7 +147,11 @@ const services = [
   { key: "outcomes", name: "開發經驗檢索", hint: "最近一次同專案任務結果檢索" },
   { key: "retrieval", name: "對話檢索", hint: "最近一次檢索狀態" },
   { key: "runner", name: "隔離執行器", hint: "在獨立容器修改程式" },
-  { key: "tunnel", name: "HTTPS 入口", hint: "ngrok 固定網址" },
+  {
+    key: "tunnel",
+    name: "HTTPS 入口",
+    hint: "Cloudflare Tunnel 或 ngrok 固定網址",
+  },
   { key: "queue", name: "工作佇列", hint: "訊息與任務排程" },
   { key: "triage", name: "需求辨識", hint: "最近一次判讀結果" },
 ];

@@ -123,11 +123,16 @@ function GroupDeliveryNotes({
                   成員可能還沒看到這則補問。可以在下方直接「送出回答」，或複製後貼到群組請成員回覆。
                 </p>
               )}
-              {pending && (
-                <div>
-                  <CopyButton text={d.text} label="複製群組訊息" />
-                </div>
-              )}
+              {pending &&
+                (d.text ? (
+                  <div>
+                    <CopyButton text={d.text} label="複製群組訊息" />
+                  </div>
+                ) : (
+                  <p className="text-xs">
+                    原文已超過保存期限，無法複製；需要時請依任務結果重新轉達。
+                  </p>
+                ))}
             </div>
           </div>
         );

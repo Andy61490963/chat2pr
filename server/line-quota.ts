@@ -51,13 +51,18 @@ export async function lineQuotaUsage(db: Database) {
 
 /**
  * 記下額度用完。line_quota 刻意不在 health.ts 的 critical 清單：那會再排一則私訊，這時送不出去。
- * 沒給用量時沿用原本說明裡的「本月已用 X／上限 Y 則」，不能把看板的用量蓋掉。
+ * 說明一定要帶「本月已用 X／上限 Y 則」：先用呼叫端給的，再沿用原本說明裡的；都沒有時
+ * （例如從沒成功查過額度）用 access 查一次，查用量的 API 不計推播額度。查不到才只寫「已用完」。
  */
 export async function markQuotaExhausted(
   db: Database,
   usage?: { limit: number | null; used: number } | null,
+  access?: string,
 ) {
-  const kept = usage ?? (await lineQuotaUsage(db));
+  const kept =
+    usage ??
+    (await lineQuotaUsage(db)) ??
+    (access ? await fetchLineQuota(access).catch(() => null) : null);
   await recordHealth(
     db,
     LINE_QUOTA,
@@ -252,9 +257,16 @@ export async function syncLineQuota(db: Database, access: string) {
   try {
     usage = await fetchLineQuota(access);
   } catch (e) {
+    // 暫停中維持「已用完（用量）」的說明；仍可推播時寫出查詢錯誤，但保留上次查到的用量，
+    // 否則之後撞到上限時說明會少了用量。
+    const last = await lineQuotaUsage(db);
+    const error = redact(String(e));
     await db.query(
       "UPDATE service_health SET detail=CASE WHEN ok THEN $2 ELSE detail END,checked_at=now() WHERE name=$1",
-      [LINE_QUOTA, redact(String(e))],
+      [
+        LINE_QUOTA,
+        last ? `${error}（上次查到${quotaUsageText(last)}）` : error,
+      ],
     );
     return;
   }
