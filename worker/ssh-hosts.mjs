@@ -40,6 +40,12 @@ export function commonOptions(host, knownHosts, pinned) {
     "ServerAliveInterval=15",
     "-o",
     "LogLevel=ERROR",
+    // 廠內設備常是舊版 SSH，只提供 ssh-rsa（SHA-1 簽章）的主機金鑰；OpenSSH 9 預設不接受。
+    // 主機金鑰另以看板記下的指紋核對，因此放行這個演算法。
+    "-o",
+    "HostKeyAlgorithms=+ssh-rsa",
+    "-o",
+    "PubkeyAcceptedAlgorithms=+ssh-rsa",
     ...(host.privateKey
       ? // 沒有密碼片語時不讓 ssh 改問密碼，失敗就直接結束。
         [
