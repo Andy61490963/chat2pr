@@ -78,9 +78,7 @@ export function ProjectContextEditor({
       <div>
         <h3 className="font-medium">專案資訊與環境</h3>
         <p className="mt-1 text-xs text-muted-foreground">
-          AI
-          會先自行安裝套件、準備可用的測試環境；缺少只有你知道的資訊才會詢問。不會自動寫入
-          Git。請勿填入帳密、金鑰或驗證碼。
+          這裡的內容會給 AI 讀。帳密請填在「連線與權限」，那裡會加密保存。
         </p>
         {project.context_updated_at && (
           <p className="mt-1 text-xs text-muted-foreground">

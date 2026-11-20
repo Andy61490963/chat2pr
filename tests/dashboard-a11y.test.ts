@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { notificationTarget } from "../shared/notifications.js";
+import {
+  notificationPath,
+  notificationTarget,
+} from "../shared/notifications.js";
 import { dispatchStatus } from "../src/app/dispatch-status.js";
 
 describe("鈴鐺通知按下去會去哪", () => {
@@ -69,4 +72,24 @@ describe("頁首派工狀態", () => {
       "已確認修改與明確查詢會依序派工；點此暫停",
     );
   });
+});
+
+it("LINE 私訊與看板使用相同的專案分頁，舊通知找不到專案時開列表", () => {
+  expect(
+    notificationPath({
+      task_id: null,
+      kind: "repo_missing",
+      project_id: "demo",
+    }),
+  ).toBe("projects?project=demo&tab=overview");
+  expect(
+    notificationPath({
+      task_id: null,
+      kind: "project_input",
+      project_id: "demo",
+    }),
+  ).toBe("projects?project=demo&tab=environment");
+  expect(notificationPath({ task_id: null, kind: "project_input" })).toBe(
+    "projects",
+  );
 });

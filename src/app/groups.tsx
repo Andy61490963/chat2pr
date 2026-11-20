@@ -1,3 +1,4 @@
+import { groupReplyStatus } from "../../shared/group-reply-status.js";
 import { useEffect, useState } from "react";
 import {
   AlertCircle,
@@ -217,11 +218,13 @@ export function GroupsView({
   busy,
   run,
   request,
+  openSettings,
 }: {
   state: State;
   busy: boolean;
   run: Run;
   request: Request;
+  openSettings: () => void;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
   const guard = useGuard();
@@ -332,6 +335,7 @@ export function GroupsView({
               <GroupCard
                 key={open.id}
                 group={open}
+                openSettings={openSettings}
                 state={state}
                 busy={busy}
                 run={run}
@@ -351,12 +355,14 @@ function GroupCard({
   busy,
   run,
   request,
+  openSettings,
 }: {
   group: Group;
   state: State;
   busy: boolean;
   run: Run;
   request: Request;
+  openSettings: () => void;
 }) {
   const [name, setName] = useState(g.name),
     [ids, setIds] = useState<string[]>(g.project_ids),
@@ -469,6 +475,14 @@ function GroupCard({
         </p>
       </div>
       <div className="grid gap-2">
+        <p role="status" className="text-sm font-medium">
+          目前：{groupReplyStatus(g, state.settings, state.health).text}
+          {!g.left_at && state.settings.group_replies === false && (
+            <Button size="sm" variant="link" onClick={openSettings}>
+              前往設定
+            </Button>
+          )}
+        </p>
         <label className="text-sm font-medium" htmlFor={`reply-${g.id}`}>
           在群組回覆
         </label>
@@ -487,18 +501,21 @@ function GroupCard({
             <SelectItem value="off">不在群組回覆</SelectItem>
           </SelectContent>
         </Select>
-        <p className="text-xs leading-relaxed text-muted-foreground">
+        <p className="text-xs text-muted-foreground">
           {replyMode === "off"
-            ? "群組成員不會收到任何回覆，所有通知只私訊給管理者。"
-            : `${replyMode === "all" ? "需求整理好等待確認時，以及" : ""}查詢有答案、修改完成或合併、需求被取消、處理遇到問題時，會在群組回覆一則訊息。查詢答案會直接貼在群組裡。`}{" "}
-          {replyMode !== "off" &&
-            "用 /任務 提出需求時會立刻回覆「收到」，這則不計入推播額度；其他回覆會依群組人數計入 LINE 的每月推播額度。"}
+            ? "你儲存後，機器人會停止在這個群組回覆。"
+            : replyMode === "all"
+              ? "你儲存後，群組會收到需求等待確認的通知與處理結果。"
+              : "你儲存後，群組會收到查詢答案與處理結果。"}
         </p>
-        {state.settings.group_replies === false && (
-          <p className="rounded-lg bg-warn-soft px-3 py-2 text-xs text-warn">
-            設定頁的「在群組回覆」總開關目前關閉，所有群組都不會回覆；開啟後這裡的設定才會生效。
+        <details className="text-xs text-muted-foreground">
+          <summary className="cursor-pointer">推播額度與 /進度</summary>
+          <p>
+            你用 /任務
+            提出需求時的即時回覆不扣推播額度，後續推播依群組人數計費；額度用完可打
+            /進度 補看結果。
           </p>
-        )}
+        </details>
       </div>
       {g.triage_error && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">

@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import type { Detail } from "../src/app/shared";
 import type { Task } from "../shared/types";
-import { detail, mockDashboard, task } from "./dashboard-fixture";
+import { defaultState, detail, mockDashboard, task } from "./dashboard-fixture";
 
 test("任務詳情顯示排隊原因與失敗後的處理建議", async ({ page }) => {
   const queued: Task = { ...task, title: "整理範例清單", status: "queued" };
@@ -42,6 +42,13 @@ test("任務詳情顯示排隊原因與失敗後的處理建議", async ({ page 
   await expect(
     failedDrawer.getByText(/建議：請到專案頁補上測試指令/),
   ).toBeVisible();
+  await expect(
+    failedDrawer.getByRole("button", { name: "重試" }),
+  ).toBeVisible();
+  await expect(
+    failedDrawer.getByRole("button", { name: "結束任務" }),
+  ).toBeVisible();
+  // 設定類失敗先去修設定，重試再試一次只會再失敗，所以前往設定是主按鈕。
   await expect(
     failedDrawer.getByRole("button", { name: "前往專案設定" }),
   ).toBeVisible();
@@ -174,6 +181,7 @@ test("專案的完全存取要先確認才開啟，取消不送出", async ({ pa
   });
   await page.goto("/projects");
   await page.getByText("測試專案", { exact: true }).first().click();
+  await page.getByRole("tab", { name: "連線與權限" }).click();
   const section = page.getByRole("region", { name: "完全存取" });
   await expect(section.getByText("關閉", { exact: true })).toBeVisible();
   await section.getByRole("button", { name: "開啟完全存取" }).click();
@@ -234,6 +242,7 @@ test("用白話描述資料庫連線，AI 整理後填進欄位並列出連不�
   );
   await page.goto("/projects");
   await page.getByText("測試專案", { exact: true }).first().click();
+  await page.getByRole("tab", { name: "連線與權限" }).click();
   const describe = page.getByLabel("用白話描述連線");
   await describe.fill(
     "MES 測試庫在 100.64.0.10，帳號 mes_reader 密碼 fictional-pass",
@@ -282,6 +291,7 @@ test("登記 SSH 主機：密碼只送出不顯示，測試登入顯示結果", 
   );
   await page.goto("/projects");
   await page.getByText("測試專案", { exact: true }).first().click();
+  await page.getByRole("tab", { name: "連線與權限" }).click();
   const section = page.getByRole("region", { name: "SSH 主機" });
   await expect(section).toContainText("沒有開啟完全存取");
   await section.getByRole("button", { name: "新增 SSH 主機" }).click();
@@ -352,4 +362,63 @@ test("你能在任務詳情追查查詢版本，閱讀答案時只看到報告",
   await dialog.getByText("查詢時的專案、分支與版本").click();
   await expect(dialog.getByText(version, { exact: true })).toBeVisible();
   await expect(dialog.getByText(/範例來源（demo\/source）/)).toBeVisible();
+});
+
+test("專案補問通知直接開啟環境驗證，方向鍵可切換其他分頁", async ({ page }) => {
+  await mockDashboard(page, {
+    state: {
+      alerts: [
+        {
+          id: "notice-input",
+          task_id: null,
+          project_id: "project-demo",
+          kind: "project_input",
+          title: null,
+          text: "請補充範例資訊",
+          created_at: "2026-01-01T08:00:00Z",
+        },
+      ],
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /^通知(?:，|$)/ }).click();
+  await page.getByRole("menuitem", { name: /請補充範例資訊/ }).click();
+  const dialog = page.getByRole("dialog", { name: "測試專案" });
+  const environment = dialog.getByRole("tab", { name: /環境驗證/ });
+  await expect(environment).toHaveAttribute("aria-selected", "true");
+  await environment.focus();
+  for (const name of ["連線與權限", "記憶", "概況"]) {
+    await page.keyboard.press("ArrowRight");
+    await expect(dialog.getByRole("tab", { name })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  }
+});
+
+test("LINE 的專案連結直接開啟對應專案與分頁", async ({ page }) => {
+  await mockDashboard(page);
+  await page.goto("/projects?project=project-demo&tab=environment");
+  await expect(
+    page
+      .getByRole("dialog", { name: "測試專案" })
+      .getByRole("tab", { name: /環境驗證/ }),
+  ).toHaveAttribute("aria-selected", "true");
+});
+
+test("群組總開關關閉時能直接前往設定查看實際回覆數", async ({ page }) => {
+  await mockDashboard(page, {
+    state: { settings: { ...defaultState.settings, group_replies: false } },
+  });
+  await page.goto("/groups");
+  await page.getByRole("button", { name: /測試群組/ }).click();
+  const status = page
+    .getByRole("status")
+    .filter({ hasText: "設定頁的總開關已關閉" });
+  await expect(status).toBeVisible();
+  await status.getByRole("button", { name: "前往設定" }).click();
+  await expect(page).toHaveURL(/\/settings$/);
+  await expect(page.locator("#group-replies-hint")).toContainText(
+    "0 個群組會回覆",
+  );
 });

@@ -149,6 +149,18 @@ const views = [
 ] as const;
 
 // 每個頁面有自己的網址，任務詳情以 ?task= 表示；重新整理、上一頁與分享連結都會回到同一處。
+function linkedProject(url: URL) {
+  const id = url.searchParams.get("project");
+  return url.pathname === "/projects" && id
+    ? {
+        id,
+        tab:
+          url.searchParams.get("tab") === "environment"
+            ? "environment"
+            : "overview",
+      }
+    : null;
+}
 const viewPaths: Record<View, string> = {
   inbox: "/",
   tasks: "/tasks",
@@ -217,7 +229,10 @@ export function App() {
     [busy, setBusy] = useState(false),
     [project, setProject] = useState<Partial<Project> | null>(null),
     // 剛存好的專案 id；專案頁打開它的詳情後清掉。
-    [savedProject, setSavedProject] = useState<string | null>(null),
+    [savedProject, setSavedProject] = useState<{
+      id: string;
+      tab: string;
+    } | null>(null),
     // 每次從導覽切換頁面就加一，讓該頁丟掉上一輪的篩選、照網址重新開始。
     [visit, setVisit] = useState(0),
     [offline, setOffline] = useState(false),
@@ -395,6 +410,7 @@ export function App() {
         () => {
           const url = new URL(destination, location.origin);
           setView(viewFromPath(url.pathname));
+          setSavedProject(linkedProject(url));
           const id = url.searchParams.get("task");
           if (id) void openTask(id, false);
           else setSelected(null);
@@ -436,6 +452,8 @@ export function App() {
       history.replaceState(null, "", back);
       setView(viewFromPath(location.pathname));
     }
+    const linked = linkedProject(new URL(location.href));
+    if (linked) setSavedProject(linked);
     const id = new URLSearchParams(location.search).get("task");
     if (id) void openTask(id, false);
   }, [user, openTask]);
@@ -498,12 +516,17 @@ export function App() {
     window.scrollTo({ top: 0 });
   };
   // 換頁前先確認沒有未儲存的修改。
-  const go = (v: View) => guard(() => leave(v));
+  const go = (v: View, projectId?: string | null, tab = "environment") =>
+    guard(() => {
+      leave(v);
+      if (v === "projects" && projectId)
+        setSavedProject({ id: projectId, tab });
+    });
   // 從選單換頁時，選單關閉會把焦點還給觸發按鈕；改送到新頁面的標題。
   const fromMenu = useRef(false);
-  const goFromMenu = (v: View) => {
+  const goFromMenu = (v: View, projectId?: string | null, tab?: string) => {
     fromMenu.current = true;
-    go(v);
+    go(v, projectId, tab);
   };
   const headingAfterMenu = (e: Event) => {
     if (!fromMenu.current) return;
@@ -1005,6 +1028,7 @@ export function App() {
             )}
             {current.id === "groups" && (
               <GroupsView
+                openSettings={() => go("settings")}
                 state={state}
                 busy={busy}
                 run={run}
@@ -1018,7 +1042,8 @@ export function App() {
                 run={run}
                 request={request}
                 edit={setProject}
-                focusId={savedProject}
+                focusId={savedProject?.id}
+                focusTab={savedProject?.tab}
                 focused={() => setSavedProject(null)}
               />
             )}
@@ -1101,7 +1126,9 @@ export function App() {
                 );
                 await openTask(created.id);
               },
-              task.mode === "query" ? "已送出追問" : "已送出追加，等待確認",
+              task.mode === "query"
+                ? "已送出追問"
+                : "已建立新的一題，等待你確認",
             )
           }
           answer={(task, text) =>
@@ -1152,7 +1179,7 @@ export function App() {
                   );
                   notice = result.notice;
                   setProject(null);
-                  setSavedProject(result.saved.id);
+                  setSavedProject({ id: result.saved.id, tab: "overview" });
                 }, "專案已儲存");
                 if (ok && notice) setToast(notice);
               }}
