@@ -358,9 +358,13 @@ test("你能在任務詳情追查查詢版本，閱讀答案時只看到報告",
   await dialog.getByText("查詢時的專案、分支與版本").click();
   await expect(dialog.getByText(version, { exact: true })).toBeVisible();
   await expect(dialog.getByText(/範例來源（demo\/source）/)).toBeVisible();
+});
+
 test("專案補問通知直接開啟環境驗證，方向鍵可切換其他分頁", async ({ page }) => {
+  await mockDashboard(page, {
     state: {
       alerts: [
+        {
           id: "notice-input",
           task_id: null,
           project_id: "project-demo",
@@ -368,6 +372,10 @@ test("專案補問通知直接開啟環境驗證，方向鍵可切換其他分�
           title: null,
           text: "請補充範例資訊",
           created_at: "2026-01-01T08:00:00Z",
+        },
+      ],
+    },
+  });
   await page.goto("/");
   await page.getByRole("button", { name: /^通知(?:，|$)/ }).click();
   await page.getByRole("menuitem", { name: /請補充範例資訊/ }).click();
@@ -382,6 +390,7 @@ test("專案補問通知直接開啟環境驗證，方向鍵可切換其他分�
       "true",
     );
   }
+});
 
 test("LINE 的專案連結直接開啟對應專案與分頁", async ({ page }) => {
   await mockDashboard(page);
