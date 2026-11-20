@@ -5,11 +5,25 @@ import { Dialog as DialogPrimitive } from "radix-ui";
 
 import { Button } from "@/components/ui/button";
 import { resolvePortalContainer } from "@/lib/utils";
+import { useDialogFocus } from "./use-dialog-focus";
+
+const ControlledDialog = React.createContext<
+  ((open: boolean) => void) | undefined
+>(undefined);
 
 function Dialog({
+  children,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Root>) {
-  return <DialogPrimitive.Root data-slot="dialog" {...props} />;
+  return (
+    <DialogPrimitive.Root data-slot="dialog" {...props}>
+      <ControlledDialog.Provider
+        value={props.open ? props.onOpenChange : undefined}
+      >
+        {children}
+      </ControlledDialog.Provider>
+    </DialogPrimitive.Root>
+  );
 }
 
 function DialogTrigger({
@@ -59,17 +73,51 @@ function DialogContent({
   showCloseButton = true,
   layout = "default",
   portalContainer,
+  onOpenAutoFocus,
+  onCloseAutoFocus,
+  onEscapeKeyDown,
   ...props
 }: React.ComponentProps<typeof DialogPrimitive.Content> & {
   showCloseButton?: boolean;
   layout?: "default" | "operation";
   portalContainer?: HTMLElement | null;
 }) {
+  const focus = useDialogFocus(onOpenAutoFocus, onCloseAutoFocus);
+  const onOpenChange = React.useContext(ControlledDialog);
+  const scopeId = React.useId();
+  React.useEffect(() => {
+    if (!onOpenChange) return;
+    // 內層確認已取得焦點時，Radix 在 document 捕捉的 Esc 有時仍會關掉外層側欄。
+    // 只在多層視窗由最內層先處理，從選單或下拉清單發出的 Esc 留給各自的控制項。
+    const escape = (event: KeyboardEvent) => {
+      if (
+        event.key !== "Escape" ||
+        event.defaultPrevented ||
+        !(event.target instanceof Element)
+      )
+        return;
+      const dialog = event.target.closest("[role=dialog]");
+      if (
+        dialog?.getAttribute("data-focus-scope") !== scopeId ||
+        document.querySelectorAll('[role=dialog][data-state="open"]').length < 2
+      )
+        return;
+      onEscapeKeyDown?.(event);
+      if (!event.defaultPrevented) onOpenChange(false);
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    window.addEventListener("keydown", escape, true);
+    return () => window.removeEventListener("keydown", escape, true);
+  }, [scopeId, onOpenChange, onEscapeKeyDown]);
   return (
     <DialogPortal data-slot="dialog-portal" container={portalContainer}>
       <DialogOverlay />
       <DialogPrimitive.Content
         data-slot="dialog-content"
+        data-focus-scope={scopeId}
+        onEscapeKeyDown={onEscapeKeyDown}
+        {...focus}
         className={cn(
           "fixed top-[50%] left-[50%] z-50 translate-x-[-50%] translate-y-[-50%] shadow-lg duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
           layout === "default" &&

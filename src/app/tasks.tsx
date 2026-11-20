@@ -3,7 +3,12 @@ import { Search } from "lucide-react";
 import type { Task, TaskStatus } from "../../shared/types.js";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/form-controls";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/form-controls";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -147,22 +152,66 @@ export function TasksView({
               : (state.groups.find((g) => g.id === key)?.name ?? "群組"),
           tasks: list.filter((t) => keyOf(t) === key),
         }));
+  const results = (
+    <>
+      {list.length ? (
+        sections.map((s) => (
+          <section key={s.key}>
+            {s.name && (
+              <SectionTitle count={s.tasks.length}>{s.name}</SectionTitle>
+            )}
+            <Card className="gap-0 py-1">
+              {s.tasks.map((t) => (
+                <TaskRow
+                  key={t.id}
+                  task={t}
+                  state={state}
+                  open={open}
+                  hide={by}
+                />
+              ))}
+            </Card>
+          </section>
+        ))
+      ) : (
+        <Card>
+          {narrowed ? (
+            <Empty title="沒有符合條件的任務">
+              <span className="flex flex-col items-center gap-3">
+                換個篩選或搜尋字詞試試；目前已載入 {state.tasks.length} 個任務。
+                <Button variant="outline" size="sm" onClick={clear}>
+                  清除篩選
+                </Button>
+              </span>
+            </Empty>
+          ) : (
+            <Empty title="還沒有任務">群組裡的需求整理好後會出現在這裡。</Empty>
+          )}
+        </Card>
+      )}
+      {/* 伺服器只先給最近的任務；更早的要按了才載入，篩選與搜尋也只看得到已載入的。 */}
+      <LoadMore
+        shown={state.tasks.length}
+        total={state.totals?.tasks}
+        unit="個任務"
+        more={more}
+      />
+    </>
+  );
   return (
-    <div className="flex flex-col gap-6">
+    <Tabs value={filter} onValueChange={setFilter} className="gap-6">
       <div className="flex flex-col gap-3">
-        <Tabs value={filter} onValueChange={setFilter}>
-          {/* 六個分頁在手機上放不下要左右捲；置中排列時左邊超出的部分捲不到，改靠左。 */}
-          <TabsList className="justify-start">
-            {filters.map((f) => (
-              <TabsTrigger key={f.id} value={f.id}>
-                {f.label}
-                <span className="text-xs text-muted-foreground">
-                  {tabCount(f.statuses)}
-                </span>
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
+        {/* 六個分頁在手機上放不下要左右捲；置中排列時左邊超出的部分捲不到，改靠左。 */}
+        <TabsList aria-label="任務狀態" className="justify-start">
+          {filters.map((f) => (
+            <TabsTrigger key={f.id} value={f.id}>
+              {f.label}
+              <span className="text-xs text-muted-foreground">
+                {tabCount(f.statuses)}
+              </span>
+            </TabsTrigger>
+          ))}
+        </TabsList>
         {omitted > 0 && (
           <p role="status" className="text-sm text-warn">
             未結束的任務太多，較舊的 {omitted}{" "}
@@ -219,48 +268,15 @@ export function TasksView({
           </div>
         </div>
       </div>
-      {list.length ? (
-        sections.map((s) => (
-          <section key={s.key}>
-            {s.name && (
-              <SectionTitle count={s.tasks.length}>{s.name}</SectionTitle>
-            )}
-            <Card className="gap-0 py-1">
-              {s.tasks.map((t) => (
-                <TaskRow
-                  key={t.id}
-                  task={t}
-                  state={state}
-                  open={open}
-                  hide={by}
-                />
-              ))}
-            </Card>
-          </section>
-        ))
-      ) : (
-        <Card>
-          {narrowed ? (
-            <Empty title="沒有符合條件的任務">
-              <span className="flex flex-col items-center gap-3">
-                換個篩選或搜尋字詞試試；目前已載入 {state.tasks.length} 個任務。
-                <Button variant="outline" size="sm" onClick={clear}>
-                  清除篩選
-                </Button>
-              </span>
-            </Empty>
-          ) : (
-            <Empty title="還沒有任務">群組裡的需求整理好後會出現在這裡。</Empty>
-          )}
-        </Card>
-      )}
-      {/* 伺服器只先給最近的任務；更早的要按了才載入，篩選與搜尋也只看得到已載入的。 */}
-      <LoadMore
-        shown={state.tasks.length}
-        total={state.totals?.tasks}
-        unit="個任務"
-        more={more}
-      />
-    </div>
+      {filters.map((f) => (
+        <TabsContent
+          key={f.id}
+          value={f.id}
+          className="data-[state=active]:flex flex-col gap-6"
+        >
+          {results}
+        </TabsContent>
+      ))}
+    </Tabs>
   );
 }

@@ -83,7 +83,8 @@ function triage(
 ) {
   const github = new GitHub();
   github.context = vi.fn(async () => ({
-    branches: {names:["main"],defaultBranch:"main",truncated:false}, branchError: null,
+    branches: { names: ["main"], defaultBranch: "main", truncated: false },
+    branchError: null,
     sha: "base",
     paths: [],
     files: {},
@@ -198,7 +199,9 @@ it("暫停時真Webhook收訊但零判讀；恢復後處理原待判讀訊息", 
     await pause(false);
     await s.service.process("group-a");
     expect(s.classify).toHaveBeenCalledTimes(1);
-    expect((await db.one("SELECT status FROM tasks")).status).toBe("awaiting_approval");
+    expect((await db.one("SELECT status FROM tasks")).status).toBe(
+      "awaiting_approval",
+    );
   } finally {
     await app.close();
   }
@@ -211,7 +214,14 @@ it("等待專案上下文時啟用暫停，尚未開始的classifier不呼叫", 
     await incoming(app);
     s.github.context = async () => {
       await pause();
-      return { sha: "base", paths: [], files: {}, truncated: false, branches:{names:["main"],defaultBranch:"main",truncated:false}, branchError:null };
+      return {
+        sha: "base",
+        paths: [],
+        files: {},
+        truncated: false,
+        branches: { names: ["main"], defaultBranch: "main", truncated: false },
+        branchError: null,
+      };
     };
     await expect(s.service.process("group-a")).rejects.toThrow("設定已改變");
     expect(s.classify).not.toHaveBeenCalled();
@@ -288,6 +298,7 @@ async function approvedExecution() {
   });
   github.publish = publish;
   const call = vi.fn(async <T>(path: string, body: unknown): Promise<T> => {
+    if (path === "checks/environments/sync") return { removed: [] } as T;
     const b = body as { phase: string };
     const r: PhaseResult = { exitCode: 0, stdout: "", stderr: "" };
     if (path === "phase" && b.phase === "collect")
@@ -375,6 +386,7 @@ it("真持久佇列略過判讀但仍排已核准執行與收圖工作", async (
   );
   await db.query("DROP SCHEMA IF EXISTS pgboss CASCADE");
   vi.stubEnv("DATABASE_URL", db.pool.options.connectionString!);
+  const warn = vi.spyOn(console, "warn");
   let jobs: Awaited<ReturnType<typeof startJobs>> | undefined;
   try {
     jobs = await startJobs(db, { runner: s.runner, github: s.github });
@@ -384,8 +396,10 @@ it("真持久佇列略過判讀但仍排已核准執行與收圖工作", async (
     expect(queued.some((j) => j.name === "triage")).toBe(false);
     expect(queued.some((j) => j.name === "execute")).toBe(true);
     expect(queued.some((j) => j.name === "images")).toBe(true);
+    expect(warn).not.toHaveBeenCalledWith("定期檢查環境：", expect.anything());
   } finally {
     await jobs?.stop();
+    warn.mockRestore();
     vi.unstubAllEnvs();
   }
 });

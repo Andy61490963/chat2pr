@@ -601,8 +601,14 @@ export function App() {
   );
   const visible = views.filter((v) => admin || v.section === "工作區");
   const current = visible.find((v) => v.id === view) ?? visible[0];
-  // 記憶體不足時系統自己暫停派新工作；手動暫停時以手動暫停為準。
-  const hold = state && !state.settings.paused ? memoryHold(state) : null;
+  // 訂閱模式以帳號的派工許可為準，避免單一模型的額度用完就誤報整體暫停。
+  const hostHold = memoryHold(state);
+  const subscriptionHold =
+    subscription && typeof account === "object" && account?.allowed === false
+      ? "Codex 訂閱額度已達上限"
+      : null;
+  const hold = state?.settings.paused ? null : (hostHold ?? subscriptionHold);
+  const holdView = hostHold ? "system" : "settings";
   const live = state && !state.settings.paused && !hold;
   const dispatch =
     state &&
@@ -645,7 +651,7 @@ export function App() {
               {section !== visible[i - 1]?.section && (
                 <p
                   className={cn(
-                    "hidden px-3 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground/80 md:block",
+                    "hidden px-3 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground md:block",
                     i > 0 && "md:mt-4",
                   )}
                 >
@@ -897,13 +903,17 @@ export function App() {
             role="status"
             className="mb-4 flex flex-wrap items-center gap-2 rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn"
           >
-            <MemoryStick className="size-4 shrink-0" />
+            {hostHold ? (
+              <MemoryStick className="size-4 shrink-0" />
+            ) : (
+              <CirclePause className="size-4 shrink-0" />
+            )}
             <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
               {hold}。排隊中的工作會在恢復後自動開始，不需手動操作
             </span>
-            {admin && view !== "system" && (
-              <Button variant="outline" size="xs" onClick={() => go("system")}>
-                查看系統頁
+            {admin && view !== holdView && (
+              <Button variant="outline" size="xs" onClick={() => go(holdView)}>
+                {hostHold ? "查看系統頁" : "查看訂閱額度"}
               </Button>
             )}
           </p>

@@ -52,6 +52,11 @@ describe("頁首派工狀態", () => {
     }
   });
   it("管理者照舊是可切換的按鈕", () => {
+    for (const c of cases) {
+      expect(dispatchStatus({ ...c, admin: true }).ariaLabel).toContain(
+        c.label,
+      );
+    }
     expect(dispatchStatus({ ...cases[0], admin: true })).toMatchObject({
       label: "已暫停",
       ariaLabel: "已暫停，點此開始自動派工",
