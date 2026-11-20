@@ -1,3 +1,4 @@
+import { splitQueryAnswer } from "../../shared/query-answer.js";
 import { useEffect, useState } from "react";
 import { TaskContextEvidence } from "./context-evidence";
 import { RunObserver } from "./run-observer";
@@ -184,6 +185,10 @@ export function TaskDrawer({
   relink: (t: Detail["task"], parentId: string | null) => unknown;
 }) {
   const t = detail.task;
+  const report = splitQueryAnswer(t.answer ?? "");
+  const sources = detail.runs.find(
+    (r) => r.version === t.version && r.query_sources,
+  )?.query_sources;
   const notes = [...t.risk_reasons, ...(t.question ? [] : t.missing)];
   const editable = [
     "awaiting_approval",
@@ -479,6 +484,30 @@ export function TaskDrawer({
                 </code>
               </p>
             )}
+            {t.mode === "query" && t.answer && (
+              <details className="mt-2 break-all">
+                <summary className="cursor-pointer">
+                  查詢時的專案、分支與版本
+                </summary>
+                {sources?.length ? (
+                  <ul>
+                    {sources.map((s) => (
+                      <li key={s.repo}>
+                        {s.name}（{s.repo}） · {s.branch} ·{" "}
+                        <code>{s.commit}</code>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="whitespace-pre-line">
+                    {report.source ??
+                      [review?.project_name, t.target_branch, t.base_sha]
+                        .filter(Boolean)
+                        .join(" · ")}
+                  </p>
+                )}
+              </details>
+            )}
             {editable && t.project_id && !t.target_branch && (
               <p className="mt-1 text-xs text-warn">
                 要先選好目標分支才能確認。請按下方「更換分支」選擇。
@@ -648,7 +677,7 @@ export function TaskDrawer({
                   size="xs"
                   onClick={() =>
                     void navigator.clipboard
-                      ?.writeText(t.answer ?? "")
+                      ?.writeText(report.body)
                       .then(() => {
                         setCopied(true);
                         setTimeout(() => setCopied(false), 2000);
@@ -667,7 +696,7 @@ export function TaskDrawer({
               </div>
               <QueryReport
                 key={t.id + ":" + t.version}
-                answer={t.answer}
+                answer={report.body}
                 taskId={t.id}
                 images={detail.reportImages}
               />

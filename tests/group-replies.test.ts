@@ -855,6 +855,20 @@ describe("用 reply token 取回與說實話", () => {
     );
     return t!.id;
   }
+  it("進度補送舊查詢時，只送答案與題名", async () => {
+    await settings();
+    const taskId = await answeredTask("範例查詢");
+    const version = "a".repeat(40);
+    await db.query(
+      "UPDATE notifications SET text=$2 WHERE task_id=$1 AND kind='group_answered'",
+      [
+        taskId,
+        `「範例查詢」的查詢結果：\n\n查詢專案：範例（demo/query）\n基底分支：main；查詢版本：${version}\n\n範例結論。`,
+      ],
+    );
+    await send("legacy-query", "/進度");
+    expect(lastReply().at(-1)).toBe("「範例查詢」的查詢結果：\n\n範例結論。");
+  });
   async function askingTask(title: string, status = "awaiting_approval") {
     const t = await db.one<Task>(
       `INSERT INTO tasks(project_id,group_id,title,summary,acceptance,status,mode,missing,question,dedupe_key)
