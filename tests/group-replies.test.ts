@@ -600,7 +600,8 @@ describe("LINE 每月推播額度用完", () => {
 
     await line.flushNotifications();
     // 群組只撞一次就略過本輪其餘群組通知，私訊照送。
-    expect(calls.pushes).toEqual(["group-a", "fictional-admin"]);
+    // 私訊與群組分開送，誰先送出不固定；只核對兩邊各送一次。
+    expect([...calls.pushes].sort()).toEqual(["fictional-admin", "group-a"]);
     expect(await quota()).toEqual({
       ok: true,
       detail: "本月已用 198／上限 200 則",
@@ -617,7 +618,8 @@ describe("LINE 每月推播額度用完", () => {
       await db.one("SELECT member_count FROM groups WHERE id='group-a'"),
     ).toEqual({ member_count: 4 });
     await line.flushNotifications();
-    expect(calls.pushes).toEqual(["group-a", "fictional-admin"]);
+    // 私訊與群組分開送，誰先送出不固定；只核對兩邊各送一次。
+    expect([...calls.pushes].sort()).toEqual(["fictional-admin", "group-a"]);
     expect((await rows())[1].last_error).toBe(
       "推播額度剩 2 則，不足這個群組 4 人，額度恢復後再送",
     );
