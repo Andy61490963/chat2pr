@@ -235,7 +235,9 @@ test("用白話描述資料庫連線，AI 整理後填進欄位並列出連不�
     "MES 測試庫在 100.64.0.10，帳號 mes_reader 密碼 fictional-pass",
   );
   await page.getByRole("button", { name: "交給 AI 整理" }).click();
-  await expect(page.getByLabel("主機")).toHaveValue("100.64.0.10");
+  await expect(page.getByLabel("主機", { exact: true })).toHaveValue(
+    "100.64.0.10",
+  );
   await expect(page.getByLabel("資料庫名稱")).toHaveValue("MES_TEST");
   await expect(page.getByLabel("帳號", { exact: true })).toHaveValue(
     "mes_reader",
@@ -248,4 +250,61 @@ test("用白話描述資料庫連線，AI 整理後填進欄位並列出連不�
   // 原文清掉，也不會自動儲存。
   await expect(describe).toHaveValue("");
   expect(writes).toHaveLength(0);
+});
+
+test("登記 SSH 主機：密碼只送出不顯示，測試登入顯示結果", async ({ page }) => {
+  await mockDashboard(page);
+  const posts: unknown[] = [];
+  const host = {
+    id: "00000000-0000-4000-8000-000000000001",
+    name: "jet-u01",
+    host: "10.0.7.31",
+    port: 22,
+    username: "reader",
+    auth: "password",
+    note: "U01 工控電腦",
+    hostKey: null,
+    updatedAt: "2026-11-20T00:00:00.000Z",
+  };
+  await page.route("**/api/projects/project-demo/ssh-hosts", (route) => {
+    if (route.request().method() === "GET")
+      return route.fulfill({ json: posts.length ? [host] : [] });
+    posts.push(route.request().postDataJSON());
+    return route.fulfill({ json: [host] });
+  });
+  await page.route(
+    `**/api/projects/project-demo/ssh-hosts/${host.id}/test`,
+    (route) => route.fulfill({ json: { ok: true, detail: "登入成功" } }),
+  );
+  await page.goto("/projects");
+  await page.getByText("測試專案", { exact: true }).first().click();
+  const section = page.getByRole("region", { name: "SSH 主機" });
+  await expect(section).toContainText("沒有開啟完全存取");
+  await section.getByRole("button", { name: "新增 SSH 主機" }).click();
+  await section.getByRole("button", { name: "儲存" }).click();
+  await expect(section.getByRole("alert")).toContainText("名稱只能用英數字");
+  expect(posts).toHaveLength(0);
+  await section.getByLabel("名稱").fill("jet-u01");
+  await section.getByLabel("SSH 主機位址").fill("10.0.7.31");
+  await section.getByLabel("登入帳號").fill("reader");
+  await section.getByLabel("登入密碼").fill("fictional-ssh-pass");
+  await section.getByLabel(/用途說明/).fill("U01 工控電腦");
+  await section.getByRole("button", { name: "儲存" }).click();
+  await expect
+    .poll(() => posts)
+    .toEqual([
+      {
+        name: "jet-u01",
+        host: "10.0.7.31",
+        port: 22,
+        username: "reader",
+        note: "U01 工控電腦",
+        password: "fictional-ssh-pass",
+      },
+    ]);
+  await expect(section.getByText("reader@10.0.7.31:22")).toBeVisible();
+  await expect(section.getByText("還沒測試登入")).toBeVisible();
+  await expect(section.getByText("fictional-ssh-pass")).toHaveCount(0);
+  await section.getByRole("button", { name: "測試登入" }).click();
+  await expect(section.getByRole("status")).toHaveText("登入成功");
 });

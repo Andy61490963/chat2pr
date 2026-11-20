@@ -214,8 +214,9 @@ flowchart LR
 
 - 安裝、開發、測試、審查每個階段都接上 `line-agentflow_open`，可連公司內網、Tailscale 與網際網路；安裝不再經下載來源白名單。這不改設定頁的全域容器網路，只影響這個專案。
 - 專案登記的資料庫連線以環境變數交給工作容器與 Codex 執行的命令：`AGENTFLOW_DB_CONNECTION`（ADO.NET 連線字串）、`AGENTFLOW_DB_HOST`、`AGENTFLOW_DB_PORT`、`AGENTFLOW_DB_NAME`、`AGENTFLOW_DB_USER`、`AGENTFLOW_DB_PASSWORD`。權限照登記的帳號，chat2pr 不另外限制；需要唯讀時請登記唯讀帳號。經 SSH 跳板的連線不提供。收集差異的階段不帶這些變數。
-- 執行器只接受 `AGENTFLOW_DB_*` 這一類環境變數；仍是非 root、根目錄唯讀、移除所有能力、沒有 Docker socket 的容器，拿不到 chat2pr 自己的機密（GitHub App 金鑰、LINE 權杖、`.local/secrets.json`）。修改仍要人核准，PR 仍由人合併。
-- 執行紀錄（含執行中輪詢的事件）、查詢答案、錯誤訊息與驗證結果中的資料庫密碼與連線字串一律換成「[已遮蔽資料庫密碼]」；變更內容含有密碼或連線字串時停止發布。
+- 專案詳情的「SSH 主機」可登記多台主機（名稱、位址、帳號、密碼或私鑰、用途說明；每個專案最多 20 台，表 `project_ssh_hosts`，機密與資料庫連線用同一把金鑰加密）。「測試登入」由主機執行器實際登入一次（`/ssh/test`，不執行命令），第一次成功時記下主機金鑰指紋；改了位址、連接埠或帳號就清掉，要重新測試。開啟完全存取時，主機以單一環境變數 `AGENTFLOW_SSH_HOSTS`（JSON）交給容器，工作映像的 `agentflow-ssh` 讀它登入：`agentflow-ssh list`、`agentflow-ssh <名稱> <命令>`、`agentflow-ssh scp <名稱> <來源> <目的>`（遠端路徑前加冒號）。密碼與密碼片語經 `sshpass` 的環境變數送出、私鑰寫在容器的 `/tmp`，都不出現在命令列；有記下指紋時先用 `ssh-keyscan` 取得主機金鑰，只信任指紋相同的那一把，不同就停止。Codex 的提示只列主機名稱、位址與用途。
+- 執行器只接受 `AGENTFLOW_DB_*` 與 `AGENTFLOW_SSH_HOSTS` 這兩類環境變數；仍是非 root、根目錄唯讀、移除所有能力、沒有 Docker socket 的容器，拿不到 chat2pr 自己的機密（GitHub App 金鑰、LINE 權杖、`.local/secrets.json`）。修改仍要人核准，PR 仍由人合併。
+- 執行紀錄（含執行中輪詢的事件）、查詢答案、錯誤訊息與驗證結果中的資料庫密碼、連線字串、SSH 密碼、私鑰與密碼片語一律換成「[已遮蔽資料庫密碼]」；變更內容含有這些值時停止發布。
 - 這台伺服器本身連不到的網路（例如沒有 VPN 的廠內網段），開了也連不到；容器內不能自行建立 VPN。需要時讓伺服器本身連上（VPN 用戶端或 Tailscale subnet router）。
 
 ### 下載來源白名單

@@ -640,6 +640,16 @@ CREATE TABLE IF NOT EXISTS project_connections (
  secret bytea NOT NULL,
  updated_at timestamptz NOT NULL DEFAULT now(), updated_by text
 );
+-- 完全存取的專案可登記 SSH 主機，任務容器用 agentflow-ssh 登入；機密加密保存，不回傳、不進每日備份。
+-- host_key 是第一次在看板測試登入成功時記下的指紋（SHA256:...），之後容器登入前核對。
+CREATE TABLE IF NOT EXISTS project_ssh_hosts (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+ name text NOT NULL, host text NOT NULL, port int NOT NULL, username text NOT NULL,
+ note text NOT NULL DEFAULT '', host_key text, secret bytea NOT NULL,
+ updated_at timestamptz NOT NULL DEFAULT now(), updated_by text,
+ UNIQUE(project_id, name)
+);
 -- 最近一次擷取的資料庫結構快照；只有結構與擁有者明確指定的參考資料表。
 CREATE TABLE IF NOT EXISTS project_schema_snapshots (
  project_id uuid PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,

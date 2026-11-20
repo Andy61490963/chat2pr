@@ -5,7 +5,8 @@ FROM node:24-bookworm-slim
 # libusb：pyrealsense2 等硬體套件；fonts-noto-cjk：中文頁面截圖不會變方塊字；
 # ripgrep：Codex 搜尋程式碼的首選工具；jq、sqlite3、unzip：常見資料處理。
 # libicu72：.NET 的中文文化與時區格式。
-RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates python3 python3-venv python3-pip libusb-1.0-0 make g++ fonts-noto-cjk ripgrep jq sqlite3 unzip libicu72 && rm -rf /var/lib/apt/lists/*
+# openssh-client、sshpass：完全存取的專案用 agentflow-ssh 登入管理者登記的 SSH 主機。
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates python3 python3-venv python3-pip libusb-1.0-0 make g++ fonts-noto-cjk ripgrep jq sqlite3 unzip libicu72 openssh-client sshpass && rm -rf /var/lib/apt/lists/*
 # .NET 8 SDK：C# 專案可在容器內建置與執行單元測試。
 # NuGet 套件於安裝階段經 egress 下載到 /workspace/obj/nuget；.NET 專案慣例忽略 obj/，
 # 因此跨階段保留又不會被當成變更。
@@ -18,9 +19,10 @@ RUN npm init -y && npm install --save-exact @openai/codex-sdk@0.166.0
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright NODE_PATH=/usr/local/lib/node_modules
 RUN npm install -g --save-exact playwright@1.52.0 && playwright install --with-deps chromium && rm -rf /var/lib/apt/lists/* /root/.npm && chmod -R a+rX /opt/ms-playwright
 COPY worker/*.mjs ./
+RUN chmod 755 /opt/agentflow/agentflow-ssh.mjs && ln -s /opt/agentflow/agentflow-ssh.mjs /usr/local/bin/agentflow-ssh
 # worker-rev：worker/*.mjs 或工具鏈有變更時更新，並同步 server/containers.ts 的 WORKER_REV；
 # 執行器會拒絕較舊的映像，避免專案默默使用舊的工作程式。
-LABEL io.agentflow.worker="v1" io.agentflow.worker-rev="2026-11-20.1"
+LABEL io.agentflow.worker="v1" io.agentflow.worker-rev="2026-11-20.2"
 USER 1000:1000
 WORKDIR /workspace
 ENV HOME=/tmp/home
