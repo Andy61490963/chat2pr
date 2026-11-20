@@ -71,3 +71,32 @@ export const objectLabels: Record<string, string> = {
   synonyms: "同義字",
   schemas: "結構描述",
 };
+
+/** 「用白話描述連線」交給 AI 整理後的結果；看板用來填表，不會自動儲存。 */
+export interface ConnectionExtractResult {
+  connection: {
+    host: string | null;
+    port: number | null;
+    database: string | null;
+    username: string | null;
+    password: string | null;
+    encrypt: boolean | null;
+    trustServerCertificate: boolean | null;
+    ssh: {
+      host: string;
+      port: number | null;
+      username: string | null;
+      password: string | null;
+    } | null;
+  };
+  /** 描述中提到、需要連得到的位址，以及從這台伺服器實測的結果。 */
+  endpoints: {
+    host: string;
+    port: number;
+    purpose: string;
+    reachable: boolean;
+    detail: string;
+  }[];
+  vpn: { needed: boolean; note: string };
+  notes: string[];
+}

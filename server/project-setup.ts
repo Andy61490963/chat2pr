@@ -318,6 +318,16 @@ ${parsed.explanation}`
     };
   }
   /** 在目前的 AI 模式與額度限制內做一次結構化判讀；環境設定與安裝審查共用。 */
+  /** 一次性的結構化判讀（不掛載專案、不佔任務預留），沿用訂閱額度與 API 預算規則。 */
+  async structured(
+    prompt: string,
+    schema: Record<string, unknown>,
+    name: string,
+    what: string,
+  ) {
+    return this.ask(prompt, schema, name, undefined, what);
+  }
+
   private async ask(
     prompt: string,
     schema: Record<string, unknown>,

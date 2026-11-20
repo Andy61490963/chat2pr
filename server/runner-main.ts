@@ -6,6 +6,7 @@ import { join, resolve } from "node:path";
 import { z } from "zod";
 import { Containers } from "./containers.js";
 import { FULL_ACCESS_ENV } from "./containers.js";
+import { ProbeTargets, probeTargets } from "./network-probe.js";
 import { systemStatus } from "./system-status.js";
 import { hostResources } from "./host-resources.js";
 import { SourceCache, SourceAccess } from "./source-cache.js";
@@ -224,6 +225,10 @@ app.post("/environment-archive", async (req) => {
   return { ok: true };
 });
 // 只有主機執行器接觸擁有者登記的資料庫；工作容器不取得連線機密。
+// 專案資訊中提到的位址：從這台主機實測連不連得到（連不到通常代表要先接上 VPN）。
+app.post("/network/probe", async (req) =>
+  probeTargets(ProbeTargets.parse((req.body as { targets?: unknown }).targets)),
+);
 app.post("/database/test", async (req) =>
   testConnection(CaptureInput.parse(req.body)),
 );

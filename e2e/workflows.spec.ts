@@ -184,3 +184,68 @@ test("專案的完全存取要先確認才開啟，取消不送出", async ({ pa
   await dialog.getByRole("button", { name: "開啟完全存取" }).click();
   await expect.poll(() => bodies).toEqual([{ enabled: true }]);
 });
+
+test("用白話描述資料庫連線，AI 整理後填進欄位並列出連不到的位址", async ({
+  page,
+}) => {
+  await mockDashboard(page);
+  const writes: string[] = [];
+  page.on("request", (request) => {
+    if (["PUT", "DELETE"].includes(request.method()))
+      writes.push(request.url());
+  });
+  await page.route("**/api/projects/project-demo/database/extract", (route) =>
+    route.fulfill({
+      json: {
+        connection: {
+          host: "100.64.0.10",
+          port: 1433,
+          database: "MES_TEST",
+          username: "mes_reader",
+          password: "fictional-pass",
+          encrypt: null,
+          trustServerCertificate: null,
+          ssh: null,
+        },
+        endpoints: [
+          {
+            host: "100.64.0.10",
+            port: 1433,
+            purpose: "資料庫",
+            reachable: true,
+            detail: "連得到（12 ms）",
+          },
+          {
+            host: "10.3.1.7",
+            port: 8096,
+            purpose: "廠內看板",
+            reachable: false,
+            detail: "5 秒內沒有回應",
+          },
+        ],
+        vpn: { needed: true, note: "要先連公司 VPN 才到得了 10.3.1.x。" },
+        notes: [],
+      },
+    }),
+  );
+  await page.goto("/projects");
+  await page.getByText("測試專案", { exact: true }).first().click();
+  const describe = page.getByLabel("用白話描述連線");
+  await describe.fill(
+    "MES 測試庫在 100.64.0.10，帳號 mes_reader 密碼 fictional-pass",
+  );
+  await page.getByRole("button", { name: "交給 AI 整理" }).click();
+  await expect(page.getByLabel("主機")).toHaveValue("100.64.0.10");
+  await expect(page.getByLabel("資料庫名稱")).toHaveValue("MES_TEST");
+  await expect(page.getByLabel("帳號", { exact: true })).toHaveValue(
+    "mes_reader",
+  );
+  await expect(page.getByLabel("密碼", { exact: true })).toHaveValue(
+    "fictional-pass",
+  );
+  await expect(page.getByText(/廠內看板：10\.3\.1\.7:8096/)).toBeVisible();
+  await expect(page.getByText(/要先連公司 VPN/)).toBeVisible();
+  // 原文清掉，也不會自動儲存。
+  await expect(describe).toHaveValue("");
+  expect(writes).toHaveLength(0);
+});

@@ -17,6 +17,13 @@ import {
   type SnapshotSummary,
 } from "../shared/project-database.js";
 import { AppError } from "./policy.js";
+import {
+  ExtractSchema,
+  extractPrompt,
+  extractResult,
+  probeList,
+} from "./connection-extract.js";
+import type { ProbeResult } from "./network-probe.js";
 import { requireAdmin } from "./auth.js";
 import { replyError } from "./error-reply.js";
 import { secrets } from "./config.js";
@@ -364,6 +371,8 @@ export function registerProjectDatabase(
   db: Database,
   call: RunnerCall,
   enqueue?: (id: string) => Promise<unknown>,
+  /** 一次性的結構化 AI 判讀（「用白話描述連線」）；沒有提供時這個功能回 503。 */
+  ask?: (prompt: string, schema: Record<string, unknown>) => Promise<unknown>,
 ) {
   const params = (req: { params: unknown }) =>
     z
@@ -494,6 +503,37 @@ export function registerProjectDatabase(
         );
     });
     return projectDatabaseView(db, id);
+  });
+
+  // 用白話描述連線：AI 整理成欄位，主機實測描述中的位址。原文只用於這次判讀，不保存、不寫進活動紀錄。
+  app.post("/api/projects/:id/database/extract", route, async (req, reply) => {
+    const admin = await requireAdmin(db, req);
+    reply.header("Cache-Control", "no-store");
+    const id = params(req);
+    const { text } = z
+      .object({ text: z.string().trim().min(1, "請先描述連線").max(8000) })
+      .parse(req.body);
+    const project = await db.one<Project>(
+      "SELECT * FROM projects WHERE id=$1",
+      [id],
+    );
+    if (!project) throw new AppError(404, "找不到專案");
+    if (!ask) throw new AppError(503, "AI 整理目前無法使用");
+    const parsed = ExtractSchema.parse(
+      await ask(extractPrompt(text), z.toJSONSchema(ExtractSchema)),
+    );
+    const targets = probeList(parsed);
+    const probes = targets.length
+      ? await call<ProbeResult[]>("network/probe", { targets }, 30000).catch(
+          () => [] as ProbeResult[],
+        )
+      : [];
+    await db.audit(
+      null,
+      "project_database",
+      `管理者 ${admin.login} 用 AI 整理專案 ${project.name} 的連線資訊（原文不保存）`,
+    );
+    return extractResult(parsed, probes);
   });
 
   app.post("/api/projects/:id/database/test", route, async (req, reply) => {

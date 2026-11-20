@@ -16,7 +16,7 @@ export function assertContextText(text: string) {
   if (containsCredential(text))
     throw new AppError(
       422,
-      "請勿在專案資訊或回覆填入密碼、金鑰或驗證碼。請在對應服務完成登入／驗證，再回來繼續。",
+      "請勿在專案資訊或回覆填入密碼、金鑰或驗證碼。資料庫連線請到專案詳情的「資料庫連線」，用白話描述交給 AI 整理；其他服務請在該服務完成登入／驗證，再回來繼續。",
     );
 }
 const field = z.string().trim().max(4000);

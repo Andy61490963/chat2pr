@@ -60,6 +60,8 @@ import {
 } from "../shared/line-quota.js";
 import { Tasks } from "./tasks.js";
 import { Budget } from "./budget.js";
+import { ProjectSetup } from "./project-setup.js";
+import { SubscriptionGate } from "./subscription-gate.js";
 import { GitHub } from "./github.js";
 import { TargetBranch } from "./task-branch.js";
 import { registerProxy } from "./proxy.js";
@@ -203,6 +205,14 @@ export async function buildApp(
     db,
     (path, body, timeoutMs) => runner.call(path, body, timeoutMs),
     enqueueValidation,
+    (prompt, schema) =>
+      new ProjectSetup(
+        db,
+        new GitHub(),
+        runner as Runner,
+        new Budget(db),
+        new SubscriptionGate(db),
+      ).structured(prompt, schema, "connection_extract", "整理連線資訊"),
   );
   registerMembers(app, db, githubUser);
   await app.register(helmet, {
