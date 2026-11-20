@@ -73,6 +73,8 @@
 
 ## 4. 測試
 
+瀏覽器驗收（`npm run test:e2e`）跑在 Vite 開發伺服器上，沒有正式伺服器的安全標頭（CSP、`frame-ancestors`、X-Frame-Options）。牽涉這些標頭的行為（例如同源 iframe 嵌入）要另外用 `buildApp` 的整合測試檢查；系統頁的架構動畫就曾在 e2e 通過、正式環境卻被 `frame-ancestors 'none'` 擋下。
+
 啟動真實排程器的測試替身須依執行器端點回傳對應格式。即使只驗證判讀或派工，排程也會同步定期檢查環境；`checks/environments/sync` 沒有清除項目時仍須回傳 `{ removed: [] }`，否則測試可能通過卻在背景留下同步錯誤。
 
 - 看板頁面若新增載入時會呼叫的 API，請同步更新 `e2e/dashboard-fixture.ts` 的虛構回應。瀏覽器驗收會攔截 API，缺少回應時回傳 404，可能讓測試只驗到錯誤畫面。

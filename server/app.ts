@@ -144,6 +144,12 @@ const ProjectInput = z.object({
     .optional(),
   enabled: z.boolean(),
 });
+/** 唯一允許被同源 iframe 嵌入的頁面（系統頁的架構動畫）。 */
+export const EMBEDDABLE_PAGE = "/docs/architecture-flow.html";
+/** 把 CSP 的 frame-ancestors 改成只允許同源；其他指令不變。 */
+export const allowSameOriginFrame = (csp: string) =>
+  csp.replace(/frame-ancestors [^;]*/, "frame-ancestors 'self'");
+
 export async function buildApp(
   db: Database,
   enqueueValidation?: (id: string) => Promise<unknown>,
@@ -210,6 +216,15 @@ export async function buildApp(
         frameAncestors: ["'none'"],
       },
     },
+  });
+  // 系統頁以同源 iframe 嵌入架構動畫：只有這一頁允許同源嵌入，其餘頁面與 API 維持禁止被嵌入。
+  app.addHook("onSend", async (req, reply, payload) => {
+    if (req.url.split("?")[0] === EMBEDDABLE_PAGE) {
+      const csp = reply.getHeader("content-security-policy");
+      if (typeof csp === "string")
+        reply.header("content-security-policy", allowSameOriginFrame(csp));
+    }
+    return payload;
   });
   await app.register(rateLimit, {
     max: 240,
