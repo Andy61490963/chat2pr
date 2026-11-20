@@ -624,8 +624,19 @@ function DecisionCard({
                   修改這一題
                 </Button>
               )}
+              {/* 失敗時主按鈕依原因：先修設定的前往頁面、逾時先修改這一題；
+                  這兩種重試只會再失敗一次、多用一次額度，所以重試降為次要。 */}
+              {target && go && (
+                <Button onClick={() => go(target)}>
+                  {fixPageLabels[target]}
+                </Button>
+              )}
+              {amend && (
+                <Button onClick={() => open(t.id, true)}>修改這一題</Button>
+              )}
               {t.status === "failed" && (
                 <Button
+                  variant={fix.kind === "retry" ? "default" : "outline"}
                   disabled={busy}
                   onClick={() => void act(t, "retry", {}, "已重新排程")}
                 >
@@ -633,30 +644,12 @@ function DecisionCard({
                 </Button>
               )}
               <EndTaskButton task={t} busy={busy} act={act} />
-              {t.status === "failed" ? (
-                <details>
-                  <summary className="cursor-pointer px-3 py-2 text-sm">
-                    更多
-                  </summary>
-                  {target && go && (
-                    <Button variant="ghost" onClick={() => go(target)}>
-                      {fixPageLabels[target]}
-                    </Button>
-                  )}
-                  {amend && (
-                    <Button variant="ghost" onClick={() => open(t.id, true)}>
-                      修改這一題
-                    </Button>
-                  )}
-                  <Button variant="ghost" onClick={() => open(t.id)}>
-                    詳情
-                  </Button>
-                </details>
-              ) : (
-                <Button variant="ghost" onClick={() => open(t.id)}>
-                  詳情
-                </Button>
-              )}
+              <Button
+                variant={fix.kind === "detail" ? "default" : "ghost"}
+                onClick={() => open(t.id)}
+              >
+                詳情
+              </Button>
             </div>
           </>
         )}

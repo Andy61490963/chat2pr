@@ -1152,8 +1152,16 @@ export function TaskDrawer({
                 修改這一題
               </Button>
             )}
+            {/* 失敗時主按鈕依原因：先修設定的前往頁面、逾時先修改這一題；這兩種重試降為次要。 */}
+            {fixTarget && (
+              <Button onClick={() => go(fixTarget)}>
+                {fixPageLabels[fixTarget]}
+              </Button>
+            )}
+            {amendFirst && <Button onClick={openAmend}>修改這一題</Button>}
             {t.status === "failed" && (
               <Button
+                variant={fix.kind === "retry" ? "default" : "outline"}
                 disabled={busy}
                 onClick={() => void act(t, "retry", {}, "已重新排程")}
               >
@@ -1169,23 +1177,6 @@ export function TaskDrawer({
               "budget_wait",
             ].includes(t.status) && (
               <EndTaskButton task={t} busy={busy} act={act} />
-            )}
-            {(fixTarget || amendFirst) && (
-              <details>
-                <summary className="cursor-pointer px-3 py-2 text-sm">
-                  更多
-                </summary>
-                {fixTarget && (
-                  <Button variant="ghost" onClick={() => go(fixTarget)}>
-                    {fixPageLabels[fixTarget]}
-                  </Button>
-                )}
-                {amendFirst && (
-                  <Button variant="ghost" onClick={openAmend}>
-                    修改這一題
-                  </Button>
-                )}
-              </details>
             )}
             {/* 等待額度會自動繼續：不放「重試」主按鈕；API 模式才給次要的「已提高預算，立即再試」。 */}
             <BudgetRetry task={t} state={state} busy={busy} act={act} />
