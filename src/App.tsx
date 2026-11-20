@@ -993,6 +993,7 @@ export function App() {
             )}
             {current.id === "groups" && (
               <GroupsView
+                openSettings={() => go("settings")}
                 state={state}
                 busy={busy}
                 run={run}

@@ -1,3 +1,4 @@
+import { groupReplyStatus } from "../../shared/group-reply-status.js";
 import { useEffect, useRef, useState } from "react";
 import { Check, Copy, RefreshCw, Send } from "lucide-react";
 import type { NotificationFailures, Settings } from "../../shared/types.js";
@@ -231,6 +232,7 @@ function QuotaCard({
 }
 
 function AiCard({
+  replyCount,
   settings: s,
   account,
   busy,
@@ -238,6 +240,7 @@ function AiCard({
   request,
 }: {
   settings: Settings;
+  replyCount: number;
   account: Account | null | string;
   busy: boolean;
   run: Run;
@@ -336,8 +339,8 @@ function AiCard({
               id="group-replies-hint"
               className="text-xs text-muted-foreground"
             >
-              開啟時，各群組依群組頁的「在群組回覆」設定回覆「收到」、查詢答案與處理結果；關閉時所有群組都不回覆，通知只私訊給管理者。群組推播會依人數計入
-              LINE 的每月推播額度。
+              你關閉時所有群組都不回覆，各群組另有自己的設定，目前有{" "}
+              {replyCount} 個群組會回覆。
             </p>
           </div>
           <div className="space-y-2">
@@ -758,6 +761,11 @@ export function SettingsView({
           </CardContent>
         </Card>
         <AiCard
+          replyCount={
+            state.groups.filter(
+              (g) => groupReplyStatus(g, s, state.health).replies,
+            ).length
+          }
           settings={s}
           account={account}
           busy={busy}
