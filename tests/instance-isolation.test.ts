@@ -3,6 +3,8 @@ import { randomUUID } from "node:crypto";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createInterface } from "node:readline";
+import type { Readable } from "node:stream";
 import { instanceName, validateRunnerEnvironment } from "../server/config.js";
 import { Containers } from "../server/containers.js";
 import { sourceVolume } from "../server/source-cache.js";
@@ -103,9 +105,15 @@ it("真實 Docker：相同 run ID 的 cleanup、cancel、dispose 不影響其他
       Entrypoint: [
         "node",
         "-e",
-        "const f=require('fs');let n=0;setInterval(()=>f.writeFileSync('/workspace/ticks',String(++n)),50)",
+        `const fs = require("node:fs");
+         let n = 0;
+         setInterval(() => {
+           fs.writeFileSync("/workspace/ticks", String(++n));
+           console.log(String(n));
+         }, 50);`,
       ],
       Cmd: [],
+      Tty: true,
       Labels: legacy
         ? { "io.agentflow.managed": "true", "io.agentflow.run": run }
         : owner.labels(run),
@@ -116,18 +124,31 @@ it("真實 Docker：相同 run ID 的 cleanup、cancel、dispose 不影響其他
     return c;
   };
   const tick = async (c: Awaited<ReturnType<typeof sentinel>>) => {
-    const stream = await c.getArchive({ path: "/workspace/ticks" });
-    const chunks: Buffer[] = [];
-    for await (const part of stream) chunks.push(Buffer.from(part));
-    return Number(
-      Buffer.concat(chunks).subarray(512, 530).toString().replace(/\0/g, ""),
-    );
+    // 只接收訂閱後的新心跳。哨兵寫完資料卷才送出整行，避免讀到剛截成空檔的 ticks。
+    const stream = (await c.logs({
+      stdout: true,
+      follow: true,
+      tail: 0,
+    })) as Readable;
+    const lines = createInterface({
+      input: stream,
+      signal: AbortSignal.timeout(5000),
+    });
+    try {
+      for await (const line of lines) {
+        expect(line).toMatch(/^[1-9]\d*$/);
+        return Number(line);
+      }
+      throw new Error("哨兵未回報新的心跳");
+    } finally {
+      lines.close();
+      stream.destroy();
+    }
   };
   try {
     const ca = await sentinel(a),
       cb = await sentinel(b),
       legacy = await sentinel(a, true);
-    await new Promise((resolve) => setTimeout(resolve, 300));
     const before = await tick(cb),
       legacyBefore = await tick(legacy);
     await a.cleanup();
@@ -140,7 +161,6 @@ it("真實 Docker：相同 run ID 的 cleanup、cancel、dispose 不影響其他
         "io.agentflow.instance"
       ],
     ).toBe(b.instance);
-    await new Promise((resolve) => setTimeout(resolve, 150));
     expect(await tick(cb)).toBeGreaterThan(before);
     expect(await tick(legacy)).toBeGreaterThan(legacyBefore);
     const ca2 = await sentinel(a);
