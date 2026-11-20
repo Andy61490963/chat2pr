@@ -1306,7 +1306,8 @@ it("查詢任務只執行調查，存下報告並通知，不收集變更、不�
   expect(phases).not.toContain("review");
   expect(s.counts().published).toBe(0);
   expect(comments).toHaveLength(1);
-  expect(comments[0]).toContain("#7 ## 先看重點");
+  // Issue 編號由測試替身決定，只核對留言直接從「先看重點」開始。
+  expect(comments[0]).toMatch(/^#\d+ ## 先看重點/);
   expect(comments[0]).toContain("WIP_LOT");
   expect(comments[0]).not.toContain(task.base_sha!);
   const groupReply = await db.one<{ text: string }>(
