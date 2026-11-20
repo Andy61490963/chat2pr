@@ -30,13 +30,15 @@ AI 自動設定的專案不必手動選這個映像。系統從固定版本的�
 需要 SQL Server 時，系統把 AI 規劃的測試命令包在 `agentflow-sqlserver run -- sh -c '<測試命令>'` 裡執行（`worker/mssql/sqlserver.mjs`，裝在衍生映像的 `/usr/local/bin/agentflow-sqlserver`）：
 
 1. 在同一個測試容器啟動 SQL Server（只聽 `127.0.0.1,1433`，記憶體上限 1 GiB，最多等 150 秒；第一次失敗會清掉資料檔重試一次）。sa 密碼每次隨機產生，只放在這個容器的環境變數 `MSSQL_SA_PASSWORD`、`SQLCMDPASSWORD`、`AGENTFLOW_SQLSERVER_CONNECTION`。
-2. 掃描工作目錄中的文字檔（`.cs`、`.json`、`.config`、`.runsettings` 等，略過 `bin`、`obj`、`node_modules`、`.git`），把 LocalDB 連線（`(localdb)\執行個體`）改成連到容器內 SQL Server 的 sa 帳號，Windows 整合驗證改為關閉；`AttachDbFilename` 改用同名資料庫。改寫前先把原檔備份到 `/workspace/obj/agentflow-sqlserver`。
+2. 掃描工作目錄中的文字檔（`.cs`、`.json`、`.config`、`.runsettings` 等，略過 `bin`、`obj`、`node_modules`、`.git`），把 LocalDB 連線（`(localdb)\執行個體`）改成連到容器內 SQL Server 的 sa 帳號，Windows 整合驗證改為關閉；`AttachDbFilename` 改用同名資料庫。字串只有伺服器名稱時（例如 C# 的 `new SqlConnectionStringBuilder { DataSource = @"(localdb)\MSSQLLocalDB", IntegratedSecurity = true }`），只把伺服器換成 `127.0.0.1,1433`，同一個檔案以屬性寫的 `IntegratedSecurity = true` 改成 sa 帳號（沒有設定 `TrustServerCertificate` 時一併信任容器內的自簽憑證）。改寫前先把原檔備份到 `/workspace/obj/agentflow-sqlserver`。
 3. 建立連線字串提到的空白資料庫；規劃的資料來源是結構快照時，再依序套用 `schema.sql`、`reference-data.sql`。沒有快照時由專案自己的遷移或建庫腳本建立資料表（在測試命令中執行）。
 4. 執行測試命令，結束後把檔案還原成原本的位元組、停止 SQL Server、刪除資料檔。上一次在測試途中被強制結束時，下一次執行會先還原。
 
 同時執行多個任務時，每個測試容器有自己的網路命名空間與工作卷，SQL Server 的連接埠、資料檔與資料庫名稱不會互相衝突；SQL Server 只聽本機，即使管理者選「完全開放」讓測試容器接上共用網路，其他容器也連不進來。
 
 導向只發生在測試容器內，不修改專案的版本控制檔案；之後的收集階段仍會確認沒有變更。測試容器維持無網路、非 root、唯讀根目錄。Codex 在開發階段自行測試時也被告知用同一個指令。
+
+改寫只認得檔案裡寫出來的 LocalDB 字樣；連線若在執行時才組出來（例如從多個變數拼接），導向改不到，測試會出現 SqlClient 的 `error: 25 - Connection string is not valid` 或 `LocalDB is not supported on this platform`。這時失敗說明會指出原始碼位置，建議專案的測試在環境變數 `AGENTFLOW_SQLSERVER_CONNECTION` 有值時改用它，沒有時才用 LocalDB；這是最穩定的做法，Windows 上的 CI 與本機開發不受影響。
 
 SQL Server 起不來或建庫失敗時，測試命令不會執行，`agentflow-sqlserver` 以退出碼 86 結束並輸出 `AGENTFLOW_TEST_ENVIRONMENT {"ok":false,...}`。系統把這種結果標示為「測試環境問題（不是程式沒過）」，列出被跳過的測試命令與判斷依據；環境驗證不交給 AI 改命令重試，派工也不交給 Codex 修程式。
 
