@@ -190,7 +190,7 @@ export function DockerDiskCard({ request }: { request: Request }) {
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-start justify-between gap-3">
+      <CardHeader className="flex flex-col items-start gap-3 sm:flex-row sm:justify-between">
         <div className="flex flex-col gap-1">
           <CardTitle className="flex items-center gap-2">
             <HardDrive className="size-4" /> Docker 磁碟
@@ -397,15 +397,17 @@ export function DockerDiskCard({ request }: { request: Request }) {
               />
               % 時私訊管理者
             </label>
-            <label className="flex flex-wrap items-center gap-2 text-sm">
+            <div className="flex flex-wrap items-center gap-2 text-sm">
               <Switch
+                id="disk-pause"
                 checked={draft.pause_enabled}
                 onCheckedChange={(v) =>
                   setDraft({ ...draft, pause_enabled: v })
                 }
               />
-              低於
+              <label htmlFor="disk-pause">低於</label>
               <Input
+                aria-label="暫停派新工作的可用空間百分比"
                 type="number"
                 className="h-8 w-20"
                 min={0.5}
@@ -416,8 +418,10 @@ export function DockerDiskCard({ request }: { request: Request }) {
                   setDraft({ ...draft, pause_percent: Number(e.target.value) })
                 }
               />
-              % 時暫停派新工作（關閉時只通知）
-            </label>
+              <label htmlFor="disk-pause">
+                % 時暫停派新工作（關閉時只通知）
+              </label>
+            </div>
             <label className="flex items-start gap-2 text-sm">
               <Switch
                 className="mt-0.5"
@@ -445,19 +449,23 @@ export function DockerDiskCard({ request }: { request: Request }) {
                 return (
                   <li key={rule} className="flex items-start gap-2 text-sm">
                     <Switch
+                      id={`disk-rule-${rule}`}
                       className="mt-0.5"
                       checked={r.enabled}
                       onCheckedChange={(v) => setRule(rule, { enabled: v })}
                     />
                     <span className="flex min-w-0 flex-col gap-1">
                       <span className="flex flex-wrap items-center gap-2">
-                        {ruleLabels[rule]}
+                        <label htmlFor={`disk-rule-${rule}`}>
+                          {ruleLabels[rule]}
+                        </label>
                         {r.days !== undefined && (
                           <>
                             ，保留
                             <Input
                               type="number"
                               className="h-7 w-16"
+                              aria-label={`${ruleLabels[rule]}保留天數`}
                               min={1}
                               value={r.days}
                               onChange={(e) =>
@@ -475,6 +483,7 @@ export function DockerDiskCard({ request }: { request: Request }) {
                             <Input
                               type="number"
                               className="h-7 w-20"
+                              aria-label={`${ruleLabels[rule]}容量上限（GB）`}
                               min={5}
                               value={r.limit_gb}
                               onChange={(e) =>

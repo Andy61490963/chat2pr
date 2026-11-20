@@ -339,7 +339,7 @@ export function Empty({
       <div className="px-5 py-4 text-sm">
         <p className="text-muted-foreground">{title}</p>
         {children && (
-          <p className="mt-0.5 text-xs text-muted-foreground/80">{children}</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">{children}</p>
         )}
       </div>
     );

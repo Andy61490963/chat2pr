@@ -21,7 +21,11 @@ import { Line } from "../server/line.js";
 import { Triage } from "../server/triage.js";
 import { GitHub } from "../server/github.js";
 import { Budget } from "../server/budget.js";
-import { askInGroup } from "../server/answers.js";
+import {
+  answerByPostback,
+  answerPostbackData,
+  askInGroup,
+} from "../server/answers.js";
 import {
   answerAck,
   answerHeldAck,
@@ -238,6 +242,69 @@ describe("在 LINE 回覆補問", () => {
     expect(g?.first_pending_at).toBeNull();
     expect(await dueTriageGroups(db, "group-a")).toHaveLength(0);
   });
+  it.each([true, false])(
+    "補問保密：群組啟用為 %s 時，拒收內容只留下固定提示",
+    async (enabled) => {
+      const t = await waiting("query");
+      await db.query("UPDATE groups SET enabled=$1 WHERE id='group-a'", [
+        enabled,
+      ]);
+      const msg = await reply("驗證碼：測試標記", "bot-q-1");
+      const stored = await db.one(
+        "SELECT text,processed,bot_reply,trigger_mode FROM messages WHERE id=$1",
+        [msg],
+      );
+      expect(stored).toEqual({
+        text: "[已略過含憑證的回答]",
+        processed: true,
+        bot_reply: false,
+        trigger_mode: "chat",
+      });
+      expect((await reload(t.id)).version).toBe(t.version);
+      expect(
+        await db.query(
+          "SELECT id FROM audit WHERE task_id=$1 AND kind='question_answered'",
+          [t.id],
+        ),
+      ).toHaveLength(0);
+      expect(await dueTriageGroups(db, "group-a")).toHaveLength(0);
+    },
+  );
+  it("補問保密：群組通知與常見答案按鈕只提供能接受的選項", async () => {
+    const t = await waiting("query");
+    const question = {
+      text: "要用哪個格式？",
+      choices: ["驗證碼：測試標記", "CSV"],
+    };
+    const updated = await db.one<Task>(
+      "UPDATE tasks SET question=$2,version=version+1 WHERE id=$1 RETURNING *",
+      [t.id, question],
+    );
+    await askInGroup(db.pool, updated!);
+    const notice = await db.one<{
+      text: string;
+      quick_replies: { data: string; displayText: string }[];
+    }>(
+      "SELECT text,quick_replies FROM notifications WHERE task_id=$1 AND dedupe_key=$2",
+      [t.id, `group:question:${t.id}:${updated!.version}`],
+    );
+    expect.soft(notice?.text).toContain("常見答案：CSV");
+    expect.soft(notice?.text).not.toContain("測試標記");
+    expect
+      .soft(notice?.quick_replies.map((b) => b.data))
+      .toEqual([answerPostbackData(updated!, 1)]);
+    const saved = await db.transaction((c) =>
+      answerByPostback(
+        db,
+        c,
+        "group-a",
+        answerPostbackData(updated!, 0),
+        randomUUID(),
+      ),
+    );
+    expect(saved).toBeNull();
+    expect((await reload(t.id)).version).toBe(updated!.version);
+  });
 });
 
 describe("在看板回答", () => {
@@ -291,5 +358,12 @@ describe("在看板回答", () => {
     expect((await answer(t, "password=hunter2")).statusCode).toBe(422);
     await db.query("UPDATE tasks SET question=NULL WHERE id=$1", [t.id]);
     expect((await answer(t, "沒有下載")).statusCode).toBe(409);
+  });
+  it("補問保密：看板拒收相同格式且不回顯內容", async () => {
+    const t = await waiting("query");
+    const response = await answer(t, "驗證碼：測試標記");
+    expect(response.statusCode).toBe(422);
+    expect(response.body).not.toContain("測試標記");
+    expect((await reload(t.id)).version).toBe(t.version);
   });
 });

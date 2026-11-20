@@ -124,8 +124,4 @@ export function assertTransition(status: TaskStatus, action: Action) {
   if (!allowed[action].includes(status))
     throw new AppError(409, "任務狀態已改變，請重新整理");
 }
-export const redact = (value: string) =>
-  value
-    .replace(/sk-[\w-]{12,}/g, "[已遮蔽金鑰]")
-    .replace(/(gh[pousr]_[\w]{10,}|github_pat_[\w]{10,})/g, "[已遮蔽憑證]")
-    .slice(0, 10000);
+export { containsCredential, redact } from "../shared/credentials.js";

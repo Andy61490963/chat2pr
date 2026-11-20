@@ -44,7 +44,7 @@ import {
   readSubscriptionAccount,
   type SubscriptionAccount,
 } from "./subscription-gate.js";
-import type { Task, Project, Settings } from "../shared/types.js";
+import type { Task, Project } from "../shared/types.js";
 import type { SourceAccess, SourceReport } from "./source-cache.js";
 import { runnerRequest, type RunnerTransport } from "./runner-http.js";
 import { missingTestMessage, suggestStack } from "./stack.js";
@@ -754,9 +754,7 @@ export class Execution {
     await tellGroupWaiting(this.db, task.id, "busy", q);
   }
   async execute(taskId: string) {
-    const snapshot = await this.db.one<{ value: Settings; revision: string }>(
-      "SELECT value,revision FROM settings WHERE id=1",
-    );
+    const snapshot = await this.db.settingsSnapshot();
     const s = snapshot.value;
     // Docker 磁碟嚴重不足、且管理者開啟了暫停派工：任務留在佇列，空間回升後再執行。
     if (s.paused || (await diskPaused(this.db))) return;

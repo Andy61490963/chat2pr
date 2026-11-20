@@ -34,6 +34,6 @@ export function dispatchStatus({
       : hold
         ? hold
         : `${state}；點此暫停${triagePaused ? "派工" : ""}`,
-    ariaLabel: paused ? "已暫停，點此開始自動派工" : "點此暫停派工",
+    ariaLabel: `${label}，${paused ? "點此開始自動派工" : "點此暫停派工"}`,
   } as const;
 }

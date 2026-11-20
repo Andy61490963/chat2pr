@@ -978,7 +978,7 @@ export function ProjectForm({
     >
       <div className="flex flex-col gap-2">
         <div className="flex items-center justify-between gap-2">
-          <Label>GitHub 儲存庫</Label>
+          <Label htmlFor="pf-repository">GitHub 儲存庫</Label>
           {pickRepo && repos && (
             <Button
               type="button"
@@ -992,10 +992,10 @@ export function ProjectForm({
           )}
         </div>
         {!pickRepo ? (
-          <Input value={form.repo} readOnly />
+          <Input id="pf-repository" value={form.repo} readOnly />
         ) : (
           <Select value={form.repo} onValueChange={choose} disabled={!repos}>
-            <SelectTrigger className="w-full">
+            <SelectTrigger id="pf-repository" className="w-full">
               {/* 清單內只列儲存庫名稱，選定後這裡仍顯示含擁有者的完整名稱。 */}
               <SelectValue placeholder={repoList.placeholder}>
                 {form.repo}

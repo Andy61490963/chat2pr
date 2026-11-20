@@ -44,6 +44,19 @@ npm run build
 
 CI（`.github/workflows/`）在每個 PR 執行同樣的檢查。
 
+### 看板端對端測試
+
+安裝專案套件後，執行下列指令安裝 Chromium 並驗收看板：
+
+```powershell
+npx playwright install chromium --only-shell
+npm run test:e2e
+```
+
+Playwright 在本機 4521 埠啟動專用 Vite 伺服器，以虛構的登入、任務與系統狀態模擬 API。這組測試可在測試資料庫停止時執行。若要使用其他埠，可設定 `E2E_PORT`。CI 透過「看板瀏覽器驗收」工作執行同一套測試。
+
+同一指令也會以 axe-core 掃描淺色與深色佈景，包括登入及任務詳情。若出現 serious 或 critical 問題，失敗報告會列出規則、元素與原因。可用 `npx playwright test e2e/accessibility.spec.ts` 單獨執行掃描。
+
 ## 交付流程
 
 1. 在 GitHub Issue 寫規格（繁體中文）。
