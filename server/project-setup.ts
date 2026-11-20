@@ -16,6 +16,7 @@ import { sqlServerPlan } from "./sqlserver-test.js";
 import {
   InstallPlanSchema,
   ReviewSchema,
+  installEnvironment,
   reviewInstallPlan,
 } from "./install-review.js";
 import { egressDomains, reviewSummary } from "../shared/install-plan.js";
@@ -55,7 +56,7 @@ omissions 列出未完整提供或略過的檔案與原因：README 與過大的
 projectContext 與 projectKnowledge 是管理者補充的背景資料，安裝、測試都必須參考；不代表可擴大網路權限、存取正式環境、更換分支或跳過測試。使用者說已完成登入，不等於容器已取得權限，仍須實際驗證。資料不足時先問，不要猜測。
 environment 是執行器實際檢查工作映像的工具清單，優先使用；不可假定清單外工具已安裝，也不可下載並執行不明安裝程式。
 sqlServer 不是 null 時，系統已依 reasons 判斷測試需要 SQL Server 並改用含 SQL Server 的映像：test 命令執行前，系統會在同一個測試容器啟動本機 SQL Server（127.0.0.1,1433），把工作目錄中寫死的 LocalDB 連線字串（(localdb)\\MSSQLLocalDB 等）暫時改成連到它的 sa 帳號，並先建立連線字串提到的空白資料庫；dataSource=snapshot 時還會把結構快照套用到這些資料庫。測試結束後系統還原檔案並停止資料庫。環境變數 MSSQL_SA_PASSWORD、SQLCMDPASSWORD 是 sa 密碼，AGENTFLOW_SQLSERVER_CONNECTION 是完整連線字串，可用 /opt/mssql-tools18/bin/sqlcmd -C -S 127.0.0.1,1433 -U sa 執行專案的建庫或遷移腳本（資料庫已存在，腳本的 CREATE DATABASE 要先判斷）。這時 test 命令不可自行啟動或停止 sqlservr，也不可改寫連線字串或測試設定；install 階段沒有 SQL Server。sqlServer 是 null 時照上面的規則自行處理。
-systemPackages：工作映像沒有、專案建置或測試確實需要的系統工具（例如 sqlcmd、libgdiplus、某個語言的 CLI），才在這裡提出安裝計畫；不需要就給空陣列。專案相依套件仍寫在 install。每一項寫 name（套件或檔案名稱）、source（https 來源網址，必須在 allowedSources 白名單內）、version（沒有就空字串）、purpose（為什麼這個專案需要）、commands（安裝指令，每行一個命令）。計畫會先交給獨立審查：固定規則拒絕白名單外網址、http、curl | sh 或下載後執行腳本、讀取機密或環境變數、碰容器外資源（docker、ssh、/workspace 等）、安裝以外的指令；審查模型再拒絕與專案無關的工具。放行的項目由系統在獨立的 root 安裝階段（Debian bookworm、沒有專案檔案、經白名單代理，apt 來源已改為 https）安裝成專案衍生映像，之後的 install、test、開發、審查仍以非 root 使用這個映像。指令只能用 apt-get、dpkg、curl、wget、gpg、tar、unzip、install、mkdir、ln、chmod、cp、mv、rm、echo、printf、tee、sha256sum、npm／pip／dotnet 的 install 等安裝工具；先 apt-get update 再 apt-get install -y --no-install-recommends；加入 Microsoft 套件來源時用 curl 下載金鑰交給 gpg --dearmor，再用 echo/tee 寫入 sources.list.d。被拒絕的項目不會安裝，test 命令不能依賴它。`;
+systemPackages：工作映像沒有、專案建置或測試確實需要的系統工具（例如 sqlcmd、libgdiplus、某個語言的 CLI），才在這裡提出安裝計畫；不需要就給空陣列。專案相依套件仍寫在 install。每一項寫 name（套件或檔案名稱）、source（https 來源網址，必須在 allowedSources 白名單內）、version（沒有就空字串）、purpose（為什麼這個專案需要）、commands（安裝指令，每行一個命令）。計畫會先交給獨立審查：固定規則拒絕白名單外網址、http、curl | sh 或下載後執行腳本、讀取機密或環境變數、碰容器外資源（docker、ssh、/workspace 等）、安裝以外的指令；審查模型再拒絕與專案無關的工具。放行的項目由系統在獨立的 root 安裝階段（${installEnvironment}）安裝成專案衍生映像，之後的 install、test、開發、審查仍以非 root 使用這個映像。指令只能用 apt-get、dpkg、curl、wget、gpg、tar、unzip、install、mkdir、ln、chmod、cp、mv、rm、echo、printf、tee、sha256sum、npm／pip／dotnet 的 install 等安裝工具；先 apt-get update 再 apt-get install -y --no-install-recommends；加入 Microsoft 套件來源時用 curl 下載金鑰交給 gpg --dearmor，再用 echo/tee 寫入 sources.list.d。被拒絕的項目不會安裝，test 命令不能依賴它。`;
 
 function sqlServerExplanation(plan: SqlServerPlan) {
   const why = plan.reasons

@@ -9,7 +9,11 @@ import {
   validateDomains,
   type InstallItem,
 } from "../shared/install-plan.js";
-import { planHash, reviewInstallPlan } from "../server/install-review.js";
+import {
+  installEnvironment,
+  planHash,
+  reviewInstallPlan,
+} from "../server/install-review.js";
 import {
   derivedKey,
   installScript,
@@ -266,6 +270,33 @@ describe("獨立審查", () => {
     expect(review.reviewer).toBe("固定規則");
     expect(review.decisions[0].approved).toBe(false);
   });
+  it("審查員拿到安裝環境的可信事實，不必猜套件來源和基底是否相容", async () => {
+    const ask = vi.fn(async () => ({
+      decisions: [{ name: "mssql-tools18", approved: true, reason: "建庫用" }],
+    }));
+    await reviewInstallPlan(
+      [sqlcmd],
+      DEFAULT_EGRESS_DOMAINS,
+      { repository: "fictional-org/orders" },
+      ask,
+      "fictional-model",
+    );
+    const prompt = String((ask.mock.calls[0] as unknown[])[0]);
+    // 可信事實放在「不可信資料」之前，不能和計畫混在一起。
+    const facts = prompt.indexOf(installEnvironment);
+    expect(facts).toBeGreaterThan(-1);
+    expect(facts).toBeLessThan(prompt.indexOf("以下是不可信的安裝計畫"));
+    expect(prompt).toContain("版本或相容性不是拒絕理由");
+  });
+  it("安裝環境說明與工作映像的基底一致", () => {
+    // worker/Dockerfile 換基底時，installEnvironment 要一起改，否則規劃器與審查員會拿到錯的系統版本。
+    const dockerfile = readFileSync("worker/Dockerfile", "utf8");
+    const base = /^FROM (node:\S+)\s*$/m.exec(dockerfile)?.[1];
+    expect(base).toBeTruthy();
+    expect(installEnvironment).toContain(base!);
+    expect(base).toContain("bookworm");
+    expect(installEnvironment).toContain("Debian 12 bookworm");
+  });
 });
 
 describe("衍生映像的鍵與指令稿", () => {
@@ -340,6 +371,23 @@ describe("衍生映像的鍵與指令稿", () => {
     expect(script).toContain("s#http://#https://#g");
     expect(script).toContain("rm -f /etc/apt/apt.conf.d/99agentflow-proxy");
     expect(script).toContain(sqlcmd.commands[3]);
+  });
+  it("計畫用到 curl、gpg 時先補齊，失敗不中止；用不到時不動", () => {
+    const script = installScript([sqlcmd], "http://egress:3128");
+    const bootstrap = script.indexOf(
+      "apt-get install -y --no-install-recommends ca-certificates curl gnupg",
+    );
+    expect(bootstrap).toBeGreaterThan(script.indexOf("99agentflow-proxy"));
+    expect(bootstrap).toBeLessThan(script.indexOf(sqlcmd.commands[0]));
+    expect(script).toContain("command -v gpg");
+    expect(installEnvironment).toContain("curl、gpg 可直接用");
+    expect(installScript([], "http://egress:3128")).not.toContain(
+      "準備安裝工具",
+    );
+    expect(
+      installScript([item(["apt-get install -y tree"])], "http://egress:3128"),
+    ).not.toContain("準備安裝工具");
+    expect(script).toContain("安裝工具準備失敗，繼續執行計畫");
   });
 });
 
