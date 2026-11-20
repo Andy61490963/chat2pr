@@ -137,7 +137,9 @@ test("通知鈴鐺可用鍵盤開關選單、移動焦點並前往對應頁面",
   await expect(menu).toBeHidden();
 });
 
-test("取消完全開放容器網路的確認對話框後不送出設定", async ({ page }) => {
+test("取消所有專案開放網路（不建議）的確認對話框後不送出設定", async ({
+  page,
+}) => {
   await mockDashboard(page);
   const updates: string[] = [];
   page.on("request", (request) => {
@@ -149,7 +151,9 @@ test("取消完全開放容器網路的確認對話框後不送出設定", async
     }
   });
   await page.goto("/settings");
-  const network = page.getByRole("switch", { name: "完全開放容器網路" });
+  const network = page.getByRole("switch", {
+    name: "所有專案開放網路（不建議）",
+  });
   await expect(network).not.toBeChecked();
   await network.click();
   await page.getByRole("button", { name: "儲存設定" }).click();

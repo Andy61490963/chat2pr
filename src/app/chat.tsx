@@ -1,3 +1,4 @@
+import { GroupStatusBadge } from "./groups";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ArrowUp,
@@ -124,13 +125,14 @@ export function ChatView({
                 ))}
               </SelectContent>
             </Select>
-            <Badge variant={group.enabled ? "secondary" : "outline"}>
-              {!group.enabled
-                ? "派工已停用"
-                : group.trigger_mode === "command"
+            <GroupStatusBadge group={group} state={state} />
+            {group.enabled && !group.left_at && (
+              <span className="text-xs text-muted-foreground">
+                {group.trigger_mode === "command"
                   ? "指令與引用追問"
                   : "自動辨識"}
-            </Badge>
+              </span>
+            )}
             <Button variant="ghost" size="sm" onClick={settings}>
               <Settings2 />
               設定觸發方式

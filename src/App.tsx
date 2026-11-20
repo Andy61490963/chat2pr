@@ -625,7 +625,9 @@ export function App() {
   const visible = views.filter((v) => admin || v.section === "工作區");
   const current = visible.find((v) => v.id === view) ?? visible[0];
   // 訂閱模式以帳號的派工許可為準，避免單一模型的額度用完就誤報整體暫停。
-  const hostHold = memoryHold(state);
+  const hostHold = state?.diskDispatchPaused
+    ? "Docker 磁碟空間嚴重不足"
+    : memoryHold(state);
   const subscriptionHold =
     subscription && typeof account === "object" && account?.allowed === false
       ? "Codex 訂閱額度已達上限"
@@ -887,6 +889,14 @@ export function App() {
             </Button>
           </p>
         )}
+        {state?.settings.container_network === "open" && (
+          <p
+            role="status"
+            className="mb-4 rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn"
+          >
+            所有專案已開放網路，你可在設定關閉，再為個別專案開啟「完全存取」。
+          </p>
+        )}
         {state && (state.settings.paused || state.settings.triage_paused) && (
           <p
             role="status"
@@ -895,8 +905,8 @@ export function App() {
             <CirclePause className="size-4 shrink-0" />
             <span className="min-w-0 flex-1">
               {state.settings.paused
-                ? "派工已暫停：訊息照常接收，但不辨識新需求，也不開始任何工作。"
-                : "新需求判讀已暫停：訊息照常接收，已核准的任務仍會執行。"}
+                ? "派工已暫停，訊息仍會保留 → 你可以按「開始派工」恢復排程。"
+                : "只暫停新需求判讀，已核准的任務照常執行 → 你可以在設定關閉「暫停新需求判讀」。"}
             </span>
             {admin &&
               (state.settings.paused ? (
@@ -932,7 +942,9 @@ export function App() {
               <CirclePause className="size-4 shrink-0" />
             )}
             <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-              {hold}。排隊中的工作會在恢復後自動開始，不需手動操作
+              {hostHold
+                ? `資源不足，派工自動暫停（${hostHold}） → 資源恢復後會自動繼續。`
+                : `${hold} → 額度恢復後會自動繼續。`}
             </span>
             {admin && view !== holdView && (
               <Button variant="outline" size="xs" onClick={() => go(holdView)}>

@@ -1,6 +1,12 @@
 import { expect, test } from "@playwright/test";
 import type { ChatPage } from "../shared/chat";
-import { group, mockDashboard, project, task } from "./dashboard-fixture";
+import {
+  defaultState,
+  group,
+  mockDashboard,
+  project,
+  task,
+} from "./dashboard-fixture";
 
 const pendingReply = "範例服務已恢復，可以再次查詢。";
 const chat: ChatPage = {
@@ -242,4 +248,40 @@ for (const [entry, title] of [
     await expect(page.getByText(`LINE 經${title}送 Webhook`)).toBeVisible();
     if (entry !== "ngrok")
       await expect(page.getByText(/ngrok 固定 HTTPS 入口/)).toHaveCount(0);
+  });
+
+for (const scenario of [
+  {
+    name: "手動暫停派工",
+    settings: { paused: true },
+    expected: "開始派工」恢復排程",
+  },
+  {
+    name: "只暫停新需求判讀",
+    settings: { triage_paused: true },
+    expected: "已核准的任務照常執行",
+  },
+  {
+    name: "磁碟不足自動暫停",
+    settings: {},
+    diskDispatchPaused: true,
+    expected: "Docker 磁碟空間嚴重不足",
+  },
+  {
+    name: "開放所有專案網路",
+    settings: { container_network: "open" },
+    expected: "所有專案已開放網路",
+  },
+])
+  test(scenario.name + "會顯示對應的頂端提醒", async ({ page }) => {
+    await mockDashboard(page, {
+      state: {
+        settings: { ...defaultState.settings, ...scenario.settings },
+        diskDispatchPaused: scenario.diskDispatchPaused,
+      },
+    });
+    await page.goto("/");
+    await expect(
+      page.getByRole("status").filter({ hasText: scenario.expected }),
+    ).toBeVisible();
   });

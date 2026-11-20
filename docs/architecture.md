@@ -95,15 +95,15 @@ flowchart LR
 
 **網路**（名稱固定，所以一台主機只能有一個正式實例）
 
-| 網路                          | 連接對象                                                     |
-| ----------------------------- | ------------------------------------------------------------ |
-| `line-agentflow_default`      | 常駐服務之間，以及出口代理對外                               |
-| `line-agentflow_workers`      | API 模式：工作容器 ↔ `app` 的推論代理                        |
-| `line-agentflow_install`      | 安裝容器 ↔ `egress`                                          |
-| `line-agentflow_ai`           | `egress-ai` 的內部網路                                       |
-| `line-agentflow_subscription` | 訂閱模式：工作容器 ↔ `subscription-relay`                    |
-| `line-agentflow_embed`        | `app` ↔ `embedder`                                           |
-| `line-agentflow_open`         | 只在設定頁選了「完全開放容器網路」時由執行器建立；預設不存在 |
+| 網路                          | 連接對象                                                               |
+| ----------------------------- | ---------------------------------------------------------------------- |
+| `line-agentflow_default`      | 常駐服務之間，以及出口代理對外                                         |
+| `line-agentflow_workers`      | API 模式：工作容器 ↔ `app` 的推論代理                                  |
+| `line-agentflow_install`      | 安裝容器 ↔ `egress`                                                    |
+| `line-agentflow_ai`           | `egress-ai` 的內部網路                                                 |
+| `line-agentflow_subscription` | 訂閱模式：工作容器 ↔ `subscription-relay`                              |
+| `line-agentflow_embed`        | `app` ↔ `embedder`                                                     |
+| `line-agentflow_open`         | 只在設定頁選了「所有專案開放網路（不建議）」時由執行器建立；預設不存在 |
 
 除了 `default` 與 `open`，其餘都是沒有對外路由的內部網路。
 
