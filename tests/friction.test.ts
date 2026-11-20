@@ -89,8 +89,9 @@ it("從稽核紀錄與通知算出回應次數、等待時間、接錯題與返�
   expect(m.responsesPerTask).toBe(0.75);
   expect(m.dashboardPerTask).toBe(0.5);
   expect(m.relinked).toBe(1);
-  expect(m.firstReplySeconds).toBe(120);
-  expect(m.answerSeconds).toBe(600);
+  // 每筆資料各自取 now()，相差幾毫秒；只比到秒。
+  expect(m.firstReplySeconds).toBeCloseTo(120, 0);
+  expect(m.answerSeconds).toBeCloseTo(600, 0);
   expect(m.reworkBase).toBe(1);
   expect(m.reworkRate).toBe(1);
   expect((await frictionMetrics(db, 7, "group-b")).tasks).toBe(0);
