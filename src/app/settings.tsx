@@ -32,9 +32,8 @@ import {
   Progress,
   Separator,
   Switch,
-  Tabs,
-  TabsList,
-  TabsTrigger,
+  segmentedListClass,
+  segmentedItemClass,
 } from "@/components/ui/form-controls";
 import { Input } from "@/components/ui/input";
 import {
@@ -283,7 +282,7 @@ function AiCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>AI 執行模式</CardTitle>
+        <CardTitle id="ai-mode-title">AI 執行模式</CardTitle>
         <CardDescription>切換只影響之後開始的判讀與開發</CardDescription>
       </CardHeader>
       <CardContent>
@@ -380,7 +379,11 @@ function AiCard({
               AI，也可能直接改動這些系統；所有資料庫操作會列在任務說明中供你檢查。
             </p>
           </div>
-          <div className="grid gap-2 sm:grid-cols-2" role="radiogroup">
+          <div
+            role="radiogroup"
+            aria-labelledby="ai-mode-title"
+            className="grid gap-2 sm:grid-cols-2"
+          >
             {(
               [
                 [
@@ -391,34 +394,38 @@ function AiCard({
                 ["api", "OpenAI API", "用 API 金鑰，依預估金額記帳"],
               ] as const
             ).map(([id, label, hint]) => (
-              <button
+              <label
                 key={id}
-                type="button"
-                role="radio"
-                aria-checked={form.ai_mode === id}
-                onClick={() => set("ai_mode", id)}
                 className={cn(
-                  "flex flex-col gap-0.5 rounded-lg border p-3 text-left transition-colors hover:bg-accent",
+                  "relative flex cursor-pointer flex-col gap-0.5 rounded-lg border p-3 text-left transition-colors hover:bg-accent has-focus-visible:outline-2 has-focus-visible:outline-offset-2",
                   form.ai_mode === id &&
                     "border-primary bg-accent ring-1 ring-primary",
                 )}
               >
+                <input
+                  type="radio"
+                  name="ai-mode"
+                  value={id}
+                  checked={form.ai_mode === id}
+                  onChange={() => set("ai_mode", id)}
+                  className="sr-only"
+                />
                 <span className="text-sm font-medium">{label}</span>
                 <span className="text-xs text-muted-foreground">{hint}</span>
-              </button>
+              </label>
             ))}
           </div>
           {form.ai_mode === "subscription" ? (
             <>
               <div className="flex flex-col gap-2">
-                <Label>模型</Label>
+                <Label htmlFor="codex-model">模型</Label>
                 <Select
                   value={form.codex_model ?? "default"}
                   onValueChange={(v) =>
                     set("codex_model", v === "default" ? null : v)
                   }
                 >
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger id="codex-model" className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -454,12 +461,12 @@ function AiCard({
                   ] as const
                 ).map(([k, label]) => (
                   <div key={k} className="flex flex-col gap-2">
-                    <Label>{label}</Label>
+                    <Label htmlFor={k}>{label}</Label>
                     <Select
                       value={form[k]}
                       onValueChange={(v) => set(k, v as Settings[typeof k])}
                     >
-                      <SelectTrigger className="w-full">
+                      <SelectTrigger id={k} className="w-full">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -529,9 +536,9 @@ function AiCard({
                   ] as const
                 ).map(([k, label]) => (
                   <div key={k} className="flex flex-col gap-2">
-                    <Label>{label}</Label>
+                    <Label htmlFor={k}>{label}</Label>
                     <Select value={form[k]} onValueChange={(v) => set(k, v)}>
-                      <SelectTrigger className="w-full">
+                      <SelectTrigger id={k} className="w-full">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
@@ -622,31 +629,53 @@ function AiCard({
 
 function ThemeCard() {
   const [theme, setTheme] = useState<Theme>(savedTheme);
+  const selectTheme = (value: Theme) => {
+    setTheme(value);
+    applyTheme(value);
+    try {
+      localStorage.setItem("agentflow-theme", value);
+    } catch {
+      // 無法保存時仍套用到這次瀏覽。
+    }
+  };
   return (
     <Card>
       <CardHeader>
-        <CardTitle>介面外觀</CardTitle>
+        <CardTitle id="theme-title">介面外觀</CardTitle>
       </CardHeader>
       <CardContent>
-        <Tabs
-          value={theme}
-          onValueChange={(v) => {
-            const t = v as Theme;
-            setTheme(t);
-            applyTheme(t);
-            try {
-              localStorage.setItem("agentflow-theme", t);
-            } catch {
-              // 無法保存時仍套用到這次瀏覽。
-            }
-          }}
+        <div
+          role="radiogroup"
+          aria-labelledby="theme-title"
+          className={segmentedListClass}
         >
-          <TabsList>
-            <TabsTrigger value="system">跟隨系統</TabsTrigger>
-            <TabsTrigger value="light">淺色</TabsTrigger>
-            <TabsTrigger value="dark">深色</TabsTrigger>
-          </TabsList>
-        </Tabs>
+          {(
+            [
+              ["system", "跟隨系統"],
+              ["light", "淺色"],
+              ["dark", "深色"],
+            ] as const
+          ).map(([value, name]) => (
+            <label
+              key={value}
+              data-state={theme === value ? "active" : "inactive"}
+              className={cn(
+                segmentedItemClass,
+                "cursor-pointer has-focus-visible:border-ring has-focus-visible:ring-[3px] has-focus-visible:ring-ring/50 has-focus-visible:outline-1",
+              )}
+            >
+              <input
+                type="radio"
+                name="theme"
+                value={value}
+                checked={theme === value}
+                onChange={() => selectTheme(value)}
+                className="sr-only"
+              />
+              {name}
+            </label>
+          ))}
+        </div>
       </CardContent>
     </Card>
   );
