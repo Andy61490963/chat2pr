@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { Project } from "../../shared/types.js";
 import {
   objectLabels,
+  type ConnectionExtractResult,
   type ConnectionTestResult,
   type ProjectDatabaseView,
 } from "../../shared/project-database.js";
@@ -77,6 +78,54 @@ export function ProjectDatabase({
     Partial<Record<keyof Draft, string>>
   >({});
   const [notice, setNotice] = useState("");
+  // 用白話描述連線：交給 AI 整理後填進下面的欄位，不會自動儲存；原文整理完就清掉。
+  const [describe, setDescribe] = useState("");
+  const [extracting, setExtracting] = useState(false);
+  const [extracted, setExtracted] = useState<ConnectionExtractResult | null>(
+    null,
+  );
+  const [extractError, setExtractError] = useState("");
+  const extract = async () => {
+    setExtracting(true);
+    setExtractError("");
+    try {
+      const r = await request<ConnectionExtractResult>(
+        `${base}/extract`,
+        "POST",
+        {
+          text: describe,
+        },
+      );
+      const c = r.connection;
+      setDraft((d) => ({
+        ...d,
+        ...(c.host ? { host: c.host } : {}),
+        ...(c.port ? { port: String(c.port) } : {}),
+        ...(c.database ? { database: c.database } : {}),
+        ...(c.username ? { username: c.username } : {}),
+        ...(c.password ? { password: c.password } : {}),
+        ...(c.encrypt !== null ? { encrypt: c.encrypt } : {}),
+        ...(c.trustServerCertificate !== null
+          ? { trustServerCertificate: c.trustServerCertificate }
+          : {}),
+        ...(c.ssh
+          ? {
+              useSsh: true,
+              sshHost: c.ssh.host,
+              sshPort: String(c.ssh.port ?? 22),
+              ...(c.ssh.username ? { sshUsername: c.ssh.username } : {}),
+              ...(c.ssh.password ? { sshPassword: c.ssh.password } : {}),
+            }
+          : {}),
+      }));
+      setExtracted(r);
+      setDescribe("");
+    } catch (e) {
+      setExtractError(message(e));
+    } finally {
+      setExtracting(false);
+    }
+  };
   const loaded = view !== null;
   const dirty = JSON.stringify(draft) !== saved;
   useUnsaved(`project-database:${project.id}`, dirty);
@@ -309,6 +358,66 @@ export function ProjectDatabase({
 
       {/* 讀取完成前整個表單停用，避免在空白草稿上按儲存，蓋掉已登記的連線。 */}
       <fieldset disabled={!loaded} className="min-w-0 space-y-4">
+        <div className="space-y-2 rounded-lg border p-3">
+          <Label htmlFor="db-describe">用白話描述連線</Label>
+          <Textarea
+            id="db-describe"
+            rows={3}
+            value={describe}
+            spellCheck={false}
+            placeholder="例如：MES 測試庫在 100.85.185.123，port 1433，資料庫 MES_TEST，帳號 mes_reader 密碼 ……；廠內看板在 http://10.3.1.7:8096，要先連公司 VPN"
+            onChange={(e) => setDescribe(e.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">
+            可以包含帳號密碼。AI
+            整理後填進下面的欄位，並從這台伺服器實測提到的位址；原文不保存，核對後再按「儲存連線」。
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={busy || extracting || !describe.trim()}
+            onClick={() => void extract()}
+          >
+            {extracting ? "AI 整理中…" : "交給 AI 整理"}
+          </Button>
+          {extractError && (
+            <p role="alert" className="text-sm text-danger">
+              {extractError}
+            </p>
+          )}
+          {extracted && (
+            <div role="status" className="space-y-2 text-sm">
+              <p className="font-medium">已填入下面的欄位，請核對後儲存。</p>
+              {extracted.endpoints.length > 0 && (
+                <ul className="space-y-1">
+                  {extracted.endpoints.map((e) => (
+                    <li
+                      key={`${e.host}:${e.port}`}
+                      className={e.reachable ? "text-good" : "text-danger"}
+                    >
+                      {e.reachable ? "✓" : "✕"} {e.purpose}：{e.host}:{e.port}，
+                      {e.detail}
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {(extracted.vpn.needed ||
+                extracted.endpoints.some((e) => !e.reachable)) && (
+                <p className="rounded bg-warn-soft px-3 py-2 text-warn">
+                  {extracted.vpn.note || "有位址連不到。"}
+                  請讓這台伺服器本身連上 VPN 或 Tailscale subnet router；VPN
+                  帳密不用給 chat2pr，設定一次後任務就連得到。
+                </p>
+              )}
+              {extracted.notes.map((n) => (
+                <p key={n} className="text-muted-foreground">
+                  {n}
+                </p>
+              ))}
+            </div>
+          )}
+        </div>
         <div className="grid gap-3 sm:grid-cols-4">
           {field("host", "主機", {
             placeholder: "db.example.com 或 IP",
