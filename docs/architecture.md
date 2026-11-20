@@ -275,7 +275,7 @@ AI 自動設定時，規劃器可以在 `systemPackages` 提出工作映像缺�
 1. 修改 `worker/Dockerfile`，用固定版本並在註解寫明用途。
 2. 修改 `worker/*.mjs` 或工具鏈時，同步更新 Dockerfile 的 `io.agentflow.worker-rev` 與 `server/containers.ts` 的 `WORKER_REV`；執行器會拒絕較舊的映像，專案若指定自訂映像會在驗證或派工時明確提示要重建。
 3. 重建映像：`docker build -f worker/Dockerfile -t line-agentflow-worker:local .`
-4. 到看板「專案」頁對受影響的專案按「驗證環境」。
+4. 到看板「專案」頁對受影響的專案重新驗證：AI 自動設定的專案按「AI 自動設定並驗證」，手動指令的專案按「驗證環境」。
 
 目前預裝：
 
