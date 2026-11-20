@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { Database, DbClient } from "./db.js";
 import { recordHealth } from "./health.js";
+import { fetchLine } from "./line-http.js";
 import { redact } from "./policy.js";
 import {
   LINE_QUOTA,
@@ -211,7 +212,7 @@ export async function expireQuotaHeld(c: DbClient, held: string[]) {
 /** 讀本月推播上限與用量；這兩支 API 不計入推播額度。limit=null 代表方案沒有上限。 */
 export async function fetchLineQuota(access: string) {
   const get = (path: string) =>
-    fetch(`https://api.line.me/v2/bot/message/${path}`, {
+    fetchLine(`https://api.line.me/v2/bot/message/${path}`, {
       headers: { Authorization: `Bearer ${access}` },
       signal: AbortSignal.timeout(10000),
     });

@@ -2,7 +2,8 @@ import { z } from "zod";
 import { Database, type DbClient } from "./db.js";
 import { secrets, config } from "./config.js";
 import { hash } from "./auth.js";
-import { AppError, redact } from "./policy.js";
+import { AppError, containsCredential, redact } from "./policy.js";
+import { fetchLine } from "./line-http.js";
 import { isProgressCommand, isTaskCommand } from "../shared/chat.js";
 import { notificationView } from "../shared/notifications.js";
 import {
@@ -17,6 +18,8 @@ import {
   groupRepliesOn,
   ackFor,
   claimPendingGroupReplies,
+  claimingNote,
+  claimTimeout,
   pendingGroupReplies,
   progressMoreNote,
   progressSummary,
@@ -27,6 +30,7 @@ import {
   replyRejected,
   REPLY_FAILURE_LIMIT,
   staleAnswerAck,
+  type GroupReplyClaim,
   type QuickReply,
 } from "./group-replies.js";
 import { subscriptionGateName } from "./subscription-gate.js";
@@ -98,8 +102,8 @@ type ReplyMessage = string | { text: string; quick?: QuickReply[] | null };
 interface Ack {
   token: string;
   messages: ReplyMessage[];
-  /** messages[i] 是補送的哪一則通知（沒有則為 null）：送出後依索引寫回 sent_message_id。 */
-  notices?: (string | null)[];
+  /** 第一則是進度摘要，其後每則訊息依序對應 claim.ids。 */
+  claim?: GroupReplyClaim;
 }
 /** Line.reply 的結果：ids 為 null 表示沒送出；status 為 null 表示沒有權杖、逾時或連不上。 */
 interface ReplyResult {
@@ -319,11 +323,8 @@ export class Line {
               return;
             }
             const { tasks, total } = await progressTasks(c, group);
-            const { replies, remaining } = await claimPendingGroupReplies(
-              c,
-              group,
-              REPLY_LIMIT - 1,
-            );
+            const { replies, remaining, claim } =
+              await claimPendingGroupReplies(c, group, REPLY_LIMIT - 1);
             const notes: ReplyMessage[] = replies.map((r, i) => ({
               text:
                 remaining && i === replies.length - 1
@@ -337,20 +338,23 @@ export class Line {
                 progressSummary(tasks, total, replies.length),
                 ...notes,
               ],
-              notices: [null, ...replies.map((r) => r.id)],
+              claim,
             });
             return;
           }
           // 「回覆」機器人的補問就是回答：直接併進需求，不用等判讀，也不再呼叫模型。
-          // 含常見憑證格式的回答不收，改走一般流程，避免機密寫進需求。
           const answerText = e.message.text?.trim() ?? "";
+          const sensitiveReply =
+            e.message.type === "text" &&
+            !!e.message.quotedMessageId &&
+            containsCredential(answerText);
           const asked =
             settings.enabled &&
             group &&
             e.message.type === "text" &&
             e.message.quotedMessageId &&
             answerText &&
-            redact(answerText) === answerText
+            !sensitiveReply
               ? await questionByQuote(c, group, e.message.quotedMessageId)
               : undefined;
           if (asked && group) {
@@ -382,13 +386,9 @@ export class Line {
             return;
           }
           // 回答補問卻含憑證格式：明確拒收。不存原文、不排判讀，也不能落到追問路徑回「收到」，
-          // 否則成員以為已收下，原文還會以追問身分交給判讀模型。過期的補問不在此處理，照舊當補充。
+          // 即使群組停用或提問已過期，仍不能把這則回答當成一般聊天而保存原文。
           if (
-            settings.enabled &&
-            e.message.type === "text" &&
-            e.message.quotedMessageId &&
-            answerText &&
-            redact(answerText) !== answerText &&
+            sensitiveReply &&
             (
               await c.query(
                 "SELECT 1 FROM notifications n JOIN tasks t ON t.id=n.task_id WHERE n.sent_message_id=$1 AND n.group_id=$2 AND t.group_id=$2 AND n.kind='group_question' LIMIT 1",
@@ -402,14 +402,16 @@ export class Line {
                 e.message.id,
                 group,
                 e.source?.userId ?? null,
-                redact(answerText),
+                "[已略過含憑證的回答]",
                 e.message.quotedMessageId,
               ],
             );
             if (saved.rowCount && replyOn)
               acks.push({
                 token: e.replyToken!,
-                messages: [credentialAnswerAck],
+                messages: [
+                  settings.enabled ? credentialAnswerAck : disabledAck,
+                ],
               });
             return;
           }
@@ -501,10 +503,7 @@ export class Line {
             );
         }
       });
-    for (const a of acks) {
-      const result = await this.reply(a.token, a.messages);
-      if (a.notices) await this.settleClaimed(a.notices, result);
-    }
+    for (const a of acks) await this.sendAck(a);
     for (const a of adoptions) {
       const reply =
         "這個按鈕已改為看板確認流程。請先到看板檢視目標專案與方案，再確認執行。";
@@ -519,7 +518,7 @@ export class Line {
   async image(id: string) {
     const access = secrets().lineToken;
     if (!access) throw new AppError(503, "LINE Access Token 尚未設定");
-    const response = await fetch(
+    const response = await fetchLine(
       `https://api-data.line.me/v2/bot/message/${encodeURIComponent(id)}/content`,
       {
         headers: { Authorization: `Bearer ${access}` },
@@ -611,24 +610,58 @@ export class Line {
       undelivered: s?.push_out || pending.failed ? pending.count : 0,
     });
   }
+  private async sendAck({ token, messages, claim }: Ack) {
+    if (!claim) {
+      await this.reply(token, messages);
+      return;
+    }
+    const sent = await this.db.transaction(async (c) => {
+      // 同一批 webhook 的回覆可能已排隊一段時間。先核對領取時間，再鎖住這批通知直到寫回；
+      // 送出最多等 5 秒，其間回收與推播都能用 SKIP LOCKED 略過，避免舊回覆改到下一輪。
+      const { rows } = await c.query<{ id: string; valid: boolean }>(
+        `SELECT id,sent_at>=clock_timestamp()-$4::interval AS valid FROM notifications
+         WHERE id=ANY($1::uuid[]) AND sent_at=$2::timestamptz AND last_error=$3 AND sent_message_id IS NULL
+         FOR UPDATE SKIP LOCKED`,
+        [claim.ids, claim.claimedAt, claimingNote, claimTimeout],
+      );
+      if (rows.length !== claim.ids.length || rows.some((r) => !r.valid)) {
+        // 摘要和通知共用一個 reply token。整批已變更時，只歸還此交易仍持有的列。
+        if (rows.length)
+          await c.query(
+            "UPDATE notifications SET sent_at=NULL,last_error=$2 WHERE id=ANY($1::uuid[])",
+            [rows.map((r) => r.id), replyFailedNote],
+          );
+        return false;
+      }
+      const result = await this.reply(token, messages);
+      await this.settleClaimed(c, claim.ids, result);
+      return true;
+    });
+    if (!sent)
+      await this.reply(token, [
+        "這批群組回覆已更新，請再輸入 /進度 查看最新進度。",
+      ]);
+  }
   /**
-   * /進度 補送的通知：reply 成功就依索引寫回 sent_message_id（之後「詳細」、引用追問、引用作答才接得上）；
+   * 在持有整批通知列鎖的交易內寫回。reply 成功就依索引記下 sent_message_id（之後「詳細」、引用追問、引用作答才接得上）；
    * 失敗或逾時就把佔住的列還原成未送出，下次 /進度 或正常推播可以再試。
    * LINE 以內容問題拒收（replyRejected）時，這批每則 reply_failures+1；到 REPLY_FAILURE_LIMIT 次就改寫成
    * replyGaveUpNote、不再被 /進度 取回，之後的 /進度 至少能回摘要。限流、5xx、逾時、沒有權杖不計。
    */
-  private async settleClaimed(notices: (string | null)[], result: ReplyResult) {
-    const claimed = notices.flatMap((id, i) => (id ? [{ id, i }] : []));
-    if (!claimed.length) return;
+  private async settleClaimed(
+    c: DbClient,
+    notices: string[],
+    result: ReplyResult,
+  ) {
     const { ids } = result;
     if (!ids) {
       const blamed = replyRejected(result.status, result.message) ? 1 : 0;
-      await this.db.query(
+      await c.query(
         `UPDATE notifications SET sent_at=NULL,reply_failures=reply_failures+$3,
            last_error=CASE WHEN reply_failures+$3>=$4 THEN $5 ELSE $2 END
          WHERE id=ANY($1::uuid[]) AND sent_message_id IS NULL`,
         [
-          claimed.map((n) => n.id),
+          notices,
           replyFailedNote,
           blamed,
           REPLY_FAILURE_LIMIT,
@@ -637,10 +670,10 @@ export class Line {
       );
       return;
     }
-    for (const n of claimed)
-      await this.db.query(
+    for (const [i, id] of notices.entries())
+      await c.query(
         "UPDATE notifications SET sent_message_id=$2,last_error=NULL WHERE id=$1",
-        [n.id, ids[n.i] ?? null],
+        [id, ids[i + 1] ?? null],
       );
   }
   /**
@@ -821,7 +854,7 @@ export class Line {
         // 每則各自一個 savepoint：某則寫入失敗只退回那一則，不會讓整批已送出的紀錄一起被撤銷。
         await c.query("SAVEPOINT push");
         try {
-          const response = await fetch(
+          const response = await fetchLine(
             "https://api.line.me/v2/bot/message/push",
             {
               method: "POST",

@@ -79,6 +79,7 @@ import type {
   TaskStatus,
 } from "../shared/types.js";
 import { describeChanges, settingsDiff } from "../shared/settings-diff.js";
+import { containsCredential } from "../shared/credentials.js";
 import {
   countStatuses,
   efforts,
@@ -445,6 +446,7 @@ export async function buildApp(
   });
   app.get("/api/state", async (req) => {
     const user = await requireUser(db, req);
+    const admin = user.role === "admin";
     // 清單預設只給最近的資料；看板按「載入更多」時才放大。
     const limits = z
       .object({
@@ -476,14 +478,22 @@ export async function buildApp(
         by_status: Partial<Record<TaskStatus, number>>;
         merged_week: number;
       }>(
-        `SELECT (SELECT count(*)::int FROM tasks) AS tasks,(SELECT count(*)::int FROM audit) AS activity,
+        `SELECT (SELECT count(*)::int FROM tasks) AS tasks,(SELECT count(*)::int FROM audit WHERE $1::boolean OR task_id IS NOT NULL) AS activity,
            coalesce((SELECT jsonb_object_agg(status,n) FROM (SELECT status,count(*)::int AS n FROM tasks GROUP BY status) s),'{}') AS by_status,
            (SELECT count(*)::int FROM tasks WHERE status='merged'
              AND (updated_at AT TIME ZONE 'Asia/Taipei')::date>(now() AT TIME ZONE 'Asia/Taipei')::date-7) AS merged_week`,
+        [admin],
       ),
-      // 鈴鐺：與 LINE 私訊相同的重要通知（待審核、失敗、PR 完成、查詢回覆、額度等）。
+      // 私訊原文只給管理者；成員可依類別與任務標題前往處理。群組原文的期限與聊天室一致。
       db.query(
-        "SELECT n.id,n.task_id,n.kind,n.text,n.created_at,t.title FROM notifications n LEFT JOIN tasks t ON t.id=n.task_id ORDER BY n.created_at DESC LIMIT 30",
+        `SELECT n.id,n.task_id,n.kind,n.created_at,t.title,
+           CASE WHEN n.group_id IS NOT NULL AND n.created_at<=message_retention_cutoff() THEN '原文已到期'
+                WHEN n.group_id IS NOT NULL OR $1::boolean THEN n.text
+                WHEN n.task_id IS NOT NULL THEN '請到任務詳情查看。'
+                ELSE '管理者私訊' END AS text
+         FROM notifications n LEFT JOIN tasks t ON t.id=n.task_id
+         ORDER BY n.created_at DESC,n.id DESC LIMIT 30`,
+        [admin],
       ),
       db.one<{ seen_at: string }>(
         "SELECT seen_at FROM alert_seen WHERE user_id=$1",
@@ -512,10 +522,10 @@ export async function buildApp(
       ),
       budget.summary(),
       db.query("SELECT * FROM service_health ORDER BY name"),
-      // 動態附上任務名稱，讓人不用點開就知道是哪一件事。
+      // 無任務的管理稽核可能含私訊內容；分頁資料與上方總數必須使用相同條件。
       db.query(
-        "SELECT a.*,t.title AS task_title FROM audit a LEFT JOIN tasks t ON t.id=a.task_id ORDER BY a.id DESC LIMIT $1",
-        [limits.activity],
+        "SELECT a.*,t.title AS task_title FROM audit a LEFT JOIN tasks t ON t.id=a.task_id WHERE $2::boolean OR a.task_id IS NOT NULL ORDER BY a.id DESC LIMIT $1",
+        [limits.activity, admin],
       ),
       db.query("SELECT * FROM group_memories ORDER BY created_at"),
       db.query(
@@ -1297,7 +1307,14 @@ export async function buildApp(
         daily_runs: z.number().int().min(1).max(200),
         codex_model: z
           .string()
-          .regex(/^[\w.-]{1,80}$/)
+          .regex(
+            /^[\w.-]{1,80}$/,
+            "Codex 模型名稱請填 1 到 80 個英數字、底線、句點或連字號",
+          )
+          .refine(
+            (model) => !containsCredential(model),
+            "Codex 模型名稱不可包含憑證",
+          )
           .nullable(),
         triage_effort: z.enum(efforts),
         coding_effort: z.enum(efforts),

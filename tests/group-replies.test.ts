@@ -1019,6 +1019,74 @@ describe("用 reply token 取回與說實話", () => {
       [taskId],
     ))!.reply_failures;
 
+  it.each(["已到期", "已由下一輪領取"] as const)(
+    "補送前保留租約所有權：%s 的通知不再送出",
+    async (state) => {
+      await settings();
+      const id = await answeredTask("租約狀態範例");
+      // 在收訊交易提交與送出之間切換這一列的狀態，不必等待兩分鐘或啟動平行程序。
+      const transaction = db.transaction.bind(db);
+      const changeLease = vi
+        .spyOn(db, "transaction")
+        .mockImplementationOnce(async (fn) => {
+          const result = await transaction(fn);
+          await db.query(
+            `UPDATE notifications SET sent_at=CASE WHEN $2='已到期' THEN now()-interval '3 minutes' ELSE clock_timestamp() END
+           WHERE task_id=$1 AND last_error=$3`,
+            [id, state, claimingNote],
+          );
+          return result;
+        });
+      try {
+        await send("lease", "/進度");
+      } finally {
+        changeLease.mockRestore();
+      }
+      expect(
+        replyCalls.flatMap((call) => call.messages.map((m) => m.text)),
+      ).not.toEqual(
+        expect.arrayContaining([expect.stringContaining(detailHint)]),
+      );
+      const current = await notice(id);
+      expect(current.sent_message_id).toBeNull();
+      if (state === "已由下一輪領取") {
+        expect(current.sent_at).not.toBeNull();
+        expect(current.last_error).toBe(claimingNote);
+      }
+    },
+  );
+
+  it.each([200, 503])(
+    "補送完成或歸還前，租約仍由本輪持有（HTTP %i）",
+    async (status) => {
+      await settings();
+      const id = await answeredTask("等待寫回結果的範例");
+      let unlocked: unknown[] | undefined;
+      vi.stubGlobal("fetch", async () => {
+        // 模擬回應尚未寫回的瞬間；另一個領取者只能看到沒有被鎖住的列。
+        unlocked = await db.query(
+          "SELECT id FROM notifications WHERE task_id=$1 AND last_error=$2 FOR UPDATE SKIP LOCKED",
+          [id, claimingNote],
+        );
+        return Response.json(
+          { sentMessages: [{ id: "summary" }, { id: "reply-result" }] },
+          { status },
+        );
+      });
+      await send("settle-lease", "/進度");
+      expect(unlocked).toEqual([]);
+      expect(await notice(id)).toMatchObject(
+        status === 200
+          ? { sent_message_id: "reply-result", last_error: null }
+          : {
+              sent_message_id: null,
+              sent_at: null,
+              last_error: replyFailedNote,
+            },
+      );
+    },
+  );
+
   it("佔住後程序中止（沒寫回 reply 結果）：超過 2 分鐘由通知排程放回待送，下一次 /進度 取得回", async () => {
     await settings();
     const id = await answeredTask("中止時的查詢");

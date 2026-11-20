@@ -1,6 +1,7 @@
 import pg from "pg";
 import { readFile } from "node:fs/promises";
 import type { Settings } from "../shared/types.js";
+import { containsCredential } from "../shared/credentials.js";
 export type DbClient = Pick<pg.PoolClient, "query">;
 export class Database {
   pool: pg.Pool;
@@ -40,18 +41,28 @@ export class Database {
     );
   }
   async settings(): Promise<Settings> {
-    const stored = (
-      await this.one<{ value: Settings }>(
-        "SELECT value FROM settings WHERE id=1",
-      )
-    ).value;
+    return (await this.settingsSnapshot()).value;
+  }
+  async settingsSnapshot() {
+    const { value: stored, revision } = await this.one<{
+      value: Settings;
+      revision: string;
+    }>("SELECT value,revision FROM settings WHERE id=1");
     return {
-      ...stored,
-      triage_paused: stored.triage_paused ?? false,
-      auto_memory: stored.auto_memory ?? true,
-      code_downloads: stored.code_downloads ?? true,
-      group_replies: stored.group_replies ?? true,
-      container_network: stored.container_network ?? "isolated",
+      revision,
+      value: {
+        ...stored,
+        // 舊版誤存的憑證不能成為看板欄位、判讀或執行送出的模型名稱。
+        codex_model:
+          stored.codex_model && containsCredential(stored.codex_model)
+            ? null
+            : stored.codex_model,
+        triage_paused: stored.triage_paused ?? false,
+        auto_memory: stored.auto_memory ?? true,
+        code_downloads: stored.code_downloads ?? true,
+        group_replies: stored.group_replies ?? true,
+        container_network: stored.container_network ?? "isolated",
+      },
     };
   }
   async audit(
