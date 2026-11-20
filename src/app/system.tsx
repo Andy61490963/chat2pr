@@ -28,6 +28,7 @@ import { type Request, type State, ago, date, message } from "./shared";
 import { FrictionCard } from "./friction";
 import { CapacityCard } from "./capacity";
 import { DockerDiskCard } from "./docker-disk";
+import { entryText, type EntryKind } from "../../shared/entry.js";
 import { EgressCard } from "./egress";
 import { CheckEnvironmentCard } from "./check-environments";
 
@@ -57,6 +58,8 @@ type SystemStatus = {
   jobs: ContainerStatus[] | null;
   images: WorkerImage[] | null;
   volumes: Volumes | null;
+  /** 固定 HTTPS 入口的種類（server/tunnel-provider.ts 的 currentEntry）。 */
+  entry?: EntryKind;
 };
 /** 上一次成功讀到的容器清單；之後讀不到時繼續顯示並標示時間。 */
 type DockerLists = {
@@ -295,7 +298,7 @@ export function SystemView({
       <EgressCard request={request} />
       <CheckEnvironmentCard request={request} admin={admin} />
       <MemoryOverview state={state} go={go} />
-      <Architecture state={state} />
+      <Architecture state={state} entry={status?.entry ?? "unknown"} />
     </div>
   );
 }
@@ -589,19 +592,18 @@ type FlowStep = {
   active: string[];
   path?: string;
 };
-const flowSteps = (open: boolean): FlowStep[] => [
+const flowSteps = (open: boolean, entry: EntryKind): FlowStep[] => [
   {
     title: "收到訊息",
-    detail:
-      "成員在 LINE 群組傳訊息，LINE 把它以 Webhook 送到 ngrok 固定 HTTPS 入口。",
-    active: ["line", "ngrok"],
+    detail: `成員在 LINE 群組傳訊息，LINE 把它以 Webhook 送到${entryText[entry].name}。`,
+    active: ["line", "entry"],
     path: "M210 66 L250 66",
   },
   {
     title: "驗證並存檔",
     detail:
       "app 驗證 LINE 簽章，把訊息存進資料庫；有圖片時在背景下載。這時還不會馬上判讀，先等群組安靜下來。",
-    active: ["ngrok", "app", "db"],
+    active: ["entry", "app", "db"],
     path: "M370 98 L370 128 M490 176 L530 176",
   },
   {
@@ -700,10 +702,10 @@ function FlowDot({ path, step }: { path?: string; step: number }) {
   );
 }
 
-function Architecture({ state }: { state: State }) {
+function Architecture({ state, entry }: { state: State; entry: EntryKind }) {
   const open = state.settings.container_network === "open";
   const downloads = state.settings.code_downloads !== false;
-  const steps = flowSteps(open);
+  const steps = flowSteps(open, entry);
   const [step, setStep] = useState(-1),
     [playing, setPlaying] = useState(false);
   const current = step >= 0 ? steps[step] : undefined;
@@ -900,8 +902,8 @@ function Architecture({ state }: { state: State }) {
                 y={34}
                 w={240}
                 h={64}
-                id="ngrok"
-                title="ngrok 固定 HTTPS 入口"
+                id="entry"
+                title={entryText[entry].title}
                 lines={["Webhook 與看板的唯一對外入口"]}
               />
               <Box
@@ -1148,7 +1150,7 @@ function Architecture({ state }: { state: State }) {
             {[
               [
                 "收訊",
-                "LINE 經 ngrok 送 Webhook 到 app，驗證簽章後存入資料庫；圖片在背景下載，原文保留 30 天。",
+                `LINE 經${entryText[entry].name}送 Webhook 到 app，驗證簽章後存入資料庫；圖片在背景下載，原文保留 30 天。`,
               ],
               [
                 "判讀",
