@@ -26,12 +26,13 @@ import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import serveStatic from "@fastify/static";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
 import { HttpEmbedder, type Embedder } from "./embedder.js";
 import { validIndexPath } from "../shared/repo-scope.js";
 import { Database } from "./db.js";
-import { config, secrets, token } from "./config.js";
+import { config, secrets, secretsPath, token } from "./config.js";
+import { currentEntry } from "./tunnel-provider.js";
 import { registerAuth, requireAdmin, requireUser, hash } from "./auth.js";
 import { registerMembers } from "./members.js";
 import { registerCapacity } from "./capacity-api.js";
@@ -1411,7 +1412,11 @@ export async function buildApp(
     await requireAdmin(db, req);
     // 執行器沒回應、Docker 沒回應或逾時都回 200 與 runner.state，看板才分得出是哪一段出問題。
     const c = config();
-    return probeSystem(c.runnerUrl, secrets().runnerSecret ?? "", c.instance);
+    const [status, entry] = await Promise.all([
+      probeSystem(c.runnerUrl, secrets().runnerSecret ?? "", c.instance),
+      currentEntry(secrets(), join(dirname(secretsPath), "tunnel-status.json")),
+    ]);
+    return { ...status, entry };
   });
   app.get("/api/codex/account", async (req) => {
     await requireUser(db, req);

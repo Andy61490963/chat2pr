@@ -1,4 +1,6 @@
+import { readFile } from "node:fs/promises";
 import type { Secrets } from "./config.js";
+import { entryKind, type EntryKind } from "../shared/entry.js";
 
 export type TunnelProvider = NonNullable<Secrets["tunnelProvider"]>;
 
@@ -73,4 +75,24 @@ export function tunnelPlan(s: Secrets, port = defaultMetricsPort): TunnelPlan {
     provider: "none",
     detail: "已選擇 Cloudflare Tunnel，但尚未填入通道權杖或設定檔路徑",
   };
+}
+
+/**
+ * 系統頁顯示的入口種類：設定優先；自備程序維護的入口從通道狀態檔（.local/tunnel-status.json）的說明辨識。
+ * 讀不到狀態檔不算錯，只是認不出種類。
+ */
+export async function currentEntry(
+  s: Secrets,
+  statusFile: string,
+): Promise<EntryKind> {
+  let detail: string | undefined;
+  try {
+    const state = JSON.parse(await readFile(statusFile, "utf8")) as {
+      detail?: unknown;
+    };
+    if (typeof state.detail === "string") detail = state.detail;
+  } catch {
+    // 通道尚未啟動或狀態檔正在改寫。
+  }
+  return entryKind(tunnelProvider(s), detail);
 }
