@@ -25,8 +25,10 @@ const STATE = "/workspace/obj/agentflow-sqlserver";
 const localDb = () => /\(localdb\)(?:\\{1,2}\.)?\\{1,2}[A-Za-z0-9_.$-]+/gi;
 // 連線字串所在的字串常值或設定值邊界：引號、XML 標記、換行。
 const BOUNDARY = /["'`<>\r\n]/;
+// 也掃 CI 會跑的腳本（PowerShell、殼層、批次檔、Python、SQL）：專案常在 tests/*.ps1 寫死 LocalDB 連線。
+// 換上的 sa 密碼只有英數與 !，放進這些語言的字串都不會被展開。
 const TEXT_FILE =
-  /\.(?:cs|csx|vb|fs|fsx|json|config|xml|runsettings|props|targets|settings|ya?ml|ini|env)$/i;
+  /\.(?:cs|csx|vb|fs|fsx|json|config|xml|runsettings|props|targets|settings|ya?ml|ini|env|ps1|psm1|psd1|sh|bash|cmd|bat|py|sql)$/i;
 const SKIP_DIRS = new Set([
   ".git",
   ".vs",

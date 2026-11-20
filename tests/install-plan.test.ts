@@ -372,6 +372,23 @@ describe("衍生映像的鍵與指令稿", () => {
     expect(script).toContain("rm -f /etc/apt/apt.conf.d/99agentflow-proxy");
     expect(script).toContain(sqlcmd.commands[3]);
   });
+  it("計畫用到 curl、gpg 時先補齊，失敗不中止；用不到時不動", () => {
+    const script = installScript([sqlcmd], "http://egress:3128");
+    const bootstrap = script.indexOf(
+      "apt-get install -y --no-install-recommends ca-certificates curl gnupg",
+    );
+    expect(bootstrap).toBeGreaterThan(script.indexOf("99agentflow-proxy"));
+    expect(bootstrap).toBeLessThan(script.indexOf(sqlcmd.commands[0]));
+    expect(script).toContain("command -v gpg");
+    expect(installEnvironment).toContain("curl、gpg 可直接用");
+    expect(installScript([], "http://egress:3128")).not.toContain(
+      "準備安裝工具",
+    );
+    expect(
+      installScript([item(["apt-get install -y tree"])], "http://egress:3128"),
+    ).not.toContain("準備安裝工具");
+    expect(script).toContain("安裝工具準備失敗，繼續執行計畫");
+  });
 });
 
 it("PR 說明列出已安裝與被拒絕的系統套件、誰放行", () => {

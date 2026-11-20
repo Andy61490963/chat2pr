@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type Docker from "dockerode";
 import { AppError } from "./policy.js";
 import type { Containers } from "./containers.js";
-import { planHash } from "./install-review.js";
+import { installPrerequisites, planHash } from "./install-review.js";
 import {
   MAX_INSTALL_ITEMS,
   canonicalItems,
@@ -87,6 +87,16 @@ export function installScript(items: readonly InstallItem[], proxy: string) {
     "  done",
     "fi",
   ];
+  // 計畫常用 curl 取簽章金鑰、gpg --dearmor 轉檔，工作映像沒有這兩個工具；由系統先從 Debian 官方來源補齊，
+  // 不交給計畫自己裝（審查員曾因前置套件未分項而拒絕整項）。只在指令用到時補，已經有就不動；
+  // 補裝失敗不中止，讓錯誤出現在真正需要它的那一項，看板才指得出是哪個套件。
+  if (items.some((i) => i.commands.some((c) => /\b(?:curl|gpg)\b/.test(c))))
+    lines.push(
+      "if command -v apt-get >/dev/null 2>&1 && ! { command -v curl >/dev/null 2>&1 && command -v gpg >/dev/null 2>&1; }; then",
+      "  echo 'AGENTFLOW_INSTALL 準備安裝工具' >&2",
+      `  { apt-get update && apt-get install -y --no-install-recommends ${installPrerequisites.join(" ")}; } || echo 'AGENTFLOW_INSTALL 安裝工具準備失敗，繼續執行計畫' >&2`,
+      "fi",
+    );
   for (const item of canonicalItems(items)) {
     lines.push(
       `echo ${quote(`AGENTFLOW_INSTALL 安裝 ${item.name}${item.version ? ` ${item.version}` : ""}`)} >&2`,

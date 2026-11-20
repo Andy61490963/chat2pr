@@ -10,7 +10,7 @@ AI 先讀取固定版本的專案說明、建置設定及 `scripts`／`tests/env
 
 ## 工作映像缺少系統工具時
 
-AI 自動設定可以在 `systemPackages` 提出系統套件安裝計畫（名稱、https 來源、版本、用途、安裝指令）。計畫先經固定規則，再由另一次審查模型呼叫判斷用途；放行的項目由系統以 root 裝成專案衍生映像，同專案、同分支、同計畫、同基底映像時重用。被拒絕的項目列在專案詳情與 PR 說明，測試命令不能依賴它們。來源只能是看板「系統 → 下載來源白名單」內的網域。細節與安全邊界見[架構](../architecture.md)〈系統套件安裝與專案衍生映像〉。
+AI 自動設定可以在 `systemPackages` 提出系統套件安裝計畫（名稱、https 來源、版本、用途、安裝指令）。計畫先經固定規則，再由另一次審查模型呼叫判斷用途；放行的項目由系統以 root 裝成專案衍生映像（Debian 12 bookworm；計畫指令用到 curl 或 gpg 時，系統先從 Debian 官方來源補齊 `ca-certificates`、`curl`、`gnupg`，計畫不必自己裝），同專案、同分支、同計畫、同基底映像時重用。被拒絕的項目列在專案詳情與 PR 說明，測試命令不能依賴它們。來源只能是看板「系統 → 下載來源白名單」內的網域。細節與安全邊界見[架構](../architecture.md)〈系統套件安裝與專案衍生映像〉。
 
 ## SQL Server 與 Redis 測試映像
 
@@ -30,7 +30,7 @@ AI 自動設定的專案不必手動選這個映像。系統從固定版本的�
 需要 SQL Server 時，系統把 AI 規劃的測試命令包在 `agentflow-sqlserver run -- sh -c '<測試命令>'` 裡執行（`worker/mssql/sqlserver.mjs`，裝在衍生映像的 `/usr/local/bin/agentflow-sqlserver`）：
 
 1. 在同一個測試容器啟動 SQL Server（只聽 `127.0.0.1,1433`，記憶體上限 1 GiB，最多等 150 秒；第一次失敗會清掉資料檔重試一次）。sa 密碼每次隨機產生，只放在這個容器的環境變數 `MSSQL_SA_PASSWORD`、`SQLCMDPASSWORD`、`AGENTFLOW_SQLSERVER_CONNECTION`。
-2. 掃描工作目錄中的文字檔（`.cs`、`.json`、`.config`、`.runsettings` 等，略過 `bin`、`obj`、`node_modules`、`.git`），把 LocalDB 連線（`(localdb)\執行個體`）改成連到容器內 SQL Server 的 sa 帳號，Windows 整合驗證改為關閉；`AttachDbFilename` 改用同名資料庫。字串只有伺服器名稱時（例如 C# 的 `new SqlConnectionStringBuilder { DataSource = @"(localdb)\MSSQLLocalDB", IntegratedSecurity = true }`），只把伺服器換成 `127.0.0.1,1433`，同一個檔案以屬性寫的 `IntegratedSecurity = true` 改成 sa 帳號（沒有設定 `TrustServerCertificate` 時一併信任容器內的自簽憑證）。改寫前先把原檔備份到 `/workspace/obj/agentflow-sqlserver`。
+2. 掃描工作目錄中的文字檔（`.cs`、`.json`、`.config`、`.runsettings` 等設定檔，以及 CI 會跑的 `.ps1`、`.sh`、`.cmd`、`.py`、`.sql` 腳本，略過 `bin`、`obj`、`node_modules`、`.git`），把 LocalDB 連線（`(localdb)\執行個體`）改成連到容器內 SQL Server 的 sa 帳號，Windows 整合驗證改為關閉；`AttachDbFilename` 改用同名資料庫。字串只有伺服器名稱時（例如 C# 的 `new SqlConnectionStringBuilder { DataSource = @"(localdb)\MSSQLLocalDB", IntegratedSecurity = true }`），只把伺服器換成 `127.0.0.1,1433`，同一個檔案以屬性寫的 `IntegratedSecurity = true` 改成 sa 帳號（沒有設定 `TrustServerCertificate` 時一併信任容器內的自簽憑證）。改寫前先把原檔備份到 `/workspace/obj/agentflow-sqlserver`。
 3. 建立連線字串提到的空白資料庫；規劃的資料來源是結構快照時，再依序套用 `schema.sql`、`reference-data.sql`。沒有快照時由專案自己的遷移或建庫腳本建立資料表（在測試命令中執行）。
 4. 執行測試命令，結束後把檔案還原成原本的位元組、停止 SQL Server、刪除資料檔。上一次在測試途中被強制結束時，下一次執行會先還原。
 

@@ -287,6 +287,27 @@ describe("LocalDB 連線改寫", () => {
   describe("備份與還原", () => {
     let root = "";
     afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
+    it("CI 用的 PowerShell 腳本寫死 LocalDB 時也改寫", () => {
+      root = fs.mkdtempSync(path.join(os.tmpdir(), "localdb-"));
+      const state = path.join(root, "obj", "agentflow-sqlserver");
+      const script = path.join(root, "tests", "Check-Orders.ps1");
+      fs.mkdirSync(path.dirname(script), { recursive: true });
+      // 虛構專案的檢查腳本，寫法與實際遇到的相同：單引號字串，之後再接 Database。
+      fs.writeFileSync(
+        script,
+        String.raw`$server = 'Server=(localdb)\MSSQLLocalDB;Integrated Security=True;TrustServerCertificate=True;Pooling=False'
+$connection = [System.Data.SqlClient.SqlConnection]::new("$server;Database=$catalog")
+`,
+      );
+      const result = redirectFiles(root, state, password);
+      expect(result.files).toEqual([path.join("tests", "Check-Orders.ps1")]);
+      const text = fs.readFileSync(script, "utf8");
+      expect(text).not.toContain("(localdb)");
+      expect(text).toContain("127.0.0.1,1433");
+      expect(text).not.toMatch(/Integrated Security=True/i);
+      restoreFiles(root, state);
+      expect(fs.readFileSync(script, "utf8")).toContain("(localdb)");
+    });
     it("改寫前先備份，還原後位元組完全相同；建置產物目錄不改", () => {
       root = fs.mkdtempSync(path.join(os.tmpdir(), "localdb-"));
       const state = path.join(root, "obj", "agentflow-sqlserver");
