@@ -77,6 +77,8 @@ export interface Project {
   setup_mode?: "auto" | "manual";
   /** AI 自動設定時是否提供測試用 SQL Server：auto 依專案判斷，always／never 是管理者覆寫。 */
   sql_server?: "auto" | "always" | "never";
+  /** 完全存取：工作容器每個階段都可連所有網路，並取得專案登記的資料庫連線（管理者逐專案開啟）。 */
+  full_access?: boolean;
   setup_plan?: import("./project-setup.js").SetupPlan | null;
   setup_status?: string | null;
   index_phase?: "queued" | "indexing" | "ready" | "failed" | "limited" | null;

@@ -49,7 +49,8 @@ import type { SourceAccess, SourceReport } from "./source-cache.js";
 import { runnerRequest, type RunnerTransport } from "./runner-http.js";
 import { missingTestMessage, suggestStack } from "./stack.js";
 import { ProjectSetup, assertTestsFound } from "./project-setup.js";
-import { provideSnapshot } from "./project-database.js";
+import { fullAccessConnection, provideSnapshot } from "./project-database.js";
+import { containsSecret, scrubber, scrubResult } from "./secret-scrub.js";
 import {
   detailHint,
   groupText,
@@ -548,6 +549,20 @@ export class Execution {
       }
       await this.provideSnapshot(project, runId);
       let test: PhaseResult | undefined;
+      // 完全存取：驗證的安裝與測試也開全網路，測試可用專案登記的資料庫連線；輸出遮蔽密碼。
+      const full = project.full_access === true;
+      const access = full
+        ? await fullAccessConnection(this.db, project.id)
+        : { env: [] as string[], secrets: [] as string[] };
+      const scrub = scrubber(access.secrets);
+      const fullInstall = full ? { full: true } : {};
+      const fullTest = full
+        ? {
+            open: true,
+            full: true,
+            ...(access.env.length ? { env: access.env } : {}),
+          }
+        : {};
       // 安裝、測試與收集使用的映像；有放行的系統套件時換成專案衍生映像。
       let image = project.image;
       const egress = egressDomains(await this.db.settings());
@@ -575,14 +590,21 @@ export class Execution {
               ? `AI 已調整準備方式，正在重試（${attempt}/2）`
               : "安裝相依套件",
           );
-          const install = await this.runner.call<PhaseResult>("phase", {
-            runId,
-            image,
-            phase: "install",
-            command: project.install_command.trim() || "true",
-            timeoutMs: Math.max(1000, Math.min(600000, deadline - Date.now())),
-            egress,
-          });
+          const install = scrubResult(
+            await this.runner.call<PhaseResult>("phase", {
+              runId,
+              image,
+              phase: "install",
+              command: project.install_command.trim() || "true",
+              timeoutMs: Math.max(
+                1000,
+                Math.min(600000, deadline - Date.now()),
+              ),
+              egress,
+              ...fullInstall,
+            }),
+            scrub,
+          );
           await current();
           if (install.exitCode !== 0) {
             failed = install;
@@ -595,15 +617,22 @@ export class Execution {
               ? "執行建置檢查（未執行自動測試）"
               : "執行基底測試",
           );
-          test = await this.runner.call<PhaseResult>("phase", {
-            runId,
-            image,
-            phase: "test",
-            command: plan
-              ? sqlServerTestCommand(plan, project.test_command.trim())
-              : project.test_command.trim() || "true",
-            timeoutMs: Math.max(1000, Math.min(600000, deadline - Date.now())),
-          });
+          test = scrubResult(
+            await this.runner.call<PhaseResult>("phase", {
+              runId,
+              image,
+              phase: "test",
+              command: plan
+                ? sqlServerTestCommand(plan, project.test_command.trim())
+                : project.test_command.trim() || "true",
+              timeoutMs: Math.max(
+                1000,
+                Math.min(600000, deadline - Date.now()),
+              ),
+              ...fullTest,
+            }),
+            scrub,
+          );
           await current();
           // SQL Server 起不來是測試環境問題，交給 AI 重新規劃也沒用，直接如實回報。
           const environment = environmentFailure(plan, test);
@@ -783,13 +812,15 @@ export class Execution {
           },
         ]);
     };
+    // 完全存取時改成遮蔽資料庫密碼的版本；執行中輪詢到的事件也經過這裡。
+    let scrubEvents = (events: RunEvent[]) => events;
     const ingest = async (events: RunEvent[]) => {
       if (!runId || !Array.isArray(events)) return;
       await saveEvents(
         this.db,
         runId,
         "runner",
-        events.filter((e) => e.seq > cursor),
+        scrubEvents(events.filter((e) => e.seq > cursor)),
       );
       for (const e of events)
         if (Number.isSafeInteger(e.seq)) cursor = Math.max(cursor, e.seq);
@@ -1125,6 +1156,14 @@ export class Execution {
       const relatedSources = await this.provideRelated(task, project, runId);
       await assertCurrent();
       const collectExclude = effectiveCollectExcludes(project.collect_excludes);
+      // 完全存取：每個階段都開全網路，並把專案登記的資料庫連線交給容器；所有輸出遮蔽密碼。
+      const full = project.full_access === true;
+      const access = full
+        ? await fullAccessConnection(this.db, project.id)
+        : { env: [] as string[], secrets: [] as string[] };
+      const scrub = scrubber(access.secrets);
+      if (access.secrets.length)
+        scrubEvents = (events) => scrubResult(events, scrub);
       const phase = async (
         name: string,
         extra: Record<string, unknown> = {},
@@ -1140,7 +1179,7 @@ export class Execution {
           [runId, name, ["code", "review"].includes(name)],
         );
         const phaseTimeoutMs = Math.max(1000, deadline - Date.now());
-        const r = await this.runner
+        let r = await this.runner
           .call<PhaseResult>(
             "phase",
             {
@@ -1148,8 +1187,16 @@ export class Execution {
               image: project.image,
               phase: name,
               timeoutMs: phaseTimeoutMs,
-              // 管理者選擇完全開放時，開發、測試、審查容器可直接連網際網路與公司內網。
-              open: s.container_network === "open",
+              // 管理者選擇完全開放（或專案開啟完全存取）時，開發、測試、審查容器可直接連網際網路與公司內網。
+              open: s.container_network === "open" || full,
+              ...(full
+                ? {
+                    full: true,
+                    ...(name !== "collect" && access.env.length
+                      ? { env: access.env }
+                      : {}),
+                  }
+                : {}),
               // 建置產物不算 AI 的修改；同一次執行的每次收集都用同一份清單。
               ...(name === "collect" ? { exclude: collectExclude } : {}),
               ...extra,
@@ -1174,6 +1221,7 @@ export class Execution {
         )
           await this.subscriptionGate.exhausted();
         await pollPending;
+        if (access.secrets.length) r = scrubResult(r, scrub);
         await ingest(r.observations ?? []);
         if (!r.observations?.length)
           await record("phase_end", undefined, r.exitCode);
@@ -1342,6 +1390,13 @@ export class Execution {
             }
           : {}),
         ...(installNote ? { installStatus: installNote } : {}),
+        ...(full
+          ? {
+              fullAccess: access.env.length
+                ? "這個專案開啟了完全存取：可直接連公司內網、Tailscale 與網際網路；專案登記的資料庫連線在環境變數 AGENTFLOW_DB_CONNECTION（ADO.NET 連線字串），另有 AGENTFLOW_DB_HOST、AGENTFLOW_DB_PORT、AGENTFLOW_DB_NAME、AGENTFLOW_DB_USER、AGENTFLOW_DB_PASSWORD。需要真實資料就直接連線查詢；不要把密碼或連線字串寫進檔案、報告或 PR，改用環境變數。這個帳號有什麼權限就能做什麼，寫入真實資料前必須是需求明確要求的。"
+                : "這個專案開啟了完全存取：可直接連公司內網、Tailscale 與網際網路。專案沒有登記可直接使用的資料庫連線（未登記，或經 SSH 跳板）。",
+            }
+          : {}),
         ...(systemInstall
           ? {
               systemPackages: {
@@ -1422,7 +1477,8 @@ export class Execution {
           effort: s.coding_effort,
           // 開發階段可經下載來源白名單出口下載套件；可在設定關閉。
           packages: s.code_downloads !== false,
-          open: s.container_network === "open",
+          open: s.container_network === "open" || full,
+          fullAccess: full,
           query: task.mode === "query",
           proxyUrl:
             process.env.WORKER_PROXY_URL ?? "http://app:4310/internal/proxy/v1",
@@ -1722,6 +1778,16 @@ ${querySummary(answer)}`,
             1500,
             "…（完整內容見執行紀錄）",
           ),
+        );
+      if (
+        access.secrets.length &&
+        files.some(
+          (f) => f.content && containsSecret(f.content, access.secrets),
+        )
+      )
+        throw new AppError(
+          422,
+          "變更內容包含資料庫密碼或連線字串，已停止發布；請改用環境變數 AGENTFLOW_DB_CONNECTION",
         );
       await assertCurrent();
       await stage("publish");

@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import { Containers } from "./containers.js";
+import { FULL_ACCESS_ENV } from "./containers.js";
 import { systemStatus } from "./system-status.js";
 import { hostResources } from "./host-resources.js";
 import { SourceCache, SourceAccess } from "./source-cache.js";
@@ -438,6 +439,12 @@ app.post("/phase", async (req) => {
     phase: z.enum(["install", "test", "code", "review", "collect"]),
     command: z.string().max(8000).optional(),
     open: z.boolean().optional(),
+    // 完全存取：安裝也走完全開放的網路；env 只接受資料庫連線（AGENTFLOW_DB_*）。
+    full: z.boolean().optional(),
+    env: z
+      .array(z.string().max(4000).regex(FULL_ACCESS_ENV))
+      .max(10)
+      .optional(),
     job: z.record(z.string(), z.unknown()).optional(),
     timeoutMs: z.number().int().min(1000).max(1800000),
     // 收集差異時排除的建置產物；伺服器已套用專案增減，這裡只接受完整規則。
@@ -474,7 +481,9 @@ app.post("/phase", async (req) => {
           ai
             ? aiNetwork(b.job)
             : b.phase === "install"
-              ? "line-agentflow_install"
+              ? b.full === true
+                ? "line-agentflow_open"
+                : "line-agentflow_install"
               : b.phase === "test" && b.open === true
                 ? "line-agentflow_open"
                 : "none",
@@ -489,6 +498,7 @@ app.post("/phase", async (req) => {
               ? { output: "collect" as const }
               : {}),
             ...(b.phase === "install" ? { nugetFeed: true } : {}),
+            ...(b.env?.length && b.phase !== "collect" ? { env: b.env } : {}),
             ...(b.phase === "collect" && b.exclude
               ? { collectExclude: b.exclude }
               : {}),

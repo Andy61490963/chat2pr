@@ -158,3 +158,29 @@ test("取消完全開放容器網路的確認對話框後不送出設定", async
   await expect(page.getByText("有修改尚未儲存", { exact: true })).toBeVisible();
   expect(updates).toHaveLength(0);
 });
+
+test("專案的完全存取要先確認才開啟，取消不送出", async ({ page }) => {
+  await mockDashboard(page);
+  const bodies: unknown[] = [];
+  await page.route("**/api/projects/project-demo/full-access", (route) => {
+    bodies.push(route.request().postDataJSON());
+    return route.fulfill({
+      json: { id: "project-demo", full_access: true },
+    });
+  });
+  await page.goto("/projects");
+  await page.getByText("測試專案", { exact: true }).first().click();
+  const section = page.getByRole("region", { name: "完全存取" });
+  await expect(section.getByText("關閉", { exact: true })).toBeVisible();
+  await section.getByRole("button", { name: "開啟完全存取" }).click();
+  const dialog = page.getByRole("dialog", {
+    name: "開啟「測試專案」的完全存取？",
+  });
+  await expect(dialog).toContainText("帳號能寫入，AI 就可能寫入");
+  await dialog.getByRole("button", { name: "先不要" }).click();
+  await expect(dialog).toBeHidden();
+  expect(bodies).toHaveLength(0);
+  await section.getByRole("button", { name: "開啟完全存取" }).click();
+  await dialog.getByRole("button", { name: "開啟完全存取" }).click();
+  await expect.poll(() => bodies).toEqual([{ enabled: true }]);
+});

@@ -441,6 +441,76 @@ export function ProjectsView({
                 />
               )}
               <Separator />
+              <section
+                className="flex flex-col gap-2"
+                aria-labelledby="full-access-title"
+              >
+                <div className="flex items-center gap-2">
+                  <h3 id="full-access-title" className="text-sm font-medium">
+                    完全存取
+                  </h3>
+                  <Badge variant={open.full_access ? "warn" : "secondary"}>
+                    {open.full_access ? "已開啟" : "關閉"}
+                  </Badge>
+                </div>
+                <p className="text-sm text-muted-foreground">
+                  開啟後，這個專案的安裝、開發、測試與審查都能連公司內網、Tailscale
+                  與網際網路，Codex
+                  與測試也拿得到下方登記的資料庫連線（權限照登記的帳號），就像在這台伺服器上開發。仍在容器裡執行，拿不到
+                  chat2pr 自己的機密；修改仍要你核准，PR
+                  仍由你合併。這台伺服器本身連不到的網路（例如沒有 VPN
+                  的廠內網段），開了也連不到。
+                </p>
+                <div>
+                  {open.full_access ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      onClick={() =>
+                        void run(
+                          () =>
+                            request(
+                              `/api/projects/${open.id}/full-access`,
+                              "PUT",
+                              {
+                                enabled: false,
+                              },
+                            ),
+                          "已關閉完全存取",
+                        )
+                      }
+                    >
+                      關閉完全存取
+                    </Button>
+                  ) : (
+                    <ConfirmButton
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      title={`開啟「${open.name}」的完全存取？`}
+                      description="AI 會在每個階段直接連公司內網、Tailscale 與網際網路，並用登記的資料庫帳號連真實資料庫；帳號能寫入，AI 就可能寫入。建議登記只有必要權限的帳號。開啟與關閉都會寫進活動紀錄。"
+                      confirm="開啟完全存取"
+                      onConfirm={() =>
+                        run(
+                          () =>
+                            request(
+                              `/api/projects/${open.id}/full-access`,
+                              "PUT",
+                              {
+                                enabled: true,
+                              },
+                            ),
+                          "已開啟完全存取",
+                        )
+                      }
+                    >
+                      開啟完全存取
+                    </ConfirmButton>
+                  )}
+                </div>
+              </section>
+              <Separator />
               <ProjectContextEditor
                 key={open.id}
                 project={open}
