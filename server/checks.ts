@@ -892,13 +892,28 @@ export async function validCheckEnvironments(db: Database) {
   }));
 }
 
+const syncResult = z.object({
+  removed: z.array(
+    z.object({
+      checkId: z.string().uuid(),
+      reason: z.enum(Object.keys(removalText) as RemovalReason[]),
+    }),
+  ),
+});
+
 /** 把有效清單送給執行器，清除過期環境並寫稽核。 */
 export async function syncCheckEnvironments(db: Database, call: RunnerCall) {
   const valid = await validCheckEnvironments(db);
   const policy = checkEnvironmentPolicy(await db.settings());
-  const { removed } = await call<{
-    removed: { checkId: string; reason: RemovalReason }[];
-  }>("checks/environments/sync", { valid, policy }, 120000);
+  const reply = await call<unknown>(
+    "checks/environments/sync",
+    { valid, policy },
+    120000,
+  );
+  const checked = syncResult.safeParse(reply);
+  if (!checked.success)
+    throw new AppError(502, "執行器回傳的檢查環境清除清單格式不正確");
+  const { removed } = checked.data;
   await auditRemovals(db, removed);
   return removed;
 }
