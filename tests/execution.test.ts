@@ -1286,7 +1286,7 @@ it("查詢任務只執行調查，存下報告並通知，不收集變更、不�
       return {
         exitCode: 0,
         stdout: JSON.stringify({
-          final: "進站會更新 WIP_LOT 與 WIP_HISTORY。",
+          final: "## 先看重點\n\n進站會更新 WIP_LOT 與 WIP_HISTORY。",
         }),
         stderr: "",
       } as T;
@@ -1300,15 +1300,22 @@ it("查詢任務只執行調查，存下報告並通知，不收集變更、不�
   await s.execution.execute(s.task.id);
   const task = await db.one<Task>("SELECT * FROM tasks");
   expect(task.status).toBe("answered");
-  expect(task.answer).toBe(
-    `查詢專案：測試專案（test/repo）\n基底分支：main；查詢版本：${task.base_sha}\n\n進站會更新 WIP_LOT 與 WIP_HISTORY。`,
-  );
+  expect(task.answer).toBe("## 先看重點\n\n進站會更新 WIP_LOT 與 WIP_HISTORY。");
   expect(phases).not.toContain("collect");
   expect(phases).not.toContain("test");
   expect(phases).not.toContain("review");
   expect(s.counts().published).toBe(0);
   expect(comments).toHaveLength(1);
+  // Issue 編號由測試替身決定，只核對留言直接從「先看重點」開始。
+  expect(comments[0]).toMatch(/^#\d+ ## 先看重點/);
   expect(comments[0]).toContain("WIP_LOT");
+  expect(comments[0]).not.toContain(task.base_sha!);
+  const groupReply = await db.one<{ text: string }>(
+    "SELECT text FROM notifications WHERE kind='group_answered' AND task_id=$1",
+    [task.id],
+  );
+  expect(groupReply.text).toContain("WIP_LOT");
+  expect(groupReply.text).not.toContain(task.base_sha!);
   expect(
     (
       await db.one<{ text: string }>(
@@ -1800,7 +1807,16 @@ it("跨專案查詢把其他已綁定專案的原始碼唯讀提供，未綁定�
       path: "/agentflow/env/projects/MachineSync",
     }),
   ]);
-  expect(task.answer).toContain("一併查詢：設備同步（test/MachineSync");
+  expect(task.answer).not.toContain("一併查詢：");
+  const run = await db.one<{ sources: { repo: string }[] }>(
+    "SELECT result->'querySources' AS sources FROM runs WHERE task_id=$1",
+    [task.id],
+  );
+  expect(run.sources).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ repo: "test/MachineSync" }),
+    ]),
+  );
 });
 it("交給 Codex 的版本資訊說明本機 master 只是紀錄，不要再連 GitHub 核對", async () => {
   const s = await queryScenario();
@@ -1905,7 +1921,7 @@ it("追問時提示帶入前面的問答（由舊到新），回答標明延續�
   const task = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [
     s.task.id,
   ]);
-  expect(task.answer).toContain("延續：〈查詢 ch3 欄位〉");
+  expect(task.answer).not.toContain("延續：〈查詢 ch3 欄位〉");
 });
 it("沒有上一題時不帶對話串", async () => {
   const s = await queryScenario();

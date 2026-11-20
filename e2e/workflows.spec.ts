@@ -308,3 +308,44 @@ test("登記 SSH 主機：密碼只送出不顯示，測試登入顯示結果", 
   await section.getByRole("button", { name: "測試登入" }).click();
   await expect(section.getByRole("status")).toHaveText("登入成功");
 });
+
+test("你能在任務詳情追查查詢版本，閱讀答案時只看到報告", async ({ page }) => {
+  const version = "a".repeat(40);
+  const completed = {
+    ...task,
+    status: "answered" as const,
+    answer: "## 先看重點\n範例結論。",
+    base_sha: version,
+  };
+  await mockDashboard(page, {
+    state: { tasks: [completed] },
+    routes: {
+      [`/api/tasks/${task.id}`]: {
+        ...detail,
+        task: completed,
+        runs: [
+          {
+            id: "run-demo",
+            version: task.version,
+            threads: [],
+            status: "done",
+            query_sources: [
+              {
+                name: "範例來源",
+                repo: "demo/source",
+                branch: "example",
+                commit: version,
+              },
+            ],
+          },
+        ],
+      },
+    },
+  });
+  await page.goto(`/tasks?task=${task.id}`);
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText("範例結論。")).toBeVisible();
+  await dialog.getByText("查詢時的專案、分支與版本").click();
+  await expect(dialog.getByText(version, { exact: true })).toBeVisible();
+  await expect(dialog.getByText(/範例來源（demo\/source）/)).toBeVisible();
+});
