@@ -173,7 +173,7 @@ export function TaskDrawer({
   /** 已展開補充需求編輯；呼叫端清掉這次的要求，之後再開同一個任務不會又自動展開。 */
   amendStarted?: () => void;
   close: () => void;
-  go: (v: View) => void;
+  go: (v: View, projectId?: string | null) => void;
   act: Act;
   /** 開啟對話串中的另一題。 */
   open: (id: string) => void;
@@ -1154,7 +1154,7 @@ export function TaskDrawer({
             )}
             {/* 失敗時主按鈕依原因：先修設定的前往頁面、逾時先修改這一題；這兩種重試降為次要。 */}
             {fixTarget && (
-              <Button onClick={() => go(fixTarget)}>
+              <Button onClick={() => go(fixTarget, t.project_id)}>
                 {fixPageLabels[fixTarget]}
               </Button>
             )}

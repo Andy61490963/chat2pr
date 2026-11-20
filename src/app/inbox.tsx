@@ -125,7 +125,7 @@ export function InboxView({
   state: State;
   needs: Task[];
   busy: boolean;
-  go: (v: View) => void;
+  go: (v: View, projectId?: string | null) => void;
   admin: boolean;
   showTasks: (filter: string) => void;
   /** amend 為 true 時打開任務詳情並直接展開補充需求編輯。 */
@@ -541,7 +541,7 @@ function DecisionCard({
   busy: boolean;
   open: (id: string, amend?: boolean) => unknown;
   act: Act;
-  go?: (v: View) => void;
+  go?: (v: View, projectId?: string | null) => void;
 }) {
   const pick = t.status === "awaiting_approval" && !t.project_id;
   // 失敗說明拆成白話說明、建議與錯誤重點：建議固定排在最後，整段截兩行一定看不到。
@@ -627,7 +627,7 @@ function DecisionCard({
               {/* 失敗時主按鈕依原因：先修設定的前往頁面、逾時先修改這一題；
                   這兩種重試只會再失敗一次、多用一次額度，所以重試降為次要。 */}
               {target && go && (
-                <Button onClick={() => go(target)}>
+                <Button onClick={() => go(target, t.project_id)}>
                   {fixPageLabels[target]}
                 </Button>
               )}
@@ -800,7 +800,7 @@ export function AssignProject({
   busy: boolean;
   act: Act;
   // 只有管理者能去群組與專案頁；沒給就只說明原因。
-  go?: (v: View) => void;
+  go?: (v: View, projectId?: string | null) => void;
 }) {
   const group = state.groups.find((g) => g.id === t.group_id);
   const bound = state.projects.filter((p) => group?.project_ids.includes(p.id));
@@ -847,7 +847,12 @@ export function AssignProject({
               variant="link"
               size="sm"
               className="h-auto p-0"
-              onClick={() => go(bound.length ? "projects" : "groups")}
+              onClick={() =>
+                go(
+                  bound.length ? "projects" : "groups",
+                  bound.length === 1 ? bound[0].id : null,
+                )
+              }
             >
               {bound.length ? "前往專案" : "前往群組設定"} <ChevronRight />
             </Button>

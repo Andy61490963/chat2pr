@@ -30,3 +30,25 @@ export function notificationTarget(
   if (view && canOpenViews) return { view };
   return { note: view ? "由管理者到看板處理" : "僅供參考" };
 }
+
+export function projectNoticeTab(kind: string) {
+  return kind === "repo_missing" ? "overview" : "environment";
+}
+/** 管理者點 LINE 私訊後，沿用看板鈴鐺的目標。 */
+export function notificationPath(n: {
+  kind: string;
+  task_id: string | null;
+  project_id?: string | null;
+}) {
+  if (n.task_id) return "tasks?task=" + encodeURIComponent(n.task_id);
+  const view = notificationView(n.kind);
+  if (view === "projects" && n.project_id)
+    return (
+      "projects?" +
+      new URLSearchParams({
+        project: n.project_id,
+        tab: projectNoticeTab(n.kind),
+      })
+    );
+  return view ?? "";
+}

@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import {
   notificationTarget,
+  projectNoticeTab,
   type NotificationView,
 } from "../../shared/notifications.js";
 import { LINE_QUOTA } from "../../shared/line-quota.js";
@@ -36,6 +37,7 @@ import { type Request, ago } from "./shared";
 export type Alert = {
   id: string;
   task_id: string | null;
+  project_id?: string | null;
   kind: string;
   text: string;
   created_at: string;
@@ -129,7 +131,11 @@ export function AlertBell({
   request: Request;
   open: (id: string) => unknown;
   // 只有管理者看得到專案、群組與設定頁；沒給就不可點。
-  openView?: (view: NotificationView) => unknown;
+  openView?: (
+    view: NotificationView,
+    projectId?: string | null,
+    tab?: string,
+  ) => unknown;
   /** 選單關閉時的焦點處理；換頁後由看板把焦點移到頁面標題。 */
   onCloseAutoFocus?: (e: Event) => void;
 }) {
@@ -139,7 +145,7 @@ export function AlertBell({
     if ("note" in target) return;
     setMenuOpen(false);
     if ("task" in target) void openTask(target.task);
-    else void openView?.(target.view);
+    else void openView?.(target.view, a.project_id, projectNoticeTab(a.kind));
   };
   // 推播額度用完的提示由伺服器依 service_health 附上，固定放在清單頂端，不算未讀、不跳桌面通知。
   const quota = all.find((a) => a.kind === LINE_QUOTA);
