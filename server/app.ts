@@ -1,3 +1,4 @@
+import { notificationProject } from "./notification-project.js";
 import { createFollowup, relinkTask } from "./followup.js";
 import { probeSystem } from "./system-status.js";
 import { answerFromDashboard } from "./answers.js";
@@ -517,6 +518,7 @@ export async function buildApp(
       // 私訊原文只給管理者；成員可依類別與任務標題前往處理。群組原文的期限與聊天室一致。
       db.query(
         `SELECT n.id,n.task_id,n.kind,n.created_at,t.title,
+           CASE WHEN $1::boolean THEN ${notificationProject} END AS project_id,
            CASE WHEN n.group_id IS NOT NULL AND n.created_at<=message_retention_cutoff() THEN '原文已到期'
                 WHEN n.group_id IS NOT NULL OR $1::boolean THEN n.text
                 WHEN n.task_id IS NOT NULL THEN '請到任務詳情查看。'
