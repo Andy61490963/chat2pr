@@ -548,7 +548,6 @@ function DecisionCard({
   const failure = t.status === "failed" ? parseFailure(t.last_error) : null;
   // 主動作與任務詳情共用 primaryFix：重試、縮小需求範圍、前往頁面或看詳情。
   const fix = primaryFix(failure);
-  const demoteRetry = t.status === "failed" && fix.kind !== "retry";
   // go 只在管理者時提供；成員看不到前往設定頁的按鈕，改用「詳情」當主按鈕。
   const target = go && fix.kind === "page" ? fix.page : null;
   const amend = t.status === "failed" && fix.kind === "amend";
@@ -620,52 +619,37 @@ function DecisionCard({
               {t.status === "awaiting_approval" && t.missing.length > 0 && (
                 <Button
                   variant={t.suggestions.length ? "outline" : "default"}
-                  onClick={() => open(t.id)}
+                  onClick={() => open(t.id, true)}
                 >
-                  {t.suggestions.length ? "都不是，自己補充" : "補充需求"}
+                  修改這一題
                 </Button>
               )}
+              {/* 失敗時主按鈕依原因：先修設定的前往頁面、逾時先修改這一題；
+                  這兩種重試只會再失敗一次、多用一次額度，所以重試降為次要。 */}
               {target && go && (
                 <Button onClick={() => go(target, t.project_id)}>
                   {fixPageLabels[target]}
                 </Button>
               )}
               {amend && (
-                // 逾時：首要是把需求拆小，打開詳情直接進補充需求編輯。
-                <Button onClick={() => open(t.id, true)}>縮小需求範圍</Button>
+                <Button onClick={() => open(t.id, true)}>修改這一題</Button>
               )}
               {t.status === "failed" && (
                 <Button
-                  // 設定、環境、專案類失敗不先處理，重試只會再失敗一次、多用一次每日次數。
-                  variant={demoteRetry ? "outline" : "default"}
+                  variant={fix.kind === "retry" ? "default" : "outline"}
                   disabled={busy}
                   onClick={() => void act(t, "retry", {}, "已重新排程")}
                 >
                   <RefreshCw /> 重試
                 </Button>
               )}
-              {t.status === "awaiting_approval" && (
-                <RejectButton task={t} busy={busy} act={act} />
-              )}
+              <EndTaskButton task={t} busy={busy} act={act} />
               <Button
-                variant={demoteRetry && !target && !amend ? "default" : "ghost"}
+                variant={fix.kind === "detail" ? "default" : "ghost"}
                 onClick={() => open(t.id)}
               >
                 詳情
               </Button>
-              {t.status === "failed" && (
-                <ConfirmButton
-                  variant="ghost"
-                  className="ml-auto text-muted-foreground"
-                  disabled={busy}
-                  title="關閉這個任務？"
-                  description="關閉後不再重試，會從「需要你處理」移除；之後要做，可以在任務詳情按「重新開啟」。"
-                  confirm="關閉任務"
-                  onConfirm={() => act(t, "cancel", {}, "已關閉任務")}
-                >
-                  關閉任務
-                </ConfirmButton>
-              )}
             </div>
           </>
         )}
@@ -900,13 +884,13 @@ export function AssignProject({
         >
           指定專案
         </Button>
-        <RejectButton task={t} busy={busy} act={act} />
+        <EndTaskButton task={t} busy={busy} act={act} />
       </div>
     </div>
   );
 }
 
-function RejectButton({
+export function EndTaskButton({
   task: t,
   busy,
   act,
@@ -915,16 +899,26 @@ function RejectButton({
   busy: boolean;
   act: Act;
 }) {
+  const label = ["running", "reviewing"].includes(t.status)
+    ? "停止並結束"
+    : "結束任務";
   return (
     <ConfirmButton
       variant="outline"
       disabled={busy}
-      title="拒絕這個需求？"
-      description={`「${t.title}」拒絕後不會派工；之後反悔，可以在任務詳情按「重新開啟」。`}
-      confirm="拒絕需求"
-      onConfirm={() => act(t, "reject", {}, "已拒絕需求")}
+      title={label + "？"}
+      description="結束後不會派工，你之後可在任務詳情按「重新開啟」。"
+      confirm={label}
+      onConfirm={() =>
+        act(
+          t,
+          t.status === "awaiting_approval" ? "reject" : "cancel",
+          {},
+          "已結束任務",
+        )
+      }
     >
-      拒絕
+      {label}
     </ConfirmButton>
   );
 }

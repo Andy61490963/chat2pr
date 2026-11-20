@@ -43,6 +43,13 @@ test("任務詳情顯示排隊原因與失敗後的處理建議", async ({ page 
     failedDrawer.getByText(/建議：請到專案頁補上測試指令/),
   ).toBeVisible();
   await expect(
+    failedDrawer.getByRole("button", { name: "重試" }),
+  ).toBeVisible();
+  await expect(
+    failedDrawer.getByRole("button", { name: "結束任務" }),
+  ).toBeVisible();
+  // 設定類失敗先去修設定，重試再試一次只會再失敗，所以前往設定是主按鈕。
+  await expect(
     failedDrawer.getByRole("button", { name: "前往專案設定" }),
   ).toBeVisible();
 });
@@ -312,11 +319,48 @@ test("登記 SSH 主機：密碼只送出不顯示，測試登入顯示結果", 
   await expect(section.getByRole("status")).toHaveText("登入成功");
 });
 
-test("專案補問通知直接開啟環境驗證，方向鍵可切換其他分頁", async ({ page }) => {
+test("你能在任務詳情追查查詢版本，閱讀答案時只看到報告", async ({ page }) => {
+  const version = "a".repeat(40);
+  const completed = {
+    ...task,
+    status: "answered" as const,
+    answer: "## 先看重點\n範例結論。",
+    base_sha: version,
+  };
   await mockDashboard(page, {
+    state: { tasks: [completed] },
+    routes: {
+      [`/api/tasks/${task.id}`]: {
+        ...detail,
+        task: completed,
+        runs: [
+          {
+            id: "run-demo",
+            version: task.version,
+            threads: [],
+            status: "done",
+            query_sources: [
+              {
+                name: "範例來源",
+                repo: "demo/source",
+                branch: "example",
+                commit: version,
+              },
+            ],
+          },
+        ],
+      },
+    },
+  });
+  await page.goto(`/tasks?task=${task.id}`);
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText("範例結論。")).toBeVisible();
+  await dialog.getByText("查詢時的專案、分支與版本").click();
+  await expect(dialog.getByText(version, { exact: true })).toBeVisible();
+  await expect(dialog.getByText(/範例來源（demo\/source）/)).toBeVisible();
+test("專案補問通知直接開啟環境驗證，方向鍵可切換其他分頁", async ({ page }) => {
     state: {
       alerts: [
-        {
           id: "notice-input",
           task_id: null,
           project_id: "project-demo",
@@ -324,10 +368,6 @@ test("專案補問通知直接開啟環境驗證，方向鍵可切換其他分�
           title: null,
           text: "請補充範例資訊",
           created_at: "2026-01-01T08:00:00Z",
-        },
-      ],
-    },
-  });
   await page.goto("/");
   await page.getByRole("button", { name: /^通知(?:，|$)/ }).click();
   await page.getByRole("menuitem", { name: /請補充範例資訊/ }).click();
@@ -342,7 +382,6 @@ test("專案補問通知直接開啟環境驗證，方向鍵可切換其他分�
       "true",
     );
   }
-});
 
 test("LINE 的專案連結直接開啟對應專案與分頁", async ({ page }) => {
   await mockDashboard(page);

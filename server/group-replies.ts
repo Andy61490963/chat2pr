@@ -1,3 +1,4 @@
+import { splitQueryAnswer } from "../shared/query-answer.js";
 /**
  * 回覆提出需求的群組。管理者私訊之外，群組成員也要知道需求收到了、結果是什麼。
  *
@@ -291,8 +292,8 @@ export async function claimPendingGroupReplies(
   limit: number,
 ) {
   const rows = (
-    await c.query<ClaimedReply>(
-      `SELECT n.id,n.text,n.quick_replies ${pendingFrom}
+    await c.query<ClaimedReply & { kind: string }>(
+      `SELECT n.id,n.kind,n.text,n.quick_replies ${pendingFrom}
        ORDER BY n.created_at,n.id FOR UPDATE OF n SKIP LOCKED`,
       [groupId],
     )
@@ -317,7 +318,15 @@ export async function claimPendingGroupReplies(
       [groupId, picked.map((r) => r.id), supersededNote],
     );
   }
-  return { replies: picked, remaining: rows.length - picked.length, claim };
+  return {
+    replies: picked.map((r) =>
+      r.kind === "group_answered"
+        ? { ...r, text: splitQueryAnswer(r.text).body }
+        : r,
+    ),
+    remaining: rows.length - picked.length,
+    claim,
+  };
 }
 
 /** 本群組還沒結束或 7 天內有變動的任務，只讀 group_id 等於本群組的資料。 */

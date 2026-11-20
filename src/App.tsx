@@ -1113,7 +1113,9 @@ export function App() {
                 );
                 await openTask(created.id);
               },
-              task.mode === "query" ? "已送出追問" : "已送出追加，等待確認",
+              task.mode === "query"
+                ? "已送出追問"
+                : "已建立新的一題，等待你確認",
             )
           }
           answer={(task, text) =>

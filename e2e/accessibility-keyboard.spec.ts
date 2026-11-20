@@ -7,7 +7,7 @@ test("關閉任務詳情與內層的拒絕確認時，焦點逐層回到原按�
   const row = page.getByRole("button", { name: new RegExp(task.title) });
   await row.press("Enter");
   const drawer = page.getByRole("dialog", { name: task.title });
-  const reject = drawer.getByRole("button", { name: "拒絕", exact: true });
+  const reject = drawer.getByRole("button", { name: "結束任務", exact: true });
   await expect(drawer.locator(":focus")).toHaveCount(1);
   // 從詳情取得的初始焦點走到拒絕按鈕，也驗證鍵盤確實能觸及該動作。
   const stops = await drawer
@@ -23,11 +23,11 @@ test("關閉任務詳情與內層的拒絕確認時，焦點逐層回到原按�
   }
   await expect(reject).toBeFocused();
   await page.keyboard.press("Enter");
-  const confirm = page.getByRole("dialog", { name: "拒絕這個需求？" });
+  const confirm = page.getByRole("dialog", { name: "結束任務？" });
   const cancel = confirm.getByRole("button", { name: "先不要" });
   await expect(cancel).toBeFocused();
   await page.keyboard.press("Shift+Tab");
-  await expect(confirm.getByRole("button", { name: "拒絕需求" })).toBeFocused();
+  await expect(confirm.getByRole("button", { name: "結束任務" })).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(cancel).toBeFocused();
   await page.keyboard.press("Escape");
