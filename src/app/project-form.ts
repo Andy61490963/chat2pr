@@ -1,6 +1,7 @@
 // 專案頁表單與狀態呈現用的純函式；不依賴 React，方便以單元測試確認判斷規則。
 // tests/project-form.test.ts 直接 import 這個檔案，所以不能用 `@/` 路徑別名（vitest 不解析）。
-import { isRepoNotice } from "../../shared/project-setup.js";
+export { validateLabel } from "../../shared/project-setup.js";
+import { isRepoNotice, validateLabel } from "../../shared/project-setup.js";
 import type { Project } from "../../shared/types.js";
 
 /**
@@ -103,14 +104,6 @@ export function offersValidation(
   form: ProjectFormFields,
 ): boolean {
   return !p.id || configChanged(p, form);
-}
-
-/** 詳情側欄驗證按鈕的文字；存檔後提示重試時也用同一個名稱，管理者才找得到。 */
-export function validateLabel(
-  p: Pick<Project, "repo_missing_at" | "setup_mode">,
-): string {
-  if (p.repo_missing_at) return "重新檢查";
-  return p.setup_mode === "auto" ? "AI 自動設定並驗證" : "驗證環境";
 }
 
 /**

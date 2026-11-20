@@ -1,3 +1,4 @@
+import { validateLabel } from "../shared/project-setup.js";
 import { saveEvents, safeDetail, connectionFailure } from "./observation.js";
 import { diskPaused } from "./docker-disk.js";
 import type { RunEvent } from "../shared/observation.js";
@@ -123,12 +124,13 @@ export class ValidationPhaseError extends Error {
    * 「分類：白話說明。\n錯誤重點：…\n建議：…」，與任務失敗的摘要同一種格式；
    * 驗證沒有執行紀錄，原始輸出摘要接在 `validationOutputMark` 之後，畫面可收合顯示。
    */
-  notice() {
+  notice(project?: Project) {
     const digest = failureDigest(this.output);
     const failure = classifyFailure(
       `${this.label}失敗：${digest}`,
       this.phase,
       "validation",
+      project,
     );
     if (toolHint(this.output)) failure.action += `（${missingTool}）`;
     // 指令沒有任何輸出時，任務用的「完整輸出見執行紀錄」在專案頁找不到，改說明沒有輸出；也不附空的原始摘要。
@@ -733,7 +735,7 @@ export class Execution {
       // 其他錯誤本身已是整理過的說明（剩餘時間不足、修改了專案檔案、設定已變更…），只去掉「Error: 」前綴。
       const message = e instanceof Error ? e.message : String(e);
       const phaseFailure =
-        e instanceof ValidationPhaseError ? e.notice() : undefined;
+        e instanceof ValidationPhaseError ? e.notice(project) : undefined;
       const shown = redact(phaseFailure?.text ?? message);
       if (
         project.validated_at &&
@@ -745,7 +747,7 @@ export class Execution {
           "UPDATE projects SET setup_status=$2,validation_error=$3 WHERE id=$1 AND config_version=$4 AND validated_at IS NOT NULL",
           [
             project.id,
-            "重新驗證遇到暫時性問題，沿用先前通過的設定；稍後再按「驗證環境」",
+            `重新驗證遇到暫時性問題，沿用先前通過的設定；稍後再按「${validateLabel(project)}」`,
             shown,
             project.config_version,
           ],
@@ -799,6 +801,7 @@ export class Execution {
       monitor: NodeJS.Timeout | undefined;
     // 監看計時器發現該停止的原因（暫停、設定變更、逾時…）；執行器之後只會回「工作已取消」。
     let stopReason: unknown, checkStop: (() => Promise<void>) | undefined;
+    let failureProject: Project | undefined;
     let currentPhase = "starting",
       localSeq = 0,
       cursor = 0;
@@ -916,6 +919,7 @@ export class Execution {
         "SELECT * FROM projects WHERE id=$1",
         [task.project_id],
       );
+      failureProject = project;
       const group = await this.db.one<{ enabled: boolean; bound: boolean }>(
         "SELECT g.enabled,EXISTS(SELECT 1 FROM group_projects gp WHERE gp.group_id=g.id AND gp.project_id=$2) AS bound FROM groups g WHERE g.id=$1",
         [task.group_id, task.project_id],
@@ -2000,7 +2004,12 @@ ${querySummary(answer)}`,
         return;
       }
       // 看板、通知與群組只看分類後的白話說明；堆疊與完整輸出只在上面的執行紀錄。
-      const failure = classifyFailure(raw, currentPhase);
+      const failure = classifyFailure(
+        raw,
+        currentPhase,
+        "task",
+        failureProject,
+      );
       const current = await this.db.one<{ version: number }>(
         "SELECT version FROM tasks WHERE id=$1",
         [taskId],
