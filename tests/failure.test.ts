@@ -1,3 +1,4 @@
+import { validateLabel } from "../shared/project-setup.js";
 import { describe, expect, it } from "vitest";
 import {
   classifyFailure,
@@ -174,6 +175,25 @@ describe("逾時的建議", () => {
 
 // 環境驗證失敗顯示在專案頁：那裡沒有「重試」按鈕也沒有任務的執行紀錄，建議要對應專案頁的按鈕。
 describe("環境驗證的建議處理", () => {
+  it.each(["auto", "manual"] as const)(
+    "建議使用 %s 專案的驗證按鈕名稱",
+    (setup_mode) => {
+      const project = { setup_mode };
+      for (const context of ["task", "validation"] as const) {
+        const failure = classifyFailure(
+          "測試環境問題",
+          "test",
+          context,
+          project,
+        );
+        expect(failure.action).toContain(`按「${validateLabel(project)}」`);
+        expect(failure.category).toBe("environment");
+        expect(
+          classifyFailure("測試環境問題", "test", context).action,
+        ).not.toContain("按「");
+      }
+    },
+  );
   it.each([
     ["安裝失敗：npm ERR! code ETIMEDOUT", "install", "transient", "驗證環境"],
     [

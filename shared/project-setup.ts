@@ -1,3 +1,4 @@
+import type { Project } from "./types.js";
 import type { InstallReview } from "./install-plan.js";
 
 /** 自動設定的依據及實際驗證方式；手動指令獨立保存，不被 AI 覆寫。 */
@@ -83,3 +84,11 @@ export const repoNotice = {
 
 export const isRepoNotice = (text: string | null | undefined) =>
   text === repoNotice.found || text === repoNotice.changed;
+
+/** 詳情側欄驗證按鈕的文字；存檔後提示重試時也用同一個名稱，管理者才找得到。 */
+export function validateLabel(
+  p: Pick<Project, "repo_missing_at" | "setup_mode">,
+): string {
+  if (p.repo_missing_at) return "重新檢查";
+  return p.setup_mode === "auto" ? "AI 自動設定並驗證" : "驗證環境";
+}
