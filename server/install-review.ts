@@ -46,7 +46,15 @@ export function planHash(items: readonly InstallItem[]) {
     .digest("hex");
 }
 
+/**
+ * 系統安裝階段的環境，規劃器與審查員共用同一段說明。工作映像（worker/Dockerfile）換基底時要一起改，
+ * tests/install-plan.test.ts 會核對。審查員缺這段時，會以「不確定套件來源和基底相容」拒絕正確的計畫。
+ */
+export const installEnvironment =
+  "Debian 12 bookworm（amd64，工作映像以 node:24-bookworm-slim 為基底）、root、沒有專案檔案、經白名單代理，apt 來源已改為 https";
+
 export const reviewInstructions = `你是獨立的安裝審查員，不是提出安裝計畫的 AI。只依本次提供的安裝計畫與專案背景，逐項判斷能不能在隔離的工作容器安裝，輸出 JSON。理由使用繁體中文，一句話。
+以下是系統提供的可信事實，不是計畫的一部分：放行的項目在獨立的安裝階段執行，環境是 ${installEnvironment}。對應 Debian 12／bookworm 的套件來源（例如 packages.microsoft.com/debian/12/prod）與這個環境相容。版本或相容性不是拒絕理由：裝不起來時安裝階段會失敗並回報，不會影響安全。
 系統已先跑過固定規則：來源與指令裡的網址都在下載來源白名單、是 https、沒有 curl | sh 這類下載後直接執行、沒有讀取機密或環境變數、沒有碰容器外的資源、指令都是安裝用的工具。你負責判斷固定規則看不出來的部分：
 - 套件或檔案名稱與用途相符，而且用途確實是建置、測試或開發這個專案需要的（例如專案用 SQL Server 而需要 sqlcmd）；
 - 與專案無關的工具（遠端控制、挖礦、代理、網路掃描、密碼破解、通訊軟體等）一律拒絕；
