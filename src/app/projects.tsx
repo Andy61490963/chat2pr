@@ -25,6 +25,10 @@ import {
 import { cn } from "@/lib/utils";
 import {
   Checkbox,
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  TabsContent,
   Label,
   Separator,
   Textarea,
@@ -111,6 +115,7 @@ export function ProjectsView({
   request,
   edit,
   focusId = null,
+  focusTab = "overview",
   focused,
 }: {
   state: State;
@@ -120,15 +125,18 @@ export function ProjectsView({
   edit: (p: Partial<Project>) => void;
   /** 剛存好的專案：打開它的詳情（從詳情按「編輯設定」進來的也回到同一個詳情），打開後呼叫 focused 清掉。 */
   focusId?: string | null;
+  focusTab?: string;
   focused?: () => void;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
   const guard = useGuard();
+  const [tab, setTab] = useState("overview");
   useEffect(() => {
     if (!focusId) return;
+    setTab(focusTab);
     setOpenId(focusId);
     focused?.();
-  }, [focusId]);
+  }, [focusId, focusTab]);
   const open = state.projects.find((p) => p.id === openId);
   return (
     <div className="flex flex-col gap-4">
@@ -169,7 +177,10 @@ export function ProjectsView({
                 <li key={p.id}>
                   <button
                     className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-5 py-3 text-left transition-colors hover:bg-muted/40 md:grid-cols-[minmax(0,2fr)_6rem_minmax(0,1.2fr)_minmax(0,1.2fr)_7.5rem]"
-                    onClick={() => setOpenId(p.id)}
+                    onClick={() => {
+                      setTab("overview");
+                      setOpenId(p.id);
+                    }}
                   >
                     <span className="flex min-w-0 flex-col">
                       <span className="truncate font-medium">{p.name}</span>
@@ -257,344 +268,392 @@ export function ProjectsView({
                 </a>
               </SheetDescription>
             </SheetHeader>
-            <div className="flex flex-1 flex-col gap-5 overflow-y-auto p-5">
-              <p
-                className={
-                  open.description ? "text-sm" : "text-sm text-muted-foreground"
-                }
-              >
-                {open.description || "尚未填寫說明，AI 只能依檔案結構判斷。"}
-              </p>
-              <dl className="grid grid-cols-[4.5rem_1fr] gap-x-3 gap-y-2 text-sm">
-                <dt className="text-muted-foreground">環境設定</dt>
-                <dd>
-                  {open.setup_mode === "auto" ? "AI 自動設定" : "手動指定"}
-                </dd>
-                <dt className="text-muted-foreground">分支</dt>
-                <dd>{open.base_branch}</dd>
-                <dt className="text-muted-foreground">安裝命令</dt>
-                <dd className="min-w-0 break-all">
-                  {(
-                    open.setup_mode === "auto"
-                      ? open.setup_plan?.install
-                      : open.install_command
-                  ) ? (
-                    <code className="rounded bg-muted px-1.5 py-0.5 text-xs">
-                      {open.setup_mode === "auto"
-                        ? open.setup_plan?.install
-                        : open.install_command}
-                    </code>
-                  ) : open.setup_mode === "auto" ? (
-                    open.setup_plan ? (
-                      "不需安裝"
-                    ) : (
-                      "驗證時由 AI 判斷"
-                    )
-                  ) : (
-                    "未設定"
-                  )}
-                </dd>
-                <dt className="text-muted-foreground">測試命令</dt>
-                <dd className="min-w-0 break-all">
-                  {(
-                    open.setup_mode === "auto"
-                      ? open.setup_plan?.test
-                      : open.test_command
-                  ) ? (
-                    <code className="rounded bg-muted px-1.5 py-0.5 text-xs">
-                      {open.setup_mode === "auto"
-                        ? open.setup_plan?.test
-                        : open.test_command}
-                    </code>
-                  ) : (
+            <Tabs
+              value={tab}
+              onValueChange={(v) => guard(() => setTab(v))}
+              className="min-h-0 flex-1"
+            >
+              <TabsList aria-label="專案詳情" className="mx-3 flex-wrap h-auto">
+                <TabsTrigger value="overview">概況</TabsTrigger>
+                <TabsTrigger value="environment">
+                  環境驗證
+                  {(open.setup_input || validationFailed(open)) && (
                     <span className="text-warn">
-                      {open.setup_mode === "auto"
-                        ? "驗證時由 AI 判斷"
-                        : "未設定（只靠審查）"}
+                      {open.setup_input ? "・等你回答" : "・驗證失敗"}
                     </span>
                   )}
-                </dd>
-                <dt className="text-muted-foreground">索引</dt>
-                <dd className="min-w-0 break-words">
-                  {indexStatus(open, state.settings.rag_enabled)}
-                </dd>
-                <dt className="text-muted-foreground">範圍</dt>
-                <dd className="min-w-0 whitespace-pre-wrap break-all text-xs">
-                  {open.index_paths?.length
-                    ? open.index_paths.join("\n")
-                    : "全儲存庫可索引文字"}
-                </dd>
-                <dt className="text-muted-foreground">群組</dt>
-                <dd>
-                  {state.groups
-                    .filter((g) => g.project_ids.includes(open.id))
-                    .map((g) => g.name)
-                    .join("、") || "—"}
-                </dd>
-              </dl>
-              {open.repo_missing_at && (
-                <div className="flex flex-col gap-1 rounded-lg bg-danger-soft px-3 py-2.5 text-sm text-danger">
-                  <span className="font-medium">
-                    {open.validation_error || "GitHub 上找不到這個儲存庫"}
-                  </span>
-                  <span className="text-xs">
-                    {date(open.repo_missing_at)}{" "}
-                    發現。可能是儲存庫已刪除、搬到還沒安裝 GitHub App
-                    的帳號或組織，或 GitHub App
-                    被移出這個儲存庫。專案先停用，並暫時從群組解除綁定
-                    {missingGroups(open, state)}。
-                  </span>
-                  <span className="text-xs">
-                    如果是搬家或改名：把 GitHub App
-                    安裝到新的帳號或組織後，系統會自動接回並恢復原本的設定，也可以按「重新檢查」馬上找一次；要換成另一個儲存庫，按「編輯設定」改選。確定不再使用就刪除專案。
-                  </span>
-                </div>
-              )}
-              {open.setup_status && (
-                <p role="status" className="rounded bg-muted p-3 text-sm">
-                  {open.setup_status}
-                </p>
-              )}
-              {open.setup_plan && open.setup_mode === "auto" && (
-                <div className="space-y-2 text-sm">
-                  {verificationLabel(open.setup_plan).caution && (
-                    <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
-                      <p className="text-warn">
-                        {verificationLabel(open.setup_plan).caution}
-                      </p>
-                      {/* 推測結構代表驗證當下還沒有結構快照；擷取快照會讓設定作廢、重新驗證。 */}
-                      {open.setup_plan.dataSource === "inferred" && (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          className="shrink-0"
-                          onClick={jumpToDatabase}
-                        >
-                          登記資料庫連線
-                        </Button>
-                      )}
-                    </div>
-                  )}
-                  {open.setup_plan.sqlServer && (
-                    <p>
-                      測試用 SQL Server：
-                      {open.setup_plan.sqlServer.source === "admin"
-                        ? "管理者設定一律提供"
-                        : "依專案判斷需要"}
-                      ，使用映像 {open.setup_plan.sqlServer.image}
-                    </p>
-                  )}
-                  <p className="whitespace-pre-line">
-                    {open.setup_plan.explanation}
+                </TabsTrigger>
+                <TabsTrigger value="access">連線與權限</TabsTrigger>
+                <TabsTrigger value="memory">記憶</TabsTrigger>
+              </TabsList>
+              <div className="min-h-0 flex-1 overflow-y-auto">
+                <TabsContent
+                  value="overview"
+                  className="flex flex-col gap-5 p-5"
+                >
+                  {" "}
+                  <p
+                    className={
+                      open.description
+                        ? "text-sm"
+                        : "text-sm text-muted-foreground"
+                    }
+                  >
+                    {open.description ||
+                      "尚未填寫說明，AI 只能依檔案結構判斷。"}
                   </p>
-                  {open.setup_plan.systemInstall && (
-                    <div className="rounded-lg border p-3">
-                      <p className="mb-2 text-xs font-medium text-muted-foreground">
-                        系統套件（安裝前審查）
-                      </p>
-                      <InstallReviewList
-                        review={open.setup_plan.systemInstall}
-                      />
+                  <dl className="grid grid-cols-[4.5rem_1fr] gap-x-3 gap-y-2 text-sm">
+                    <dt className="text-muted-foreground">環境設定</dt>
+                    <dd>
+                      {open.setup_mode === "auto" ? "AI 自動設定" : "手動指定"}
+                    </dd>
+                    <dt className="text-muted-foreground">分支</dt>
+                    <dd>{open.base_branch}</dd>
+                    <dt className="text-muted-foreground">安裝命令</dt>
+                    <dd className="min-w-0 break-all">
+                      {(
+                        open.setup_mode === "auto"
+                          ? open.setup_plan?.install
+                          : open.install_command
+                      ) ? (
+                        <code className="rounded bg-muted px-1.5 py-0.5 text-xs">
+                          {open.setup_mode === "auto"
+                            ? open.setup_plan?.install
+                            : open.install_command}
+                        </code>
+                      ) : open.setup_mode === "auto" ? (
+                        open.setup_plan ? (
+                          "不需安裝"
+                        ) : (
+                          "驗證時由 AI 判斷"
+                        )
+                      ) : (
+                        "未設定"
+                      )}
+                    </dd>
+                    <dt className="text-muted-foreground">測試命令</dt>
+                    <dd className="min-w-0 break-all">
+                      {(
+                        open.setup_mode === "auto"
+                          ? open.setup_plan?.test
+                          : open.test_command
+                      ) ? (
+                        <code className="rounded bg-muted px-1.5 py-0.5 text-xs">
+                          {open.setup_mode === "auto"
+                            ? open.setup_plan?.test
+                            : open.test_command}
+                        </code>
+                      ) : (
+                        <span className="text-warn">
+                          {open.setup_mode === "auto"
+                            ? "驗證時由 AI 判斷"
+                            : "未設定（只靠審查）"}
+                        </span>
+                      )}
+                    </dd>
+                    <dt className="text-muted-foreground">索引</dt>
+                    <dd className="min-w-0 break-words">
+                      {indexStatus(open, state.settings.rag_enabled)}
+                    </dd>
+                    <dt className="text-muted-foreground">範圍</dt>
+                    <dd className="min-w-0 whitespace-pre-wrap break-all text-xs">
+                      {open.index_paths?.length
+                        ? open.index_paths.join("\n")
+                        : "全儲存庫可索引文字"}
+                    </dd>
+                    <dt className="text-muted-foreground">群組</dt>
+                    <dd>
+                      {state.groups
+                        .filter((g) => g.project_ids.includes(open.id))
+                        .map((g) => g.name)
+                        .join("、") || "—"}
+                    </dd>
+                  </dl>
+                  {open.repo_missing_at && (
+                    <div className="flex flex-col gap-1 rounded-lg bg-danger-soft px-3 py-2.5 text-sm text-danger">
+                      <span className="font-medium">
+                        {open.validation_error || "GitHub 上找不到這個儲存庫"}
+                      </span>
+                      <span className="text-xs">
+                        {date(open.repo_missing_at)}{" "}
+                        發現。可能是儲存庫已刪除、搬到還沒安裝 GitHub App
+                        的帳號或組織，或 GitHub App
+                        被移出這個儲存庫。專案先停用，並暫時從群組解除綁定
+                        {missingGroups(open, state)}。
+                      </span>
+                      <span className="text-xs">
+                        如果是搬家或改名：把 GitHub App
+                        安裝到新的帳號或組織後，系統會自動接回並恢復原本的設定，也可以按「重新檢查」馬上找一次；要換成另一個儲存庫，按「編輯設定」改選。確定不再使用就刪除專案。
+                      </span>
                     </div>
                   )}
-                  {!!open.setup_plan.omissions?.length && (
-                    <div className="text-xs text-muted-foreground">
-                      <p>以下檔案只提供摘錄或未讀取：</p>
-                      <ul className="mt-1 list-disc space-y-0.5 pl-5">
-                        {open.setup_plan.omissions.map((o, i) => (
-                          <li key={i} className="break-all">
-                            {o.path}：{o.reason}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  <details className="text-xs text-muted-foreground">
-                    <summary className="cursor-pointer">
-                      查看 AI 設定依據
-                    </summary>
-                    <p className="mt-2 break-all">
-                      分支：{open.setup_plan.branch} · 版本：
-                      {open.setup_plan.sha.slice(0, 8)}
-                      {` · 本次參考專案資訊：設定版本 ${open.setup_plan.configVersion}`}
-                    </p>
-                    {open.setup_plan.evidence.map((e, i) => (
-                      <div key={i} className="mt-2">
-                        <p className="break-all">{e.path}</p>
-                        <pre className="whitespace-pre-wrap break-all">
-                          {e.quote}
-                        </pre>
-                      </div>
-                    ))}
-                  </details>
-                </div>
-              )}
-              {open.validation_error && !open.repo_missing_at && (
-                <ValidationError
-                  text={open.validation_error}
-                  // 已驗證的專案重新驗證遇到暫時性問題時沿用先前的設定；儲存庫接回後的
-                  // 「請重新驗證」也只是提醒。這兩種都不算失敗。
-                  tone={
-                    isRepoNotice(open.validation_error)
-                      ? "notice"
-                      : open.validated_at
-                        ? "transient"
-                        : "failed"
-                  }
-                />
-              )}
-              <Separator />
-              <section
-                className="flex flex-col gap-2"
-                aria-labelledby="full-access-title"
-              >
-                <div className="flex items-center gap-2">
-                  <h3 id="full-access-title" className="text-sm font-medium">
-                    完全存取
-                  </h3>
-                  <Badge variant={open.full_access ? "warn" : "secondary"}>
-                    {open.full_access ? "已開啟" : "關閉"}
-                  </Badge>
-                </div>
-                <p className="text-sm text-muted-foreground">
-                  你開啟後，這個專案的 AI 可以連到內網與已登記的資料庫、SSH
-                  主機。
-                </p>
-                <details className="text-xs text-muted-foreground">
-                  <summary className="cursor-pointer">說明</summary>
-                  <div className="mt-1">
-                    開啟後，這個專案的安裝、開發、測試與審查都能連公司內網、Tailscale
-                    與網際網路，Codex 與測試也拿得到下方登記的資料庫連線與 SSH
-                    主機（權限照登記的帳號），就像在這台伺服器上開發。仍在容器裡執行，拿不到
-                    chat2pr 自己的機密；修改仍要你核准，PR
-                    仍由你合併。這台伺服器本身連不到的網路（例如沒有 VPN
-                    的廠內網段），開了也連不到。
-                  </div>
-                </details>
-                <div>
-                  {open.full_access ? (
+                  <SheetFooter>
+                    <Button
+                      onClick={() =>
+                        guard(() => {
+                          setOpenId(null);
+                          edit(open);
+                        })
+                      }
+                    >
+                      編輯設定
+                    </Button>
                     <Button
                       variant="outline"
-                      size="sm"
-                      disabled={busy}
+                      disabled={busy || !!open.setup_input}
                       onClick={() =>
                         void run(
                           () =>
                             request(
-                              `/api/projects/${open.id}/full-access`,
-                              "PUT",
-                              {
-                                enabled: false,
-                              },
+                              `/api/projects/${open.id}/validate`,
+                              "POST",
                             ),
-                          "已關閉完全存取",
+                          "已開始驗證環境，通過後會自動啟用派工",
                         )
                       }
                     >
-                      關閉完全存取
+                      <RefreshCw /> {validateLabel(open)}
                     </Button>
-                  ) : (
-                    <ConfirmButton
-                      variant="outline"
-                      size="sm"
-                      disabled={busy}
-                      title={`開啟「${open.name}」的完全存取？`}
-                      description="AI 會在每個階段直接連公司內網、Tailscale 與網際網路，並用登記的資料庫帳號與 SSH 主機連真實系統；帳號能寫入，AI 就可能寫入。建議登記只有必要權限的帳號。開啟與關閉都會寫進活動紀錄。"
-                      confirm="開啟完全存取"
-                      onConfirm={() =>
-                        run(
-                          () =>
-                            request(
-                              `/api/projects/${open.id}/full-access`,
-                              "PUT",
-                              {
-                                enabled: true,
-                              },
-                            ),
-                          "已開啟完全存取",
-                        )
-                      }
-                    >
-                      開啟完全存取
-                    </ConfirmButton>
-                  )}
-                </div>
-              </section>
-              <Separator />
-              <ProjectContextEditor
-                key={open.id}
-                project={open}
-                busy={busy}
-                run={run}
-                request={request}
-              />
-              <Separator />
-              <ProjectDatabase
-                key={`database-${open.id}`}
-                project={open}
-                busy={busy}
-                run={run}
-                request={request}
-              />
-              <Separator />
-              <ProjectSsh
-                key={`ssh-${open.id}`}
-                project={open}
-                busy={busy}
-                run={run}
-                request={request}
-              />
-              <Separator />
-              <ProjectKnowledge
-                project={open}
-                state={state}
-                busy={busy}
-                run={run}
-                request={request}
-              />
-            </div>
-            <SheetFooter>
-              <Button
-                onClick={() =>
-                  guard(() => {
-                    setOpenId(null);
-                    edit(open);
-                  })
-                }
-              >
-                編輯設定
-              </Button>
-              <Button
-                variant="outline"
-                disabled={busy || !!open.setup_input}
-                onClick={() =>
-                  void run(
-                    () => request(`/api/projects/${open.id}/validate`, "POST"),
-                    "已開始驗證環境，通過後會自動啟用派工",
-                  )
-                }
-              >
-                <RefreshCw /> {validateLabel(open)}
-              </Button>
-              {open.repo_missing_at && (
-                <ConfirmButton
-                  variant="destructive"
-                  disabled={busy}
-                  title={`刪除專案「${open.name}」？`}
-                  description="專案設定、專案記憶與程式碼索引會一併刪除，無法復原；已經做過的任務紀錄會保留。"
-                  confirm="刪除專案"
-                  onConfirm={() =>
-                    run(async () => {
-                      await request(`/api/projects/${open.id}`, "DELETE");
-                      setOpenId(null);
-                    }, `已刪除專案「${open.name}」`)
-                  }
+                    {open.repo_missing_at && (
+                      <ConfirmButton
+                        variant="destructive"
+                        disabled={busy}
+                        title={`刪除專案「${open.name}」？`}
+                        description="專案設定、專案記憶與程式碼索引會一併刪除，無法復原；已經做過的任務紀錄會保留。"
+                        confirm="刪除專案"
+                        onConfirm={() =>
+                          run(async () => {
+                            await request(`/api/projects/${open.id}`, "DELETE");
+                            setOpenId(null);
+                          }, `已刪除專案「${open.name}」`)
+                        }
+                      >
+                        <Trash2 /> 刪除專案
+                      </ConfirmButton>
+                    )}
+                  </SheetFooter>
+                </TabsContent>
+                <TabsContent
+                  value="environment"
+                  className="flex flex-col gap-5 p-5"
                 >
-                  <Trash2 /> 刪除專案
-                </ConfirmButton>
-              )}
-            </SheetFooter>
+                  {" "}
+                  {open.setup_status && (
+                    <p role="status" className="rounded bg-muted p-3 text-sm">
+                      {open.setup_status}
+                    </p>
+                  )}
+                  {open.setup_plan && open.setup_mode === "auto" && (
+                    <div className="space-y-2 text-sm">
+                      {verificationLabel(open.setup_plan).caution && (
+                        <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center sm:justify-between">
+                          <p className="text-warn">
+                            {verificationLabel(open.setup_plan).caution}
+                          </p>
+                          {/* 推測結構代表驗證當下還沒有結構快照；擷取快照會讓設定作廢、重新驗證。 */}
+                          {open.setup_plan.dataSource === "inferred" && (
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="shrink-0"
+                              onClick={() =>
+                                guard(() => {
+                                  setTab("access");
+                                  requestAnimationFrame(jumpToDatabase);
+                                })
+                              }
+                            >
+                              登記資料庫連線
+                            </Button>
+                          )}
+                        </div>
+                      )}
+                      {open.setup_plan.sqlServer && (
+                        <p>
+                          測試用 SQL Server：
+                          {open.setup_plan.sqlServer.source === "admin"
+                            ? "管理者設定一律提供"
+                            : "依專案判斷需要"}
+                          ，使用映像 {open.setup_plan.sqlServer.image}
+                        </p>
+                      )}
+                      <p className="whitespace-pre-line">
+                        {open.setup_plan.explanation}
+                      </p>
+                      {open.setup_plan.systemInstall && (
+                        <div className="rounded-lg border p-3">
+                          <p className="mb-2 text-xs font-medium text-muted-foreground">
+                            系統套件（安裝前審查）
+                          </p>
+                          <InstallReviewList
+                            review={open.setup_plan.systemInstall}
+                          />
+                        </div>
+                      )}
+                      {!!open.setup_plan.omissions?.length && (
+                        <div className="text-xs text-muted-foreground">
+                          <p>以下檔案只提供摘錄或未讀取：</p>
+                          <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                            {open.setup_plan.omissions.map((o, i) => (
+                              <li key={i} className="break-all">
+                                {o.path}：{o.reason}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      <details className="text-xs text-muted-foreground">
+                        <summary className="cursor-pointer">
+                          查看 AI 設定依據
+                        </summary>
+                        <p className="mt-2 break-all">
+                          分支：{open.setup_plan.branch} · 版本：
+                          {open.setup_plan.sha.slice(0, 8)}
+                          {` · 本次參考專案資訊：設定版本 ${open.setup_plan.configVersion}`}
+                        </p>
+                        {open.setup_plan.evidence.map((e, i) => (
+                          <div key={i} className="mt-2">
+                            <p className="break-all">{e.path}</p>
+                            <pre className="whitespace-pre-wrap break-all">
+                              {e.quote}
+                            </pre>
+                          </div>
+                        ))}
+                      </details>
+                    </div>
+                  )}
+                  {open.validation_error && !open.repo_missing_at && (
+                    <ValidationError
+                      text={open.validation_error}
+                      // 已驗證的專案重新驗證遇到暫時性問題時沿用先前的設定；儲存庫接回後的
+                      // 「請重新驗證」也只是提醒。這兩種都不算失敗。
+                      tone={
+                        isRepoNotice(open.validation_error)
+                          ? "notice"
+                          : open.validated_at
+                            ? "transient"
+                            : "failed"
+                      }
+                    />
+                  )}
+                  <ProjectContextEditor
+                    key={open.id}
+                    project={open}
+                    busy={busy}
+                    run={run}
+                    request={request}
+                  />
+                </TabsContent>
+                <TabsContent value="access" className="flex flex-col gap-5 p-5">
+                  <section
+                    className="flex flex-col gap-2"
+                    aria-labelledby="full-access-title"
+                  >
+                    <div className="flex items-center gap-2">
+                      <h3
+                        id="full-access-title"
+                        className="text-sm font-medium"
+                      >
+                        完全存取
+                      </h3>
+                      <Badge variant={open.full_access ? "warn" : "secondary"}>
+                        {open.full_access ? "已開啟" : "關閉"}
+                      </Badge>
+                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      你開啟後，這個專案的 AI 可以連到內網與已登記的資料庫、SSH
+                      主機。
+                    </p>
+                    <details className="text-xs text-muted-foreground">
+                      <summary className="cursor-pointer">說明</summary>
+                      <div className="mt-1">
+                        開啟後，這個專案的安裝、開發、測試與審查都能連公司內網、Tailscale
+                        與網際網路，Codex 與測試也拿得到下方登記的資料庫連線與
+                        SSH
+                        主機（權限照登記的帳號），就像在這台伺服器上開發。仍在容器裡執行，拿不到
+                        chat2pr 自己的機密；修改仍要你核准，PR
+                        仍由你合併。這台伺服器本身連不到的網路（例如沒有 VPN
+                        的廠內網段），開了也連不到。
+                      </div>
+                    </details>
+                    <div>
+                      {open.full_access ? (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={busy}
+                          onClick={() =>
+                            void run(
+                              () =>
+                                request(
+                                  `/api/projects/${open.id}/full-access`,
+                                  "PUT",
+                                  {
+                                    enabled: false,
+                                  },
+                                ),
+                              "已關閉完全存取",
+                            )
+                          }
+                        >
+                          關閉完全存取
+                        </Button>
+                      ) : (
+                        <ConfirmButton
+                          variant="outline"
+                          size="sm"
+                          disabled={busy}
+                          title={`開啟「${open.name}」的完全存取？`}
+                          description="AI 會在每個階段直接連公司內網、Tailscale 與網際網路，並用登記的資料庫帳號與 SSH 主機連真實系統；帳號能寫入，AI 就可能寫入。建議登記只有必要權限的帳號。開啟與關閉都會寫進活動紀錄。"
+                          confirm="開啟完全存取"
+                          onConfirm={() =>
+                            run(
+                              () =>
+                                request(
+                                  `/api/projects/${open.id}/full-access`,
+                                  "PUT",
+                                  {
+                                    enabled: true,
+                                  },
+                                ),
+                              "已開啟完全存取",
+                            )
+                          }
+                        >
+                          開啟完全存取
+                        </ConfirmButton>
+                      )}
+                    </div>
+                  </section>
+                  <Separator />
+                  <ProjectDatabase
+                    key={`database-${open.id}`}
+                    project={open}
+                    busy={busy}
+                    run={run}
+                    request={request}
+                  />
+                  <Separator />
+                  <ProjectSsh
+                    key={`ssh-${open.id}`}
+                    project={open}
+                    busy={busy}
+                    run={run}
+                    request={request}
+                  />
+                </TabsContent>
+                <TabsContent value="memory" className="flex flex-col gap-5 p-5">
+                  <ProjectKnowledge
+                    project={open}
+                    state={state}
+                    busy={busy}
+                    run={run}
+                    request={request}
+                  />
+                </TabsContent>
+              </div>
+            </Tabs>
           </SheetContent>
         </Sheet>
       )}

@@ -150,6 +150,18 @@ const views = [
 ] as const;
 
 // 每個頁面有自己的網址，任務詳情以 ?task= 表示；重新整理、上一頁與分享連結都會回到同一處。
+function linkedProject(url: URL) {
+  const id = url.searchParams.get("project");
+  return url.pathname === "/projects" && id
+    ? {
+        id,
+        tab:
+          url.searchParams.get("tab") === "environment"
+            ? "environment"
+            : "overview",
+      }
+    : null;
+}
 const viewPaths: Record<View, string> = {
   inbox: "/",
   tasks: "/tasks",
@@ -218,7 +230,10 @@ export function App() {
     [busy, setBusy] = useState(false),
     [project, setProject] = useState<Partial<Project> | null>(null),
     // 剛存好的專案 id；專案頁打開它的詳情後清掉。
-    [savedProject, setSavedProject] = useState<string | null>(null),
+    [savedProject, setSavedProject] = useState<{
+      id: string;
+      tab: string;
+    } | null>(null),
     // 每次從導覽切換頁面就加一，讓該頁丟掉上一輪的篩選、照網址重新開始。
     [visit, setVisit] = useState(0),
     [offline, setOffline] = useState(false),
@@ -396,6 +411,7 @@ export function App() {
         () => {
           const url = new URL(destination, location.origin);
           setView(viewFromPath(url.pathname));
+          setSavedProject(linkedProject(url));
           const id = url.searchParams.get("task");
           if (id) void openTask(id, false);
           else setSelected(null);
@@ -437,6 +453,8 @@ export function App() {
       history.replaceState(null, "", back);
       setView(viewFromPath(location.pathname));
     }
+    const linked = linkedProject(new URL(location.href));
+    if (linked) setSavedProject(linked);
     const id = new URLSearchParams(location.search).get("task");
     if (id) void openTask(id, false);
   }, [user, openTask]);
@@ -499,12 +517,17 @@ export function App() {
     window.scrollTo({ top: 0 });
   };
   // 換頁前先確認沒有未儲存的修改。
-  const go = (v: View) => guard(() => leave(v));
+  const go = (v: View, projectId?: string | null, tab = "environment") =>
+    guard(() => {
+      leave(v);
+      if (v === "projects" && projectId)
+        setSavedProject({ id: projectId, tab });
+    });
   // 從選單換頁時，選單關閉會把焦點還給觸發按鈕；改送到新頁面的標題。
   const fromMenu = useRef(false);
-  const goFromMenu = (v: View) => {
+  const goFromMenu = (v: View, projectId?: string | null, tab?: string) => {
     fromMenu.current = true;
-    go(v);
+    go(v, projectId, tab);
   };
   const headingAfterMenu = (e: Event) => {
     if (!fromMenu.current) return;
@@ -603,7 +626,9 @@ export function App() {
   const visible = views.filter((v) => admin || v.section === "工作區");
   const current = visible.find((v) => v.id === view) ?? visible[0];
   // 訂閱模式以帳號的派工許可為準，避免單一模型的額度用完就誤報整體暫停。
-  const hostHold = memoryHold(state);
+  const hostHold = state?.diskDispatchPaused
+    ? "Docker 磁碟空間嚴重不足"
+    : memoryHold(state);
   const subscriptionHold =
     subscription && typeof account === "object" && account?.allowed === false
       ? "Codex 訂閱額度已達上限"
@@ -865,6 +890,14 @@ export function App() {
             </Button>
           </p>
         )}
+        {state?.settings.container_network === "open" && (
+          <p
+            role="status"
+            className="mb-4 rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn"
+          >
+            所有專案已開放網路，你可在設定關閉，再為個別專案開啟「完全存取」。
+          </p>
+        )}
         {state && (state.settings.paused || state.settings.triage_paused) && (
           <p
             role="status"
@@ -873,8 +906,8 @@ export function App() {
             <CirclePause className="size-4 shrink-0" />
             <span className="min-w-0 flex-1">
               {state.settings.paused
-                ? "派工已暫停：訊息照常接收，但不辨識新需求，也不開始任何工作。"
-                : "新需求判讀已暫停：訊息照常接收，已核准的任務仍會執行。"}
+                ? "派工已暫停，訊息仍會保留 → 你可以按「開始派工」恢復排程。"
+                : "只暫停新需求判讀，已核准的任務照常執行 → 你可以在設定關閉「暫停新需求判讀」。"}
             </span>
             {admin &&
               (state.settings.paused ? (
@@ -910,7 +943,9 @@ export function App() {
               <CirclePause className="size-4 shrink-0" />
             )}
             <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-              {hold}。排隊中的工作會在恢復後自動開始，不需手動操作
+              {hostHold
+                ? `資源不足，派工自動暫停（${hostHold}） → 資源恢復後會自動繼續。`
+                : `${hold} → 額度恢復後會自動繼續。`}
             </span>
             {admin && view !== holdView && (
               <Button variant="outline" size="xs" onClick={() => go(holdView)}>
@@ -995,6 +1030,7 @@ export function App() {
             {current.id === "groups" && (
               <>
                 <GroupsView
+                  openSettings={() => go("settings")}
                   state={state}
                   busy={busy}
                   run={run}
@@ -1010,7 +1046,8 @@ export function App() {
                 run={run}
                 request={request}
                 edit={setProject}
-                focusId={savedProject}
+                focusId={savedProject?.id}
+                focusTab={savedProject?.tab}
                 focused={() => setSavedProject(null)}
               />
             )}
@@ -1141,7 +1178,7 @@ export function App() {
                   );
                   notice = result.notice;
                   setProject(null);
-                  setSavedProject(result.saved.id);
+                  setSavedProject({ id: result.saved.id, tab: "overview" });
                 }, "專案已儲存");
                 if (ok && notice) setToast(notice);
               }}

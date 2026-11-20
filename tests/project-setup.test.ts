@@ -257,6 +257,25 @@ it("虛構引用與不足資訊皆不執行安裝", async () => {
     "請提供測試資料庫",
   );
   expect((await s.project()).setup_input?.reason).toContain("你才知道的資訊");
+  const alerts = async () =>
+    (
+      await app.inject({ method: "GET", url: "/api/state", headers: s.headers })
+    ).json().alerts;
+  expect(await alerts()).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ kind: "project_input", project_id: s.id }),
+    ]),
+  );
+  // 舊版補問只在通知鍵裡記錄問題編號，還在等回答時也要能直達專案。
+  await db.query(
+    "UPDATE notifications SET dedupe_key=$1 WHERE kind='project_input'",
+    ["project-input:" + (await s.project()).setup_input!.id],
+  );
+  expect(await alerts()).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ kind: "project_input", project_id: s.id }),
+    ]),
+  );
   expect(s.calls.some((c) => c.path === "phase")).toBe(false);
 });
 
