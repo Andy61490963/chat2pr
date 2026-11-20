@@ -1,3 +1,4 @@
+import { validateLabel } from "../shared/project-setup.js";
 import { redact } from "./policy.js";
 import { clip } from "./pr-body.js";
 
@@ -30,17 +31,19 @@ export interface FailureExplanation {
   detail: string;
 }
 
+type Advice = string | ((verify: string) => string);
+
 interface Rule {
   category: FailureCategory;
   test: (body: string, phase: string) => boolean;
   plain: string;
-  action: string;
+  action: Advice;
   group: string;
   /**
    * 專案環境驗證失敗時的建議處理。驗證沒有「重試」按鈕也沒有任務的執行紀錄，
    * 建議要對應專案頁的按鈕（「驗證環境」「AI 自動設定並驗證」、進階設定）；沒寫時依分類套用預設。
    */
-  validation?: string;
+  validation?: Advice;
   /** 訊息本身就是整理過的說明（審查意見、上限說明），整段保留而不是只挑錯誤行。 */
   keep?: boolean;
   /** 從堆疊挑出專案原始碼的位置放在錯誤重點最前面（堆疊行本身不放進摘要）。 */
@@ -64,13 +67,13 @@ export function projectSourceLine(output: string): string | null {
 /** 失敗發生在哪裡：任務執行，或專案頁的環境驗證。 */
 export type FailureContext = "task" | "validation";
 
-const validationDefaults: Record<FailureCategory, string> = {
-  transient: "通常稍後就會恢復，請稍後在專案頁再按「驗證環境」",
-  environment:
-    "確認工作映像有需要的工具，或在專案頁進階設定改安裝指令、映像後按「驗證環境」",
+const validationDefaults: Record<FailureCategory, Advice> = {
+  transient: (verify) => `通常稍後就會恢復，請稍後在專案頁${verify}`,
+  environment: (verify) =>
+    `確認工作映像有需要的工具，或在專案頁進階設定改安裝指令、映像後${verify}`,
   project: "修好儲存庫的建置或測試，或在進階設定調整測試指令後重新驗證",
-  config: "依錯誤重點補上設定或權限後，在專案頁按「驗證環境」",
-  system: "稍後在專案頁再按「驗證環境」；仍發生時回報給維護者",
+  config: (verify) => `依錯誤重點補上設定或權限後，在專案頁${verify}`,
+  system: (verify) => `稍後在專案頁${verify}；仍發生時回報給維護者`,
 };
 const matches = (pattern: RegExp) => (body: string) => pattern.test(body);
 
@@ -81,7 +84,7 @@ const rules: Rule[] = [
     category: "environment",
     test: matches(/測試環境問題/),
     plain: "測試需要的環境（例如 SQL Server）沒有啟動成功，不是程式沒過",
-    action: "請管理者到看板專案頁按「驗證環境」，確認工作映像與測試設定",
+    action: (verify) => `請到看板專案頁${verify}，確認工作映像與測試設定`,
     group: "測試環境沒有啟動成功，請管理者處理專案的測試環境。",
     keep: true,
   },
@@ -96,8 +99,8 @@ const rules: Rule[] = [
       "測試程式在容器裡仍連到 LocalDB（只有 Windows 才有），系統沒辦法自動改成容器內的 SQL Server",
     action:
       "請讓測試在環境變數 AGENTFLOW_SQLSERVER_CONNECTION 有值時改用它（容器內 SQL Server 的連線字串），沒有時才用 LocalDB；錯誤重點的「位置」就是要改的地方，改好後重新驗證專案再重試",
-    validation:
-      "修改錯誤重點「位置」指出的測試程式：有環境變數 AGENTFLOW_SQLSERVER_CONNECTION 時改用它連容器內的 SQL Server，沒有時才用 LocalDB；合併後按「驗證環境」",
+    validation: (verify) =>
+      `修改錯誤重點「位置」指出的測試程式：有環境變數 AGENTFLOW_SQLSERVER_CONNECTION 時改用它連容器內的 SQL Server，沒有時才用 LocalDB；合併後${verify}`,
     group: "專案的測試寫死只能在 Windows 使用的資料庫，請管理者調整測試設定。",
     locate: true,
   },
@@ -109,20 +112,20 @@ const rules: Rule[] = [
     ),
     plain:
       "系統套件的安裝計畫或下載來源沒有通過目前的白名單（可能是白名單在驗證後被改過）",
-    action:
-      "請管理者到「系統 → 下載來源白名單」確認需要的來源，或到專案頁按「AI 自動設定並驗證」讓 AI 依目前的白名單重新規劃",
-    validation:
-      "到「系統 → 下載來源白名單」確認需要的來源，或在專案頁按「AI 自動設定並驗證」讓 AI 依目前的白名單重新規劃",
+    action: (verify) =>
+      `請到「系統 → 下載來源白名單」確認需要的來源，或到專案頁${verify}`,
+    validation: (verify) =>
+      `到「系統 → 下載來源白名單」確認需要的來源，或在專案頁${verify}`,
     group: "專案需要的系統套件來源目前不在允許清單，請管理者處理。",
   },
   {
     category: "environment",
     test: matches(/系統套件安裝失敗|衍生映像[^。\n]{0,20}(?:不屬於|設定異常)/),
     plain: "安裝前審查放行的系統套件沒有裝起來",
-    action:
-      "到執行紀錄查看安裝輸出（套件名稱、版本或來源），再到專案頁按「AI 自動設定並驗證」重新規劃後重試",
-    validation:
-      "依錯誤重點檢查套件名稱、版本或來源，再到專案頁按「AI 自動設定並驗證」重新規劃",
+    action: (verify) =>
+      `到執行紀錄查看安裝輸出（套件名稱、版本或來源），再到專案頁${verify}後重試`,
+    validation: (verify) =>
+      `依錯誤重點檢查套件名稱、版本或來源，再到專案頁${verify}`,
     group: "專案需要的系統工具沒有裝起來，請管理者處理專案的執行環境。",
   },
   {
@@ -175,7 +178,8 @@ const rules: Rule[] = [
     // 單次執行時間上限是 30 分鐘；已經設成 30 的管理者調不上去，先建議縮小範圍。
     action:
       "縮小需求範圍或拆成較小的需求後重試；單次執行時間可在「設定」調整（上限 30 分鐘）",
-    validation: "稍後在專案頁再按「驗證環境」；仍逾時請在進階設定縮小測試範圍",
+    validation: (verify) =>
+      `稍後在專案頁${verify}；仍逾時請在進階設定縮小測試範圍`,
     group: "工作沒有在時間限制內完成，請管理者縮小範圍或調整時間限制後重試。",
   },
   {
@@ -187,8 +191,8 @@ const rules: Rule[] = [
     plain: "AI 額度不足或呼叫次數受到限制",
     action:
       "請管理者到「設定」確認每次任務預算、每日額度與次數，額度足夠後到看板重試",
-    validation:
-      "到「設定」確認 AI 額度與每日次數，額度足夠後在專案頁再按「驗證環境」",
+    validation: (verify) =>
+      `到「設定」確認 AI 額度與每日次數，額度足夠後在專案頁${verify}`,
     group: "AI 額度不足，請管理者處理額度。",
   },
   {
@@ -199,8 +203,8 @@ const rules: Rule[] = [
     plain: "外部服務拒絕存取，可能是登入過期、憑證失效或權限不足",
     action:
       "請管理者到看板檢查 GitHub 授權、Codex 登入、API 金鑰或套件來源的權限，修正後重試",
-    validation:
-      "檢查 GitHub 授權、Codex 登入、API 金鑰或私有套件來源的權限，修正後在專案頁按「驗證環境」",
+    validation: (verify) =>
+      `檢查 GitHub 授權、Codex 登入、API 金鑰或私有套件來源的權限，修正後在專案頁${verify}`,
     group: "外部服務的登入或權限有問題，請管理者檢查服務授權。",
   },
   {
@@ -210,7 +214,7 @@ const rules: Rule[] = [
     ),
     plain: "缺少必要的連線或憑證設定",
     action: "請管理者到看板專案頁補上連線或憑證設定後重試",
-    validation: "在專案頁補上連線或憑證設定後按「驗證環境」",
+    validation: (verify) => `在專案頁補上連線或憑證設定後${verify}`,
     group: "專案缺少連線或憑證設定，請管理者到看板補上。",
   },
   {
@@ -221,7 +225,7 @@ const rules: Rule[] = [
     ),
     plain: "執行期間任務、群組或專案的設定被變更，已停止這次執行",
     action: "到看板確認目前的需求版本、專案與群組設定後再重試",
-    validation: "確認專案設定後，在專案頁重新按「驗證環境」",
+    validation: (verify) => `確認專案設定後，在專案頁${verify}`,
     group: "處理期間設定有變更，請管理者確認設定後重試。",
   },
   {
@@ -232,8 +236,8 @@ const rules: Rule[] = [
     plain: "工作容器缺少需要的指令、工具或映像",
     action:
       "請管理者確認工作映像已安裝對應工具（或改用專案專屬映像），重新驗證專案後重試",
-    validation:
-      "確認工作映像已安裝對應工具，或在專案頁進階設定改用專案專屬映像、調整指令後按「驗證環境」",
+    validation: (verify) =>
+      `確認工作映像已安裝對應工具，或在專案頁進階設定改用專案專屬映像、調整指令後${verify}`,
     group: "工作環境缺少需要的工具，請管理者處理專案的執行環境。",
   },
   {
@@ -269,8 +273,8 @@ const rules: Rule[] = [
     plain: "安裝依賴失敗，程式無法建置或執行",
     action:
       "依錯誤重點修正套件設定（名稱、版本、套件來源或私有套件權限），或到看板專案頁重新驗證環境後重試",
-    validation:
-      "修正套件設定（名稱、版本、套件來源或私有套件權限），或在進階設定改安裝指令或映像後按「驗證環境」",
+    validation: (verify) =>
+      `修正套件設定（名稱、版本、套件來源或私有套件權限），或在進階設定改安裝指令或映像後${verify}`,
     group: "專案的依賴安裝失敗，請管理者處理專案的套件設定。",
   },
   {
@@ -367,6 +371,7 @@ export function classifyFailure(
   raw: string,
   phase = "",
   context: FailureContext = "task",
+  project?: Parameters<typeof validateLabel>[0],
 ): FailureExplanation {
   const body = redact(raw.replace(ansi, ""));
   const rule = rules.find((r) => r.test(body, phase)) ?? fallback;
@@ -381,15 +386,19 @@ export function classifyFailure(
         rule.category === "project" || rule.category === "environment" ? 4 : 2,
         900,
       );
+  const advice =
+    context === "validation"
+      ? (rule.validation ?? validationDefaults[rule.category])
+      : rule.action;
   const where = rule.locate ? projectSourceLine(body) : null;
   if (where) detail = `位置：${where}\n${detail}`;
   return {
     category: rule.category,
     plain: rule.plain,
     action:
-      context === "validation"
-        ? (rule.validation ?? validationDefaults[rule.category])
-        : rule.action,
+      typeof advice === "string"
+        ? advice
+        : advice(project ? `按「${validateLabel(project)}」` : "重新驗證環境"),
     group: rule.group,
     detail,
   };
