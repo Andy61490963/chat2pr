@@ -157,6 +157,7 @@ export async function mockDashboard(
       bot_messages: [],
       next: null,
     },
+    [`/api/projects/${project.id}/ssh-hosts`]: [],
     [`/api/projects/${project.id}/database`]: {
       connection: null,
       snapshot: null,

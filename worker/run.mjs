@@ -25,9 +25,11 @@ try {
   throw new Error("工作輸入不是完整的 JSON，已停止執行");
 }
 const shellEnv = { PATH: process.env.PATH, HOME: "/tmp/home" };
-// 完全存取的專案：資料庫連線（AGENTFLOW_DB_*）也交給 Codex 執行的命令，像在本機開發一樣直接連。
+// 完全存取的專案：資料庫連線（AGENTFLOW_DB_*）與 SSH 主機（AGENTFLOW_SSH_HOSTS，給 agentflow-ssh）也交給 Codex 執行的命令，像在本機開發一樣直接連。
 const dbEnv = Object.fromEntries(
-  Object.entries(process.env).filter(([k]) => /^AGENTFLOW_DB_[A-Z]+$/.test(k)),
+  Object.entries(process.env).filter(([k]) =>
+    /^AGENTFLOW_(DB_[A-Z]+|SSH_HOSTS)$/.test(k),
+  ),
 );
 // 開發階段可用套件白名單出口；代理只給 Codex 執行的命令，Codex 自己連推論代理不經過它。
 const egress = "http://egress:3128";

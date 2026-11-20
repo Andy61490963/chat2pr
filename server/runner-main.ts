@@ -7,6 +7,7 @@ import { z } from "zod";
 import { Containers } from "./containers.js";
 import { FULL_ACCESS_ENV } from "./containers.js";
 import { ProbeTargets, probeTargets } from "./network-probe.js";
+import { SshLoginInput, testSshLogin } from "./ssh-login.js";
 import { systemStatus } from "./system-status.js";
 import { hostResources } from "./host-resources.js";
 import { SourceCache, SourceAccess } from "./source-cache.js";
@@ -229,6 +230,10 @@ app.post("/environment-archive", async (req) => {
 app.post("/network/probe", async (req) =>
   probeTargets(ProbeTargets.parse((req.body as { targets?: unknown }).targets)),
 );
+// 專案登記的 SSH 主機：從這台主機實際登入一次，回報主機金鑰指紋。
+app.post("/ssh/test", async (req) =>
+  testSshLogin(SshLoginInput.parse(req.body)),
+);
 app.post("/database/test", async (req) =>
   testConnection(CaptureInput.parse(req.body)),
 );
@@ -444,11 +449,11 @@ app.post("/phase", async (req) => {
     phase: z.enum(["install", "test", "code", "review", "collect"]),
     command: z.string().max(8000).optional(),
     open: z.boolean().optional(),
-    // 完全存取：安裝也走完全開放的網路；env 只接受資料庫連線（AGENTFLOW_DB_*）。
+    // 完全存取：安裝也走完全開放的網路；env 只接受資料庫連線（AGENTFLOW_DB_*）與 SSH 主機（AGENTFLOW_SSH_HOSTS）。
     full: z.boolean().optional(),
     env: z
-      .array(z.string().max(4000).regex(FULL_ACCESS_ENV))
-      .max(10)
+      .array(z.string().max(120000).regex(FULL_ACCESS_ENV))
+      .max(12)
       .optional(),
     job: z.record(z.string(), z.unknown()).optional(),
     timeoutMs: z.number().int().min(1000).max(1800000),

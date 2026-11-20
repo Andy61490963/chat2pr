@@ -142,6 +142,27 @@ describe("專案的完全存取", () => {
     expect(s.published()).toBe(1);
   });
 
+  it("登記的 SSH 主機也交給容器，提示列出主機但不含密碼", async () => {
+    const sshPassword = "Fictional-Ssh-Pass-321";
+    const s = await scenario({ full: true });
+    await db.query(
+      "INSERT INTO project_ssh_hosts(project_id,name,host,port,username,note,secret) SELECT project_id,'jet-u01','10.0.7.31',22,'reader','U01 工控電腦',$1 FROM tasks WHERE id=$2",
+      [seal({ password: "", sshPassword }), s.task.id],
+    );
+    await s.execution.execute(s.task.id);
+    const code = s.calls.find((c) => c.phase === "code")!;
+    expect(code.env).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^AGENTFLOW_DB_CONNECTION=/),
+        expect.stringMatching(/^AGENTFLOW_SSH_HOSTS=\[\{"name":"jet-u01"/),
+      ]),
+    );
+    const prompt = String((code.job as Record<string, unknown>).prompt);
+    expect(prompt).toContain("jet-u01（reader@10.0.7.31:22，U01 工控電腦）");
+    expect(prompt).not.toContain(sshPassword);
+    expect(s.calls.find((c) => c.phase === "collect")!.env).toBeUndefined();
+  });
+
   it("沒開啟時維持隔離：不給資料庫連線、不開網路", async () => {
     const s = await scenario({ full: false });
     await s.execution.execute(s.task.id);
@@ -151,9 +172,9 @@ describe("專案的完全存取", () => {
       expect(c.open).toBe(false);
     }
     const code = s.calls.find((c) => c.phase === "code")!;
-    expect(
-      String((code.job as Record<string, unknown>).prompt),
-    ).toContain("不可連線正式資料庫。");
+    expect(String((code.job as Record<string, unknown>).prompt)).toContain(
+      "不可連線正式資料庫。",
+    );
   });
 
   it("變更內容含資料庫密碼時拒絕發布", async () => {

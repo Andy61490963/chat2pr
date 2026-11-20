@@ -40,6 +40,7 @@ import { checkIntegrations } from "./integrations.js";
 import { registerChat } from "./chat.js";
 import { registerProjectContext } from "./project-context.js";
 import { registerProjectDatabase } from "./project-database.js";
+import { registerProjectSsh } from "./project-ssh.js";
 import { registerDockerDisk } from "./docker-disk.js";
 import { registerEgress } from "./egress-api.js";
 import { notifyGroup } from "./group-replies.js";
@@ -213,6 +214,9 @@ export async function buildApp(
         new Budget(db),
         new SubscriptionGate(db),
       ).structured(prompt, schema, "connection_extract", "整理連線資訊"),
+  );
+  registerProjectSsh(app, db, (path, body, timeoutMs) =>
+    runner.call(path, body, timeoutMs),
   );
   registerMembers(app, db, githubUser);
   await app.register(helmet, {

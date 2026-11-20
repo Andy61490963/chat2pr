@@ -58,6 +58,7 @@ import {
 } from "./project-form";
 import { InstallReviewList } from "./egress";
 import { ConfirmButton } from "./confirm";
+import { ProjectSsh } from "./project-ssh";
 import { useUnsaved, useGuard } from "./unsaved";
 import { ProjectContextEditor } from "./project-context";
 import { ProjectDatabase } from "./project-database";
@@ -456,7 +457,7 @@ export function ProjectsView({
                 <p className="text-sm text-muted-foreground">
                   開啟後，這個專案的安裝、開發、測試與審查都能連公司內網、Tailscale
                   與網際網路，Codex
-                  與測試也拿得到下方登記的資料庫連線（權限照登記的帳號），就像在這台伺服器上開發。仍在容器裡執行，拿不到
+                  與測試也拿得到下方登記的資料庫連線與 SSH 主機（權限照登記的帳號），就像在這台伺服器上開發。仍在容器裡執行，拿不到
                   chat2pr 自己的機密；修改仍要你核准，PR
                   仍由你合併。這台伺服器本身連不到的網路（例如沒有 VPN
                   的廠內網段），開了也連不到。
@@ -489,7 +490,7 @@ export function ProjectsView({
                       size="sm"
                       disabled={busy}
                       title={`開啟「${open.name}」的完全存取？`}
-                      description="AI 會在每個階段直接連公司內網、Tailscale 與網際網路，並用登記的資料庫帳號連真實資料庫；帳號能寫入，AI 就可能寫入。建議登記只有必要權限的帳號。開啟與關閉都會寫進活動紀錄。"
+                      description="AI 會在每個階段直接連公司內網、Tailscale 與網際網路，並用登記的資料庫帳號與 SSH 主機連真實系統；帳號能寫入，AI 就可能寫入。建議登記只有必要權限的帳號。開啟與關閉都會寫進活動紀錄。"
                       confirm="開啟完全存取"
                       onConfirm={() =>
                         run(
@@ -521,6 +522,14 @@ export function ProjectsView({
               <Separator />
               <ProjectDatabase
                 key={`database-${open.id}`}
+                project={open}
+                busy={busy}
+                run={run}
+                request={request}
+              />
+              <Separator />
+              <ProjectSsh
+                key={`ssh-${open.id}`}
                 project={open}
                 busy={busy}
                 run={run}
