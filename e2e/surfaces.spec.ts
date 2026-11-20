@@ -180,3 +180,29 @@ test("375px 寬時八個看板頁面的內容都能在視窗內閱讀，整頁�
     });
   }
 });
+
+for (const [entry, title] of [
+  ["cloudflare", "Cloudflare Tunnel 固定 HTTPS 入口"],
+  ["ngrok", "ngrok 固定 HTTPS 入口"],
+  ["external", "固定 HTTPS 入口（自備程序）"],
+] as const)
+  test(`系統架構圖依入口設定顯示：${entry}`, async ({ page }) => {
+    await mockDashboard(page, {
+      routes: {
+        "/api/system": {
+          checkedAt: new Date().toISOString(),
+          requiredWorkerRev: "demo",
+          runner: { state: "ok" },
+          services: [],
+          jobs: [],
+          images: [],
+          volumes: { jobs: 0, sourceCaches: 0 },
+          entry,
+        },
+      },
+    });
+    await page.goto("/system");
+    await expect(page.getByText(title, { exact: true })).toBeVisible();
+    if (entry !== "ngrok")
+      await expect(page.getByText(/ngrok 固定 HTTPS 入口/)).toHaveCount(0);
+  });
