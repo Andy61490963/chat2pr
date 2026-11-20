@@ -1,3 +1,4 @@
+import { projectLabels } from "../../shared/status-glossary.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bell,
@@ -67,7 +68,7 @@ const kinds: Record<
   repo_missing: {
     icon: FolderX,
     tone: "text-danger",
-    label: "找不到儲存庫",
+    label: projectLabels.missing,
   },
   repo_found: {
     icon: FolderCheck,

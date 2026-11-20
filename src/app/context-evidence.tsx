@@ -11,7 +11,9 @@ export function TaskContextEvidence({ detail }: { detail: Detail }) {
       {!!detail.images?.length && (
         <section className="space-y-3">
           <h3 className="text-sm font-medium text-muted-foreground">
-            需求版本 {detail.task.version} 的圖片參考
+            {detail.task.version > 1
+              ? `需求版本 ${detail.task.version} 的圖片參考`
+              : "需求的圖片參考"}
           </h3>
           {detail.images.map((image) => (
             <details key={image.id} className="rounded-lg border p-3 text-sm">
@@ -74,7 +76,8 @@ export function TaskContextEvidence({ detail }: { detail: Detail }) {
               <li key={e.id} className="min-w-0 break-all">
                 <p>
                   {contextMechanismLabels[e.mechanism]} ·{" "}
-                  {contextSourceLabels[e.source_kind]} · 版本 {e.version} ·{" "}
+                  {contextSourceLabels[e.source_kind]}
+                  {detail.task.version > 1 && ` · 版本 ${e.version}`} ·{" "}
                   {e.phase === "triage-selected"
                     ? "需求辨識選用的來源"
                     : e.phase === "triage"

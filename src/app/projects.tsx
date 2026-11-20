@@ -1,3 +1,4 @@
+import { projectLabels, projectStatus } from "../../shared/status-glossary.js";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   ArrowUpRight,
@@ -137,12 +138,14 @@ export function ProjectsView({
           {
             state.projects.filter(
               (p) =>
-                p.enabled &&
-                p.validated_at &&
-                state.groups.some((g) => g.project_ids.includes(p.id)),
+                projectStatus(
+                  p,
+                  state.groups.some((g) => g.project_ids.includes(p.id)),
+                  validationFailed(p),
+                ) === "ready",
             ).length
           }{" "}
-          個可派工
+          個{projectLabels.ready}
         </p>
         <Button onClick={() => edit(emptyProject)}>
           <Plus /> 新增專案
@@ -192,7 +195,7 @@ export function ProjectsView({
                         p.setup_status || "AI 自動設定"
                       ) : validationFailed(p) ? (
                         <>
-                          驗證失敗
+                          {projectLabels.failed}
                           {p.test_command && (
                             <>
                               {" · "}
@@ -455,13 +458,20 @@ export function ProjectsView({
                   </Badge>
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  開啟後，這個專案的安裝、開發、測試與審查都能連公司內網、Tailscale
-                  與網際網路，Codex
-                  與測試也拿得到下方登記的資料庫連線與 SSH 主機（權限照登記的帳號），就像在這台伺服器上開發。仍在容器裡執行，拿不到
-                  chat2pr 自己的機密；修改仍要你核准，PR
-                  仍由你合併。這台伺服器本身連不到的網路（例如沒有 VPN
-                  的廠內網段），開了也連不到。
+                  你開啟後，這個專案的 AI 可以連到內網與已登記的資料庫、SSH
+                  主機。
                 </p>
+                <details className="text-xs text-muted-foreground">
+                  <summary className="cursor-pointer">說明</summary>
+                  <div className="mt-1">
+                    開啟後，這個專案的安裝、開發、測試與審查都能連公司內網、Tailscale
+                    與網際網路，Codex 與測試也拿得到下方登記的資料庫連線與 SSH
+                    主機（權限照登記的帳號），就像在這台伺服器上開發。仍在容器裡執行，拿不到
+                    chat2pr 自己的機密；修改仍要你核准，PR
+                    仍由你合併。這台伺服器本身連不到的網路（例如沒有 VPN
+                    的廠內網段），開了也連不到。
+                  </div>
+                </details>
                 <div>
                   {open.full_access ? (
                     <Button
@@ -659,35 +669,27 @@ function ProjectBadge({
   project: Project;
   bound: boolean;
 }) {
-  const ready = p.enabled && p.validated_at;
-  if (p.setup_input) return <Badge variant="warn">等你回答</Badge>;
-  if (p.repo_missing_at)
-    return (
-      <Badge
-        variant="danger"
-        title="GitHub 上找不到這個儲存庫（可能已刪除、搬家或改名），專案先停用並暫時解除群組綁定"
-      >
-        找不到儲存庫
-      </Badge>
-    );
-  if (validationFailed(p))
-    return (
-      <Badge
-        variant="danger"
-        title={validationErrorParts(p.validation_error ?? "").headline}
-      >
-        驗證失敗
-      </Badge>
-    );
-  if (ready && !bound)
-    return (
-      <Badge variant="secondary" title="到群組管理勾選這個專案後才會收到需求">
-        未綁定群組
-      </Badge>
-    );
+  const status = projectStatus(p, bound, validationFailed(p));
+  const variant = {
+    missing: "danger",
+    question: "warn",
+    failed: "danger",
+    unverified: "warn",
+    disabled: "info",
+    unbound: "secondary",
+    ready: "good",
+  } as const;
+  const title =
+    status === "missing"
+      ? "GitHub 上找不到儲存庫，請檢查儲存庫位置與 GitHub App 權限。"
+      : status === "failed"
+        ? validationErrorParts(p.validation_error ?? "").headline
+        : status === "unbound"
+          ? "到群組管理勾選這個專案後才會收到需求"
+          : undefined;
   return (
-    <Badge variant={ready ? "good" : p.validated_at ? "info" : "warn"}>
-      {ready ? "可派工" : p.validated_at ? "已驗證・未啟用" : "需要驗證"}
+    <Badge variant={variant[status]} title={title}>
+      {projectLabels[status]}
     </Badge>
   );
 }
@@ -1198,12 +1200,22 @@ export function ProjectForm({
         <p className="mt-1 text-muted-foreground">
           {form.setup_mode === "auto"
             ? offerValidate
-              ? "不必填指令。按「儲存並驗證環境」，AI 會讀取所選分支的 CI、文件與套件設定，安裝並驗證；成功後自動啟用派工，只有建置或缺少必要資訊時會明確說明。按「只儲存」不會開始驗證，存檔後會打開專案詳情，之後可在那裡驗證。"
-              : "不必填指令。AI 依所選分支的 CI、文件與套件設定安裝並驗證；只改名稱或說明不需要重新驗證。"
-            : offerValidate
-              ? "驗證環境與每次派工都會執行進階設定中的指令。按「儲存並驗證環境」會接著用這些指令驗證；也可以切換成 AI 自動設定。"
-              : "驗證環境與每次派工都會執行進階設定中的指令。既有設定已保留，也可以切換成 AI 自動設定。"}
+              ? "你按「儲存並驗證環境」後，AI 會依分支內容安裝與測試，通過後啟用派工。"
+              : "你儲存後，AI 會在驗證時依分支內容決定如何安裝與測試。"
+            : "你儲存的安裝與測試指令會用於環境驗證與派工。"}
         </p>
+        <details className="text-xs text-muted-foreground">
+          <summary className="cursor-pointer">說明</summary>
+          <div className="mt-1">
+            {form.setup_mode === "auto"
+              ? offerValidate
+                ? "不必填指令。按「儲存並驗證環境」，AI 會讀取所選分支的 CI、文件與套件設定，安裝並驗證；成功後自動啟用派工，只有建置或缺少必要資訊時會明確說明。按「只儲存」不會開始驗證，存檔後會打開專案詳情，之後可在那裡驗證。"
+                : "不必填指令。AI 依所選分支的 CI、文件與套件設定安裝並驗證；只改名稱或說明不需要重新驗證。"
+              : offerValidate
+                ? "驗證環境與每次派工都會執行進階設定中的指令。按「儲存並驗證環境」會接著用這些指令驗證；也可以切換成 AI 自動設定。"
+                : "驗證環境與每次派工都會執行進階設定中的指令。既有設定已保留，也可以切換成 AI 自動設定。"}
+          </div>
+        </details>
       </div>
       <details
         className="rounded-md border p-3"
@@ -1292,15 +1304,22 @@ export function ProjectForm({
         </summary>
         <div className="mt-3 flex flex-col gap-2">
           <p className="text-xs text-muted-foreground">
-            收集 AI 的修改時，版本控制原本沒有追蹤的新檔案若符合下列規則就不放進
-            PR，並在 PR
-            說明與任務紀錄列出。原本就追蹤的檔案、以及基底已有追蹤檔案的目錄照常收集。預設：
-            {DEFAULT_COLLECT_EXCLUDES.map((rule) => (
-              <code key={rule} className="mx-0.5 rounded bg-muted px-1">
-                {rule}
-              </code>
-            ))}
+            你加入規則後，符合規則且尚未追蹤的建置產物會從 PR 排除。
           </p>
+          <details className="text-xs text-muted-foreground">
+            <summary className="cursor-pointer">說明</summary>
+            <div className="mt-1">
+              收集 AI
+              的修改時，版本控制原本沒有追蹤的新檔案若符合下列規則就不放進
+              PR，並在 PR
+              說明與任務紀錄列出。原本就追蹤的檔案、以及基底已有追蹤檔案的目錄照常收集。預設：
+              {DEFAULT_COLLECT_EXCLUDES.map((rule) => (
+                <code key={rule} className="mx-0.5 rounded bg-muted px-1">
+                  {rule}
+                </code>
+              ))}
+            </div>
+          </details>
           <Label htmlFor="pf-collect-excludes">
             增減規則{" "}
             <span className="font-normal text-muted-foreground">

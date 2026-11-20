@@ -356,3 +356,48 @@ test("你能在任務詳情追查查詢版本，閱讀答案時只看到報告",
   await expect(dialog.getByText(version, { exact: true })).toBeVisible();
   await expect(dialog.getByText(/範例來源（demo\/source）/)).toBeVisible();
 });
+
+test("設定優先列出異常，正常的檢索服務收在全部服務", async ({ page }) => {
+  await mockDashboard(page, {
+    state: {
+      health: [
+        {
+          name: "github",
+          ok: false,
+          detail: "範例連線失敗",
+          checked_at: new Date().toISOString(),
+        },
+        {
+          name: "rag_index",
+          ok: true,
+          detail: "範例索引正常",
+          checked_at: new Date().toISOString(),
+        },
+      ],
+    },
+  });
+  await page.goto("/settings");
+  await expect(
+    page.getByRole("listitem").filter({ hasText: "範例連線失敗" }).first(),
+  ).toBeVisible();
+  const services = page
+    .locator("details")
+    .filter({ has: page.locator("summary", { hasText: "全部服務" }) });
+  await expect(
+    services.getByRole("listitem").filter({ hasText: "範例索引正常" }),
+  ).toBeHidden();
+  await services.locator("summary").click();
+  await expect(
+    services.getByRole("listitem").filter({ hasText: "範例索引正常" }),
+  ).toBeVisible();
+});
+test("群組可查看記憶總覽，第一版任務隱藏版號", async ({ page }) => {
+  await mockDashboard(page);
+  await page.goto("/groups");
+  await expect(page.getByText("記憶總覽", { exact: true })).toBeVisible();
+  await page.goto("/tasks");
+  await page.getByRole("button", { name: new RegExp(task.title) }).click();
+  await expect(
+    page.getByRole("dialog").getByText("版本 1", { exact: true }),
+  ).toHaveCount(0);
+});

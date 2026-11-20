@@ -346,8 +346,12 @@ export function TaskDrawer({
                 {projectName(state, t)}
               </span>
               <span aria-hidden>·</span>
-              <span>版本 {t.version}</span>
-              <span aria-hidden>·</span>
+              {t.version > 1 && (
+                <>
+                  <span>版本 {t.version}</span>
+                  <span aria-hidden>·</span>
+                </>
+              )}
               <span>
                 建立於 {date(t.created_at)}・更新於 {ago(t.updated_at)}
               </span>
@@ -429,10 +433,10 @@ export function TaskDrawer({
               </summary>
               <div className="mt-2 flex flex-col gap-2">
                 <p className="text-xs text-muted-foreground">
-                  改接到正確的上一題後，會沿用那一題的專案與分支重新處理；改成新話題則要重新確認專案。
+                  你選擇上一題後會沿用它的專案與分支重新處理，選「改成新話題」則會重新確認專案。
                 </p>
                 <select
-                  aria-label="改接到"
+                  aria-label="選擇上一題"
                   className="rounded-md border bg-background px-2 py-1.5"
                   value={relinkTo}
                   onChange={(e) => setRelinkTo(e.target.value)}
@@ -455,7 +459,7 @@ export function TaskDrawer({
                     setRelinkTo("");
                   }}
                 >
-                  改接
+                  改成接在另一題後面
                 </Button>
               </div>
             </details>
@@ -724,9 +728,15 @@ export function TaskDrawer({
                 {adding
                   ? t.status === "ready"
                     ? "你確認新的一題後，修改會接在同一個 PR。"
-                    : "你確認新的一題後，系統會沿用這次需求從目標分支另開 PR。"
-                  : "你會在同一個專案與分支開新的一題，原本的問答會保留。"}
+                    : "你確認新的一題後，系統會從目標分支另開 PR。"
+                  : "你可以沿用專案與分支開新的一題，原本的問答會保留。"}
               </p>
+              <details className="text-xs text-muted-foreground">
+                <summary className="cursor-pointer">說明</summary>
+                {adding
+                  ? "你也可以在 LINE 引用完成通知，說明還想調整的地方。"
+                  : "你也可以在 LINE 引用機器人的回答接著問。"}
+              </details>
               <div>
                 <Button
                   disabled={busy || !ask.trim()}

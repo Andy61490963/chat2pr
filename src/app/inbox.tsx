@@ -1,3 +1,4 @@
+import { projectLabels } from "../../shared/status-glossary.js";
 import { useState } from "react";
 import {
   Activity,
@@ -158,7 +159,7 @@ export function InboxView({
             needCount
               ? "審核、補充或重試"
               : heldCount
-                ? `另有 ${heldCount} 件等待額度，會自動繼續`
+                ? `另有 ${heldCount} 件${statusLabels.budget_wait}，會自動繼續`
                 : "目前沒有待決定的事"
           }
           icon={<CircleAlert />}
@@ -174,7 +175,7 @@ export function InboxView({
           onClick={() => showTasks("moving")}
         />
         <StatCard
-          label="待你合併"
+          label={statusLabels.ready}
           value={readyCount}
           hint="PR 已建立"
           icon={<GitPullRequest />}
@@ -255,7 +256,7 @@ export function InboxView({
               id="waiting-title"
               className="text-sm font-medium text-muted-foreground"
             >
-              等待額度（會自動繼續）
+              {statusLabels.budget_wait}（會自動繼續）
             </h2>
             <Badge variant="secondary">{held.length}</Badge>
             {admin && (
@@ -306,7 +307,9 @@ export function InboxView({
             </Card>
           </section>
           <section>
-            <SectionTitle count={ready.length}>待你合併</SectionTitle>
+            <SectionTitle count={ready.length}>
+              {statusLabels.ready}
+            </SectionTitle>
             <Card className="gap-0 py-1">
               {ready.length ? (
                 ready.map((t) => (
@@ -807,7 +810,7 @@ export function AssignProject({
   // 找不到儲存庫、還沒驗證或已停用的專案派不了工：列出來讓人知道原因，但不能選。
   const blocked = (p: Project) =>
     p.repo_missing_at
-      ? "找不到儲存庫"
+      ? projectLabels.missing
       : !p.validated_at
         ? "尚未驗證"
         : !p.enabled

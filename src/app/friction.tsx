@@ -45,7 +45,7 @@ export function FrictionCard({
         [
           "每件任務需要人回應",
           times(data.responsesPerTask),
-          "核准、補充、回答補問、改接等，越少越好",
+          "核准、補充、回答補問或選擇上一題的次數",
         ],
         [
           "每件任務要切到看板",
