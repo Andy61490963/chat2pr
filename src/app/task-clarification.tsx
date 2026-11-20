@@ -106,7 +106,7 @@ export function TaskClarification({
                   disabled={busy}
                   onClick={amend}
                 >
-                  改成編輯整份需求
+                  修改這一題
                 </Button>
               </div>
             </form>
@@ -171,7 +171,7 @@ export function TaskClarification({
                           draft.value.trim() === assumption
                         }
                       >
-                        {createsFollowup ? "依新假設接著問" : "儲存假設"}
+                        {createsFollowup ? "接著問" : "修改這一題"}
                       </Button>
                       <Button
                         type="button"
@@ -194,7 +194,7 @@ export function TaskClarification({
                         variant="outline"
                         size="sm"
                         disabled={busy || !!draft}
-                        aria-label={`修改第 ${index + 1} 項假設`}
+                        aria-label={`${createsFollowup ? "接著問" : "修改這一題"}（第 ${index + 1} 項假設）`}
                         onClick={() =>
                           setEditing({
                             index,
@@ -203,7 +203,7 @@ export function TaskClarification({
                           })
                         }
                       >
-                        修改
+                        {createsFollowup ? "接著問" : "修改這一題"}
                       </Button>
                     )}
                   </div>

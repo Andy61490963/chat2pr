@@ -110,7 +110,7 @@ export function MembersView({
             <div className="rounded-lg border px-3 py-2.5">
               <dt className="font-medium">成員</dt>
               <dd className="text-muted-foreground">
-                查看收件匣、任務與聊天室，可以核准、拒絕、採用方案、補充需求與重試任務。
+                查看收件匣、任務與聊天室，可以核准、結束任務、採用方案、修改這一題與重試任務。
               </dd>
             </div>
             <div className="rounded-lg border px-3 py-2.5">

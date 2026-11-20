@@ -40,14 +40,13 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { AssignProject, BudgetRetry } from "./inbox";
+import { AssignProject, BudgetRetry, EndTaskButton } from "./inbox";
 import { CopyButton } from "./copy-button";
 import {
   deliveryNotice,
   groupKindLabels,
   undelivered,
 } from "../../shared/group-delivery.js";
-import { ConfirmButton } from "./confirm";
 import { useUnsaved } from "./unsaved";
 import {
   type Act,
@@ -298,7 +297,6 @@ export function TaskDrawer({
   const failure = t.status === "failed" ? parseFailure(t.last_error) : null;
   // 主動作與收件匣卡片共用 primaryFix；前往頁面只給管理者。
   const fix = primaryFix(failure);
-  const demoteRetry = t.status === "failed" && fix.kind !== "retry";
   const fixTarget = admin && fix.kind === "page" ? fix.page : null;
   const amendFirst = t.status === "failed" && fix.kind === "amend";
   // 執行中的那一次（最新且未完成）：標頭顯示階段、已跑時間與期限。
@@ -677,10 +675,10 @@ export function TaskDrawer({
           )}
           {canFollowup && (
             <section
-              aria-label={adding ? "追加修改" : "追問"}
+              aria-label={adding ? "再改一點" : "接著問"}
               className="flex flex-col gap-2"
             >
-              <Label htmlFor="followup">{adding ? "追加修改" : "接著問"}</Label>
+              <Label htmlFor="followup">{adding ? "再改一點" : "接著問"}</Label>
               <Textarea
                 id="followup"
                 rows={3}
@@ -696,9 +694,9 @@ export function TaskDrawer({
               <p className="text-xs text-muted-foreground">
                 {adding
                   ? t.status === "ready"
-                    ? "會建立一題追加，管理者確認後接在同一個 PR 上繼續改，不會另開 PR。"
-                    : "會建立一題追加，管理者確認後從目標分支另開 PR，並帶入這次需求的脈絡。"
-                  : "會建立新的一題，沿用這一題的專案與分支，並帶著前面的問答查詢；這裡的回答不會被取代。也可以在 LINE 用「回覆」引用機器人的回答接著問。"}
+                    ? "你確認新的一題後，修改會接在同一個 PR。"
+                    : "你確認新的一題後，系統會沿用這次需求從目標分支另開 PR。"
+                  : "你會在同一個專案與分支開新的一題，原本的問答會保留。"}
               </p>
               <div>
                 <Button
@@ -708,7 +706,7 @@ export function TaskDrawer({
                     if (await followup(t, ask.trim())) setAsk("");
                   }}
                 >
-                  {adding ? "送出追加" : "追問"}
+                  {adding ? "再改一點" : "接著問"}
                 </Button>
               </div>
             </section>
@@ -876,11 +874,7 @@ export function TaskDrawer({
               onToggle={(e) => setAmendOpen(e.currentTarget.open)}
             >
               <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
-                {t.status === "answered"
-                  ? "修改問題重新查詢（會取代目前的回答）"
-                  : t.missing.length
-                    ? "自己補充需求"
-                    : "修改需求"}
+                修改這一題
                 {amendDirty && (
                   <span className="ml-2 text-xs font-normal text-warn">
                     尚未儲存
@@ -899,6 +893,11 @@ export function TaskDrawer({
                   );
                 }}
               >
+                <p className="text-sm text-muted-foreground">
+                  {t.status === "answered"
+                    ? "你儲存後會重新查詢並取代目前的回答。"
+                    : "你儲存後會以新版本取代目前的需求與驗收條件。"}
+                </p>
                 {stale && (
                   <p
                     role="status"
@@ -1121,40 +1120,43 @@ export function TaskDrawer({
                 variant={options ? "ghost" : "default"}
                 onClick={openAmend}
               >
-                {options ? "都不是，自己補充" : "補充需求"}
+                修改這一題
               </Button>
-            )}
-            {t.status === "awaiting_approval" && (
-              <ConfirmButton
-                variant="outline"
-                className="ml-auto"
-                disabled={busy}
-                title="拒絕這個需求？"
-                description="拒絕後不會派工；之後反悔，可以在這個任務按「重新開啟」。"
-                confirm="拒絕需求"
-                onConfirm={() => act(t, "reject", {}, "已拒絕需求")}
-              >
-                拒絕
-              </ConfirmButton>
-            )}
-            {fixTarget && (
-              <Button onClick={() => go(fixTarget)}>
-                {fixPageLabels[fixTarget]}
-              </Button>
-            )}
-            {amendFirst && (
-              // 逾時：首要是把需求拆小，重試留作次要。
-              <Button onClick={openAmend}>縮小需求範圍</Button>
             )}
             {t.status === "failed" && (
               <Button
-                // 設定、環境、專案類失敗不先處理，重試只會再失敗一次、多用一次每日次數。
-                variant={demoteRetry ? "outline" : "default"}
                 disabled={busy}
                 onClick={() => void act(t, "retry", {}, "已重新排程")}
               >
                 <RefreshCw /> 重試
               </Button>
+            )}
+            {[
+              "awaiting_approval",
+              "failed",
+              "queued",
+              "running",
+              "reviewing",
+              "budget_wait",
+            ].includes(t.status) && (
+              <EndTaskButton task={t} busy={busy} act={act} />
+            )}
+            {(fixTarget || amendFirst) && (
+              <details>
+                <summary className="cursor-pointer px-3 py-2 text-sm">
+                  更多
+                </summary>
+                {fixTarget && (
+                  <Button variant="ghost" onClick={() => go(fixTarget)}>
+                    {fixPageLabels[fixTarget]}
+                  </Button>
+                )}
+                {amendFirst && (
+                  <Button variant="ghost" onClick={openAmend}>
+                    修改這一題
+                  </Button>
+                )}
+              </details>
             )}
             {/* 等待額度會自動繼續：不放「重試」主按鈕；API 模式才給次要的「已提高預算，立即再試」。 */}
             <BudgetRetry task={t} state={state} busy={busy} act={act} />
@@ -1162,35 +1164,6 @@ export function TaskDrawer({
               <Button variant="ghost" size="sm" onClick={() => go("settings")}>
                 調整每日次數／預算
               </Button>
-            )}
-            {t.status === "failed" ? (
-              <ConfirmButton
-                variant="ghost"
-                className="ml-auto"
-                disabled={busy}
-                title="關閉這個任務？"
-                description="關閉後不再重試，會從「需要你處理」移除；之後要做，可以在這個任務按「重新開啟」。"
-                confirm="關閉任務"
-                onConfirm={() => act(t, "cancel", {}, "已關閉任務")}
-              >
-                關閉任務
-              </ConfirmButton>
-            ) : (
-              ["queued", "running", "reviewing", "budget_wait"].includes(
-                t.status,
-              ) && (
-                <ConfirmButton
-                  variant="ghost"
-                  className="ml-auto"
-                  disabled={busy}
-                  title="取消這個任務？"
-                  description="進行中的工作會停止，不會開 PR；之後要做，可以在這個任務按「重新開啟」。"
-                  confirm="取消任務"
-                  onConfirm={() => act(t, "cancel", {}, "已取消任務")}
-                >
-                  取消任務
-                </ConfirmButton>
-              )
             )}
           </SheetFooter>
         )}
@@ -1214,16 +1187,16 @@ export function TaskDrawer({
           <SheetFooter className="items-center">
             <span className="flex-1 text-sm text-muted-foreground">
               {t.status === "ready"
-                ? "PR 已建立，請到 GitHub 檢視與合併；合併或關閉後這裡會自動更新。要再調整，用上方的「追加修改」，會接在同一個 PR 上。"
+                ? "PR 已建立，請到 GitHub 檢視與合併；合併或關閉後這裡會自動更新。要再調整，用上方的「再改一點」，會接在同一個 PR 上。"
                 : t.status === "merged"
-                  ? "PR 已合併，任務完成。要再調整，用上方的「追加修改」。"
+                  ? "PR 已合併，任務完成。要再調整，用上方的「再改一點」。"
                   : t.status === "closed"
-                    ? "PR 沒有合併就關閉了（儲存庫被移除時也會這樣）。要重做，用上方的「追加修改」另開 PR。"
-                    : "查詢已回覆。要接著問，請用上方的「接著問」；想換個問法整個重查，才用「修改問題重新查詢」，原回答會被取代。"}
+                    ? "PR 沒有合併就關閉了（儲存庫被移除時也會這樣）。要重做，用上方的「再改一點」另開 PR。"
+                    : "查詢已回覆。要接著問，請用上方的「接著問」；想換個問法整個重查，才用「修改這一題」，原回答會被取代。"}
             </span>
             {t.status === "answered" ? (
               <Button variant="outline" onClick={openAmend}>
-                修改問題重新查詢
+                修改這一題
               </Button>
             ) : (
               t.pr_url && (
