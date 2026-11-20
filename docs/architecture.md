@@ -193,6 +193,8 @@ flowchart LR
 
 部署後可開啟 `/docs/rag-flow-demo.html` 查看靜態流程展示頁與正式群組驗收文案。此頁隨 Vite 一起建置，不讀取群組資料；管理看板仍位於 `/`。
 
+看板「系統」頁的「系統架構」嵌入 `/docs/architecture-flow.html`（腳本在 `src/flow/architecture-flow.js`，GSAP 由 Vite 打包），以虛構需求逐步播放一則 LINE 訊息到 PR 的流程。看板以網址參數傳入外觀（`theme`）與固定 HTTPS 入口種類（`entry`），動畫頁回報高度。看板 CSP 只允許同源腳本，這個頁面不能引用 CDN 或外部字型。
+
 ## 隔離與網路
 
 | 階段           | 網路                                                   | 掛載                 |

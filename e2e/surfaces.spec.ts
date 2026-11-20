@@ -181,28 +181,65 @@ test("375px 寬時八個看板頁面的內容都能在視窗內閱讀，整頁�
   }
 });
 
+const systemWithEntry = (entry: string) => ({
+  "/api/system": {
+    checkedAt: new Date().toISOString(),
+    requiredWorkerRev: "demo",
+    runner: { state: "ok" },
+    services: [],
+    jobs: [],
+    images: [],
+    volumes: { jobs: 0, sourceCaches: 0 },
+    entry,
+  },
+});
+const flowFrame = (page: import("@playwright/test").Page) =>
+  page.frameLocator('iframe[title^="系統架構動畫"]');
+
+for (const [entry, title, sub] of [
+  ["cloudflare", "Cloudflare Tunnel", "固定 HTTPS 入口"],
+  ["ngrok", "ngrok", "固定 HTTPS 入口"],
+  ["external", "固定 HTTPS 入口", "自備程序"],
+] as const)
+  test(`系統架構動畫依入口設定顯示：${entry}`, async ({ page }) => {
+    await mockDashboard(page, { routes: systemWithEntry(entry) });
+    await page.goto("/system");
+    const tunnel = flowFrame(page).locator("#n-tunnel");
+    await expect(tunnel).toContainText(title);
+    await expect(tunnel).toContainText(sub);
+    if (entry !== "ngrok") await expect(tunnel).not.toContainText("ngrok");
+  });
+
+test("系統頁的架構動畫可以播放，並跟著看板外觀切換深色", async ({ page }) => {
+  await mockDashboard(page, { routes: systemWithEntry("cloudflare") });
+  await page.goto("/system");
+  const frame = flowFrame(page);
+  await frame.getByRole("button", { name: "開始播放" }).click();
+  await expect(frame.locator("#live-text")).toHaveText("播放中");
+  await expect(frame.locator("#lower-title")).toHaveText("成員在群組提需求");
+  // 嵌入時不重複顯示頁首，iframe 高度由動畫頁回報，不會出現內部捲軸。
+  await expect(frame.locator(".top")).toBeHidden();
+  const iframe = page.locator('iframe[title^="系統架構動畫"]');
+  await expect
+    .poll(async () => (await iframe.boundingBox())?.height ?? 0)
+    .toBeGreaterThan(500);
+  await page.evaluate(() => document.documentElement.classList.add("dark"));
+  await expect
+    .poll(() =>
+      frame.locator("html").evaluate((h) => h.getAttribute("data-theme")),
+    )
+    .toBe("dark");
+});
+
 for (const [entry, title] of [
   ["cloudflare", "Cloudflare Tunnel 固定 HTTPS 入口"],
   ["ngrok", "ngrok 固定 HTTPS 入口"],
-  ["external", "固定 HTTPS 入口（自備程序）"],
+  ["external", "自備的固定 HTTPS 入口"],
 ] as const)
-  test(`系統架構圖依入口設定顯示：${entry}`, async ({ page }) => {
-    await mockDashboard(page, {
-      routes: {
-        "/api/system": {
-          checkedAt: new Date().toISOString(),
-          requiredWorkerRev: "demo",
-          runner: { state: "ok" },
-          services: [],
-          jobs: [],
-          images: [],
-          volumes: { jobs: 0, sourceCaches: 0 },
-          entry,
-        },
-      },
-    });
+  test(`系統頁的流程說明依入口設定顯示：${entry}`, async ({ page }) => {
+    await mockDashboard(page, { routes: systemWithEntry(entry) });
     await page.goto("/system");
-    await expect(page.getByText(title, { exact: true })).toBeVisible();
+    await expect(page.getByText(`LINE 經${title}送 Webhook`)).toBeVisible();
     if (entry !== "ngrok")
       await expect(page.getByText(/ngrok 固定 HTTPS 入口/)).toHaveCount(0);
   });
