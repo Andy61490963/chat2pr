@@ -1,3 +1,4 @@
+import { MemoryOverview } from "./app/memory-overview";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
@@ -1027,13 +1028,16 @@ export function App() {
               />
             )}
             {current.id === "groups" && (
-              <GroupsView
-                openSettings={() => go("settings")}
-                state={state}
-                busy={busy}
-                run={run}
-                request={request}
-              />
+              <>
+                <GroupsView
+                  openSettings={() => go("settings")}
+                  state={state}
+                  busy={busy}
+                  run={run}
+                  request={request}
+                />
+                <MemoryOverview state={state} go={go} />
+              </>
             )}
             {current.id === "projects" && (
               <ProjectsView
@@ -1051,12 +1055,7 @@ export function App() {
               <ChecksView state={state} request={request} admin={admin} />
             )}
             {current.id === "system" && (
-              <SystemView
-                state={state}
-                request={request}
-                go={go}
-                admin={admin}
-              />
+              <SystemView state={state} request={request} admin={admin} />
             )}
             {current.id === "members" && (
               <MembersView
@@ -1147,7 +1146,7 @@ export function App() {
                 version: task.version,
               });
               await openTask(task.id, false);
-            }, "已改接")
+            }, "已更新這一題接續的位置")
           }
         />
       )}

@@ -1,3 +1,4 @@
+import { FrictionCard } from "./friction";
 import { groupReplyStatus } from "../../shared/group-reply-status.js";
 import { useEffect, useRef, useState } from "react";
 import { Check, Copy, RefreshCw, Send } from "lucide-react";
@@ -324,7 +325,7 @@ function AiCard({
               checked={form.rag_enabled}
               onCheckedChange={(v) => set("rag_enabled", v)}
             />
-            本機 RAG
+            從過去對話與任務找參考資料
           </label>
           <div className="space-y-2">
             <label className="flex items-center gap-2 text-sm">
@@ -712,6 +713,78 @@ export function SettingsView({
     stale: 0,
   };
   const push = linePushPanel(state.health, failures);
+  const [allServicesOpen, setAllServicesOpen] = useState(false);
+  const serviceRows = services
+    .filter((i) => !i.mode || i.mode === s.ai_mode)
+    .map((i) => {
+      const disabled =
+        ["embedder", "retrieval", "outcomes"].includes(i.key) && !s.rag_enabled;
+      const h = disabled
+        ? undefined
+        : state.health.find((h) => h.name === i.key);
+      // 判讀與檢索在使用時更新，顯示最近一次結果；其他服務由每小時檢查確認，
+      // 超過一天沒有再確認的結果不能當成「正常」，只代表上次正常。
+      const onUse = [
+        "notifications",
+        "triage",
+        "rag_index",
+        "retrieval",
+        "outcomes",
+      ].includes(i.key);
+      const stale =
+        !onUse &&
+        !!h?.ok &&
+        Date.now() - new Date(h.checked_at).getTime() > 86400000;
+      const action = !disabled && (stale || (h ? !h.ok : !onUse));
+      return {
+        action,
+        row: (
+          <li
+            key={i.key}
+            className="flex items-center gap-3 border-b py-2.5 last:border-0"
+          >
+            <span
+              className={cn(
+                "size-2 shrink-0 rounded-full bg-border",
+                h?.ok && !stale && "bg-good",
+                stale && "bg-warn",
+                h && !h.ok && "bg-danger",
+              )}
+            />
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="text-sm font-medium">{i.name}</span>
+              <span className="text-xs break-all text-muted-foreground">
+                {h?.detail ?? i.hint}
+                {h && (
+                  <span className={cn("block", stale && "text-warn")}>
+                    {onUse ? "最近一次" : "最後確認"} {ago(h.checked_at)}
+                    {stale && "，每小時會自動確認；可按「檢查連線」立即更新"}
+                  </span>
+                )}
+              </span>
+            </span>
+            <Badge
+              variant={
+                h ? (stale ? "warn" : h.ok ? "good" : "danger") : "secondary"
+              }
+            >
+              {disabled
+                ? "未啟用"
+                : h
+                  ? stale
+                    ? "待確認"
+                    : h.ok
+                      ? "正常"
+                      : "需處理"
+                  : // 使用時才更新的項目沒有紀錄，代表還沒用到，不是漏了檢查。
+                    onUse
+                    ? "尚無紀錄"
+                    : "未檢查"}
+            </Badge>
+          </li>
+        ),
+      };
+    });
   return (
     <div className="grid items-start gap-4 lg:grid-cols-2">
       <div className="flex flex-col gap-4">
@@ -757,6 +830,7 @@ export function SettingsView({
             </Button>
           </CardContent>
         </Card>
+        <FrictionCard state={state} request={request} />
         <AiCard
           replyCount={
             state.groups.filter(
@@ -792,83 +866,21 @@ export function SettingsView({
           </CardHeader>
           <CardContent>
             <ul>
-              {services
-                .filter((i) => !i.mode || i.mode === s.ai_mode)
-                .map((i) => {
-                  const disabled =
-                    ["embedder", "retrieval", "outcomes"].includes(i.key) &&
-                    !s.rag_enabled;
-                  const h = disabled
-                    ? undefined
-                    : state.health.find((h) => h.name === i.key);
-                  // 判讀與檢索在使用時更新，顯示最近一次結果；其他服務由每小時檢查確認，
-                  // 超過一天沒有再確認的結果不能當成「正常」，只代表上次正常。
-                  const onUse = [
-                    "notifications",
-                    "triage",
-                    "rag_index",
-                    "retrieval",
-                    "outcomes",
-                  ].includes(i.key);
-                  const stale =
-                    !onUse &&
-                    !!h?.ok &&
-                    Date.now() - new Date(h.checked_at).getTime() > 86400000;
-                  return (
-                    <li
-                      key={i.key}
-                      className="flex items-center gap-3 border-b py-2.5 last:border-0"
-                    >
-                      <span
-                        className={cn(
-                          "size-2 shrink-0 rounded-full bg-border",
-                          h?.ok && !stale && "bg-good",
-                          stale && "bg-warn",
-                          h && !h.ok && "bg-danger",
-                        )}
-                      />
-                      <span className="flex min-w-0 flex-1 flex-col">
-                        <span className="text-sm font-medium">{i.name}</span>
-                        <span className="text-xs break-all text-muted-foreground">
-                          {h?.detail ?? i.hint}
-                          {h && (
-                            <span className={cn("block", stale && "text-warn")}>
-                              {onUse ? "最近一次" : "最後確認"}{" "}
-                              {ago(h.checked_at)}
-                              {stale &&
-                                "，每小時會自動確認；可按「檢查連線」立即更新"}
-                            </span>
-                          )}
-                        </span>
-                      </span>
-                      <Badge
-                        variant={
-                          h
-                            ? stale
-                              ? "warn"
-                              : h.ok
-                                ? "good"
-                                : "danger"
-                            : "secondary"
-                        }
-                      >
-                        {disabled
-                          ? "未啟用"
-                          : h
-                            ? stale
-                              ? "待確認"
-                              : h.ok
-                                ? "正常"
-                                : "需處理"
-                            : // 使用時才更新的項目沒有紀錄，代表還沒用到，不是漏了檢查。
-                              onUse
-                              ? "尚無紀錄"
-                              : "未檢查"}
-                      </Badge>
-                    </li>
-                  );
-                })}
+              {!allServicesOpen &&
+                serviceRows
+                  .filter((entry) => entry.action)
+                  .map((entry) => entry.row)}
             </ul>
+            {!allServicesOpen && !serviceRows.some((entry) => entry.action) && (
+              <p className="text-sm">目前沒有需要處理的服務。</p>
+            )}
+            <details
+              className="mt-3 text-sm"
+              onToggle={(e) => setAllServicesOpen(e.currentTarget.open)}
+            >
+              <summary className="cursor-pointer">全部服務</summary>
+              <ul>{serviceRows.map((entry) => entry.row)}</ul>
+            </details>
             <details className="mt-3 text-sm">
               <summary className="cursor-pointer text-muted-foreground">
                 Webhook 網址

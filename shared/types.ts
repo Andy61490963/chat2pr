@@ -279,20 +279,7 @@ export interface Suggestion {
   summary: string;
   acceptance: string[];
 }
-export const statusLabels: Record<TaskStatus, string> = {
-  awaiting_approval: "待審核",
-  queued: "待執行",
-  running: "開發中",
-  reviewing: "驗證中",
-  ready: "待合併",
-  failed: "需要處理",
-  rejected: "已拒絕",
-  cancelled: "已取消",
-  budget_wait: "等待額度",
-  merged: "已合併",
-  answered: "已回覆",
-  closed: "已關閉",
-};
+export { statusLabels } from "./status-glossary.js";
 /**
  * /api/state 的 notificationFailures：重試 3 次仍送不出去、還沒過期的私訊與群組通知，
  * 以及重送時會標成「已過期，未補送」略過的通知數。

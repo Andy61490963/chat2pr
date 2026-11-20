@@ -466,7 +466,7 @@ export function StatCard({
   );
 }
 
-const steps = ["整理需求", "審核", "排程", "開發", "驗證", "待合併"];
+const steps = ["整理需求", "審核", "排程", "開發", "驗證", statusLabels.ready];
 const stepOf: Partial<Record<Task["status"], number>> = {
   awaiting_approval: 1,
   budget_wait: 2,
@@ -487,7 +487,7 @@ export function Stepper({
 }) {
   const at = stepOf[status];
   const labels = query
-    ? ["整理需求", "審核", "排程", "調查", "整理報告", "已回覆"]
+    ? ["整理需求", "審核", "排程", "調查", "整理報告", statusLabels.answered]
     : steps;
   if (at === undefined) return null;
   return (

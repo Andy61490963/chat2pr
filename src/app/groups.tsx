@@ -1,3 +1,4 @@
+import { groupLabels, groupStatus } from "../../shared/status-glossary.js";
 import { groupReplyStatus } from "../../shared/group-reply-status.js";
 import { useEffect, useState } from "react";
 import {
@@ -53,29 +54,33 @@ const memorySource: Record<Memory["source"], string> = {
 };
 
 export function GroupStatusBadge({
-  group: g,
+  group,
   state,
 }: {
   group: Group;
   state: State;
 }) {
-  return g.left_at ? (
-    <Badge variant="secondary">機器人已離開</Badge>
-  ) : !g.enabled ? (
-    <Badge variant="secondary">已停用</Badge>
-  ) : g.triage_failures >= 3 ? (
-    <Badge variant="danger" title={g.triage_error ?? ""}>
-      辨識失敗，已停止
-    </Badge>
-  ) : g.triage_error ? (
-    <Badge variant="warn" title={g.triage_error}>
-      辨識失敗
-    </Badge>
-  ) : usable(g, state) ? (
-    <Badge variant="good">接收需求中</Badge>
-  ) : (
-    <Badge variant="warn" title={noProjectHint}>
-      沒有可用專案
+  const status = groupStatus(group, usable(group, state));
+  const variant = {
+    left: "secondary",
+    disabled: "secondary",
+    stopped: "danger",
+    error: "warn",
+    ready: "good",
+    unbound: "warn",
+  } as const;
+  return (
+    <Badge
+      variant={variant[status]}
+      title={
+        status === "unbound"
+          ? noProjectHint
+          : status === "stopped" || status === "error"
+            ? (group.triage_error ?? undefined)
+            : undefined
+      }
+    >
+      {groupLabels[status]}
     </Badge>
   );
 }
@@ -242,27 +247,21 @@ export function GroupsView({
   const present = state.groups.filter((g) => !g.left_at);
   const gone = state.groups.length - present.length;
   const groups = [...present, ...state.groups.filter((g) => g.left_at)];
-  const stuck = present.filter((g) => g.enabled && !usable(g, state)).length;
-  const halted = present.filter(
-    (g) => g.enabled && g.triage_failures >= 3,
-  ).length;
+  const states = present.map((g) => groupStatus(g, usable(g, state)));
+  const stuck = states.filter((status) => status === "unbound").length;
+  const halted = states.filter((status) => status === "stopped").length;
   return (
     <div className="flex flex-col gap-4">
       <p className="text-sm text-muted-foreground">
         共 {present.length} 個群組，
         {
-          present.filter(
-            (g) =>
-              g.enabled &&
-              !g.triage_error &&
-              g.triage_failures < 3 &&
-              usable(g, state),
-          ).length
+          present.filter((g) => groupStatus(g, usable(g, state)) === "ready")
+            .length
         }{" "}
-        個接收需求中
-        {stuck > 0 && `，${stuck} 個沒有可用專案`}
-        {halted > 0 && `，${halted} 個辨識失敗，已停止`}
-        {gone > 0 && `；另有 ${gone} 個機器人已離開`}
+        個{groupLabels.ready}
+        {stuck > 0 && `，${stuck} 個${groupLabels.unbound}`}
+        {halted > 0 && `，${halted} 個${groupLabels.stopped}`}
+        {gone > 0 && `；另有 ${gone} 個${groupLabels.left}`}
       </p>
       <Card className="gap-0 py-0">
         <div className="hidden grid-cols-[minmax(0,1.6fr)_8rem_minmax(0,2fr)_5rem_7rem] gap-4 border-b px-5 py-2.5 text-xs text-muted-foreground md:grid">
@@ -469,10 +468,18 @@ function GroupCard({
         </Select>
         <p className="text-xs leading-relaxed text-muted-foreground">
           {triggerMode === "command"
-            ? "一般聊天只保存、不辨識。請以 /任務 開頭提出新需求；引用機器人的任務回答可直接追問。附圖時，先傳圖片，再引用該圖片輸入 /任務 與說明。"
-            : "AI 會辨識新訊息並略過閒聊；修改先確認專案，明確且有依據的查詢可自動執行。不希望自動辨識時請選指令模式。"}{" "}
-          切換只套用到之後的新訊息。
+            ? "你可以用 /任務 或引用機器人的回答提出需求。"
+            : "你儲存後，AI 會自動從新訊息辨識需求。"}
         </p>
+        <details className="text-xs text-muted-foreground">
+          <summary className="cursor-pointer">說明</summary>
+          <div className="mt-1">
+            {triggerMode === "command"
+              ? "一般聊天只保存、不辨識。請以 /任務 開頭提出新需求；引用機器人的任務回答可直接追問。附圖時，先傳圖片，再引用該圖片輸入 /任務 與說明。"
+              : "AI 會辨識新訊息並略過閒聊；修改先確認專案，明確且有依據的查詢可自動執行。不希望自動辨識時請選指令模式。"}{" "}
+            切換只套用到之後的新訊息。
+          </div>
+        </details>
       </div>
       <div className="grid gap-2">
         <p role="status" className="text-sm font-medium">

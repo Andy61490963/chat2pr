@@ -1,3 +1,4 @@
+import { statusLabels } from "../../shared/status-glossary.js";
 import { useEffect, useState } from "react";
 import { Search } from "lucide-react";
 import type { Task, TaskStatus } from "../../shared/types.js";
@@ -43,9 +44,9 @@ const filters: { id: string; label: string; statuses: TaskStatus[] | null }[] =
   [
     { id: "all", label: "全部", statuses: null },
     { id: "todo", label: "待處理", statuses: attention },
-    { id: "waiting", label: "等待額度", statuses: waiting },
+    { id: "waiting", label: statusLabels.budget_wait, statuses: waiting },
     { id: "moving", label: "進行中", statuses: moving },
-    { id: "ready", label: "待合併", statuses: ready },
+    { id: "ready", label: statusLabels.ready, statuses: ready },
     { id: "closed", label: "已結束", statuses: ended },
   ];
 const matcher = (statuses: TaskStatus[] | null) => (t: Task) =>
