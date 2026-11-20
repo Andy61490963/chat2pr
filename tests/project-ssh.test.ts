@@ -233,6 +233,8 @@ describe("agentflow-ssh", () => {
   it("命令列不含密碼；scp 以冒號開頭的路徑代表遠端", () => {
     const options = commonOptions(host, "/tmp/k", true);
     expect(options).toContain("StrictHostKeyChecking=yes");
+    // 只提供 ssh-rsa 的舊設備也要連得上（10.3.x 的機台實測如此）。
+    expect(options).toContain("HostKeyAlgorithms=+ssh-rsa");
     const ssh = sshArgs(host, options, undefined, ["dir", "C:\\logs"]);
     expect(ssh.slice(-4)).toEqual([
       "2222",
