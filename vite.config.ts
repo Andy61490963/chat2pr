@@ -21,6 +21,9 @@ export default defineConfig({
         demo: fileURLToPath(
           new URL("./docs/rag-flow-demo.html", import.meta.url),
         ),
+        flow: fileURLToPath(
+          new URL("./docs/architecture-flow.html", import.meta.url),
+        ),
       },
     },
   },
