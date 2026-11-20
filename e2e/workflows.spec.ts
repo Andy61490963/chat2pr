@@ -1,7 +1,7 @@
 import { expect, test } from "@playwright/test";
 import type { Detail } from "../src/app/shared";
 import type { Task } from "../shared/types";
-import { detail, mockDashboard, task } from "./dashboard-fixture";
+import { defaultState, detail, mockDashboard, task } from "./dashboard-fixture";
 
 test("任務詳情顯示排隊原因與失敗後的處理建議", async ({ page }) => {
   const queued: Task = { ...task, title: "整理範例清單", status: "queued" };
@@ -400,4 +400,21 @@ test("LINE 的專案連結直接開啟對應專案與分頁", async ({ page }) =
       .getByRole("dialog", { name: "測試專案" })
       .getByRole("tab", { name: /環境驗證/ }),
   ).toHaveAttribute("aria-selected", "true");
+});
+
+test("群組總開關關閉時能直接前往設定查看實際回覆數", async ({ page }) => {
+  await mockDashboard(page, {
+    state: { settings: { ...defaultState.settings, group_replies: false } },
+  });
+  await page.goto("/groups");
+  await page.getByRole("button", { name: /測試群組/ }).click();
+  const status = page
+    .getByRole("status")
+    .filter({ hasText: "設定頁的總開關已關閉" });
+  await expect(status).toBeVisible();
+  await status.getByRole("button", { name: "前往設定" }).click();
+  await expect(page).toHaveURL(/\/settings$/);
+  await expect(page.locator("#group-replies-hint")).toContainText(
+    "0 個群組會回覆",
+  );
 });

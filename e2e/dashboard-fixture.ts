@@ -84,7 +84,7 @@ export const detail: Detail = {
   thread: { before: [], after: [] },
 };
 
-const defaultState: State = {
+export const defaultState: State = {
   settings: {
     rag_enabled: false,
     paused: false,
