@@ -43,6 +43,13 @@ test("任務詳情顯示排隊原因與失敗後的處理建議", async ({ page 
     failedDrawer.getByText(/建議：請到專案頁補上測試指令/),
   ).toBeVisible();
   await expect(
+    failedDrawer.getByRole("button", { name: "重試" }),
+  ).toBeVisible();
+  await expect(
+    failedDrawer.getByRole("button", { name: "結束任務" }),
+  ).toBeVisible();
+  // 設定類失敗先去修設定，重試再試一次只會再失敗，所以前往設定是主按鈕。
+  await expect(
     failedDrawer.getByRole("button", { name: "前往專案設定" }),
   ).toBeVisible();
 });
