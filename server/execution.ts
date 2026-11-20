@@ -1524,13 +1524,20 @@ export class Execution {
           // 草擬定期檢查：從回覆取出檢查定義，建立待核准的檢查並試跑一次。
           if (task.check_draft) answer = await this.draftCheck(task, answer);
           await this.github.base(project);
-          const relatedLine = relatedSources.length
-            ? `\n一併查詢：${relatedSources.map((r) => `${r.name}（${r.repo}，${r.branch}，${r.commit.slice(0, 8)}）`).join("、")}`
-            : "";
-          const followLine = thread.length
-            ? `\n延續：〈${thread[thread.length - 1].title}〉`
-            : "";
-          answer = `查詢專案：${project.name}（${project.repo}）\n基底分支：${project.base_branch}；查詢版本：${task.base_sha}${relatedLine}${followLine}\n\n${answer}`;
+          const querySources = [
+            {
+              name: project.name,
+              repo: project.repo,
+              branch: project.base_branch,
+              commit: task.base_sha,
+            },
+            ...relatedSources.map(({ name, repo, branch, commit }) => ({
+              name,
+              repo,
+              branch,
+              commit,
+            })),
+          ];
           if (attachments.warnings.length)
             answer += "\n\n補充圖片說明：" + attachments.warnings.join("\n");
           await assertCurrent();
@@ -1585,7 +1592,7 @@ export class Execution {
               throw new AppError(409, "報告圖片來源已失效，已停止發布");
             await c.query("UPDATE runs SET result=$2 WHERE id=$1", [
               runId,
-              JSON.stringify({ answer }),
+              JSON.stringify({ answer, querySources }),
             ]);
             return true;
           });
@@ -1596,9 +1603,7 @@ export class Execution {
               .commentIssue?.(
                 project,
                 task.issue_number,
-                `## 調查結果
-
-${reportForGitHub(answer, `${config().publicUrl}/tasks?task=${task.id}`)}
+                `${reportForGitHub(answer, `${config().publicUrl}/tasks?task=${task.id}`)}
 
 由 chat2pr 查詢任務產生。`,
               )

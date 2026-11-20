@@ -1,3 +1,4 @@
+import { splitQueryAnswer } from "../shared/query-answer.js";
 import { z } from "zod";
 import { Database, type DbClient } from "./db.js";
 import { secrets, config } from "./config.js";
@@ -442,7 +443,10 @@ export class Line {
               if (saved.rowCount && replyOn)
                 acks.push({
                   token: e.replyToken!,
-                  messages: lineChunks(full.answer, REPLY_LIMIT),
+                  messages: lineChunks(
+                    splitQueryAnswer(full.answer).body,
+                    REPLY_LIMIT,
+                  ),
                 });
               return;
             }
@@ -869,7 +873,13 @@ export class Line {
                 // 群組補問附常見答案按鈕（quickReply）；管理者私訊不帶按鈕。
                 messages: [
                   n.group_id
-                    ? lineText({ text: n.text, quick: n.quick_replies })
+                    ? lineText({
+                        text:
+                          n.kind === "group_answered"
+                            ? splitQueryAnswer(n.text).body
+                            : n.text,
+                        quick: n.quick_replies,
+                      })
                     : {
                         type: "text",
                         text: `${n.text}\n${config().publicUrl}/${n.task_id ? `tasks?task=${n.task_id}` : (notificationView(n.kind) ?? "")}`,
