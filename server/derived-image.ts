@@ -34,17 +34,40 @@ export function derivedRepository(instance: string) {
     ? "line-agentflow-derived"
     : `agentflow-${instance}-derived`;
 }
-/** 以專案、分支、安裝計畫與基底映像為鍵；任一項改變就建立新的衍生映像。 */
+/** 以專案、分支、要安裝的套件與基底映像為鍵；任一項改變就建立新的衍生映像。 */
 export function derivedKey(
   instance: string,
   projectId: string,
   branch: string,
-  plan: string,
+  packages: string,
   baseId: string,
 ) {
   return sha256(
-    JSON.stringify(["derived-v1", instance, projectId, branch, plan, baseId]),
+    JSON.stringify([
+      "derived-v2",
+      instance,
+      projectId,
+      branch,
+      packages,
+      baseId,
+    ]),
   ).slice(0, 32);
+}
+
+/**
+ * 衍生映像的套件識別：只看名稱、來源與版本，不看安裝指令的寫法。
+ * 每次重新驗證 AI 都會重寫一次安裝計畫，指令的措辭（curl 參數、先後順序）幾乎每次不同；
+ * 以整份指令為鍵時同一組套件會一直重建新映像（WeYuJetOpcUaLoader 一天內建了 8 個）。
+ * 建置失敗不會留下映像，所以只有真正裝好的才會被重用。
+ */
+export function packageIdentity(items: readonly InstallItem[]) {
+  return sha256(
+    JSON.stringify(
+      canonicalItems(items)
+        .map((i) => [i.name.toLowerCase(), i.source, i.version])
+        .sort((a, b) => a.join("\0").localeCompare(b.join("\0"))),
+    ),
+  );
 }
 
 const quote = (value: string) => `'${value.replace(/'/g, `'\\''`)}'`;
@@ -164,7 +187,7 @@ export async function derivedImage(
     c.instance,
     request.projectId,
     request.branch,
-    plan,
+    packageIdentity(request.items),
     baseId,
   );
   const tag = `${derivedRepository(c.instance)}:${key}`;

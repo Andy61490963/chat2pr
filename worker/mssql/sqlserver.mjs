@@ -48,7 +48,8 @@ export function rewriteLocalDb(text, password) {
   const databases = new Set();
   let count = 0,
     out = "",
-    cursor = 0;
+    cursor = 0,
+    serverOnly = 0;
   for (const match of text.matchAll(localDb())) {
     if (match.index < cursor) continue;
     let start = match.index;
@@ -56,6 +57,15 @@ export function rewriteLocalDb(text, password) {
     let end = match.index + match[0].length;
     while (end < text.length && !BOUNDARY.test(text[end])) end++;
     let segment = text.slice(start, end);
+    // 字串只有伺服器名稱（例如 SqlConnectionStringBuilder 的 DataSource = @"(localdb)\MSSQLLocalDB"）：
+    // 只換成伺服器位址；整串連線字串塞進 DataSource 會變成無效的伺服器名稱（SqlClient error 25）。
+    if (segment.trim() === match[0]) {
+      count++;
+      serverOnly++;
+      out += text.slice(cursor, start) + segment.replace(match[0], SERVER);
+      cursor = end;
+      continue;
+    }
     // AttachDbFilename 指向 Windows 上的 .mdf，容器內無法附加；改用同名資料庫並事先建立。
     const attach = /AttachDbFilename\s*=\s*([^;]*);?/i.exec(segment);
     let attachedName = "";
@@ -92,7 +102,34 @@ export function rewriteLocalDb(text, password) {
     cursor = end;
   }
   if (!count) return { text, count: 0, databases: [] };
-  return { text: out + text.slice(cursor), count, databases: [...databases] };
+  let result = out + text.slice(cursor);
+  if (serverOnly) result = builderCredentials(result, password);
+  return { text: result, count, databases: [...databases] };
+}
+
+/**
+ * SqlConnectionStringBuilder 以屬性指定 Windows 整合驗證（IntegratedSecurity = true）時，
+ * 改成 sa 帳號登入；Linux 容器沒有 Windows 驗證。只在同一個檔案有「只寫伺服器名稱」的 LocalDB 時呼叫。
+ * 檔案沒有設定 TrustServerCertificate 時一併信任容器內 SQL Server 的自簽憑證
+ * （不重複設定：物件初始設定式重複指定同一屬性會編譯失敗）。
+ */
+export function builderCredentials(text, password) {
+  const trust = /\bTrustServerCertificate\s*=/.test(text);
+  // 陳述式：builder.IntegratedSecurity = true;
+  let out = text.replace(
+    /\b([A-Za-z_][A-Za-z0-9_.]*)\.IntegratedSecurity\s*=\s*true\s*;/g,
+    (_m, target) =>
+      `${target}.IntegratedSecurity = false; ${target}.UserID = "sa"; ${target}.Password = "${password}";` +
+      (trust ? "" : ` ${target}.TrustServerCertificate = true;`),
+  );
+  // 物件初始設定式：new SqlConnectionStringBuilder { ..., IntegratedSecurity = true, ... }
+  out = out.replace(
+    /(^|[{,\s])IntegratedSecurity\s*=\s*true(?=\s*[,}\r\n])/g,
+    (_m, before) =>
+      `${before}IntegratedSecurity = false, UserID = "sa", Password = "${password}"` +
+      (trust ? "" : ", TrustServerCertificate = true"),
+  );
+  return out;
 }
 
 /** 找出工作目錄中含 LocalDB 連線的文字檔（不進入建置產物、套件與 Git 目錄，不跟隨符號連結）。 */

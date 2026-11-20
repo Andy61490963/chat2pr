@@ -10,7 +10,11 @@ import {
   type InstallItem,
 } from "../shared/install-plan.js";
 import { planHash, reviewInstallPlan } from "../server/install-review.js";
-import { derivedKey, installScript } from "../server/derived-image.js";
+import {
+  derivedKey,
+  installScript,
+  packageIdentity,
+} from "../server/derived-image.js";
 import { prReport } from "../server/pr-body.js";
 
 const sqlcmd: InstallItem = {
@@ -295,6 +299,40 @@ describe("衍生映像的鍵與指令稿", () => {
       ),
     ])
       expect(other).not.toBe(base);
+  });
+  it("同一組套件換了指令寫法或用途說明仍重用同一個映像；名稱、來源、版本改變才換", () => {
+    const pwsh: InstallItem = {
+      name: "powershell",
+      source: "https://packages.microsoft.com/debian/12/prod",
+      version: "",
+      purpose: "執行 CI 的檢查腳本",
+      commands: ["apt-get update", "apt-get install -y curl gpg"],
+    };
+    const same = packageIdentity([pwsh, sqlcmd]);
+    // 重新驗證時 AI 重寫的計畫：指令措辭、用途、名稱大小寫與順序都不同。
+    expect(
+      packageIdentity([
+        { ...sqlcmd, purpose: "另一種說法" },
+        {
+          ...pwsh,
+          name: "PowerShell",
+          purpose: "提供 pwsh",
+          commands: [
+            "apt-get update",
+            "apt-get install -y ca-certificates curl gpg",
+          ],
+        },
+      ]),
+    ).toBe(same);
+    for (const other of [
+      packageIdentity([pwsh]),
+      packageIdentity([{ ...pwsh, version: "7.4" }, sqlcmd]),
+      packageIdentity([
+        { ...pwsh, source: "https://example.test/apt" },
+        sqlcmd,
+      ]),
+    ])
+      expect(other).not.toBe(same);
   });
   it("代理只放在指令稿；apt 改用 https 並在結束時移除代理設定", () => {
     const script = installScript([sqlcmd], "http://egress:3128");

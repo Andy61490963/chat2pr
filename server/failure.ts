@@ -43,6 +43,22 @@ interface Rule {
   validation?: string;
   /** 訊息本身就是整理過的說明（審查意見、上限說明），整段保留而不是只挑錯誤行。 */
   keep?: boolean;
+  /** 從堆疊挑出專案原始碼的位置放在錯誤重點最前面（堆疊行本身不放進摘要）。 */
+  locate?: boolean;
+}
+
+/**
+ * 堆疊中第一個專案原始碼的位置（.NET 的「in /workspace/路徑:line N」），排除建置產物。
+ * 只回傳工作目錄內的相對路徑與行號，不含其他堆疊內容。
+ */
+export function projectSourceLine(output: string): string | null {
+  for (const m of output.matchAll(
+    /\bin \/workspace\/([^\s:]+\.(?:cs|vb|fs)):line (\d+)/g,
+  )) {
+    if (/(^|\/)(?:obj|bin)\//.test(m[1])) continue;
+    return `${m[1]} 第 ${m[2]} 行`;
+  }
+  return null;
 }
 
 /** 失敗發生在哪裡：任務執行，或專案頁的環境驗證。 */
@@ -68,6 +84,22 @@ const rules: Rule[] = [
     action: "請管理者到看板專案頁按「驗證環境」，確認工作映像與測試設定",
     group: "測試環境沒有啟動成功，請管理者處理專案的測試環境。",
     keep: true,
+  },
+  // 測試在 Linux 容器仍連 LocalDB：系統的導向只能改寫檔案裡的連線字串，程式碼另外組出的 LocalDB 連線改不到。
+  // 要排在暫時性規則前：SqlClient 的訊息含「network-related」，不能當成網路問題重試。
+  {
+    category: "project",
+    test: matches(
+      /error: 25 - Connection string is not valid|LocalDB is not supported on this platform/i,
+    ),
+    plain:
+      "測試程式在容器裡仍連到 LocalDB（只有 Windows 才有），系統沒辦法自動改成容器內的 SQL Server",
+    action:
+      "請讓測試在環境變數 AGENTFLOW_SQLSERVER_CONNECTION 有值時改用它（容器內 SQL Server 的連線字串），沒有時才用 LocalDB；錯誤重點的「位置」就是要改的地方，改好後重新驗證專案再重試",
+    validation:
+      "修改錯誤重點「位置」指出的測試程式：有環境變數 AGENTFLOW_SQLSERVER_CONNECTION 時改用它連容器內的 SQL Server，沒有時才用 LocalDB；合併後按「驗證環境」",
+    group: "專案的測試寫死只能在 Windows 使用的資料庫，請管理者調整測試設定。",
+    locate: true,
   },
   // 系統套件（#18）：要排在 403、安裝失敗等通用規則前，代理擋下來源時輸出裡也會有 403。
   {
@@ -342,13 +374,15 @@ export function classifyFailure(
   const lines = body
     .replace(/^\s*[\p{Script=Han}A-Za-z ]{1,16}?(?:失敗|未通過驗證)：/u, "")
     .trim();
-  const detail = rule.keep
+  let detail = rule.keep
     ? clip(stripInternals(lines), 900, "…（完整內容見執行紀錄）")
     : keyErrorLines(
         lines,
         rule.category === "project" || rule.category === "environment" ? 4 : 2,
         900,
       );
+  const where = rule.locate ? projectSourceLine(body) : null;
+  if (where) detail = `位置：${where}\n${detail}`;
   return {
     category: rule.category,
     plain: rule.plain,
