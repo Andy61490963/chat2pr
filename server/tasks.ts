@@ -460,14 +460,15 @@ export class Tasks {
     const rows = await this.db.query<{
       id: string;
       kind: string;
-      text: string;
+      text: string | null;
       sent_at: string | null;
       has_message_id: boolean;
       attempts: number;
       last_error: string | null;
       created_at: string;
     }>(
-      "SELECT id,kind,left(text,4500) AS text,sent_at,sent_message_id IS NOT NULL AS has_message_id,attempts,last_error,created_at FROM notifications WHERE task_id=$1 AND group_id IS NOT NULL ORDER BY created_at,id",
+      // 原文與聊天室同樣受保存期限限制：到期後只回狀態，不回文字，也就不能複製。
+      "SELECT id,kind,CASE WHEN created_at>message_retention_cutoff() THEN left(text,4500) END AS text,sent_at,sent_message_id IS NOT NULL AS has_message_id,attempts,last_error,created_at FROM notifications WHERE task_id=$1 AND group_id IS NOT NULL ORDER BY created_at,id",
       [id],
     );
     if (!rows.length) return [];

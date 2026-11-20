@@ -743,7 +743,7 @@ export class Line {
         message?: unknown;
       } | null;
       if (isMonthlyLimit(response.status, body?.message)) {
-        await markQuotaExhausted(this.db);
+        await markQuotaExhausted(this.db, null, access);
         throw new AppError(409, quotaTestBlocked);
       }
       if (response.status === 429)
@@ -956,7 +956,7 @@ export class Line {
               [n.id, quotaExhaustedDetail],
             );
             // 保留用量：剛查到的、本地累加的，都沒有就沿用原本說明裡的。
-            await markQuotaExhausted(this.db, usage);
+            await markQuotaExhausted(this.db, usage, access);
             usageChanged = false;
             break;
           }
