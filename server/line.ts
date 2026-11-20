@@ -1,3 +1,4 @@
+import { notificationProject } from "./notification-project.js";
 import { z } from "zod";
 import { Database, type DbClient } from "./db.js";
 import { secrets, config } from "./config.js";
@@ -5,7 +6,7 @@ import { hash } from "./auth.js";
 import { AppError, containsCredential, redact } from "./policy.js";
 import { fetchLine } from "./line-http.js";
 import { isProgressCommand, isTaskCommand } from "../shared/chat.js";
-import { notificationView } from "../shared/notifications.js";
+import { notificationPath } from "../shared/notifications.js";
 import {
   commandAck,
   disabledAck,
@@ -814,6 +815,7 @@ export class Line {
       // 先前因額度不夠而略過、這輪要續送的群組：過時的不補送（比照解除封鎖前的 expireStaleNotifications）。
       await expireQuotaHeld(c, [...short]);
       type Pending = {
+        project_id?: string | null;
         id: string;
         task_id: string | null;
         group_id: string | null;
@@ -825,7 +827,7 @@ export class Line {
       // 私訊與群組分開取：排在前面的群組通知（額度不夠、一直被略過）不會卡住只要 1 則額度的管理者私訊。
       const direct = (
         await c.query<Pending>(
-          "SELECT * FROM notifications WHERE sent_at IS NULL AND attempts<3 AND group_id IS NULL AND $1::text IS NOT NULL ORDER BY created_at LIMIT 10 FOR UPDATE SKIP LOCKED",
+          `SELECT n.*,${notificationProject} AS project_id FROM notifications n WHERE sent_at IS NULL AND attempts<3 AND group_id IS NULL AND $1::text IS NOT NULL ORDER BY created_at LIMIT 10 FOR UPDATE OF n SKIP LOCKED`,
           [s.admin_line_id ?? null],
         )
       ).rows;
@@ -872,7 +874,7 @@ export class Line {
                     ? lineText({ text: n.text, quick: n.quick_replies })
                     : {
                         type: "text",
-                        text: `${n.text}\n${config().publicUrl}/${n.task_id ? `tasks?task=${n.task_id}` : (notificationView(n.kind) ?? "")}`,
+                        text: `${n.text}\n${config().publicUrl}/${notificationPath(n)}`,
                       },
                 ],
               }),

@@ -108,7 +108,7 @@ export async function requestProjectInput(
     await c.query(
       "INSERT INTO notifications(kind,dedupe_key,text) VALUES('project_input',$1,$2) ON CONFLICT DO NOTHING",
       [
-        `project-input:${request.id}`,
+        `project-input:${project.id}:${request.id}`,
         `專案「${project.name}」（${project.repo}）需要你補充資訊。\n${request.questions.map((q, i) => `${i + 1}. ${q.question.slice(0, 300)}`).join("\n")}\n請到看板的專案資訊回覆完整問題；登入或驗證碼請在服務本身完成。`,
       ],
     );

@@ -170,6 +170,7 @@ test("專案的完全存取要先確認才開啟，取消不送出", async ({ pa
   });
   await page.goto("/projects");
   await page.getByText("測試專案", { exact: true }).first().click();
+  await page.getByRole("tab", { name: "連線與權限" }).click();
   const section = page.getByRole("region", { name: "完全存取" });
   await expect(section.getByText("關閉", { exact: true })).toBeVisible();
   await section.getByRole("button", { name: "開啟完全存取" }).click();
@@ -230,6 +231,7 @@ test("用白話描述資料庫連線，AI 整理後填進欄位並列出連不�
   );
   await page.goto("/projects");
   await page.getByText("測試專案", { exact: true }).first().click();
+  await page.getByRole("tab", { name: "連線與權限" }).click();
   const describe = page.getByLabel("用白話描述連線");
   await describe.fill(
     "MES 測試庫在 100.64.0.10，帳號 mes_reader 密碼 fictional-pass",
@@ -278,6 +280,7 @@ test("登記 SSH 主機：密碼只送出不顯示，測試登入顯示結果", 
   );
   await page.goto("/projects");
   await page.getByText("測試專案", { exact: true }).first().click();
+  await page.getByRole("tab", { name: "連線與權限" }).click();
   const section = page.getByRole("region", { name: "SSH 主機" });
   await expect(section).toContainText("沒有開啟完全存取");
   await section.getByRole("button", { name: "新增 SSH 主機" }).click();
@@ -307,4 +310,46 @@ test("登記 SSH 主機：密碼只送出不顯示，測試登入顯示結果", 
   await expect(section.getByText("fictional-ssh-pass")).toHaveCount(0);
   await section.getByRole("button", { name: "測試登入" }).click();
   await expect(section.getByRole("status")).toHaveText("登入成功");
+});
+
+test("專案補問通知直接開啟環境驗證，方向鍵可切換其他分頁", async ({ page }) => {
+  await mockDashboard(page, {
+    state: {
+      alerts: [
+        {
+          id: "notice-input",
+          task_id: null,
+          project_id: "project-demo",
+          kind: "project_input",
+          title: null,
+          text: "請補充範例資訊",
+          created_at: "2026-01-01T08:00:00Z",
+        },
+      ],
+    },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /^通知(?:，|$)/ }).click();
+  await page.getByRole("menuitem", { name: /請補充範例資訊/ }).click();
+  const dialog = page.getByRole("dialog", { name: "測試專案" });
+  const environment = dialog.getByRole("tab", { name: /環境驗證/ });
+  await expect(environment).toHaveAttribute("aria-selected", "true");
+  await environment.focus();
+  for (const name of ["連線與權限", "記憶", "概況"]) {
+    await page.keyboard.press("ArrowRight");
+    await expect(dialog.getByRole("tab", { name })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  }
+});
+
+test("LINE 的專案連結直接開啟對應專案與分頁", async ({ page }) => {
+  await mockDashboard(page);
+  await page.goto("/projects?project=project-demo&tab=environment");
+  await expect(
+    page
+      .getByRole("dialog", { name: "測試專案" })
+      .getByRole("tab", { name: /環境驗證/ }),
+  ).toHaveAttribute("aria-selected", "true");
 });
