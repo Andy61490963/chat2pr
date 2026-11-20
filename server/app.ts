@@ -1050,6 +1050,28 @@ export async function buildApp(
     if (!saved) throw new AppError(409, "專案設定已更新，請重新整理");
     return saved;
   });
+  // 完全存取：工作容器每個階段都可連所有網路，並取得專案登記的資料庫連線（帳號權限照登記的帳號）。
+  app.put("/api/projects/:id/full-access", async (req) => {
+    const admin = await requireAdmin(db, req);
+    const id = z
+      .string()
+      .uuid()
+      .parse((req.params as { id: string }).id);
+    const { enabled } = z.object({ enabled: z.boolean() }).parse(req.body);
+    const project = await db.one<Project>(
+      "UPDATE projects SET full_access=$2 WHERE id=$1 RETURNING *",
+      [id, enabled],
+    );
+    if (!project) throw new AppError(404, "找不到專案");
+    await db.audit(
+      null,
+      "settings",
+      enabled
+        ? `管理者 ${admin.login} 開啟專案 ${project.name} 的完全存取：工作容器每個階段都可連公司內網、Tailscale 與網際網路，並以環境變數取得專案登記的資料庫連線（權限照登記的帳號）`
+        : `管理者 ${admin.login} 關閉專案 ${project.name} 的完全存取`,
+    );
+    return { id: project.id, full_access: project.full_access };
+  });
   app.post("/api/projects/:id/validate", async (req, reply) => {
     await requireAdmin(db, req);
     const id = z

@@ -26,7 +26,8 @@ import type { SchemaCapture } from "./sqlserver-schema.js";
 
 /**
  * 擁有者登記的專案資料庫連線與結構快照。
- * 連線機密加密後保存，只在呼叫主機執行器時解開；API、日誌、AI 提示詞與工作容器都拿不到。
+ * 連線機密加密後保存，只在呼叫主機執行器時解開；API、日誌與 AI 提示詞都拿不到。
+ * 工作容器只有在專案開啟「完全存取」時，才以環境變數取得連線（fullAccessConnection），輸出經 scrubber 遮蔽。
  * 這兩張表不進每日備份：還原後重新登記連線、重新擷取即可。
  */
 type Secret = {
@@ -279,6 +280,40 @@ export async function provideSnapshot(
   if (files.length)
     await call("environment-files", { runId, image, files }, 60000);
   return files.length > 0;
+}
+
+/**
+ * 完全存取的專案：把登記的資料庫連線交給工作容器。
+ * env 是容器環境變數；secrets 是要從輸出中遮蔽的值。經 SSH 跳板的連線容器內無法直接使用，不提供。
+ */
+export async function fullAccessConnection(db: Database, projectId: string) {
+  const row = await db.one<ConnectionRow>(
+    "SELECT * FROM project_connections WHERE project_id=$1",
+    [projectId],
+  );
+  if (!row || row.ssh_host)
+    return { env: [] as string[], secrets: [] as string[] };
+  const { password } = unseal(row.secret);
+  const connection = [
+    `Server=${row.host},${row.port}`,
+    `Database=${row.database_name}`,
+    `User ID=${row.username}`,
+    `Password=${password}`,
+    `Encrypt=${row.encrypt ? "True" : "False"}`,
+    `TrustServerCertificate=${row.trust_server_certificate ? "True" : "False"}`,
+  ].join(";");
+  return {
+    env: [
+      `AGENTFLOW_DB_ENGINE=${row.engine}`,
+      `AGENTFLOW_DB_HOST=${row.host}`,
+      `AGENTFLOW_DB_PORT=${row.port}`,
+      `AGENTFLOW_DB_NAME=${row.database_name}`,
+      `AGENTFLOW_DB_USER=${row.username}`,
+      `AGENTFLOW_DB_PASSWORD=${password}`,
+      `AGENTFLOW_DB_CONNECTION=${connection}`,
+    ],
+    secrets: [password, connection],
+  };
 }
 
 export function captureInput(row: ConnectionRow): CaptureInput {

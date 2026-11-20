@@ -491,6 +491,8 @@ ALTER TABLE projects ADD COLUMN IF NOT EXISTS repo_missing_at timestamptz;
 -- 儲存庫搬家或改名時靠 GitHub 的固定編號找回來；找不到時先記下原本的啟用狀態、群組綁定與交回人工的任務，接回後自動復原。
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS repo_id bigint;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS repo_missing_state jsonb;
+-- 完全存取：工作容器每個階段都可連所有網路（含公司內網與 Tailscale），並以環境變數取得專案登記的資料庫連線。管理者逐專案開啟。
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS full_access boolean NOT NULL DEFAULT false;
 
 CREATE TABLE IF NOT EXISTS query_report_images (
  id uuid PRIMARY KEY,task_id uuid NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,

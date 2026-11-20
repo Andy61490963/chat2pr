@@ -84,7 +84,9 @@ export class ContainerDeadline {
   }
 }
 /** 執行器接受的最低工作映像版本；與 worker/Dockerfile 的 io.agentflow.worker-rev 同步。 */
-export const WORKER_REV = "2026-11-13.2";
+export const WORKER_REV = "2026-11-20.1";
+/** 完全存取時唯一允許傳進工作容器的環境變數：專案登記的資料庫連線。 */
+export const FULL_ACCESS_ENV = /^AGENTFLOW_DB_[A-Z]+=/;
 export const containerPolicy = (
   volume: string,
   network: string,
@@ -426,6 +428,8 @@ export class Containers {
       nugetFeed?: boolean;
       /** 收集差異時排除的建置產物規則（已套用專案增減）。 */
       collectExclude?: string[];
+      /** 完全存取的專案：資料庫連線環境變數（只接受 AGENTFLOW_DB_*）。 */
+      env?: string[];
     },
   ) {
     const volume = this.volume(runId);
@@ -482,6 +486,11 @@ export class Containers {
         env.push(`RestoreAdditionalProjectSources=${nugetFeedPath}`);
       const environment = mount && this.provided.has(runId);
       if (environment) env.push(`AGENTFLOW_ENV_DIR=${environmentPath}`);
+      for (const item of options?.env ?? []) {
+        if (!FULL_ACCESS_ENV.test(item))
+          throw new AppError(400, "不允許的環境變數");
+        env.push(item);
+      }
       if (options?.collectExclude?.length)
         env.push(
           `AGENTFLOW_COLLECT_EXCLUDE=${JSON.stringify(options.collectExclude)}`,

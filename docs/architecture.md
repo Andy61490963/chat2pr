@@ -208,6 +208,16 @@ flowchart LR
 
 除了下面的「系統套件安裝」，所有工作容器以非 root、唯讀根目錄、移除全部 Linux capabilities 執行，拿不到主訂閱登入、GitHub 寫入憑證、LINE 機密、資料庫連線機密、Docker socket 或主機目錄。每個容器最多 512 個程序（容器內的 SQL Server 本身就需要兩百多個）。
 
+### 專案的完全存取
+
+管理者可以在專案詳情逐專案開啟「完全存取」（預設關閉，開啟要確認，開關都寫進活動紀錄），讓任務像在這台伺服器上開發一樣：
+
+- 安裝、開發、測試、審查每個階段都接上 `line-agentflow_open`，可連公司內網、Tailscale 與網際網路；安裝不再經下載來源白名單。這不改設定頁的全域容器網路，只影響這個專案。
+- 專案登記的資料庫連線以環境變數交給工作容器與 Codex 執行的命令：`AGENTFLOW_DB_CONNECTION`（ADO.NET 連線字串）、`AGENTFLOW_DB_HOST`、`AGENTFLOW_DB_PORT`、`AGENTFLOW_DB_NAME`、`AGENTFLOW_DB_USER`、`AGENTFLOW_DB_PASSWORD`。權限照登記的帳號，chat2pr 不另外限制；需要唯讀時請登記唯讀帳號。經 SSH 跳板的連線不提供。收集差異的階段不帶這些變數。
+- 執行器只接受 `AGENTFLOW_DB_*` 這一類環境變數；仍是非 root、根目錄唯讀、移除所有能力、沒有 Docker socket 的容器，拿不到 chat2pr 自己的機密（GitHub App 金鑰、LINE 權杖、`.local/secrets.json`）。修改仍要人核准，PR 仍由人合併。
+- 執行紀錄（含執行中輪詢的事件）、查詢答案、錯誤訊息與驗證結果中的資料庫密碼與連線字串一律換成「[已遮蔽資料庫密碼]」；變更內容含有密碼或連線字串時停止發布。
+- 這台伺服器本身連不到的網路（例如沒有 VPN 的廠內網段），開了也連不到；容器內不能自行建立 VPN。需要時讓伺服器本身連上（VPN 用戶端或 Tailscale subnet router）。
+
 ### 下載來源白名單
 
 `egress`（Squid）只放行 `/etc/squid/allowed-domains.txt` 內的網域，而且只接受 TLS（443 埠的 CONNECT）；私有網段、主機與清單外的網域一律拒絕。映像內建預設清單（`infra/egress/allowed-domains.txt`，與 `shared/install-plan.ts` 的 `DEFAULT_EGRESS_DOMAINS` 相同）：npm、Yarn、PyPI、NuGet、Debian（`deb.debian.org`、`security.debian.org`）、Ubuntu、`packages.microsoft.com`，以及 GitHub Releases 的下載網域（`github.com`、`objects.githubusercontent.com`、`release-assets.githubusercontent.com`）。
