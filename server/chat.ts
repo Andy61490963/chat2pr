@@ -26,6 +26,8 @@ async function botMessages(
   groupId: string,
   before: string | null,
   oldest: string | null,
+  /** 機器人訊息自己的游標：只取比這則通知舊的（同時間以 id 排序），用於超過 botLimit 的接續頁。 */
+  botBefore: string | null = null,
 ): Promise<BotMessage[]> {
   const rows = await db.query<{
     id: string;
@@ -46,8 +48,9 @@ async function botMessages(
      WHERE n.group_id=$1
        AND ($2::text IS NULL OR n.created_at<(SELECT received_at FROM messages WHERE id=$2 AND group_id=$1))
        AND ($3::text IS NULL OR n.created_at>=(SELECT received_at FROM messages WHERE id=$3 AND group_id=$1))
+       AND ($4::uuid IS NULL OR (n.created_at,n.id)<(SELECT created_at,id FROM notifications WHERE id=$4 AND group_id=$1))
      ORDER BY n.created_at DESC,n.id DESC LIMIT ${botLimit + 1}`,
-    [groupId, before, oldest],
+    [groupId, before, oldest, botBefore],
   );
   // 額度用完期間排入的通知 last_error 是空的，要靠推播暫停狀態才說得出「額度用完」。
   const quotaBlocked = rows.length ? await lineQuotaBlocked(db) : false;
@@ -63,6 +66,13 @@ async function botMessages(
   }));
 }
 
+/**
+ * 同一段時間機器人訊息超過 botLimit、又沒有成員訊息可縮時，下一頁先接著載入較舊的機器人訊息。
+ * 游標格式 b:<本頁最舊一則通知 id>:<成員訊息下限（本頁的 next，最後一頁為空）>；
+ * 看板把 next 當成不透明字串原樣帶回，舊版看板也能用。
+ */
+const botCursor = /^b:([0-9a-f-]{36}):(.*)$/;
+
 export function registerChat(app: FastifyInstance, db: Database) {
   app.get("/api/groups/:id/messages", async (req, reply): Promise<ChatPage> => {
     reply.header("Cache-Control", "no-store");
@@ -75,6 +85,31 @@ export function registerChat(app: FastifyInstance, db: Database) {
       .parse(req.query);
     if (!(await db.one("SELECT 1 FROM groups WHERE id=$1", [id])))
       throw new AppError(404, "找不到群組");
+    const cursor = before ? botCursor.exec(before) : null;
+    if (cursor) {
+      const [, botBefore, floor] = cursor;
+      if (
+        !(await db.one(
+          "SELECT 1 FROM notifications WHERE id=$1 AND group_id=$2",
+          [botBefore, id],
+        )) ||
+        (floor &&
+          !(await db.one("SELECT 1 FROM messages WHERE id=$1 AND group_id=$2", [
+            floor,
+            id,
+          ])))
+      )
+        throw new AppError(400, "訊息分頁已失效，請重新整理");
+      const bots = await botMessages(db, id, null, floor || null, botBefore);
+      const more = bots.length > botLimit;
+      const page = bots.slice(-botLimit);
+      return {
+        messages: [],
+        bot_messages: page,
+        // 這段還有更舊的機器人訊息就繼續接；接完回到成員訊息分頁（從下限那則往前）。
+        next: more ? `b:${page[0].id}:${floor}` : floor || null,
+      };
+    }
     if (
       before &&
       !(await db.one("SELECT 1 FROM messages WHERE id=$1 AND group_id=$2", [
@@ -158,11 +193,13 @@ export function registerChat(app: FastifyInstance, db: Database) {
       quoted_sender:
         (quoted_user_id && names.get(quoted_user_id)) || m.quoted_sender,
     }));
+    // 縮不了（本頁成員訊息已縮到一則，或沒有成員訊息）時本頁只帶最新的 botLimit 則，
+    // 較舊的由 b: 游標的下一頁接著載入，不丟棄。
+    const page = bots.slice(-botLimit);
     return {
       messages: messages.reverse(),
-      // 縮不了（本頁沒有成員訊息可縮）時只留最新的 botLimit 則。
-      bot_messages: bots.slice(-botLimit),
-      next,
+      bot_messages: page,
+      next: bots.length > botLimit ? `b:${page[0].id}:${next ?? ""}` : next,
     };
   });
 }

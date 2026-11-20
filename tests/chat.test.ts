@@ -116,7 +116,7 @@ function triage(classify: Classifier["classify"]) {
 }
 async function page(before?: string): Promise<ChatPage> {
   const r = await app.inject({
-    url: `/api/groups/group-a/messages${before ? `?before=${before}` : ""}`,
+    url: `/api/groups/group-a/messages${before ? `?before=${encodeURIComponent(before)}` : ""}`,
     headers,
   });
   expect(r.statusCode).toBe(200);
@@ -790,6 +790,77 @@ describe("聊天室與任務詳情顯示機器人的群組訊息與送達狀態"
     expect(new Set(bots).size).toBe(300);
   });
 
+  it("兩則成員訊息之間的機器人訊息超過 200 則時，可以繼續載入較舊的，不丟棄也不重複", async () => {
+    // 成員 3 則：最新、60 分鐘前、120 分鐘前；最新與 60 分鐘前之間夾 450 則機器人訊息，另有 5 則比所有成員訊息舊。
+    await db.query(
+      `INSERT INTO messages(id,group_id,type,text,received_at) VALUES
+         ('gap-0','group-a','text','測試',now()),
+         ('gap-1','group-a','text','測試',now()-interval '60 minutes'),
+         ('gap-2','group-a','text','測試',now()-interval '120 minutes')`,
+    );
+    await db.query(
+      `INSERT INTO notifications(kind,dedupe_key,text,group_id,sent_at,created_at)
+       SELECT 'group_check','gap:'||j,'機器人 '||j,'group-a',now(),now()-interval '1 minute'-make_interval(secs=>j*7)
+       FROM generate_series(0,449) j
+       UNION ALL
+       SELECT 'group_check','old:'||j,'更早 '||j,'group-a',now(),now()-interval '3 hours'-make_interval(mins=>j)
+       FROM generate_series(0,4) j`,
+    );
+    await botNotice("foreign", "別群組", { group: "group-b" });
+    const members: string[] = [];
+    const bots: string[] = [];
+    const sizes: number[] = [];
+    let next: string | null = null;
+    do {
+      const p = await page(next ?? undefined);
+      members.push(...p.messages.map((m) => m.id));
+      // 每頁由舊到新；整體由新到舊收集，最後檢查時間順序。
+      bots.unshift(...p.bot_messages.map((b) => b.text!));
+      sizes.push(p.bot_messages.length);
+      next = p.next;
+    } while (next);
+    // 每頁最多 200 則；450 則那段要分三次載入（200、200、50）。
+    expect(Math.max(...sizes)).toBe(200);
+    expect(sizes.filter((n) => n === 200)).toHaveLength(2);
+    expect(new Set(members)).toEqual(new Set(["gap-0", "gap-1", "gap-2"]));
+    expect(bots).toHaveLength(455);
+    expect(new Set(bots).size).toBe(455);
+    expect(bots).not.toContain("別群組");
+    // 由舊到新：先是 5 則「更早」，接著機器人 449 → 0。
+    expect(bots.slice(0, 5)).toEqual([4, 3, 2, 1, 0].map((j) => `更早 ${j}`));
+    expect(bots.slice(5)).toEqual(
+      Array.from({ length: 450 }, (_, k) => `機器人 ${449 - k}`),
+    );
+  });
+
+  it("群組只有機器人訊息、超過 200 則時也能一路載入到最舊", async () => {
+    await db.query(
+      `INSERT INTO notifications(kind,dedupe_key,text,group_id,sent_at,created_at)
+       SELECT 'group_check','solo:'||j,'機器人 '||j,'group-a',now(),now()-make_interval(secs=>j)
+       FROM generate_series(0,249) j`,
+    );
+    const first = await page();
+    expect(first.messages).toEqual([]);
+    expect(first.bot_messages).toHaveLength(200);
+    expect(first.next).toMatch(/^b:/);
+    const second = await page(first.next!);
+    expect(second.bot_messages).toHaveLength(50);
+    expect(second.bot_messages[0].text).toBe("機器人 249");
+    expect(second.next).toBeNull();
+  });
+
+  it("機器人訊息游標不能指到別群組的通知", async () => {
+    await botNotice("foreign", "別群組", { group: "group-b" });
+    const foreign = await db.one<{ id: string }>(
+      "SELECT id FROM notifications WHERE group_id='group-b' LIMIT 1",
+    );
+    const r = await app.inject({
+      url: `/api/groups/group-a/messages?before=${encodeURIComponent(`b:${foreign.id}:`)}`,
+      headers,
+    });
+    expect(r.statusCode).toBe(400);
+  });
+
   it("推播額度用完時任務詳情標示群組訊息沒送出；總開關關閉後改為略過", async () => {
     await db.query("DELETE FROM service_health WHERE name='line_quota'");
     try {
@@ -875,6 +946,18 @@ describe("聊天室與任務詳情顯示機器人的群組訊息與送達狀態"
         status: "skipped",
         reason: "replies_off",
       });
+      // 超過聊天室原文保存期限：任務詳情與聊天室一樣只留狀態，不回原文（看板也就沒有內容可複製）。
+      await db.query(
+        "UPDATE notifications SET created_at=message_retention_cutoff()-interval '1 minute' WHERE kind='group_answered'",
+      );
+      const expired = await detail();
+      expect(expired.answered.text).toBeNull();
+      expect(expired.answered.delivery).toMatchObject({ status: "skipped" });
+      expect(expired.body).not.toContain("首頁按鈕目前是綠色");
+      const old = await page();
+      expect(
+        old.bot_messages.find((b) => b.kind === "group_answered")?.text,
+      ).toBeNull();
     } finally {
       await db.query("DELETE FROM service_health WHERE name='line_quota'");
     }

@@ -225,6 +225,7 @@ export interface GroupDelivery {
   id: string;
   kind: string;
   created_at: string;
-  text: string;
+  /** 超過聊天室原文保存期限時為 null（只顯示送達狀態）。 */
+  text: string | null;
   delivery: Delivery;
 }
