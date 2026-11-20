@@ -130,6 +130,9 @@ describe("專案的完全存取", () => {
     // 告訴 Codex 可以直接連，但不要把密碼寫進檔案；提示詞本身不含密碼。
     expect(String(job.prompt)).toContain("AGENTFLOW_DB_CONNECTION");
     expect(String(job.prompt)).not.toContain(password);
+    // 曾經同時寫著「不可連線正式資料庫」，Codex 因此拒用登記的 MES 連線、只回「無法判定」。
+    expect(String(job.prompt)).not.toContain("不可連線正式資料庫。");
+    expect(String(job.prompt)).toContain("登記的資料庫連線見 fullAccess");
     // 執行紀錄遮蔽密碼。
     const events = await db.query<{ detail: unknown }>(
       "SELECT detail FROM run_events",
@@ -147,6 +150,10 @@ describe("專案的完全存取", () => {
       expect(c.full).toBeUndefined();
       expect(c.open).toBe(false);
     }
+    const code = s.calls.find((c) => c.phase === "code")!;
+    expect(
+      String((code.job as Record<string, unknown>).prompt),
+    ).toContain("不可連線正式資料庫。");
   });
 
   it("變更內容含資料庫密碼時拒絕發布", async () => {
