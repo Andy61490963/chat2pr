@@ -41,7 +41,7 @@ import { registerChat } from "./chat.js";
 import { registerProjectContext } from "./project-context.js";
 import { registerProjectDatabase } from "./project-database.js";
 import { registerProjectSsh } from "./project-ssh.js";
-import { registerDockerDisk } from "./docker-disk.js";
+import { diskPaused, registerDockerDisk } from "./docker-disk.js";
 import { registerEgress } from "./egress-api.js";
 import { notifyGroup } from "./group-replies.js";
 import { HttpRunner, type Runner } from "./execution.js";
@@ -485,6 +485,7 @@ export async function buildApp(
       })
       .parse(req.query ?? {});
     const [
+      diskDispatchPaused,
       totals,
       alerts,
       seen,
@@ -501,6 +502,7 @@ export async function buildApp(
       rag,
       failures,
     ] = await Promise.all([
+      diskPaused(db),
       // 看板的分頁數字與統計卡用資料庫的實際數量，不受清單載入範圍影響。
       db.one<{
         tasks: number;
@@ -619,6 +621,7 @@ export async function buildApp(
       tasks,
       rag,
       usage: { ...usage, runs_today: runsToday.count },
+      diskDispatchPaused,
       health,
       activity,
       memories,

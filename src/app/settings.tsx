@@ -366,7 +366,7 @@ function AiCard({
                   set("container_network", v ? "open" : "isolated")
                 }
               />
-              完全開放容器網路
+              所有專案開放網路（不建議）
             </label>
             <p
               id="open-network-hint"
@@ -377,10 +377,7 @@ function AiCard({
                   : "text-muted-foreground",
               )}
             >
-              開啟後，Codex
-              開發、測試與審查時可直接連網際網路與公司內網（包含專案設定檔中的正式資料庫），可實際執行整合測試與
-              SQL。群組訊息若誤導
-              AI，也可能直接改動這些系統；所有資料庫操作會列在任務說明中供你檢查。
+              建議你改在個別專案開啟「完全存取」，只影響該專案。
             </p>
           </div>
           <div

@@ -51,6 +51,34 @@ const memorySource: Record<Memory["source"], string> = {
   admin: "管理者",
 };
 
+export function GroupStatusBadge({
+  group: g,
+  state,
+}: {
+  group: Group;
+  state: State;
+}) {
+  return g.left_at ? (
+    <Badge variant="secondary">機器人已離開</Badge>
+  ) : !g.enabled ? (
+    <Badge variant="secondary">已停用</Badge>
+  ) : g.triage_failures >= 3 ? (
+    <Badge variant="danger" title={g.triage_error ?? ""}>
+      辨識失敗，已停止
+    </Badge>
+  ) : g.triage_error ? (
+    <Badge variant="warn" title={g.triage_error}>
+      辨識失敗
+    </Badge>
+  ) : usable(g, state) ? (
+    <Badge variant="good">接收需求中</Badge>
+  ) : (
+    <Badge variant="warn" title={noProjectHint}>
+      沒有可用專案
+    </Badge>
+  );
+}
+
 // 單筆記憶：顯示來源，可直接修改內容與對應專案或刪除。
 function MemoryItem({
   memory: m,
@@ -219,10 +247,18 @@ export function GroupsView({
     <div className="flex flex-col gap-4">
       <p className="text-sm text-muted-foreground">
         共 {present.length} 個群組，
-        {present.filter((g) => g.enabled && usable(g, state)).length}{" "}
+        {
+          present.filter(
+            (g) =>
+              g.enabled &&
+              !g.triage_error &&
+              g.triage_failures < 3 &&
+              usable(g, state),
+          ).length
+        }{" "}
         個接收需求中
         {stuck > 0 && `，${stuck} 個沒有可用專案`}
-        {halted > 0 && `，${halted} 個辨識已停止`}
+        {halted > 0 && `，${halted} 個辨識失敗，已停止`}
         {gone > 0 && `；另有 ${gone} 個機器人已離開`}
       </p>
       <Card className="gap-0 py-0">
@@ -268,25 +304,7 @@ export function GroupsView({
                     {memories} 筆
                   </span>
                   <span className="flex justify-end">
-                    {g.left_at ? (
-                      <Badge variant="secondary">機器人已離開</Badge>
-                    ) : !g.enabled ? (
-                      <Badge variant="secondary">已停用</Badge>
-                    ) : g.triage_failures >= 3 ? (
-                      <Badge variant="danger" title={g.triage_error ?? ""}>
-                        辨識已停止
-                      </Badge>
-                    ) : g.triage_error ? (
-                      <Badge variant="warn" title={g.triage_error}>
-                        辨識失敗
-                      </Badge>
-                    ) : usable(g, state) ? (
-                      <Badge variant="good">接收需求中</Badge>
-                    ) : (
-                      <Badge variant="warn" title={noProjectHint}>
-                        沒有可用專案
-                      </Badge>
-                    )}
+                    <GroupStatusBadge group={g} state={state} />
                   </span>
                 </button>
               </li>
@@ -398,8 +416,9 @@ function GroupCard({
             onCheckedChange={setEnabled}
             disabled={!!g.left_at}
           />
-          {enabled ? "接收需求中" : "已停用"}
+          允許這個群組提出需求
         </label>
+        <GroupStatusBadge group={g} state={state} />
       </div>
       {room(g) && (
         <div className="grid gap-2">

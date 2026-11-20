@@ -81,6 +81,7 @@ export type State = {
   knowledge: Knowledge[];
   usage: { spent: number; reserved: number; day: string; runs_today: number };
   health: Health[];
+  diskDispatchPaused?: boolean;
   activity: Audit[];
   alerts?: import("./alerts").Alert[];
   alertsSeenAt?: string | null;
