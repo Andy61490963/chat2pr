@@ -114,8 +114,9 @@ it("E01.invalid：單批超過100、錯誤簽章、無效型別與超大本文�
   expect(await db.query("SELECT id FROM messages")).toHaveLength(0);
 });
 it("E03.notification：供應商已接受但本機寫入中斷，重試沿用同一去重碼且只接受一次", async () => {
+  // 「完成」通知在全通知模式才會送出，這裡驗證送達後的重試與去重。
   await db.query(
-    'UPDATE settings SET value=value||\'{"admin_line_id":"驗收管理者"}\'',
+    'UPDATE settings SET value=value||\'{"admin_line_id":"驗收管理者","line_private_mode":"all"}\'',
   );
   const line = new Line(db),
     accepted = new Set<string>(),
@@ -136,7 +137,7 @@ it("E03.notification：供應商已接受但本機寫入中斷，重試沿用同
   await line.notify(null, "ready", "唯一驗收通知", "完成");
   const original = db.transaction.bind(db);
   let interrupted = false;
-  // 推播在交易內記錄送出（撈取時鎖住這批通知），所以攔截交易用的連線。
+  // 摘要送達後以交易寫回結果，所以攔截交易用的連線。
   const spy = vi.spyOn(db, "transaction").mockImplementation(((
     fn: Parameters<typeof db.transaction>[0],
   ) =>

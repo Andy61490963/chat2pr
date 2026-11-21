@@ -1,3 +1,9 @@
+import {
+  linePrivateDefaults,
+  linePrivateQuotaHold,
+  linePrivateQuotaNotes,
+} from "./line-private.js";
+
 /**
  * LINE 每月推播額度的共用文字與判讀。伺服器（推播、重送、測試通知、連線檢查）與看板共用，
  * 避免同一件事在不同地方說法不一。額度狀態存在 service_health 的 line_quota，
@@ -98,12 +104,14 @@ export function retryDescription(f: {
 export function linePushPanel(
   health: { name: string; ok: boolean; detail?: string }[] | undefined,
   failures: { direct: number; group: number; stale: number },
+  reserve: number = linePrivateDefaults.line_group_reserve_percent,
 ) {
   const blocked = quotaBlocked(health);
   const usage = quotaUsageOf(
     health?.find((h) => h.name === LINE_QUOTA)?.detail,
   );
   const failed = failures.direct + failures.group;
+  const privateHold = linePrivateQuotaHold(usage, reserve);
   return {
     blocked,
     usage: usage
@@ -113,7 +121,7 @@ export function linePushPanel(
       : null,
     notice: blocked
       ? `${quotaRetryBlocked}。群組的「收到」與看板鈴鐺照常；每小時會向 LINE 確認額度，恢復後自動續送暫停期間排隊的通知，過時的訊息不補送。`
-      : null,
+      : privateHold ? linePrivateQuotaNotes[privateHold] : null,
     failed,
     failedText: failed
       ? `有 ${failed} 則通知重試 3 次仍送不出去（私訊 ${failures.direct} 則、群組 ${failures.group} 則）。${
@@ -124,7 +132,7 @@ export function linePushPanel(
       : null,
     // 額度用完時重送只會再失敗、測試通知只會白打一次推播。
     retryDisabled: blocked,
-    testDisabled: blocked,
+    testDisabled: blocked || !!privateHold || quotaRemaining(usage) === 0,
     confirm: retryDescription(failures),
   };
 }

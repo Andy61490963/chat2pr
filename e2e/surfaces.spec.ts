@@ -329,6 +329,61 @@ test("你可以儲存個人保留比例並看到 chat2pr 上限與重置時間",
   expect(reserve).toBe(59);
 });
 
+test("在 375px 可以用鍵盤調整 LINE 推播設定並看到私訊暫停", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  let policy = {};
+  await mockDashboard(page);
+  await page.route(/\/api\/state\?/, (route) =>
+    route.fulfill({ json: {
+      ...defaultState,
+      settings: { ...defaultState.settings, ...policy, admin_line_id: "已綁定" },
+      health: [{
+        name: "line_quota",
+        ok: true,
+        detail: "本月已用 50／上限 200 則",
+        checked_at: "2026-01-10T08:00:00Z",
+      }],
+    } }),
+  );
+  await page.route("**/api/settings/line-push", (route) => {
+    expect(route.request().method()).toBe("PUT");
+    policy = route.request().postDataJSON();
+    return route.fulfill({ json: { ok: true } });
+  });
+  await page.goto("/settings#settings-line");
+  const section = page.getByRole("region", { name: "LINE", exact: true });
+  const mode = section.getByRole("combobox", { name: "LINE 私訊範圍" });
+  const reserve = section.getByRole("spinbutton", { name: "保留給群組回覆的比例（%）" });
+  const save = section.getByRole("button", { name: "儲存 LINE 推播設定" });
+  await expect(mode).toHaveValue("action");
+  await expect(reserve).toHaveValue("70");
+  await expect(save).toBeDisabled();
+  await mode.focus();
+  await page.keyboard.press("ArrowDown");
+  await expect(mode).toHaveValue("all");
+  await page.keyboard.press("Tab");
+  await expect(reserve).toBeFocused();
+  await reserve.fill("80");
+  await page.keyboard.press("Tab");
+  await expect(save).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(section.getByRole("status").filter({ hasText: "私訊暫停" })).toBeVisible();
+  await expect(section.getByRole("button", { name: "送一則測試通知" })).toBeDisabled();
+  expect(policy).toEqual({ line_private_mode: "all", line_group_reserve_percent: 80 });
+  for (const field of [mode, reserve, save])
+    expect((await field.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  expect(await section.evaluate((node) => node.scrollWidth)).toBeLessThanOrEqual(375);
+  const accessibility = await new AxeBuilder({ page })
+    .include('section[aria-labelledby="settings-line"]')
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(accessibility.violations).toEqual([]);
+  await page.reload();
+  await expect(mode).toHaveValue("all");
+  await expect(reserve).toHaveValue("80");
+});
+
 test("LINE 額度用完時，每頁顯示簡短警示，按連結才顯示替代做法", async ({
   page,
 }) => {

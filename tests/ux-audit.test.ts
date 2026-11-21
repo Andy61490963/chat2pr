@@ -62,10 +62,12 @@ const state = async (query = "") =>
   (
     await app.inject({ url: `/api/state${query}`, headers: await session() })
   ).json();
-const pair = () =>
-  db.query(
+const pair = async () => {
+  await db.query(
     'UPDATE settings SET value=value||\'{"admin_line_id":"fictional-admin"}\'',
   );
+  await recordHealth(db, "line_quota", true, "本月已用 12／上限 200 則");
+};
 const task = (status: string, key: string) =>
   db.one<{ id: string }>(
     "INSERT INTO tasks(group_id,title,summary,status,dedupe_key) VALUES('group-a','任務','內容',$1,$2) RETURNING id",
@@ -566,6 +568,17 @@ describe("測試通知", () => {
     await clearQuota();
   });
 
+  it("用到保留門檻時連測試私訊都暫停", async () => {
+    await pair();
+    await recordHealth(db, "line_quota", true, "本月已用 60／上限 200 則");
+    const upstream = vi.fn();
+    vi.stubGlobal("fetch", upstream);
+    const response = await send();
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toContain("私訊暫停");
+    expect(upstream).not.toHaveBeenCalled();
+  });
+
   it("推播回每月上限時同樣說明，並記下額度用完", async () => {
     await pair();
     vi.stubGlobal(
@@ -588,9 +601,10 @@ describe("測試通知", () => {
   });
 });
 
-describe("LINE 通知連結", () => {
-  it("沒有任務的通知連到能處理它的頁面", async () => {
+describe("LINE 摘要連結", () => {
+  it("全通知模式將不同頁面的通知合併並附看板連結", async () => {
     await pair();
+    await db.query("UPDATE settings SET value=value||'{\"line_private_mode\":\"all\"}'::jsonb");
     const texts: string[] = [];
     vi.stubGlobal(
       "fetch",
@@ -601,18 +615,13 @@ describe("LINE 通知連結", () => {
     );
     await db.query(
       `INSERT INTO notifications(kind,dedupe_key,text,created_at) VALUES
-        ('group_left','k1','群組通知',now()-interval '4 seconds'),
-        ('triage','k2','辨識通知',now()-interval '3 seconds'),
-        ('service_down','k3','服務通知',now()-interval '2 seconds'),
-        ('repo_missing','k4','儲存庫通知',now()-interval '1 second')`,
+        ('group_left','k1','群組通知',now()-interval '14 minutes'),
+        ('triage','k2','辨識通知',now()-interval '13 minutes'),
+        ('repo_missing','k4','儲存庫通知',now()-interval '12 minutes')`,
     );
     await new Line(db).flushNotifications();
-    const base = "http://localhost:4310";
     expect(texts).toEqual([
-      `群組通知\n${base}/groups`,
-      `辨識通知\n${base}/groups`,
-      `服務通知\n${base}/settings`,
-      `儲存庫通知\n${base}/projects`,
+      "你的 LINE 通知摘要\n• 群組通知\n• 辨識通知\n• 儲存庫通知\n\n看板：http://localhost:4310",
     ]);
     const health = (await state()).health.find(
       (h: { name: string }) => h.name === "notifications",

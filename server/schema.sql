@@ -115,6 +115,9 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 -- 以 /進度 補送被 LINE 拒收（內容問題的 4xx）的次數；到 2 次就不再取回，避免整個群組的 /進度 一直失敗。
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS reply_failures integer NOT NULL DEFAULT 0;
+-- 私訊摘要先保存批次，再對 LINE 推播；重試同一批沿用同一個 LINE 重試鍵。
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_digest_id uuid;
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_outage_started_at timestamptz;
 CREATE TABLE IF NOT EXISTS service_health (name text PRIMARY KEY, ok boolean NOT NULL, detail text NOT NULL, checked_at timestamptz NOT NULL DEFAULT now());
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS config_version integer NOT NULL DEFAULT 1;
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS triage_failures integer NOT NULL DEFAULT 0;
@@ -665,9 +668,17 @@ ALTER TABLE service_health ADD COLUMN IF NOT EXISTS notified_ok boolean;
 ALTER TABLE service_health ADD COLUMN IF NOT EXISTS reading_ok boolean;
 -- HTTPS 入口中斷的起點，讓短暫中斷的判斷能跨越程序重啟。
 ALTER TABLE service_health ADD COLUMN IF NOT EXISTS outage_started_at timestamptz;
+-- 中斷起點經 JavaScript Date 寫回只保留毫秒；兩邊都存到毫秒，私訊才比對得到同一次中斷。
+ALTER TABLE service_health ALTER COLUMN outage_started_at TYPE timestamptz(3);
+ALTER TABLE notifications ALTER COLUMN line_outage_started_at TYPE timestamptz(3);
+ALTER TABLE service_health ADD COLUMN IF NOT EXISTS line_outage_confirmed boolean NOT NULL DEFAULT false;
 -- 機器人送出的 LINE 訊息 ID：群組成員用「回覆」引用機器人的回答時，據此判斷是在接續哪一題。
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS sent_message_id text;
 CREATE INDEX IF NOT EXISTS notifications_sent_message ON notifications(sent_message_id) WHERE sent_message_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS notifications_private_pending
+  ON notifications(created_at,id) WHERE sent_at IS NULL AND group_id IS NULL;
+CREATE INDEX IF NOT EXISTS notifications_private_digest
+  ON notifications(line_digest_id) WHERE line_digest_id IS NOT NULL;
 -- 定期檢查：AI 或管理者寫好檢查定義，人核准後由系統依排程執行，不再呼叫 AI；狀態改變時才通知。
 CREATE TABLE IF NOT EXISTS scheduled_checks (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

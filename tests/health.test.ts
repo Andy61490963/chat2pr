@@ -33,6 +33,24 @@ function monitor(name = "tunnel", confirm = true) {
 }
 
 describe("服務中斷通知", () => {
+  it("有滿 15 分鐘後的異常讀數才確認長時間中斷，短暫中斷仍記在看板", () => {
+    const before = {
+      ok: false,
+      reading_ok: false,
+      notified_ok: false,
+      checked_at: new Date(startedAt),
+      outage_started_at: new Date(startedAt),
+    };
+    const observe = (minute: number, ok: boolean) => healthTransition(
+      "github", before, ok, "範例探測", new Date(startedAt + minute * 60_000), false,
+    );
+    expect(observe(14, false).lineOutageConfirmed).toBe(false);
+    expect(observe(15, false).lineOutageConfirmed).toBe(true);
+    expect(observe(16, true)).toMatchObject({
+      lineOutageConfirmed: false,
+      notice: { kind: "service_up" },
+    });
+  });
   it("入口中斷兩分鐘後恢復，只通知一次中斷與恢復", () => {
     const read = monitor();
     expect(read(0, false)).toBeNull();

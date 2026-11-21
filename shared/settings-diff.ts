@@ -1,6 +1,11 @@
 import type { Settings } from "./types.js";
 import { containsCredential } from "./credentials.js";
 import { reserveLabel } from "./subscription-quota.js";
+import {
+  lineGroupReserveLabel,
+  linePrivateDefaults,
+  linePrivateModeLabels,
+} from "./line-private.js";
 
 /**
  * 工作流程設定（`PUT /api/settings`）的中文差異，看板確認對話框與稽核共用。
@@ -38,6 +43,16 @@ const fields = {
   auto_memory: { label: "自動歸納群組記憶", fallback: true, value: onOff },
   code_downloads: { label: "開發時允許下載套件", fallback: true, value: onOff },
   group_replies: { label: "在群組回覆", fallback: true, value: onOff },
+  line_private_mode: {
+    label: "LINE 私訊範圍",
+    fallback: linePrivateDefaults.line_private_mode,
+    value: (v) => (v === "all" ? linePrivateModeLabels.all : linePrivateModeLabels.action),
+  },
+  line_group_reserve_percent: {
+    label: lineGroupReserveLabel,
+    fallback: linePrivateDefaults.line_group_reserve_percent,
+    value: (v) => `${String(v)}%`,
+  },
   container_network: {
     label: "容器網路",
     fallback: "isolated",

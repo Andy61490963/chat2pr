@@ -1,3 +1,5 @@
+import type { LinePrivateMode } from "./line-private.js";
+
 export type TaskStatus =
   | "awaiting_approval"
   | "queued"
@@ -212,8 +214,10 @@ export interface Settings {
   auto_memory: boolean;
   /** 開發階段可經下載來源白名單出口下載套件；預設開啟。 */
   code_downloads: boolean;
-  /** 總開關：關閉時所有群組都不回覆，只私訊管理者；各群組另有自己的回覆範圍。預設開啟。 */
+  /** 關閉時所有群組都不回覆；各群組另有自己的回覆範圍。預設開啟。 */
   group_replies?: boolean;
+  line_private_mode?: LinePrivateMode;
+  line_group_reserve_percent?: number;
   /** isolated：只開放套件白名單；open：開發、測試、審查容器可直接連網際網路與公司內網。 */
   container_network: "isolated" | "open";
   /** 安裝階段與開發下載套件可連的網域（系統頁維護）；沒有設定時用預設白名單。 */
