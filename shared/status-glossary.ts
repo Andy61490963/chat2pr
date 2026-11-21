@@ -25,6 +25,11 @@ export const taskStationLabels = {
   reply: "回覆",
 } as const;
 
+export const taskListLabels = {
+  active: "進行中與待處理",
+  ended: "已結束",
+} as const;
+
 export const taskStationStatusLabels = {
   decision: "等你決定",
   blockedAtVerification: "卡在驗證",

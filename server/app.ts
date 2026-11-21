@@ -86,6 +86,8 @@ import type {
   Project,
   Settings,
   StateTotals,
+  Task,
+  TaskPage,
   TaskStatus,
 } from "../shared/types.js";
 import { describeChanges, settingsDiff } from "../shared/settings-diff.js";
@@ -93,6 +95,7 @@ import { containsCredential } from "../shared/credentials.js";
 import {
   countStatuses,
   efforts,
+  endedStatuses,
   UNFINISHED_LIMIT,
   unfinishedStatuses,
 } from "../shared/types.js";
@@ -782,6 +785,66 @@ export async function buildApp(
   app.delete("/api/checks/:id", async (req) => {
     const actor = await requireAdmin(db, req);
     return deleteCheck(db, checkId(req), actor.login);
+  });
+  app.get("/api/tasks", async (req, reply): Promise<TaskPage> => {
+    reply.header("Cache-Control", "no-store");
+    await requireUser(db, req);
+    const query = z
+      .object({
+        filter: z.enum(["all", "closed"], {
+          error: "請選擇全部或已結束的任務",
+        }),
+        group: z.string().optional(),
+        project: z
+          .union([z.literal("none"), z.uuid()], { error: "請選擇有效的專案" })
+          .optional(),
+        q: z.string().optional(),
+        before: z.iso
+          .datetime({ error: "任務清單的更新時間格式不正確" })
+          .optional(),
+        beforeId: z.uuid({ error: "任務清單的編號格式不正確" }).optional(),
+      })
+      .refine(({ before, beforeId }) => !!before === !!beforeId, {
+        message: "載入下一批任務時需要提供更新時間和任務編號",
+      })
+      .parse(req.query);
+    const pageSize = 30;
+    const rows = await db.query<Task & { cursor_time: string }>(
+      `WITH picked AS (
+         SELECT t.* FROM tasks t
+         WHERE ($1::text[] IS NULL OR t.status=ANY($1))
+           AND ($2::text IS NULL OR t.group_id=$2)
+           AND ($3::text IS NULL OR coalesce(t.project_id::text,'none')=$3)
+           AND ($4::text IS NULL OR strpos(lower(t.title||' '||t.summary),lower($4))>0)
+           AND ($5::timestamptz IS NULL OR (t.updated_at,t.id)<($5,$6::uuid))
+         ORDER BY t.updated_at DESC,t.id DESC LIMIT $7
+       )
+       SELECT t.*,r.status AS run_phase,r.started_at AS run_started_at,r.deadline AS run_deadline,
+         r.heartbeat_at AS run_heartbeat_at,
+         to_char(t.updated_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_time
+       FROM picked t
+       LEFT JOIN LATERAL (SELECT status,started_at,deadline,heartbeat_at FROM runs
+         WHERE task_id=t.id AND completed_at IS NULL ORDER BY started_at DESC LIMIT 1) r ON true
+       ORDER BY t.updated_at DESC,t.id DESC`,
+      [
+        query.filter === "closed" ? endedStatuses : null,
+        query.group ?? null,
+        query.project ?? null,
+        query.q || null,
+        query.before ?? null,
+        query.beforeId ?? null,
+        pageSize + 1,
+      ],
+    );
+    const last = rows[pageSize - 1];
+    return {
+      tasks: rows.slice(0, pageSize).map(({ cursor_time, ...task }) => task),
+      // 保留資料庫的微秒精度，同一時間更新的任務再用編號決定順序。
+      next:
+        rows.length > pageSize
+          ? { before: last.cursor_time, beforeId: last.id }
+          : null,
+    };
   });
   app.get("/api/tasks/:id", async (req, reply) => {
     reply.header("Cache-Control", "no-store");

@@ -240,6 +240,7 @@ export function App() {
     } | null>(null),
     // 每次從導覽切換頁面就加一，讓該頁丟掉上一輪的篩選、照網址重新開始。
     [visit, setVisit] = useState(0),
+    [taskHistoryRevision, setTaskHistoryRevision] = useState(0),
     [offline, setOffline] = useState(false),
     [, setTick] = useState(0),
     [account, setAccount] = useState<Account | null | string>(null);
@@ -280,13 +281,12 @@ export function App() {
     [user],
   );
   const guard = useGuard();
-  // 任務與動態只載入最近的一部分；按「載入更多」才加大範圍。
-  const limits = useRef({ tasks: 250, activity: 80 });
+  // 動態只載入最近的一部分；按「載入更多」才加大範圍。
+  const activityLimit = useRef(80);
   const refresh = useCallback(async () => {
     try {
-      const { tasks, activity } = limits.current;
       setState(
-        await request<State>(`/api/state?tasks=${tasks}&activity=${activity}`),
+        await request<State>(`/api/state?activity=${activityLimit.current}`),
       );
       setError("");
     } catch (e) {
@@ -501,6 +501,7 @@ export function App() {
         return false;
       }
       setToast({ text: toastText });
+      if (view === "tasks") setTaskHistoryRevision((n) => n + 1);
       try {
         await refresh();
       } catch {
@@ -572,14 +573,8 @@ export function App() {
       },
       { prefixes: ["task"] },
     );
-  const loadMore = (kind: "tasks" | "activity") => {
-    limits.current = {
-      ...limits.current,
-      [kind]: Math.min(
-        limits.current[kind] * 2,
-        kind === "tasks" ? 5000 : 2000,
-      ),
-    };
+  const loadMoreActivity = () => {
+    activityLimit.current = Math.min(activityLimit.current * 2, 2000);
     return refresh();
   };
   // 主動登出不經過 refresh：登出後再讀狀態必然 401，登入頁會誤顯示「登入已失效」。
@@ -885,7 +880,10 @@ export function App() {
                 size="icon"
                 aria-label="重新整理"
                 title="重新整理"
-                onClick={() => void refresh()}
+                onClick={() => {
+                  if (view === "tasks") setTaskHistoryRevision((n) => n + 1);
+                  void refresh();
+                }}
               >
                 <RefreshCw />
               </Button>
@@ -1041,15 +1039,17 @@ export function App() {
                 showTasks={showTasks}
                 open={showTask}
                 act={act}
-                more={() => loadMore("activity")}
+                more={loadMoreActivity}
               />
             )}
             {current.id === "tasks" && (
               <TasksView
-                key={visit}
+                key={`${user.login}:${visit}`}
                 state={state}
                 open={showTask}
-                more={() => loadMore("tasks")}
+                request={request}
+                login={user.login}
+                historyRevision={taskHistoryRevision}
               />
             )}
             {current.id === "chat" && (

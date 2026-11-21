@@ -428,6 +428,7 @@ BEGIN
 END $legacy_images$;
 
 CREATE INDEX IF NOT EXISTS tasks_sources_gin ON tasks USING gin(source_ids);
+CREATE INDEX IF NOT EXISTS tasks_updated_id ON tasks (updated_at DESC, id DESC);
 CREATE TABLE IF NOT EXISTS chat_revision(id integer PRIMARY KEY CHECK(id=1),revision bigint NOT NULL DEFAULT 0);
 INSERT INTO chat_revision(id) VALUES(1) ON CONFLICT DO NOTHING;
 CREATE OR REPLACE FUNCTION touch_chat_revision() RETURNS trigger LANGUAGE plpgsql AS $$

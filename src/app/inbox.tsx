@@ -1042,7 +1042,7 @@ function TaskRowFields({
 }) {
   return (
     <span className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground [overflow-wrap:anywhere]">
-      {task.mode === "query" && <span>查詢</span>}
+      <span>{task.mode === "query" ? "查詢" : "修改"}</span>
       {hide !== "group" && <span>群組 {groupName(state, task)}</span>}
       {hide !== "project" && <span>專案 {projectName(state, task)}</span>}
       {task.issue_number && (
@@ -1105,7 +1105,7 @@ export function TaskRow({
     );
   }
   return (
-    <button className="work-row" onClick={() => open(t.id)}>
+    <button className="work-row" data-task-id={t.id} onClick={() => open(t.id)}>
       {description}
       <StationTrack task={t} />
     </button>
