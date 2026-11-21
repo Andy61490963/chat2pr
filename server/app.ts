@@ -561,7 +561,7 @@ export async function buildApp(
       db.query("SELECT * FROM service_health ORDER BY name"),
       // 無任務的管理稽核可能含私訊內容；分頁資料與上方總數必須使用相同條件。
       db.query(
-        "SELECT a.*,t.title AS task_title FROM audit a LEFT JOIN tasks t ON t.id=a.task_id WHERE $2::boolean OR a.task_id IS NOT NULL ORDER BY a.id DESC LIMIT $1",
+        "SELECT a.*,t.title AS task_title,t.mode AS task_mode FROM audit a LEFT JOIN tasks t ON t.id=a.task_id WHERE $2::boolean OR a.task_id IS NOT NULL ORDER BY a.id DESC LIMIT $1",
         [limits.activity, admin],
       ),
       db.query("SELECT * FROM group_memories ORDER BY created_at"),

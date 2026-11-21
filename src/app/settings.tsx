@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, Copy, RefreshCw, Send } from "lucide-react";
 import type { NotificationFailures, Settings } from "../../shared/types.js";
 import { LINE_QUOTA, linePushPanel } from "../../shared/line-quota.js";
+import { networkStatusLabels } from "../../shared/status-glossary.js";
 import {
   maxCodexReserve,
   reserveLabel,
@@ -445,6 +446,11 @@ function AiCard({
             >
               建議你改在個別專案開啟「完全存取」，只影響該專案。
             </p>
+            {s.container_network === "open" && (
+              <p className="text-sm text-muted-foreground">
+                {networkStatusLabels.open}。
+              </p>
+            )}
           </div>
           <div
             role="radiogroup"

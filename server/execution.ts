@@ -1196,7 +1196,7 @@ export class Execution {
       await this.db.audit(
         task.id,
         "started",
-        `開始開發需求版本 ${task.version}，基底 ${task.base_sha.slice(0, 8)}`,
+        `開始${task.mode === "query" ? "調查" : "開發"}需求版本 ${task.version}，基底 ${task.base_sha.slice(0, 8)}`,
       );
       await stage("archive");
       if (this.runner.prepareSource) {
@@ -1528,7 +1528,11 @@ export class Execution {
         await this.db.audit(
           task.id,
           "attempt",
-          attempt === 0 ? "開始程式修改" : "開始唯一一次自動修復",
+          task.mode === "query"
+            ? "開始調查"
+            : attempt === 0
+              ? "開始程式修改"
+              : "開始唯一一次自動修復",
         );
         const job = {
           mode: subscription ? "subscription" : "api",

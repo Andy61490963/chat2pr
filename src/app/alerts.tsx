@@ -1,5 +1,4 @@
 import {
-  notificationLabels,
   projectLabels,
   statusLabels,
   taskStationStatusLabels,
@@ -353,6 +352,11 @@ export function AlertBell({
               const k = kindOf(a.kind);
               const Icon = k.icon;
               const task = a.task_id ? tasksById.get(a.task_id) : undefined;
+              const useTaskStatus =
+                (a.kind === "approval" &&
+                  task?.status === "awaiting_approval") ||
+                (a.kind === "failed" && task?.status === "failed") ||
+                (a.kind === "ready" && task?.status === "ready");
               const action = needsAction(a);
               const isNew = action || unreadResults.has(a.id);
               // 不能前往時仍可聚焦（讀得到內容），但說明為什麼點了沒反應。
@@ -375,13 +379,13 @@ export function AlertBell({
                     target &&
                       "cursor-pointer transition-colors hover:bg-muted/50",
                     isNew && "bg-muted/40",
+                    "work-touch",
                   )}
                 >
                   <Icon className={cn("mt-0.5 size-4 shrink-0", k.tone)} />
                   <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                     <span className="flex flex-wrap gap-x-2 text-xs text-muted-foreground">
-                      {action && <span>{notificationLabels.action}</span>}
-                      <span>{k.label}</span>
+                      {!task && <span>{k.label}</span>}
                       <span className="tabular-nums">{ago(a.created_at)}</span>
                     </span>
                     {a.title && (
@@ -392,7 +396,12 @@ export function AlertBell({
                     <span className="line-clamp-2 text-xs text-muted-foreground [overflow-wrap:anywhere]">
                       {a.text}
                     </span>
-                    {task && <StationTrack task={task} />}
+                    {task && (
+                      <StationTrack
+                        task={task}
+                        statusLabel={useTaskStatus ? undefined : k.label}
+                      />
+                    )}
                     {why && (
                       <span className="text-[11px] text-muted-foreground">
                         {why}

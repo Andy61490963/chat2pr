@@ -37,7 +37,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Wordmark } from "@/components/brand";
 import type { Action, Project, Settings, Task } from "../shared/types.js";
-import { quotaBlocked } from "../shared/line-quota.js";
+import { LINE_QUOTA } from "../shared/line-quota.js";
 import {
   reservedQuotaHold,
   subscriptionGateName,
@@ -77,6 +77,7 @@ import { SystemView } from "./app/system";
 import { ChecksView } from "./app/checks";
 import { MembersView } from "./app/members";
 import { AlertBell } from "./app/alerts";
+import { PageNotices } from "./app/page-notices";
 import {
   expiredMessage,
   probeService,
@@ -206,9 +207,6 @@ const vital: Record<string, string> = {
   tunnel: "HTTPS 入口",
   notifications: "LINE 推播（群組回覆與私訊）",
 };
-// LINE 每月推播額度用完（line_quota 健康項）：不是連線壞掉，另用黃色橫幅說明替代做法。
-const quotaBanner =
-  "LINE 本月推播額度已用完，群組回答與私訊暫時送不出去；「收到」即時確認不受影響。請看通知鈴鐺，必要時到任務詳情複製結果貼到群組，群組成員可打 /進度 取回";
 // 登入前所在的網址：GitHub 登入回來後回到這裡（例如 LINE 通知裡的任務連結）。
 const returnKey = "agentflow-return";
 
@@ -628,13 +626,13 @@ export function App() {
   // 一般成員只看得到工作區；管理區（群組、專案、系統、成員、設定）限管理者。
   const admin = user.role !== "member";
   const goneProjects = (state?.projects ?? []).filter((p) => p.repo_missing_at);
-  const quotaOut = quotaBlocked(state?.health);
+  const lineQuota = state?.health.find((h) => h.name === LINE_QUOTA && !h.ok);
   const down = (state?.health ?? []).filter(
     (h) =>
       !h.ok &&
       vital[h.name] &&
       // 額度用完時推播失敗是預期中的，由下方黃色橫幅說明，不算「連線異常」。
-      !(quotaOut && h.name === "notifications") &&
+      !(lineQuota && h.name === "notifications") &&
       (!["codex", "openai"].includes(h.name) ||
         (h.name === "codex") === (state?.settings.ai_mode === "subscription")),
   );
@@ -661,6 +659,54 @@ export function App() {
         : null;
   const hold = state?.settings.paused ? null : (hostHold ?? subscriptionHold);
   const holdView = hostHold ? "system" : "settings";
+  const notices = [
+    admin &&
+      goneProjects.length > 0 && {
+        key: [
+          "projects",
+          ...goneProjects.map((p) => [p.id, p.repo_missing_at]).sort(),
+        ],
+        visible: view !== "projects",
+      },
+    admin &&
+      down.length > 0 && {
+        key: [
+          "services",
+          ...down.map((h) => [h.name, h.outage_started_at]).sort(),
+        ],
+        visible: view !== "settings",
+      },
+    (state?.settings.paused || state?.settings.triage_paused) && {
+      key: state.settings.paused ? "dispatch-paused" : "triage-paused",
+      visible: true,
+    },
+    hold && {
+      key: [
+        "hold",
+        state?.diskDispatchPaused
+          ? "disk"
+          : hostHold
+            ? "memory"
+            : subscriptionHold,
+      ],
+      visible: true,
+    },
+    lineQuota && {
+      key: [
+        "line-quota",
+        lineQuota.outage_started_at ?? lineQuota.checked_at?.slice(0, 7),
+      ],
+      visible: true,
+    },
+    offline && { key: "offline", visible: true },
+    error && { key: "error", visible: true },
+  ].filter((notice) => typeof notice === "object" && notice !== null);
+  const noticeCount = notices.filter((notice) => notice.visible).length;
+  const noticeIncident = notices.length
+    ? JSON.stringify(notices.map((notice) => notice.key))
+    : state
+      ? null
+      : undefined;
   const live = state && !state.settings.paused && !hold;
   const dispatch =
     state &&
@@ -890,139 +936,184 @@ export function App() {
             </div>
           )}
         </header>
-        {admin && goneProjects.length > 0 && view !== "projects" && (
-          <p
-            role="alert"
-            className="mb-4 flex flex-wrap items-center gap-2 rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
-          >
-            <FolderX className="size-4 shrink-0" />
-            <span className="min-w-0 flex-1">
-              專案{goneProjects.map((p) => `「${p.name}」`).join("")}
-              的儲存庫找不到了（可能已刪除、搬家或改名），已先停用並暫時解除群組綁定。
-            </span>
-            <Button variant="outline" size="xs" onClick={() => go("projects")}>
-              查看專案
-            </Button>
-          </p>
-        )}
-        {admin && down.length > 0 && view !== "settings" && (
-          <p
-            role="alert"
-            className="mb-4 flex flex-wrap items-center gap-2 rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
-          >
-            <Unplug className="size-4 shrink-0" />
-            <span className="min-w-0 flex-1">
-              {down.map((h) => vital[h.name]).join("、")}
-              連線異常，恢復前相關功能會停擺。
-            </span>
-            <Button variant="outline" size="xs" onClick={() => go("settings")}>
-              前往設定
-            </Button>
-          </p>
-        )}
-        {state?.settings.container_network === "open" && (
-          <p
-            role="status"
-            className="mb-4 rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn"
-          >
-            所有專案已開放網路，你可在設定關閉，再為個別專案開啟「完全存取」。
-          </p>
-        )}
-        {state && (state.settings.paused || state.settings.triage_paused) && (
-          <p
-            role="status"
-            className="mb-4 flex flex-wrap items-center gap-2 rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn"
-          >
-            <CirclePause className="size-4 shrink-0" />
-            <span className="min-w-0 flex-1">
-              {state.settings.paused
-                ? "派工已暫停，訊息仍會保留 → 你可以按「開始派工」恢復排程。"
-                : "只暫停新需求判讀，已核准的任務照常執行 → 你可以在設定關閉「暫停新需求判讀」。"}
-            </span>
-            {admin &&
-              (state.settings.paused ? (
-                <Button
-                  variant="outline"
-                  size="xs"
-                  disabled={busy}
-                  onClick={() => void togglePause()}
-                >
-                  開始派工
-                </Button>
-              ) : (
-                view !== "settings" && (
+        <PageNotices incident={noticeIncident} count={noticeCount}>
+          {admin && goneProjects.length > 0 && view !== "projects" && (
+            <p
+              role="alert"
+              className="flex flex-wrap items-center gap-2 px-2 py-2 text-sm text-danger"
+            >
+              <FolderX className="size-4 shrink-0" />
+              <span className="min-w-0 flex-1">
+                專案{goneProjects.map((p) => `「${p.name}」`).join("")}
+                的儲存庫找不到了（可能已刪除、搬家或改名），已先停用並暫時解除群組綁定。
+              </span>
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() => go("projects")}
+              >
+                查看專案
+              </Button>
+            </p>
+          )}
+          {admin && down.length > 0 && view !== "settings" && (
+            <p
+              role="alert"
+              className="flex flex-wrap items-center gap-2 px-2 py-2 text-sm text-danger"
+            >
+              <Unplug className="size-4 shrink-0" />
+              <span className="min-w-0 flex-1">
+                {down.map((h) => vital[h.name]).join("、")}
+                連線異常，恢復前相關功能會停擺。
+              </span>
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() => go("settings")}
+              >
+                前往設定
+              </Button>
+            </p>
+          )}
+          {state && (state.settings.paused || state.settings.triage_paused) && (
+            <p
+              role="status"
+              className="flex flex-wrap items-center gap-2 px-2 py-2 text-sm"
+            >
+              <CirclePause className="size-4 shrink-0" />
+              <span className="min-w-0 flex-1">
+                {state.settings.paused
+                  ? "派工已暫停，訊息仍會保留，你可以按「開始派工」恢復排程。"
+                  : "已核准的任務照常執行，你可以在設定關閉「暫停新需求判讀」。"}
+              </span>
+              {admin &&
+                (state.settings.paused ? (
                   <Button
                     variant="outline"
                     size="xs"
-                    onClick={() => go("settings")}
+                    disabled={busy}
+                    onClick={() => void togglePause()}
                   >
-                    前往設定
+                    開始派工
                   </Button>
-                )
-              ))}
-          </p>
-        )}
-        {hold && (
-          <p
-            role="status"
-            className="mb-4 flex flex-wrap items-center gap-2 rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn"
-          >
-            {hostHold ? (
-              <MemoryStick className="size-4 shrink-0" />
-            ) : (
-              <CirclePause className="size-4 shrink-0" />
-            )}
-            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-              {hostHold
-                ? `資源不足，派工自動暫停（${hostHold}） → 資源恢復後會自動繼續。`
-                : hold.startsWith(reservedQuotaHold)
-                  ? hold
-                  : `${hold}，額度恢復後會自動繼續。`}
-            </span>
-            {admin && view !== holdView && (
-              <Button variant="outline" size="xs" onClick={() => go(holdView)}>
-                {hostHold ? "查看系統頁" : "查看訂閱額度"}
+                ) : (
+                  view !== "settings" && (
+                    <Button
+                      variant="outline"
+                      size="xs"
+                      onClick={() => go("settings")}
+                    >
+                      前往設定
+                    </Button>
+                  )
+                ))}
+            </p>
+          )}
+          {hold && (
+            <p
+              role="status"
+              className="flex flex-wrap items-center gap-2 px-2 py-2 text-sm"
+            >
+              {hostHold ? (
+                <MemoryStick className="size-4 shrink-0" />
+              ) : (
+                <CirclePause className="size-4 shrink-0" />
+              )}
+              <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+                {hostHold
+                  ? `資源不足，派工自動暫停（${hostHold}），資源恢復後會自動繼續。`
+                  : hold.startsWith(reservedQuotaHold)
+                    ? hold
+                    : `${hold}，額度恢復後會自動繼續。`}
+              </span>
+              {admin && view !== holdView && (
+                <Button
+                  variant="outline"
+                  size="xs"
+                  onClick={() => go(holdView)}
+                >
+                  {hostHold ? "查看系統頁" : "查看訂閱額度"}
+                </Button>
+              )}
+            </p>
+          )}
+          {lineQuota && (
+            <div className="px-2 text-sm">
+              <div className="flex flex-wrap items-center gap-x-2">
+                <p
+                  role="status"
+                  className="flex flex-[1_1_9rem] items-start gap-2 py-2"
+                >
+                  <BellOff
+                    aria-hidden="true"
+                    className="mt-0.5 size-4 shrink-0"
+                  />
+                  <span>LINE 本月推播額度已用完，你仍可在看板查看通知。</span>
+                </p>
+                <a
+                  id="line-quota-help-link"
+                  href="#line-quota-help"
+                  className="work-touch inline-flex items-center font-medium underline underline-offset-4"
+                >
+                  怎麼辦
+                </a>
+              </div>
+              <div
+                id="line-quota-help"
+                tabIndex={-1}
+                className="hidden pb-2 target:block"
+              >
+                <p>
+                  額度通常在下個月初重置，你可以先從任務詳情複製結果貼回群組，或在群組輸入
+                  /進度 取回。
+                </p>
+                <p>
+                  你仍會在群組收到即時確認，額度恢復後會續送仍有效的群組回覆和私訊。
+                </p>
+                <a
+                  href="#line-quota-help-link"
+                  className="work-touch inline-flex items-center font-medium underline underline-offset-4"
+                >
+                  收起說明
+                </a>
+              </div>
+            </div>
+          )}
+          {offline && (
+            <p
+              role="status"
+              className="flex flex-wrap items-center gap-2 px-2 py-2 text-sm"
+            >
+              <WifiOff className="size-4 shrink-0" />
+              <span className="min-w-0 flex-1">
+                即時更新中斷了，正在重新連線；畫面可能不是最新狀態。
+              </span>
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() => void refresh()}
+              >
+                立即更新
               </Button>
-            )}
-          </p>
-        )}
-        {quotaOut && (
-          <p
-            role="status"
-            className="mb-4 flex flex-wrap items-center gap-2 rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn"
-          >
-            <BellOff className="size-4 shrink-0" />
-            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-              {quotaBanner}
-            </span>
-          </p>
-        )}
-        {offline && (
-          <p
-            role="status"
-            className="mb-4 flex flex-wrap items-center gap-2 rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn"
-          >
-            <WifiOff className="size-4 shrink-0" />
-            <span className="min-w-0 flex-1">
-              即時更新中斷了，正在重新連線；畫面可能不是最新狀態。
-            </span>
-            <Button variant="outline" size="xs" onClick={() => void refresh()}>
-              立即更新
-            </Button>
-          </p>
-        )}
-        {error && (
-          <p
-            role="alert"
-            className="mb-4 flex flex-wrap items-center gap-2 rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
-          >
-            <AlertCircle className="size-4 shrink-0" />
-            <span className="min-w-0 flex-1">{error}</span>
-            <Button variant="outline" size="xs" onClick={() => void refresh()}>
-              重試
-            </Button>
-          </p>
-        )}
+            </p>
+          )}
+          {error && (
+            <p
+              role="alert"
+              className="flex flex-wrap items-center gap-2 px-2 py-2 text-sm text-danger"
+            >
+              <AlertCircle className="size-4 shrink-0" />
+              <span className="min-w-0 flex-1">{error}</span>
+              <Button
+                variant="outline"
+                size="xs"
+                onClick={() => void refresh()}
+              >
+                重試
+              </Button>
+            </p>
+          )}
+        </PageNotices>
         {!state ? (
           <div className="flex min-h-60 items-center justify-center gap-2 text-muted-foreground">
             <Loader2 className="size-4 animate-spin" /> 載入中…

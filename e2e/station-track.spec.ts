@@ -23,6 +23,15 @@ const previous: Task = {
   title: "整理範例班表",
   last_error: "執行中斷。",
 };
+const ready: Task = {
+  ...task,
+  id: "55555555-5555-4555-8555-555555555555",
+  title: "更新範例出貨報表",
+  mode: "change",
+  status: "ready",
+  pr_number: 12,
+  pr_url: "https://example.invalid/demo/report/pull/12",
+};
 
 for (const colorScheme of ["light", "dark"] as const) {
   for (const width of [1280, 375]) {
@@ -33,7 +42,7 @@ for (const colorScheme of ["light", "dark"] as const) {
       await page.setViewportSize({ width, height: 900 });
       await mockDashboard(page, {
         state: {
-          tasks: [task, investigation, blocked, previous],
+          tasks: [task, investigation, blocked, previous, ready],
           health: ["github", "line", "runner", "codex"].map((name) => ({
             name,
             ok: true,
@@ -68,25 +77,32 @@ for (const colorScheme of ["light", "dark"] as const) {
       };
 
       await expect(
-        page.getByRole("heading", { name: "等你決定", exact: true }),
+        page.getByRole("heading", { name: "需要你處理 3", exact: true }),
       ).toBeVisible();
       await expect(
         page.getByRole("img", { name: "站別軌道，目前在審核站" }),
       ).toBeVisible();
       expect(await withinViewport()).toBe(true);
-      if (width === 375) {
-        const summary = page.getByRole("navigation", { name: "任務摘要" });
-        const buttons = await summary.getByRole("button").all();
-        const [decision, moving, ready, merged] = await Promise.all(
-          buttons.map((button) => button.boundingBox()),
-        );
-        expect(decision!.y).toBe(moving!.y);
-        expect(ready!.y).toBe(merged!.y);
-        expect(decision!.x).toBe(ready!.x);
-        expect(moving!.x).toBe(merged!.x);
-        expect(ready!.y).toBeGreaterThan(decision!.y);
-        const total = await summary.getByText(/^累計/).boundingBox();
-        expect(total!.y).toBeGreaterThan(ready!.y);
+      for (const name of [
+        "需要你處理 3",
+        "進行中 1",
+        "待合併 1",
+        "近 7 天已合併 0",
+      ]) {
+        await expect(
+          page.getByRole("button", { name, exact: true }),
+        ).toHaveCount(1);
+        await expect(page.getByText(name, { exact: true })).toHaveCount(1);
+      }
+      for (const name of ["需要你處理 3", "進行中 1", "待合併 1"]) {
+        const section = page.getByRole("region", { name, exact: true });
+        const heading = section.getByRole("heading", { name, exact: true });
+        const ledger = section.locator(":scope > .work-ledger");
+        const firstRow = ledger.locator(":scope > :first-child");
+        await expect(firstRow).toBeVisible();
+        await expect(heading).toHaveCSS("border-bottom-width", "0px");
+        await expect(ledger).toHaveCSS("border-top-width", "1px");
+        await expect(firstRow).toHaveCSS("border-top-width", "0px");
       }
       await capture("收件匣");
 

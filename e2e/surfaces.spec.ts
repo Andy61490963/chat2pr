@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
 import type { ChatPage } from "../shared/chat";
 import {
   defaultState,
@@ -324,7 +325,7 @@ test("你可以儲存個人保留比例並看到 chat2pr 上限與重置時間",
   expect(reserve).toBe(59);
 });
 
-test("LINE 推播額度用完時，每個看板頁面都提示替代取回答案的方式", async ({
+test("LINE 額度用完時，每頁顯示簡短警示，按連結才顯示替代做法", async ({
   page,
 }) => {
   await mockDashboard(page, {
@@ -334,7 +335,7 @@ test("LINE 推播額度用完時，每個看板頁面都提示替代取回答案
           name: "line_quota",
           ok: false,
           detail: "LINE 本月推播額度已用完",
-          checked_at: new Date().toISOString(),
+          checked_at: "2026-01-10T08:00:00Z",
         },
       ],
     },
@@ -350,10 +351,144 @@ test("LINE 推播額度用完時，每個看板頁面都提示替代取回答案
       ).toBeVisible();
       const banner = page
         .getByRole("status")
-        .filter({ hasText: /LINE 本月推播額度已用完.*群組回答/ });
+        .filter({ hasText: "LINE 本月推播額度已用完，你仍可在看板查看通知。" });
       await expect(banner).toBeVisible();
-      await expect(banner).toContainText("/進度");
+      const help = page.getByText(/或在群組輸入 \/進度 取回/);
+      await expect(help).toBeHidden();
+      await page.getByRole("link", { name: "怎麼辦" }).click();
+      await expect(help).toBeVisible();
+      await page.getByRole("link", { name: "收起說明" }).click();
+      await expect(help).toBeHidden();
     });
+  }
+});
+
+test("頁首警示在 375px 可用鍵盤收合，重新整理後保持收合，新事件再展開", async ({
+  page,
+}, testInfo) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  const quota = {
+    name: "line_quota",
+    ok: false,
+    detail: "LINE 本月推播額度已用完",
+    checked_at: "2026-01-10T08:00:00Z",
+    outage_started_at: "2026-01-10T06:00:00Z",
+  };
+  let health = [quota];
+  await mockDashboard(page);
+  await page.route(/\/api\/state\?/, (route) =>
+    route.fulfill({ json: { ...defaultState, health } }),
+  );
+  await page.goto("/");
+  const banner = page.getByText(
+    "LINE 本月推播額度已用完，你仍可在看板查看通知。",
+  );
+  await expect(banner).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  await testInfo.attach("375px 收件匣與額度警示", {
+    body: await page.screenshot({ fullPage: true }),
+    contentType: "image/png",
+  });
+  const collapse = page.getByRole("button", { name: "收合頁首警示" });
+  const bounds = (await collapse.boundingBox())!;
+  expect(bounds.width).toBeGreaterThanOrEqual(44);
+  expect(bounds.height).toBeGreaterThanOrEqual(44);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(375);
+  const { violations } = await new AxeBuilder({ page }).analyze();
+  expect(
+    violations.filter(
+      ({ impact }) => impact === "serious" || impact === "critical",
+    ),
+  ).toEqual([]);
+  await collapse.focus();
+  await page.keyboard.press("Enter");
+  const expand = page.getByRole("button", { name: "展開頁首警示（1）" });
+  await expect(expand).toBeFocused();
+  await expect(expand).toHaveAttribute("aria-expanded", "false");
+  await expect(banner).toBeHidden();
+
+  health = [{ ...quota, checked_at: "2026-01-10T09:00:00Z" }];
+  await page.reload();
+  await expect(expand).toBeVisible();
+  await expect(banner).toBeHidden();
+
+  health = [
+    {
+      ...quota,
+      outage_started_at: "2026-01-10T10:00:00Z",
+      checked_at: "2026-01-10T10:00:00Z",
+    },
+  ];
+  await page.reload();
+  await expect(banner).toBeVisible();
+  await expect(collapse).toHaveAttribute("aria-expanded", "true");
+
+  // 640px 的瀏覽器在 200% 縮放時，版面以 320 CSS 像素重新排列。
+  await page.setViewportSize({ width: 320, height: 812 });
+  await page.getByRole("link", { name: "怎麼辦" }).click();
+  await expect(page.getByText(/或在群組輸入 \/進度 取回/)).toBeVisible();
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(320);
+});
+
+test("收件匣只在開啟系統紀錄時顯示技術細節", async ({ page }) => {
+  const entries = [
+    ["attempt", "開始程式修改"],
+    ["settings", "管理者恢復派工"],
+    ["install_image", "重用衍生映像 line-agentflow-derived:01234567"],
+    ["install_review", "系統套件安裝前審查"],
+    ["retrieval", "判讀參考：檢索到 20 則舊對話"],
+    ["started", "開始開發需求版本 1，基底 89abcdef"],
+  ];
+  await mockDashboard(page, {
+    state: {
+      activity: entries.map(([kind, detail], id) => ({
+        id,
+        kind,
+        detail,
+        task_id: task.id,
+        task_title: task.title,
+        task_mode: "query",
+        created_at: "2026-01-10T08:00:00Z",
+      })),
+    },
+  });
+  await page.goto("/");
+  await expect(page.getByText("開始調查", { exact: true })).toBeVisible();
+  await expect(page.getByText("開始程式修改", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("管理者恢復派工", { exact: true })).toBeVisible();
+  const system = [
+    ...entries.slice(2, 5).map(([, detail]) => detail),
+    "開始調查需求版本 1，基底 89abcdef",
+  ].map((detail) => page.getByText(detail, { exact: true }));
+  for (const entry of system) await expect(entry).toHaveCount(0);
+  await page.getByRole("button", { name: "顯示系統紀錄" }).click();
+  for (const entry of system) await expect(entry).toBeVisible();
+  await page.getByRole("button", { name: "隱藏系統紀錄" }).click();
+  for (const entry of system) await expect(entry).toHaveCount(0);
+});
+
+test("所有專案開放網路只在設定和專案頁顯示狀態", async ({ page }) => {
+  await mockDashboard(page, {
+    state: {
+      settings: { ...defaultState.settings, container_network: "open" },
+    },
+  });
+  const status = page.getByText(/所有專案已開放網路/);
+  await page.goto("/");
+  await expect(
+    page.getByRole("heading", { name: "收件匣", exact: true }),
+  ).toBeVisible();
+  await expect(status).toHaveCount(0);
+  for (const path of ["/settings", "/projects"]) {
+    await page.goto(path);
+    await expect(status).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "收合頁首警示" }),
+    ).toHaveCount(0);
   }
 });
 
@@ -492,11 +627,6 @@ for (const scenario of [
     settings: {},
     diskDispatchPaused: true,
     expected: "Docker 磁碟空間嚴重不足",
-  },
-  {
-    name: "開放所有專案網路",
-    settings: { container_network: "open" },
-    expected: "所有專案已開放網路",
   },
 ])
   test(scenario.name + "會顯示對應的頂端提醒", async ({ page }) => {
