@@ -1,4 +1,5 @@
 import {
+  notificationLabels,
   projectLabels,
   statusLabels,
   taskStationStatusLabels,
@@ -110,8 +111,16 @@ const kinds: Record<
     label: "機器人已離開群組",
   },
   group_new: { icon: UserPlus, tone: "text-warn", label: "群組等你啟用" },
-  service_down: { icon: Unplug, tone: "text-danger", label: "服務異常" },
-  service_up: { icon: PlugZap, tone: "text-good", label: "服務已恢復" },
+  service_down: {
+    icon: Unplug,
+    tone: "text-danger",
+    label: notificationLabels.serviceDown,
+  },
+  service_up: {
+    icon: PlugZap,
+    tone: "text-good",
+    label: notificationLabels.serviceUp,
+  },
   disk_low: {
     icon: HardDrive,
     tone: "text-danger",
@@ -411,7 +420,12 @@ export function AlertBell({
                         {task ? taskListTitle(task) : a.title}
                       </span>
                     )}
-                    <span className="line-clamp-2 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                    <span
+                      className={cn(
+                        "text-xs text-muted-foreground [overflow-wrap:anywhere]",
+                        a.kind !== "service_down" && "line-clamp-2",
+                      )}
+                    >
                       {a.text}
                     </span>
                     {task && (

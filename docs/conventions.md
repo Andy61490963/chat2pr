@@ -79,6 +79,8 @@
 
 專案頁的驗證按鈕與失敗建議共用 `shared/project-setup.ts` 的 `validateLabel`。你調整按鈕名稱時，請同步核對自動與手動設定的失敗樣本，讓使用者能照建議找到按鈕。
 
+服務異常通知使用 `shared/service-health-text.ts` 的固定說明。新增錯誤對照時，在 `tests/health.test.ts` 補上探測原文及對應說明，避免把讀數裡的技術字串帶進鈴鐺或 LINE 私訊。恢復通知的去重鍵使用服務名稱與中斷起點，重試同一段中斷時沿用原鍵。
+
 ## 4. 測試
 
 瀏覽器驗收（`npm run test:e2e`）跑在 Vite 開發伺服器上，沒有正式伺服器的安全標頭（CSP、`frame-ancestors`、X-Frame-Options）。牽涉這些標頭的行為（例如同源 iframe 嵌入）要另外用 `buildApp` 的整合測試檢查；系統頁的架構動畫就曾在 e2e 通過、正式環境卻被 `frame-ancestors 'none'` 擋下。

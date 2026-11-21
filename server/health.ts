@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { Database } from "./db.js";
 import { lineServiceOutageMinutes } from "../shared/line-private.js";
+import { serviceDownText } from "../shared/service-health-text.js";
+import { notificationLabels } from "../shared/status-glossary.js";
 
 // 會讓收訊、派工或通知停擺的服務；其餘項目只在設定頁顯示。
 const critical: Record<string, string> = {
@@ -23,6 +25,7 @@ type HealthReading = {
 };
 
 const minute = 60_000;
+const tunnelNoticeDelay = 5 * minute;
 
 export function healthTransition(
   name: string,
@@ -40,6 +43,7 @@ export function healthTransition(
   let lineOutageConfirmed = before.line_outage_confirmed ?? false;
   let notice: { kind: "service_up" | "service_down"; text: string } | null =
     null;
+  let briefOutage: string | null = null;
 
   if (!ok && confirmed) {
     outageStartedAt ??=
@@ -51,31 +55,50 @@ export function healthTransition(
   if (!ok && confirmed && elapsed >= lineServiceOutageMinutes * minute)
     lineOutageConfirmed = true;
 
-  if (ok && confirmed && (!baseline || (name === "tunnel" && outageStartedAt))) {
-    notice = {
-      kind: "service_up",
-      text: baseline
-        ? `${label}曾中斷約 ${Math.max(1, Math.round(elapsed / minute))} 分鐘，已恢復。`
-        : `服務已恢復：${label}`,
-    };
+  if (ok && confirmed) {
+    if (name === "tunnel" && outageStartedAt) {
+      // 用首次正常讀數計算中斷時間，第二次讀數只用來確認恢復。
+      const recoveredAt = confirm ? before.checked_at : observedAt;
+      const duration = recoveredAt.getTime() - outageStartedAt.getTime();
+      const minutes = Math.max(1, Math.round(duration / minute));
+      if (duration < tunnelNoticeDelay) {
+        briefOutage = `${label}中斷約 ${minutes} 分鐘後恢復`;
+      } else {
+        notice = {
+          kind: "service_up",
+          text: baseline
+            ? `${label}曾中斷約 ${minutes} 分鐘，已恢復。`
+            : `${notificationLabels.serviceUp}：${label}`,
+        };
+      }
+    } else if (!baseline) {
+      notice = {
+        kind: "service_up",
+        text: `${notificationLabels.serviceUp}：${label}`,
+      };
+    }
     notifiedOk = true;
+    outageStartedAt = null;
+    lineOutageConfirmed = false;
   } else if (
     !ok &&
     baseline &&
     confirmed &&
-    (name !== "tunnel" || elapsed >= 5 * minute)
+    (name !== "tunnel" || elapsed >= tunnelNoticeDelay)
   ) {
     notice = {
       kind: "service_down",
-      text: `服務異常：${label}（${detail}）。恢復前相關功能會停擺，請到設定頁查看。`,
+      text: serviceDownText(name, label, detail),
     };
     notifiedOk = false;
   }
-  if (ok && confirmed) {
-    outageStartedAt = null;
-    lineOutageConfirmed = false;
-  }
-  return { notifiedOk, outageStartedAt, lineOutageConfirmed, notice };
+  return {
+    notifiedOk,
+    outageStartedAt,
+    lineOutageConfirmed,
+    notice,
+    briefOutage,
+  };
 }
 
 /**
@@ -99,17 +122,24 @@ export async function recordHealth(
        outage_started_at=CASE WHEN NOT $5 THEN service_health.outage_started_at
          WHEN $2 THEN NULL
          ELSE coalesce(service_health.outage_started_at,now()) END`,
-      [name, ok, detail, options.silent ? null : ok, options.trackOutage ?? false],
+      [
+        name,
+        ok,
+        detail,
+        options.silent ? null : ok,
+        options.trackOutage ?? false,
+      ],
     );
     return;
   }
 
   // 同一服務的探測依資料列鎖序列化，狀態與通知一起提交。
   await db.transaction(async (c) => {
+    // 入口剛啟動時也要等中斷確認並達門檻，才改變通知基準。
     const inserted = await c.query(
       `INSERT INTO service_health(name,ok,detail,reading_ok,notified_ok)
-       VALUES($1,$2,$3,$2,$2) ON CONFLICT(name) DO NOTHING RETURNING name`,
-      [name, ok, detail],
+       VALUES($1,$2,$3,$2,$4) ON CONFLICT(name) DO NOTHING RETURNING name`,
+      [name, ok, detail, name === "tunnel" || ok],
     );
     if (inserted.rowCount) return;
     const {
@@ -123,23 +153,56 @@ export async function recordHealth(
     } = await c.query<{ observed_at: Date }>(
       "SELECT clock_timestamp() AS observed_at",
     );
-    const { notifiedOk, outageStartedAt, lineOutageConfirmed, notice } =
-      healthTransition(name, before, ok, detail, observedAt, options.confirm ?? false);
+    const {
+      notifiedOk,
+      outageStartedAt,
+      lineOutageConfirmed,
+      notice,
+      briefOutage,
+    } = healthTransition(
+      name,
+      before,
+      ok,
+      detail,
+      observedAt,
+      options.confirm ?? false,
+    );
     await c.query(
       `UPDATE service_health SET ok=$2,detail=$3,reading_ok=$2,checked_at=$4,
        notified_ok=$5,outage_started_at=$6,line_outage_confirmed=$7 WHERE name=$1`,
-      [name, ok, detail, observedAt, notifiedOk, outageStartedAt, lineOutageConfirmed],
+      [
+        name,
+        ok,
+        detail,
+        observedAt,
+        notifiedOk,
+        outageStartedAt,
+        lineOutageConfirmed,
+      ],
     );
+    if (briefOutage) {
+      await c.query(
+        "INSERT INTO audit(kind,detail,created_at) VALUES('tunnel_brief_outage',$1,$2)",
+        [briefOutage, observedAt],
+      );
+    }
     if (notice) {
       const noticeOutage = ok
-        ? (before.line_outage_confirmed ? before.outage_started_at : null)
+        ? before.line_outage_confirmed
+          ? before.outage_started_at
+          : null
         : outageStartedAt;
+      // 恢復通知以服務與中斷起點去重，舊資料沒有中斷起點時沿用資料列鎖。
+      const noticeId =
+        ok && before.outage_started_at
+          ? before.outage_started_at.toISOString()
+          : randomUUID();
       await c.query(
         `INSERT INTO notifications(kind,dedupe_key,text,created_at,line_outage_started_at)
-         VALUES($1,$2,$3,$4,$5)`,
+         VALUES($1,$2,$3,$4,$5) ON CONFLICT(dedupe_key) DO NOTHING`,
         [
           notice.kind,
-          `service:${name}:${ok ? "up" : "down"}:${randomUUID()}`,
+          `service:${name}:${ok ? "up" : "down"}:${noticeId}`,
           notice.text,
           observedAt,
           noticeOutage,

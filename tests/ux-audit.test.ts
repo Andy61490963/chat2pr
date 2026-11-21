@@ -171,11 +171,13 @@ describe("服務狀態通知", () => {
   it("第一次觀察只建立基準；正常轉異常、異常恢復各通知一次", async () => {
     await recordHealth(db, "github", true, "正常");
     expect(await db.query("SELECT 1 FROM notifications")).toHaveLength(0);
-    await recordHealth(db, "github", false, "GitHub App 驗證失敗");
-    await recordHealth(db, "github", false, "GitHub App 驗證失敗");
+    await recordHealth(db, "github", false, "TypeError: fetch failed");
+    await recordHealth(db, "github", false, "TypeError: fetch failed");
     const down = await notices("service_down");
     expect(down).toHaveLength(1);
     expect(down[0].text).toContain("GitHub App");
+    expect(down[0].text).toContain("連不上服務");
+    expect(down[0].text).not.toContain("fetch failed");
     await recordHealth(db, "github", true, "正常");
     await recordHealth(db, "github", true, "正常");
     expect(await notices("service_up")).toHaveLength(1);
@@ -203,20 +205,45 @@ describe("服務狀態通知", () => {
       [minutes],
     );
 
-  it("入口短暫中斷只通知恢復，單次異常讀數不通報", async () => {
+  it("入口短暫中斷只留下系統紀錄，單次異常讀數不留紀錄", async () => {
+    const recentOutages = () =>
+      db.query("SELECT detail FROM audit WHERE kind='tunnel_brief_outage'");
     await tunnel(true);
     await tunnel(false);
     await tunnel(true);
     await tunnel(true);
     expect(await db.query("SELECT 1 FROM notifications")).toHaveLength(0);
+    expect(await recentOutages()).toHaveLength(0);
     await tunnel(false);
     await tunnel(false);
-    await ageOutage(2);
+    await ageOutage(1);
     await tunnel(true);
     expect(await db.query("SELECT 1 FROM notifications")).toHaveLength(0);
+    await Promise.all([tunnel(true), tunnel(true)]);
+    expect(await db.query("SELECT 1 FROM notifications")).toHaveLength(0);
+    expect(await recentOutages()).toEqual([
+      { detail: "HTTPS 入口中斷約 1 分鐘後恢復" },
+    ]);
+    const dashboard = await state();
+    expect(dashboard.alerts).toHaveLength(0);
+    expect(dashboard.activity).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: "tunnel_brief_outage",
+        task_id: null,
+        detail: "HTTPS 入口中斷約 1 分鐘後恢復",
+      }),
+    ]));
+  });
+
+  it("首次探測時入口還沒就緒，短暫中斷恢復後只留系統紀錄", async () => {
+    await tunnel(false);
+    await tunnel(false);
+    await ageOutage(1);
     await tunnel(true);
-    expect(await db.query("SELECT kind,text FROM notifications")).toEqual([
-      { kind: "service_up", text: "HTTPS 入口曾中斷約 2 分鐘，已恢復。" },
+    await tunnel(true);
+    expect(await db.query("SELECT 1 FROM notifications")).toHaveLength(0);
+    expect(await db.query("SELECT detail FROM audit WHERE kind='tunnel_brief_outage'")).toEqual([
+      { detail: "HTTPS 入口中斷約 1 分鐘後恢復" },
     ]);
   });
 
@@ -224,7 +251,7 @@ describe("服務狀態通知", () => {
     await tunnel(true);
     await tunnel(false);
     await tunnel(false);
-    await ageOutage(5);
+    await ageOutage(6);
     await tunnel(false);
     await tunnel(false);
     expect(await notices("service_down")).toHaveLength(1);
@@ -235,6 +262,30 @@ describe("服務狀態通知", () => {
     await tunnel(true);
     expect(await notices("service_up")).toHaveLength(1);
     expect(await notices("service_down")).toHaveLength(1);
+  });
+
+  it("同一段入口中斷的恢復重試不重複通知，下次中斷仍會通知", async () => {
+    const outageStart = new Date("2026-01-01T08:00:00Z");
+    const replayOutage = (start: Date) =>
+      db.query(
+        `UPDATE service_health SET ok=false,reading_ok=false,notified_ok=false,
+         outage_started_at=$1 WHERE name='tunnel'`,
+        [start],
+      );
+    await tunnel(true);
+    await replayOutage(outageStart);
+    await tunnel(true);
+    await tunnel(true);
+    expect(await notices("service_up")).toHaveLength(1);
+
+    await replayOutage(outageStart);
+    await Promise.all([tunnel(true), tunnel(true), tunnel(true)]);
+    expect(await notices("service_up")).toHaveLength(1);
+
+    await replayOutage(new Date("2026-01-01T09:00:00Z"));
+    await tunnel(true);
+    await tunnel(true);
+    expect(await notices("service_up")).toHaveLength(2);
   });
 });
 

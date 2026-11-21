@@ -632,6 +632,7 @@ const systemActivity = new Set([
   "retrieval",
   "started",
   "triage_skipped",
+  "tunnel_brief_outage",
 ]);
 const isSystemActivity = (a: Audit) =>
   systemActivity.has(a.kind) ||
