@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Server, utils } from "ssh2";
 import type { AddressInfo } from "node:net";
 import { db, reset, fixture, session } from "./helpers.js";
+import { testHostKey } from "./ssh-host-key.js";
 import { buildApp } from "../server/app.js";
 import type { Runner } from "../server/execution.js";
 import { FULL_ACCESS_ENV } from "../server/containers.js";
@@ -266,7 +267,7 @@ describe("從主機測試 SSH 登入", () => {
   let server: Server | undefined;
   afterAll(() => server?.close());
   it("登入成功回報指紋；密碼錯誤與金鑰不符各自說明", async () => {
-    const hostKey = utils.generateKeyPairSync("ed25519");
+    const hostKey = testHostKey();
     server = new Server({ hostKeys: [hostKey.private] }, (client) => {
       client.on("authentication", (ctx) =>
         ctx.method === "password" &&

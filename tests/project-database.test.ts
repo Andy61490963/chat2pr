@@ -10,6 +10,7 @@ import {
 import { createServer, connect, type AddressInfo, type Server } from "node:net";
 import ssh2 from "ssh2";
 import { db, fixture, reset, session } from "./helpers.js";
+import { testHostKey } from "./ssh-host-key.js";
 import { buildApp } from "../server/app.js";
 import type { Project } from "../shared/types.js";
 import { openTunnel } from "../server/database-capture.js";
@@ -676,7 +677,7 @@ describe("SSH 跳板通道", () => {
       socket.on("data", (d) => socket.write(d)),
     );
     const targetPort = await listen(target);
-    const hostKey = ssh2.utils.generateKeyPairSync("ed25519");
+    const hostKey = testHostKey();
     jump = new ssh2.Server({ hostKeys: [hostKey.private] }, (client) => {
       client.on("authentication", (ctx) =>
         ctx.method === "password" && ctx.password === "fictional-jump-pass"
