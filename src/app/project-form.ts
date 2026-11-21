@@ -32,6 +32,18 @@ export function validationKind(
   return p.validated_at ? "transient" : "failed";
 }
 
+export function projectVerification(p: Project) {
+  if (p.validation_progress) return "validating";
+  if (p.repo_missing_at || validationKind(p) === "failed") return "failed";
+  if (!p.validated_at || p.setup_input) return "unverified";
+  // 重新驗證暫時失敗時，仍以先前通過的驗證範圍為準。
+  const plan = p.setup_mode === "auto" ? p.setup_plan : null;
+  if (plan?.verification === "partial" || plan?.verification === "build")
+    return "partial";
+  if (p.setup_mode !== "auto" && !p.test_command.trim()) return "partial";
+  return "passed";
+}
+
 /** 連接埠欄位的檢查：空值或不是 1–65535 的整數時回傳提示，不能讓空值被當成 0 送出。 */
 export function portError(value: string, label = "連接埠"): string {
   const v = value.trim();

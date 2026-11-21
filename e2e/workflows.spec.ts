@@ -680,7 +680,9 @@ for (const progress of [
     });
     await page.goto("/projects");
     const row = page.getByRole("button", { name: /^測試專案/ });
-    await expect(row.getByText("驗證中", { exact: true })).toBeVisible();
+    await expect(
+      row.getByText("驗證中", { exact: true }).first(),
+    ).toBeVisible();
     await expect(row.getByText(progress, { exact: true })).toBeVisible();
     await row.click();
     const dialog = page.getByRole("dialog", { name: project.name });
