@@ -81,6 +81,11 @@ import {
 import { TaskDrawer } from "./app/task-drawer";
 import { TasksView } from "./app/tasks";
 import { SystemView } from "./app/system";
+import {
+  defaultSystemTab,
+  readSystemTab,
+  type SystemTab,
+} from "../shared/system-tabs.js";
 import { ChecksView } from "./app/checks";
 import { MembersView } from "./app/members";
 import { AlertBell } from "./app/alerts";
@@ -217,6 +222,9 @@ const returnKey = "agentflow-return";
 
 export function App() {
   const [view, setView] = useState<View>(() => viewFromPath(location.pathname)),
+    [systemTab, setSystemTab] = useState(() =>
+      readSystemTab(new URLSearchParams(location.search).get("tab")),
+    ),
     [state, setState] = useState<State | null>(null),
     [user, setUser] = useState<{
       csrf: string;
@@ -445,6 +453,7 @@ export function App() {
       guard(
         () => {
           setView(viewFromPath(destination.pathname));
+          setSystemTab(readSystemTab(destination.searchParams.get("tab")));
           setSavedProject(linkedProject(destination));
           setTaskAfterNavigation(null);
           const id = destination.searchParams.get("task");
@@ -494,6 +503,9 @@ export function App() {
     ) {
       history.replaceState(null, "", back);
       setView(viewFromPath(location.pathname));
+      setSystemTab(
+        readSystemTab(new URLSearchParams(location.search).get("tab")),
+      );
     }
     const linked = linkedProject(new URL(location.href));
     if (linked) setSavedProject(linked);
@@ -558,23 +570,33 @@ export function App() {
         else setSelected(await request<Detail>(`/api/tasks/${task.id}`));
       }
     }, done ?? "任務已更新");
-  const leave = (v: View) => {
+  const leave = (v: View, nextSystemTab?: SystemTab) => {
     setView(v);
     setSelected(null);
     setTaskAfterNavigation(null);
     // 從導覽進入一律是乾淨的頁面：不帶上一輪的篩選。
-    if (viewPaths[v] !== location.pathname || location.search || location.hash)
-      history.pushState(null, "", viewPaths[v]);
+    const path = nextSystemTab
+      ? `${viewPaths[v]}?${new URLSearchParams({ tab: nextSystemTab })}`
+      : viewPaths[v];
+    if (path !== location.pathname + location.search + location.hash)
+      history.pushState(null, "", path);
+    setSystemTab(nextSystemTab ?? defaultSystemTab);
     setVisit((n) => n + 1);
     window.scrollTo({ top: 0 });
   };
   // 換頁前先確認沒有未儲存的修改。
-  const go = (v: View, projectId?: string | null, tab = "environment") =>
+  const go = (v: View, projectId?: string | null, tab?: string) =>
     guard(() => {
-      leave(v);
+      leave(v, v === "system" && tab ? readSystemTab(tab) : undefined);
       if (v === "projects" && projectId)
-        setSavedProject({ id: projectId, tab });
+        setSavedProject({ id: projectId, tab: tab ?? "environment" });
     });
+  const changeSystemTab = (tab: SystemTab) => {
+    const url = new URL(location.href);
+    url.searchParams.set("tab", tab);
+    history.pushState(null, "", url);
+    setSystemTab(tab);
+  };
   // 從選單換頁時，選單關閉會把焦點還給觸發按鈕；改送到新頁面的標題。
   const fromMenu = useRef(false);
   const goFromMenu = (v: View, projectId?: string | null, tab?: string) => {
@@ -699,6 +721,11 @@ export function App() {
         : null;
   const hold = state?.settings.paused ? null : (hostHold ?? subscriptionHold);
   const holdView = hostHold ? "system" : "settings";
+  const holdTab = hostHold
+    ? state?.diskDispatchPaused
+      ? "disk"
+      : defaultSystemTab
+    : undefined;
   const notices = [
     admin &&
       goneProjects.length > 0 && {
@@ -1071,15 +1098,16 @@ export function App() {
                     ? hold
                     : `${hold}，額度恢復後會自動繼續。`}
               </span>
-              {admin && view !== holdView && (
-                <Button
-                  variant="outline"
-                  size="xs"
-                  onClick={() => go(holdView)}
-                >
-                  {hostHold ? "查看系統頁" : "查看訂閱額度"}
-                </Button>
-              )}
+              {admin &&
+                (view !== holdView || (holdTab && systemTab !== holdTab)) && (
+                  <Button
+                    variant="outline"
+                    size="xs"
+                    onClick={() => go(holdView, null, holdTab)}
+                  >
+                    {hostHold ? "查看系統頁" : "查看訂閱額度"}
+                  </Button>
+                )}
             </p>
           )}
           {lineQuota && (
@@ -1254,7 +1282,13 @@ export function App() {
               <ChecksView state={state} request={request} admin={admin} />
             )}
             {current.id === "system" && (
-              <SystemView state={state} request={request} admin={admin} />
+              <SystemView
+                state={state}
+                request={request}
+                admin={admin}
+                tab={systemTab}
+                onTabChange={changeSystemTab}
+              />
             )}
             {current.id === "members" && (
               <MembersView

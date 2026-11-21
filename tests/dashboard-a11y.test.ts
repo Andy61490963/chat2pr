@@ -31,6 +31,19 @@ describe("鈴鐺通知按下去會去哪", () => {
         notificationTarget({ task_id: null, kind: "knowledge" }, admin),
       ).toEqual({ note: "僅供參考" });
   });
+  it("磁碟不足或恢復的通知指向容器與磁碟分頁，僅管理者可開啟", () => {
+    for (const kind of ["disk_low", "disk_ok"]) {
+      const notice = { task_id: null, kind };
+      expect(notificationTarget(notice, true)).toEqual({
+        view: "system",
+        tab: "disk",
+      });
+      expect(notificationTarget(notice, false)).toEqual({
+        note: "由管理者到看板處理",
+      });
+      expect(notificationPath(notice)).toBe("system?tab=disk");
+    }
+  });
 });
 
 describe("頁首派工狀態", () => {

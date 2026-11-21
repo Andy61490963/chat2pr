@@ -6,12 +6,84 @@ import {
   checkEnvironmentLimits,
   defaultCheckEnvironmentPolicy,
 } from "../shared/check-environment";
-import { defaultDiskSettings } from "../shared/docker-disk";
+import { defaultDiskSettings, type DiskReport } from "../shared/docker-disk";
 import type { ChatPage } from "../shared/chat";
 import { discordServiceText } from "../shared/status-glossary";
 import type { ActivityEvent } from "../shared/activity-groups";
 
 const timestamp = "2026-01-01T00:00:00Z";
+
+export const systemSnapshot = {
+  checkedAt: timestamp,
+  requiredWorkerRev: "demo",
+  runner: { state: "ok" },
+  services: [
+    {
+      name: "line-agentflow-app-1",
+      role: "看板與排程服務",
+      image: "demo-app:local",
+      state: "running",
+      status: "Up (healthy)",
+      created: timestamp,
+    },
+  ],
+  jobs: [],
+  images: [
+    {
+      tag: "line-agentflow-worker:local",
+      rev: "demo",
+      current: true,
+      sizeMb: 2048,
+      created: timestamp,
+    },
+    {
+      tag: "line-agentflow-worker:demo-old",
+      rev: "demo-old",
+      current: false,
+      sizeMb: 2048,
+      created: timestamp,
+    },
+    {
+      tag: "line-agentflow-worker:demo-unused",
+      rev: null,
+      current: false,
+      sizeMb: 1024,
+      created: timestamp,
+    },
+  ],
+  volumes: { jobs: 0, sourceCaches: 0 },
+};
+
+export const diskReport: DiskReport = {
+  checkedAt: timestamp,
+  instance: "demo",
+  settings: defaultDiskSettings,
+  usage: [
+    {
+      kind: "images",
+      label: "映像",
+      total: 3,
+      active: 2,
+      size: 5 * 1024 ** 3,
+      reclaimable: 1024 ** 3,
+    },
+  ],
+  spaces: [
+    {
+      label: "範例磁碟",
+      freeBytes: 80 * 1024 ** 3,
+      totalBytes: 100 * 1024 ** 3,
+    },
+  ],
+  level: "ok",
+  freePercent: 80,
+  paused: false,
+  owners: [],
+  candidates: [],
+  protected: [],
+  nextCleanupAt: null,
+  lastCleanup: null,
+};
 
 export const project: Project = {
   id: "project-demo",
@@ -340,37 +412,7 @@ export async function mockDashboard(
     },
     "/api/checks": [],
     "/api/members": [],
-    "/api/system": {
-      checkedAt: timestamp,
-      requiredWorkerRev: "demo",
-      runner: { state: "ok" },
-      services: [],
-      jobs: [],
-      images: [
-        {
-          tag: "line-agentflow-worker:local",
-          rev: "demo",
-          current: true,
-          sizeMb: 2048,
-          created: timestamp,
-        },
-        {
-          tag: "line-agentflow-worker:demo-old",
-          rev: "demo-old",
-          current: false,
-          sizeMb: 2048,
-          created: timestamp,
-        },
-        {
-          tag: "line-agentflow-worker:demo-unused",
-          rev: null,
-          current: false,
-          sizeMb: 1024,
-          created: timestamp,
-        },
-      ],
-      volumes: { jobs: 0, sourceCaches: 0 },
-    },
+    "/api/system": systemSnapshot,
     "/api/capacity": {
       maxRuns: 2,
       cap: 8,
@@ -404,21 +446,7 @@ export async function mockDashboard(
       limits: checkEnvironmentLimits,
     },
     "/api/system/disk/settings": defaultDiskSettings,
-    "/api/system/disk": {
-      checkedAt: timestamp,
-      instance: "demo",
-      settings: defaultDiskSettings,
-      usage: [],
-      spaces: [],
-      level: "ok",
-      freePercent: 80,
-      paused: false,
-      owners: [],
-      candidates: [],
-      protected: [],
-      nextCleanupAt: null,
-      lastCleanup: null,
-    },
+    "/api/system/disk": diskReport,
     ...options.routes,
   };
 

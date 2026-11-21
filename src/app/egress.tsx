@@ -72,7 +72,11 @@ export function EgressCard({ request }: { request: Request }) {
         "PUT",
         reset ? { reset: true } : { domains: lines },
       );
-      setNotice(r.warning ?? "已保存並更新套件出口代理。");
+      setNotice(
+        r.warning
+          ? "白名單已儲存，但下載代理暫時無法同步，可能是代理忙碌或沒有回應。系統會在下次安裝前重試；若下載仍失敗，請確認下載代理正在運轉。"
+          : "白名單已儲存，下載代理也已更新。",
+      );
       await load();
     } catch (e) {
       setError(message(e));
@@ -83,7 +87,9 @@ export function EgressCard({ request }: { request: Request }) {
   return (
     <Card>
       <CardHeader className="flex flex-col gap-1">
-        <CardTitle>下載來源白名單</CardTitle>
+        <CardTitle role="heading" aria-level={2}>
+          下載來源白名單
+        </CardTitle>
         <CardDescription>
           安裝相依套件、安裝審查放行的系統套件，以及開發時下載套件，只能經代理連到這些網域（只限
           https）。開頭加點代表連同子網域，例如
@@ -92,7 +98,10 @@ export function EgressCard({ request }: { request: Request }) {
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {error && (
-          <p className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">
+          <p
+            role="alert"
+            className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
+          >
             {error}
           </p>
         )}

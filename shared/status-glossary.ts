@@ -180,6 +180,27 @@ export const groupLabels = {
   unbound: "沒有可用專案",
 } as const;
 
+export const systemStatusLabels = {
+  attention: taskStatusFilterLabels.todo,
+  runner: {
+    ok: "連線正常",
+    docker: "Docker 沒有回應",
+    down: "執行器沒有回應",
+    unavailable: "無法讀取狀態",
+  },
+  container: {
+    running: "運轉中",
+    stopped: "未運轉",
+    unhealthy: "健康檢查未通過",
+  },
+  disk: {
+    ok: "空間足夠",
+    low: "空間不足",
+    critical: "嚴重不足",
+    unknown: "讀不到可用空間",
+  },
+} as const;
+
 export const triageNoTaskLabels = {
   coworker_assignment: "訊息屬於同事之間的分工，系統未建立任務。",
   undecided_discussion: "討論尚未定案，系統未建立任務。",

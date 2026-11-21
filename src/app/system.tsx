@@ -9,15 +9,38 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/form-controls";
 import { cn } from "@/lib/utils";
-import { type Request, type State, ago, date, message } from "./shared";
+import {
+  type Request,
+  type State,
+  ago,
+  date,
+  memoryHold,
+  message,
+} from "./shared";
 import { CapacityCard } from "./capacity";
 import { DockerDiskCard } from "./docker-disk";
+import type { DiskLevel } from "../../shared/docker-disk.js";
 import { entryText, type EntryKind } from "../../shared/entry.js";
+import { phaseLabels } from "../../shared/observation.js";
 import {
+  systemStatusLabels,
   workerImageLabels,
   workerImageStatus,
 } from "../../shared/status-glossary.js";
+import {
+  containerCondition,
+  diskAttentionCount,
+  readSystemTab,
+  systemTabs,
+  type SystemTab,
+} from "../../shared/system-tabs.js";
 import { EgressCard } from "./egress";
 import { CheckEnvironmentCard } from "./check-environments";
 import { FrictionCard } from "./friction";
@@ -29,7 +52,7 @@ type ContainerStatus = {
   state: string;
   status: string;
   created: string;
-  runId?: string;
+  phase?: string;
 };
 type WorkerImage = {
   tag: string;
@@ -60,28 +83,51 @@ type DockerLists = {
   volumes: Volumes;
 };
 type Tone = "good" | "warn" | "danger";
-const runnerView: Record<
-  SystemStatus["runner"]["state"],
-  { tone: Tone; label: string }
-> = {
-  ok: { tone: "good", label: "連線正常" },
-  docker: { tone: "warn", label: "Docker 沒有回應" },
-  down: { tone: "danger", label: "執行器沒有回應" },
+const runnerTone = {
+  ok: "good",
+  docker: "warn",
+  down: "danger",
+  unavailable: "danger",
+} as const;
+const runnerAdvice = {
+  docker:
+    "執行器有回應，但讀不到 Docker 資料，可能是 Docker 忙碌或已停止。請確認 Docker Desktop 與主機可用記憶體，再按「重新整理」。",
+  down: "執行器沒有回應，主機程序可能已停止或網路已中斷。請確認主機連線，稍候讓監督程序恢復執行器，再按「重新整理」。",
+};
+const containerTone = {
+  running: "good",
+  unhealthy: "danger",
+  stopped: "danger",
+} as const;
+const serviceNames: Record<string, string> = {
+  app: "看板與排程",
+  db: "資料庫",
+  egress: "套件下載代理",
+  "egress-ai": "AI 服務連線代理",
+  "subscription-relay": "訂閱推論轉送",
+  embedder: "本機向量模型",
+  "db-test": "測試用資料庫",
 };
 
 export function SystemView({
   state,
   request,
   admin = false,
+  tab,
+  onTabChange,
 }: {
   state: State;
   request: Request;
   admin?: boolean;
+  tab: SystemTab;
+  onTabChange: (tab: SystemTab) => void;
 }) {
   const [status, setStatus] = useState<SystemStatus | null>(null),
     [lists, setLists] = useState<DockerLists | null>(null),
-    [error, setError] = useState(""),
+    [error, setError] = useState(false),
+    [errorDetail, setErrorDetail] = useState(""),
     [loading, setLoading] = useState(false);
+  const [diskLevel, setDiskLevel] = useState<DiskLevel | null>(null);
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -95,9 +141,11 @@ export function SystemView({
           images: s.images,
           volumes: s.volumes,
         });
-      setError("");
+      setError(false);
+      setErrorDetail("");
     } catch (e) {
-      setError(message(e));
+      setError(true);
+      setErrorDetail(message(e));
     } finally {
       setLoading(false);
     }
@@ -107,13 +155,12 @@ export function SystemView({
     const t = setInterval(() => void load(), 30000);
     return () => clearInterval(t);
   }, [load]);
-  const runner = error
-    ? { tone: "danger" as Tone, label: "無法讀取狀態" }
-    : status
-      ? runnerView[status.runner.state]
-      : null;
+  const services = (lists?.services ?? []).map((service) => ({
+    service,
+    condition: containerCondition(service),
+  }));
   // 這次沒拿到清單（執行器或 Docker 沒回應、或看板讀取失敗）：沿用上一次的清單並標示時間。
-  const stale = !!error || (!!status && !status.services);
+  const stale = error || (!!status && !status.services);
   const images = (lists?.images ?? []).map((image) => {
     const usedBy = state.projects
       .filter((project) => project.image === image.tag)
@@ -124,190 +171,341 @@ export function SystemView({
       status: workerImageStatus(image.current, usedBy.length > 0),
     };
   });
+  const counts: Record<SystemTab, number> = {
+    execution: Number(
+      !state.settings.paused &&
+        !state.diskDispatchPaused &&
+        !!memoryHold(state),
+    ),
+    disk: diskAttentionCount({
+      probeFailed: stale,
+      services: services.map(({ condition }) => condition),
+      images: images.map(({ status }) => status),
+      diskLevel,
+      diskPaused: state.diskDispatchPaused ?? false,
+    }),
+    network: 0,
+    architecture: 0,
+  };
   return (
-    <div className="flex flex-col gap-6">
-      <CapacityCard request={request} />
-      {admin && <FrictionCard state={state} request={request} />}
-      <Card>
-        <CardHeader className="flex flex-row items-start justify-between gap-3">
-          <div className="flex flex-col gap-1">
-            <CardTitle>容器狀態</CardTitle>
-            <CardDescription>
-              {status
-                ? `每 30 秒更新，最後更新 ${ago(status.checkedAt)}`
-                : "讀取中…"}
-            </CardDescription>
-          </div>
-          <Button
-            variant="outline"
-            size="sm"
-            className="min-h-11"
-            disabled={loading}
-            onClick={() => void load()}
-          >
-            <RefreshCw className={cn(loading && "animate-spin")} /> 重新整理
-          </Button>
-        </CardHeader>
-        <CardContent className="flex flex-col gap-5">
-          {error && (
-            <p
-              role="alert"
-              className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
+    <Tabs
+      value={tab}
+      onValueChange={(value) => onTabChange(readSystemTab(value))}
+      className="min-w-0 gap-4"
+    >
+      <TabsList
+        aria-label="系統分頁"
+        className="h-auto max-w-full justify-start overflow-x-auto"
+      >
+        {(Object.entries(systemTabs) as [SystemTab, string][]).map(
+          ([id, label]) => (
+            <TabsTrigger
+              key={id}
+              value={id}
+              className="h-auto min-h-11 flex-none gap-1.5 px-3 md:min-h-8"
             >
-              {error}
-            </p>
-          )}
-          {!error && status?.runner.detail && (
-            <p
-              role="status"
-              className={cn(
-                "rounded-lg px-3 py-2 text-sm",
-                status.runner.state === "down"
-                  ? "bg-danger-soft text-danger"
-                  : "bg-warn-soft text-warn",
+              {label}
+              {counts[id] > 0 && (
+                // 數字可見、說明給讀屏：可見文字要包含在名稱裡（axe label-content-name-mismatch）。
+                <Badge variant="warn" className="px-1.5">
+                  <span className="sr-only">
+                    {" "}
+                    {systemStatusLabels.attention}{" "}
+                  </span>
+                  {counts[id]}
+                  <span className="sr-only"> 項</span>
+                </Badge>
               )}
-            >
-              {status.runner.detail}
-            </p>
-          )}
-          {runner && (
+            </TabsTrigger>
+          ),
+        )}
+      </TabsList>
+      {/* 分頁切換時保留設定草稿；磁碟盤點也提供未開啟分頁的待處理數量。 */}
+      <TabsContent
+        value="execution"
+        forceMount
+        hidden={tab !== "execution"}
+        className="space-y-6"
+      >
+        <CapacityCard request={request} />
+        {admin && <FrictionCard state={state} request={request} />}
+      </TabsContent>
+      <TabsContent
+        value="disk"
+        forceMount
+        hidden={tab !== "disk"}
+        className="space-y-6"
+      >
+        <ContainerCard
+          status={status}
+          lists={lists}
+          services={services}
+          images={images}
+          stale={stale}
+          error={error}
+          errorDetail={errorDetail}
+          loading={loading}
+          reload={load}
+        />
+        <DockerDiskCard
+          request={request}
+          active={tab === "disk"}
+          onLevelChange={setDiskLevel}
+        />
+      </TabsContent>
+      <TabsContent
+        value="network"
+        forceMount
+        hidden={tab !== "network"}
+        className="space-y-6"
+      >
+        <EgressCard request={request} />
+        <CheckEnvironmentCard request={request} admin={admin} />
+      </TabsContent>
+      <TabsContent value="architecture">
+        {status || error ? (
+          <Architecture state={state} entry={status?.entry ?? "unknown"} />
+        ) : (
+          <p role="status" className="text-sm text-muted-foreground">
+            正在讀取系統架構…
+          </p>
+        )}
+      </TabsContent>
+    </Tabs>
+  );
+}
+
+function ContainerCard({
+  status,
+  lists,
+  services,
+  images,
+  stale,
+  error,
+  errorDetail,
+  loading,
+  reload,
+}: {
+  status: SystemStatus | null;
+  lists: DockerLists | null;
+  services: {
+    service: ContainerStatus;
+    condition: ReturnType<typeof containerCondition>;
+  }[];
+  images: {
+    image: WorkerImage;
+    usedBy: string[];
+    status: ReturnType<typeof workerImageStatus>;
+  }[];
+  stale: boolean;
+  error: boolean;
+  errorDetail: string;
+  loading: boolean;
+  reload: () => Promise<void>;
+}) {
+  const runner = error ? "unavailable" : status?.runner.state;
+  return (
+    <Card>
+      <CardHeader className="flex flex-row items-start justify-between gap-3">
+        <div className="flex flex-col gap-1">
+          <CardTitle role="heading" aria-level={2}>
+            容器狀態
+          </CardTitle>
+          <CardDescription>
+            {status
+              ? `每 30 秒更新，最後更新 ${ago(status.checkedAt)}`
+              : error
+                ? "尚未取得狀態"
+                : "讀取中…"}
+          </CardDescription>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="min-h-11"
+          disabled={loading}
+          onClick={() => void reload()}
+        >
+          <RefreshCw className={cn(loading && "animate-spin")} /> 重新整理
+        </Button>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-5">
+        {error && (
+          <p
+            role="alert"
+            className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
+          >
+            無法讀取容器狀態，可能是連線中斷或看板暫時無法取得資料。請按「重新整理」再試。
+            {errorDetail && (
+              <span className="mt-1 block text-xs break-words">
+                錯誤重點：{errorDetail}
+              </span>
+            )}
+          </p>
+        )}
+        {(runner === "down" || runner === "docker") && (
+          <p
+            role="status"
+            className={cn(
+              "rounded-lg px-3 py-2 text-sm",
+              runner === "down"
+                ? "bg-danger-soft text-danger"
+                : "bg-warn-soft text-warn",
+            )}
+          >
+            {runnerAdvice[runner]}
+            {/* 伺服器已遮蔽機密；保留錯誤重點，管理者才知道是哪一步失敗。 */}
+            {status?.runner.detail && (
+              <span className="mt-1 block text-xs break-words">
+                錯誤重點：{status.runner.detail}
+              </span>
+            )}
+          </p>
+        )}
+        {runner && (
+          <section className="flex flex-col gap-2">
+            <h3 className="text-xs font-medium text-muted-foreground">服務</h3>
+            <ul className="divide-y rounded-lg border">
+              <ServiceRow
+                name="執行器"
+                role="負責建立與回收工作容器的主機程序"
+                tone={runnerTone[runner]}
+                detail={systemStatusLabels.runner[runner]}
+              />
+              {services.map(({ service, condition }) => (
+                <ServiceRow
+                  key={service.name}
+                  name={
+                    serviceNames[
+                      service.name.replace(/^line-agentflow-|-\d+$/g, "")
+                    ] ?? "其他服務"
+                  }
+                  role={service.role}
+                  tone={containerTone[condition]}
+                  detail={systemStatusLabels.container[condition]}
+                />
+              ))}
+            </ul>
+            {!stale &&
+              services.some(({ condition }) => condition !== "running") && (
+                <p className="text-xs text-danger">
+                  有服務暫時無法使用，可能是容器已停止或健康檢查未通過。請在主機確認
+                  Docker 中的服務狀態，再按「重新整理」。
+                </p>
+              )}
+            {stale && (
+              <p className="text-xs text-muted-foreground">
+                {lists
+                  ? `容器清單資料停在 ${ago(lists.checkedAt)}，恢復回應後會自動更新。`
+                  : "尚未取得容器清單，恢復回應後會自動更新。"}
+              </p>
+            )}
+          </section>
+        )}
+        {lists && (
+          <>
             <section className="flex flex-col gap-2">
               <h3 className="text-xs font-medium text-muted-foreground">
-                服務
+                執行中的工作容器
               </h3>
-              <ul className="divide-y rounded-lg border">
-                <ServiceRow
-                  name="執行器 runner"
-                  role="主機上的程序（4312），負責建立與回收工作容器"
-                  tone={runner.tone}
-                  detail={runner.label}
-                />
-                {lists?.services.map((c) => (
-                  <ServiceRow
-                    key={c.name}
-                    name={c.name.replace(/^line-agentflow-|-1$/g, "")}
-                    role={c.role}
-                    tone={c.state === "running" ? "good" : "danger"}
-                    detail={c.status}
-                  />
-                ))}
-              </ul>
-              {stale && (
-                <p className="text-xs text-muted-foreground">
-                  {lists
-                    ? `容器清單資料停在 ${ago(lists.checkedAt)}，恢復回應後會自動更新。`
-                    : "尚未取得容器清單，恢復回應後會自動更新。"}
+              {lists.jobs.length ? (
+                <ul className="divide-y rounded-lg border">
+                  {lists.jobs.map((c) => {
+                    const condition = containerCondition(c);
+                    return (
+                      <ServiceRow
+                        key={c.name}
+                        name={phaseLabels[c.phase ?? ""] ?? c.role}
+                        role={`建立於 ${date(c.created)}，映像 ${c.image}`}
+                        tone={containerTone[condition]}
+                        detail={systemStatusLabels.container[condition]}
+                      />
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  目前沒有工作容器在執行。
                 </p>
               )}
             </section>
-          )}
-          {lists && (
-            <>
-              <section className="flex flex-col gap-2">
-                <h3 className="text-xs font-medium text-muted-foreground">
-                  執行中的工作容器
+            <section className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+              <section
+                id="worker-images"
+                aria-labelledby="worker-images-title"
+                className="flex min-w-0 flex-col gap-2"
+              >
+                <h3
+                  id="worker-images-title"
+                  className="text-xs font-medium text-muted-foreground"
+                >
+                  工作映像（需要版本 {status?.requiredWorkerRev} 以後）
                 </h3>
-                {lists.jobs.length ? (
-                  <ul className="divide-y rounded-lg border">
-                    {lists.jobs.map((c) => (
-                      <ServiceRow
-                        key={c.name}
-                        name={c.name}
-                        role={`執行 ${c.runId?.slice(0, 8) ?? ""} · ${c.image}`}
-                        tone={c.state === "running" ? "good" : "danger"}
-                        detail={c.status}
-                      />
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="text-sm text-muted-foreground">
-                    目前沒有工作容器在執行。
+                <ul className="divide-y rounded-lg border">
+                  {images.map(({ image, usedBy, status: imageStatus }) => (
+                    <li
+                      key={image.tag}
+                      className="flex flex-wrap items-start gap-x-3 gap-y-2 px-3 py-2.5 text-sm"
+                    >
+                      <span className="flex min-w-0 flex-[1_1_12rem] flex-col gap-1">
+                        <code className="text-xs [overflow-wrap:anywhere]">
+                          {image.tag}
+                        </code>
+                        {usedBy.length > 0 && (
+                          <span className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                            使用中：{usedBy.join("、")}
+                          </span>
+                        )}
+                        <span className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
+                          <span>{(image.sizeMb / 1024).toFixed(1)} GB</span>
+                          <span>建立於 {date(image.created)}</span>
+                        </span>
+                      </span>
+                      <Badge
+                        variant={
+                          imageStatus === "current"
+                            ? "good"
+                            : imageStatus === "outdated"
+                              ? "warn"
+                              : "secondary"
+                        }
+                        className="max-w-full whitespace-normal"
+                      >
+                        {imageStatus === "current"
+                          ? workerImageLabels.current(image.rev)
+                          : workerImageLabels[imageStatus]}
+                      </Badge>
+                    </li>
+                  ))}
+                </ul>
+                {images.some(({ status }) => status === "unused") && (
+                  <p className="text-xs text-muted-foreground">
+                    可在下方「Docker 磁碟」查看並清理符合清理規則的映像。
                   </p>
                 )}
               </section>
-              <section className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-                <section
-                  id="worker-images"
-                  aria-labelledby="worker-images-title"
-                  className="flex min-w-0 flex-col gap-2"
-                >
-                  <h3
-                    id="worker-images-title"
-                    className="text-xs font-medium text-muted-foreground"
-                  >
-                    工作映像（需要版本 {status?.requiredWorkerRev} 以後）
-                  </h3>
-                  <ul className="divide-y rounded-lg border">
-                    {images.map(({ image, usedBy, status: imageStatus }) => (
-                      <li
-                        key={image.tag}
-                        className="flex flex-wrap items-start gap-x-3 gap-y-2 px-3 py-2.5 text-sm"
-                      >
-                        <span className="flex min-w-0 flex-[1_1_12rem] flex-col gap-1">
-                          <code className="text-xs [overflow-wrap:anywhere]">
-                            {image.tag}
-                          </code>
-                          {usedBy.length > 0 && (
-                            <span className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
-                              使用中：{usedBy.join("、")}
-                            </span>
-                          )}
-                          <span className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
-                            <span>{(image.sizeMb / 1024).toFixed(1)} GB</span>
-                            <span>建立於 {date(image.created)}</span>
-                          </span>
-                        </span>
-                        <Badge
-                          variant={
-                            imageStatus === "current"
-                              ? "good"
-                              : imageStatus === "outdated"
-                                ? "warn"
-                                : "secondary"
-                          }
-                          className="max-w-full whitespace-normal"
-                        >
-                          {imageStatus === "current"
-                            ? workerImageLabels.current(image.rev)
-                            : workerImageLabels[imageStatus]}
-                        </Badge>
-                      </li>
-                    ))}
-                  </ul>
-                  {images.some(({ status }) => status === "unused") && (
-                    <p className="text-xs text-muted-foreground">
-                      可在下方「Docker 磁碟」查看並清理符合清理規則的映像。
-                    </p>
-                  )}
-                </section>
-                <div className="flex flex-col gap-2">
-                  <h3 className="text-xs font-medium text-muted-foreground">
-                    磁碟上的工作資料
-                  </h3>
-                  <dl className="grid grid-cols-[1fr_auto] gap-y-2 rounded-lg border px-3 py-2.5 text-sm">
-                    <dt className="text-muted-foreground">任務工作區</dt>
-                    <dd className="tabular-nums">{lists.volumes.jobs} 個</dd>
-                    <dt className="text-muted-foreground">原始碼快取</dt>
-                    <dd className="tabular-nums">
-                      {lists.volumes.sourceCaches} 個
-                    </dd>
-                  </dl>
-                  <p className="text-xs text-muted-foreground">
-                    任務工作區保留 30
-                    天後由每小時的維護工作清除；可在下方「Docker
-                    磁碟」開啟較短的保留規則。
-                  </p>
-                </div>
-              </section>
-            </>
-          )}
-        </CardContent>
-      </Card>
-      <DockerDiskCard request={request} />
-      <EgressCard request={request} />
-      <CheckEnvironmentCard request={request} admin={admin} />
-      <Architecture state={state} entry={status?.entry ?? "unknown"} />
-    </div>
+              <div className="flex flex-col gap-2">
+                <h3 className="text-xs font-medium text-muted-foreground">
+                  磁碟上的工作資料
+                </h3>
+                <dl className="grid grid-cols-[1fr_auto] gap-y-2 rounded-lg border px-3 py-2.5 text-sm">
+                  <dt className="text-muted-foreground">任務工作區</dt>
+                  <dd className="tabular-nums">{lists.volumes.jobs} 個</dd>
+                  <dt className="text-muted-foreground">原始碼快取</dt>
+                  <dd className="tabular-nums">
+                    {lists.volumes.sourceCaches} 個
+                  </dd>
+                </dl>
+                <p className="text-xs text-muted-foreground">
+                  任務工作區保留 30 天後由每小時的維護工作清除；可在下方「Docker
+                  磁碟」開啟較短的保留規則。
+                </p>
+              </div>
+            </section>
+          </>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -336,12 +534,14 @@ function ServiceRow({
         )}
       />
       <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-sm font-medium">{name}</span>
-        <span className="truncate text-xs text-muted-foreground">{role}</span>
+        <span className="wrap-anywhere text-sm font-medium">{name}</span>
+        <span className="wrap-anywhere text-xs text-muted-foreground">
+          {role}
+        </span>
       </span>
       <span
         className={cn(
-          "shrink-0 text-xs",
+          "max-w-[40%] shrink-0 text-right text-xs",
           tone === "good"
             ? "text-muted-foreground"
             : tone === "warn"
@@ -443,7 +643,9 @@ function Architecture({ state, entry }: { state: State; entry: EntryKind }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>系統架構</CardTitle>
+        <CardTitle role="heading" aria-level={2}>
+          系統架構
+        </CardTitle>
         <CardDescription>
           按播放，跟著一則 LINE
           需求看它經過哪些元件、在每一步做什麼；下方是各階段的權限與資料位置。
@@ -469,7 +671,7 @@ function Architecture({ state, entry }: { state: State; entry: EntryKind }) {
               ],
               [
                 "開發",
-                "執行器依序建立工作容器：抓原始碼 → 安裝相依 → Codex 修改 → 收集差異 → 跑測試 → 獨立審查。失敗會自動修復一次，仍失敗就停下來交給你。",
+                "執行器先取得原始碼並安裝相依套件，接著由 Codex 修改。系統收集差異後執行測試，最後進行獨立審查。失敗會自動修復一次，仍失敗就停下來交給你。",
               ],
               [
                 "發布",
