@@ -19,7 +19,6 @@ import {
   CheckCircle2,
   Clock,
   ExternalLink,
-  FolderGit2,
   RefreshCw,
   RotateCcw,
 } from "lucide-react";
@@ -64,7 +63,7 @@ import {
   projectName,
   RunProgressLine,
   StatusBadge,
-  Stepper,
+  StationTrack,
 } from "./shared";
 
 /**
@@ -279,6 +278,7 @@ export function TaskDrawer({
   const [assignOpen, setAssignOpen] = useState(false);
   const projectHeading = useRef<HTMLParagraphElement>(null);
   const [branchOpen, setBranchOpen] = useState(false);
+  const titleRef = useRef<HTMLHeadingElement>(null);
   // 任務出了新版本：選項與指定專案重來；補充需求的草稿只有沒動過（或剛存成這一版）才跟著更新，
   // 寫到一半的內容不再被背景更新洗掉。
   useEffect(() => {
@@ -403,35 +403,32 @@ export function TaskDrawer({
   );
   return (
     <Sheet open onOpenChange={(o) => !o && close()}>
-      <SheetContent className="sm:max-w-2xl">
+      <SheetContent
+        className="sm:max-w-2xl"
+        onOpenAutoFocus={(event) => {
+          if (!titleRef.current) return;
+          event.preventDefault();
+          titleRef.current.focus({ preventScroll: true });
+        }}
+      >
         <SheetHeader className="shrink-0 gap-2">
-          <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
-            <StatusBadge status={t.status} />
-            <Badge variant={t.mode === "query" ? "info" : "secondary"}>
-              {t.mode === "query" ? "查詢任務" : "修改程式"}
-            </Badge>
-            <SheetDescription className="flex flex-wrap items-center gap-x-1.5">
-              <span>{groupName(state, t)}</span>
-              <span aria-hidden>·</span>
-              <span className="inline-flex items-center gap-1">
-                <FolderGit2 className="size-3.5" />
-                {projectName(state, t)}
-              </span>
-              <span aria-hidden>·</span>
-              {t.version > 1 && (
-                <>
-                  <span>版本 {t.version}</span>
-                  <span aria-hidden>·</span>
-                </>
-              )}
-              <span>
-                建立於 {date(t.created_at)}・更新於 {ago(t.updated_at)}
-              </span>
-            </SheetDescription>
-          </div>
-          <SheetTitle className="text-lg leading-snug [overflow-wrap:anywhere]">
+          <SheetTitle
+            ref={titleRef}
+            tabIndex={-1}
+            className="text-lg leading-snug [overflow-wrap:anywhere] focus-visible:outline-hidden!"
+          >
             {taskListTitle(t, title)}
           </SheetTitle>
+          <SheetDescription className="flex flex-wrap gap-x-3 gap-y-1 text-xs [overflow-wrap:anywhere]">
+            <span>{t.mode === "query" ? "查詢任務" : "修改程式"}</span>
+            <span>群組 {groupName(state, t)}</span>
+            <span>專案 {projectName(state, t)}</span>
+            {t.version > 1 && (
+              <span className="tabular-nums">版本 {t.version}</span>
+            )}
+            <span className="tabular-nums">建立於 {date(t.created_at)}</span>
+            <span className="tabular-nums">更新於 {ago(t.updated_at)}</span>
+          </SheetDescription>
 
           {(t.issue_url || (!hasPrResult && t.pr_url)) && (
             <div className="flex flex-wrap gap-2">
@@ -451,7 +448,7 @@ export function TaskDrawer({
               )}
             </div>
           )}
-          <Stepper status={t.status} query={t.mode === "query"} />
+          <StationTrack task={t} labelled />
           {live && (
             <RunProgressLine
               run={{

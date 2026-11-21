@@ -2,7 +2,6 @@ import { MemoryOverview } from "./app/memory-overview";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
-  ArrowRight,
   BellOff,
   Bot,
   Brain,
@@ -865,7 +864,7 @@ export function App() {
                 // 一般成員不能切換：只顯示狀態，不做成按鈕，也不寫「點此」。
                 <span
                   title={dispatch?.title}
-                  className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border bg-background px-3 text-sm whitespace-nowrap shadow-xs dark:border-input dark:bg-input/30"
+                  className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border bg-background px-3 text-sm whitespace-nowrap dark:border-input"
                 >
                   {dispatchContent}
                 </span>
@@ -874,6 +873,7 @@ export function App() {
                 alerts={state.alerts ?? []}
                 inboxTasks={needs}
                 inboxCount={countOf(state, attention)}
+                tasks={state.tasks}
                 seenAt={state.alertsSeenAt ?? null}
                 request={request}
                 open={showTask}
@@ -1328,7 +1328,7 @@ function Login({
                     }
                   }}
                 >
-                  <GithubMark /> 使用 GitHub 登入 <ArrowRight />
+                  <GithubMark /> 使用 GitHub 登入
                 </a>
               </Button>
               {!configured ? (
@@ -1410,7 +1410,7 @@ function QuotaLines(props: QuotaProps) {
           <span
             className={cn(
               "block h-full rounded-full",
-              left < 15 ? "bg-danger" : left < 40 ? "bg-warn" : "bg-brand",
+              left < 15 ? "bg-danger" : left < 40 ? "bg-warn" : "bg-good",
             )}
             style={{ width: `${left}%` }}
           />

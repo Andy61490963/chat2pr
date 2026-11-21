@@ -1,8 +1,9 @@
 import {
   notificationLabels,
   projectLabels,
+  statusLabels,
+  taskStationStatusLabels,
 } from "../../shared/status-glossary.js";
-import type { Task } from "../../shared/types.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bell,
@@ -29,6 +30,7 @@ import {
   type NotificationView,
 } from "../../shared/notifications.js";
 import { LINE_QUOTA } from "../../shared/line-quota.js";
+import { taskListTitle } from "../../shared/task-title.js";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -37,7 +39,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { type Request, ago } from "./shared";
+import type { Task } from "../../shared/types.js";
+import { type Request, ago, StationTrack } from "./shared";
 
 export type Alert = {
   id: string;
@@ -47,7 +50,7 @@ export type Alert = {
   text: string;
   created_at: string;
   title: string | null;
-  disposition: "inbox" | "action" | "result" | "resolved";
+  disposition?: "inbox" | "action" | "result" | "resolved";
 };
 
 const needsAction = (a: Alert) =>
@@ -57,12 +60,24 @@ const kinds: Record<
   string,
   { icon: typeof Bell; tone: string; label: string }
 > = {
-  approval: { icon: CircleHelp, tone: "text-warn", label: "等你審核" },
+  approval: {
+    icon: CircleHelp,
+    tone: "text-warn",
+    label: taskStationStatusLabels.decision,
+  },
   group_question: { icon: CircleHelp, tone: "text-warn", label: "AI 等你回答" },
   project_input: { icon: CircleHelp, tone: "text-warn", label: "專案等你補充" },
   input_required: { icon: CircleHelp, tone: "text-warn", label: "AI 等你回答" },
-  failed: { icon: CircleAlert, tone: "text-danger", label: "需要處理" },
-  ready: { icon: GitPullRequest, tone: "text-good", label: "PR 已完成" },
+  failed: {
+    icon: CircleAlert,
+    tone: "text-danger",
+    label: statusLabels.failed,
+  },
+  ready: {
+    icon: GitPullRequest,
+    tone: "text-good",
+    label: taskStationStatusLabels.ready,
+  },
   answered: { icon: MessageSquareText, tone: "text-good", label: "查詢已回覆" },
   no_changes: { icon: MessageSquareText, tone: "text-good", label: "無需修改" },
   budget: { icon: Hourglass, tone: "text-warn", label: "額度用完" },
@@ -133,6 +148,7 @@ export function AlertBell({
   alerts: all,
   inboxTasks,
   inboxCount,
+  tasks,
   seenAt,
   request,
   open: openTask,
@@ -142,6 +158,7 @@ export function AlertBell({
   alerts: Alert[];
   inboxTasks: Task[];
   inboxCount: number;
+  tasks: Task[];
   seenAt: string | null;
   request: Request;
   open: (id: string) => unknown;
@@ -166,6 +183,10 @@ export function AlertBell({
   const quota = all.find((a) => a.kind === LINE_QUOTA);
   // 只在清單真的變了才換新陣列，下面的桌面通知 effect 才不會每次重繪都跑。
   const alerts = useMemo(() => all.filter((a) => a.kind !== LINE_QUOTA), [all]);
+  const tasksById = useMemo(
+    () => new Map(tasks.map((task) => [task.id, task])),
+    [tasks],
+  );
   const [seen, setSeen] = useState(seenAt);
   const [menuOpen, setMenuOpen] = useState(false);
   const [desktop, setDesktop] = useState(desktopEnabled);
@@ -182,22 +203,38 @@ export function AlertBell({
   );
   const actions = alerts.filter(needsAction);
   const covered = new Set(actions.map((a) => a.task_id));
+  // 舊版回應沒有分類時，只沿用與目前待處理狀態相符的通知文字。
+  const legacyByTask = new Map<string, Alert>();
+  for (const a of alerts) {
+    if (!a.disposition && a.task_id && !legacyByTask.has(a.task_id)) {
+      const task = tasksById.get(a.task_id);
+      if (
+        (task?.status === "failed" && a.kind === "failed") ||
+        (task?.status === "awaiting_approval" && a.kind === "approval")
+      )
+        legacyByTask.set(a.task_id, a);
+    }
+  }
   // 任務可能沒有留下通知，仍可從鈴鐺前往收件匣列出的待處理任務。
   const unlisted: Alert[] = inboxTasks
     .filter((t) => !covered.has(t.id))
-    .map((t) => ({
-      id: `inbox:${t.id}`,
-      task_id: t.id,
-      kind: t.status === "failed" ? "failed" : "approval",
-      text: "請到任務詳情確認下一步。",
-      created_at: t.updated_at,
-      title: t.title,
-      disposition: "inbox",
-    }));
+    .map((t) => {
+      const legacy = legacyByTask.get(t.id);
+      return {
+        id: legacy?.id ?? `inbox:${t.id}`,
+        task_id: t.id,
+        kind: legacy?.kind ?? (t.status === "failed" ? "failed" : "approval"),
+        text: legacy?.text ?? "請到任務詳情確認下一步。",
+        created_at: legacy?.created_at ?? t.updated_at,
+        title: t.title,
+        disposition: "inbox",
+      };
+    });
+  const unlistedIds = new Set(unlisted.map((a) => a.id));
   const menuAlerts = [
     ...actions,
     ...unlisted,
-    ...alerts.filter((a) => !needsAction(a)),
+    ...alerts.filter((a) => !needsAction(a) && !unlistedIds.has(a.id)),
   ];
   const unread =
     inboxCount +
@@ -315,6 +352,7 @@ export function AlertBell({
             menuAlerts.map((a) => {
               const k = kindOf(a.kind);
               const Icon = k.icon;
+              const task = a.task_id ? tasksById.get(a.task_id) : undefined;
               const action = needsAction(a);
               const isNew = action || unreadResults.has(a.id);
               // 不能前往時仍可聚焦（讀得到內容），但說明為什麼點了沒反應。
@@ -336,23 +374,25 @@ export function AlertBell({
                     "w-full items-start gap-3 rounded-none border-b px-3 py-2.5 text-left last:border-0 focus:bg-muted/60 focus:text-foreground",
                     target &&
                       "cursor-pointer transition-colors hover:bg-muted/50",
-                    isNew && "bg-brand-soft/40",
+                    isNew && "bg-muted/40",
                   )}
                 >
                   <Icon className={cn("mt-0.5 size-4 shrink-0", k.tone)} />
                   <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <span className="text-xs text-muted-foreground">
-                      {action ? `${notificationLabels.action} · ` : ""}
-                      {k.label} · {ago(a.created_at)}
+                    <span className="flex flex-wrap gap-x-2 text-xs text-muted-foreground">
+                      {action && <span>{notificationLabels.action}</span>}
+                      <span>{k.label}</span>
+                      <span className="tabular-nums">{ago(a.created_at)}</span>
                     </span>
                     {a.title && (
                       <span className="truncate text-sm font-medium">
-                        {a.title}
+                        {task ? taskListTitle(task) : a.title}
                       </span>
                     )}
                     <span className="line-clamp-2 text-xs text-muted-foreground [overflow-wrap:anywhere]">
                       {a.text}
                     </span>
+                    {task && <StationTrack task={task} />}
                     {why && (
                       <span className="text-[11px] text-muted-foreground">
                         {why}
@@ -364,7 +404,7 @@ export function AlertBell({
             })
           ) : (
             <p className="px-3 py-6 text-center text-sm text-muted-foreground">
-              還沒有通知。
+              你還沒有通知，等你處理的任務和完成結果會顯示在這裡。
             </p>
           )}
         </div>
