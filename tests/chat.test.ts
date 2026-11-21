@@ -444,6 +444,36 @@ describe("聊天室與明確指令派工", () => {
     expect(bad.statusCode).toBe(404);
     expect(bad.json().error).toContain("找不到任務");
   });
+  it("看板群組回傳建立時間與最近一則仍保留且未撤回的訊息時間", async () => {
+    await receive("demo-latest", "範例群組的訊息");
+    await receive("demo-revoked", "範例群組後來撤回的訊息");
+    await receive(
+      "demo-expired",
+      "超過保存期限的訊息",
+      "text",
+      undefined,
+      "CfictionalOld",
+    );
+    const [latest] = await db.query<{ received_at: Date }>(
+      "UPDATE messages SET received_at=now()-interval '1 hour' WHERE id='demo-latest' RETURNING received_at",
+    );
+    await db.query("UPDATE messages SET revoked=true WHERE id='demo-revoked'");
+    await db.query(
+      "UPDATE messages SET received_at=now()-interval '31 days' WHERE id='demo-expired'",
+    );
+    const response = await app.inject({ url: "/api/state", headers });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().groups).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "group-a",
+          created_at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+          last_message_at: latest.received_at.toISOString(),
+        }),
+        expect.objectContaining({ id: "CfictionalOld", last_message_at: null }),
+      ]),
+    );
+  });
   it("群組名稱同步 LINE；一小時內不重查，聊天室與失敗時保留原名", async () => {
     const { syncGroupNames } = await import("../server/line-groups.js");
     await receive("g1", "你好", "text", undefined, "Cline-group");

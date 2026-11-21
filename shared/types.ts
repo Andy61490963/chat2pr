@@ -147,6 +147,11 @@ export interface Group {
   first_pending_at: string | null;
   last_pending_at: string | null;
 }
+export interface DashboardGroup extends Group {
+  created_at: string;
+  /** 最近一則仍保留且未撤回的群組訊息收取時間。 */
+  last_message_at: string | null;
+}
 /** 從 LINE 提出定期檢查時要求的排程（二擇一）。 */
 export interface CheckSchedule {
   intervalMinutes: number | null;

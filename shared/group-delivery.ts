@@ -14,7 +14,11 @@ import {
   quotaExhaustedDetail,
   quotaShortPrefix,
 } from "./line-quota.js";
-import { discordDeliveryNotes, linePushServiceLabels } from "./status-glossary.js";
+import {
+  discordDeliveryNotes,
+  groupDeliveryText,
+  linePushServiceLabels,
+} from "./status-glossary.js";
 import type { ChatPlatformId } from "./types.js";
 
 /** 與 server/group-replies.ts 的同名常數相同；tests/group-delivery.test.ts 會核對。 */
@@ -91,26 +95,32 @@ export interface DeliveryRow {
 }
 
 const reasonNotes: Record<DeliveryReason, string> = {
-  quota: "LINE 本月推播額度已用完",
-  group_size: "LINE 剩餘推播額度不夠這個群組的人數",
+  quota: groupDeliveryText.quota,
+  group_size: groupDeliveryText.groupSize,
   // 不寫「稍後會再送」：重試 3 次後就不再送，這句也會出現在「送不出去」的說明裡。
-  rate: "LINE 暫時限制推播速度",
+  rate: groupDeliveryText.lineRate,
   replies_off: repliesOffNote,
   expired: expiredNote,
   superseded: supersededNote,
   reply_failed: "以 /進度 補送沒有成功，下次再試",
-  error: "LINE 沒有收下這則訊息",
+  error: groupDeliveryText.lineRejected,
 };
 
-const withoutErrorPrefix = (raw: string) => raw.replace(/^[A-Za-z]*Error:\s*/, "");
+const withoutErrorPrefix = (raw: string) =>
+  raw.replace(/^[A-Za-z]*Error:\s*/, "");
 const isLineConnectionError = (raw: string) =>
-  /^(Timeout|Abort)Error:|timeout|fetch failed|ECONN|ENOTFOUND|ETIMEDOUT/i.test(raw);
+  /^(Timeout|Abort)Error:|timeout|fetch failed|ECONN|ENOTFOUND|ETIMEDOUT/i.test(
+    raw,
+  );
 
 /**
  * 把 last_error 的固定文字對到原因；認不得的一律當成一般錯誤，只留狀態碼。
  * flushNotifications 寫入的是 redact(String(e))，前面會帶「Error: 」，比對前先去掉。
  */
-function reasonOf(raw: string, platform?: ChatPlatformId): { reason: DeliveryReason; note: string } {
+function reasonOf(
+  raw: string,
+  platform?: ChatPlatformId,
+): { reason: DeliveryReason; note: string } {
   const error = withoutErrorPrefix(raw);
   const pick = (reason: DeliveryReason, note = reasonNotes[reason]) => ({
     reason,
@@ -123,7 +133,9 @@ function reasonOf(raw: string, platform?: ChatPlatformId): { reason: DeliveryRea
   if (error.startsWith("以 /進度")) return pick("reply_failed");
   if (platform === "discord") {
     if (error === discordDeliveryNotes.rate) return pick("rate", error);
-    const note = Object.values(discordDeliveryNotes).find((value) => value === error);
+    const note = Object.values(discordDeliveryNotes).find(
+      (value) => value === error,
+    );
     return pick("error", note ?? discordDeliveryNotes.unavailable);
   }
   if (error.startsWith(rateLimitedPrefix)) return pick("rate");
@@ -136,9 +148,10 @@ function reasonOf(raw: string, platform?: ChatPlatformId): { reason: DeliveryRea
     return pick("quota");
   // 其他錯誤已經過 redact，但仍可能夾帶內部細節：只取狀態碼。
   const code = error.match(/（(\d{3})）/)?.[1];
-  if (code) return pick("error", `LINE 回應錯誤（${code}）`);
+  if (code) return pick("error", `${groupDeliveryText.lineError}（${code}）`);
   // 逾時或連線失敗（fetch 的 TimeoutError、ECONNREFUSED 等）：LINE 沒有回應，不是拒收。
-  if (isLineConnectionError(raw)) return pick("error", "連不上 LINE");
+  if (isLineConnectionError(raw))
+    return pick("error", groupDeliveryText.lineConnection);
   return pick("error");
 }
 
@@ -163,14 +176,22 @@ export function deliveryState(
     return { status: "skipped", ...reasonOf(error, context.platform) };
   }
   if (
-    context.platform !== "discord" && context.quotaBlocked &&
+    context.platform !== "discord" &&
+    context.quotaBlocked &&
     row.attempts < maxPushAttempts &&
     !(error && /多次/.test(error))
   )
     return { status: "pending", reason: "quota", note: reasonNotes.quota };
   if (!error)
     return row.attempts >= maxPushAttempts
-      ? { status: "failed", reason: "error", note: context.platform === "discord" ? discordDeliveryNotes.unavailable : reasonNotes.error }
+      ? {
+          status: "failed",
+          reason: "error",
+          note:
+            context.platform === "discord"
+              ? discordDeliveryNotes.unavailable
+              : reasonNotes.error,
+        }
       : { status: "pending", reason: null, note: "排隊等待送出" };
   const r = reasonOf(error, context.platform);
   if (r.reason === "reply_failed" && /多次/.test(error))
@@ -207,24 +228,59 @@ export function deliveryLabel(d: Delivery) {
 }
 
 /** 任務詳情的提示句。 */
-export function deliveryNotice(d: Delivery) {
+export function deliveryNotice(d: Delivery, kind?: string) {
+  const text = groupDeliveryText;
+  const subject = kind
+    ? (deliverySubjects[kind] ?? groupKindLabels[kind] ?? text.generic)
+    : text.generic;
+  // note 可能缺漏（舊資料或測試替身），缺值時不能讓整個看板崩潰。
+  const explain = (
+    status: string,
+    reason: string | undefined,
+    action: string,
+  ) =>
+    reason
+      ? `${subject}${status}，因為${reason.startsWith("LINE") ? " " : ""}${reason}。${action}。`
+      : `${subject}${status}。${action}。`;
   if (d.reason === "quota" || d.reason === "group_size")
-    return `這則群組訊息沒有送出：${d.note}`;
+    return explain(text.undelivered, d.note, text.tryProgress);
   switch (d.status) {
     case "sent":
-      return "已送到群組";
+      return `${subject}${text.sent}。`;
     case "skipped":
-      return `沒有送到群組：${d.note}`;
+      if (d.reason === "replies_off")
+        return explain(text.undelivered, text.repliesOff, text.enableReplies);
+      if (d.reason === "expired")
+        return explain(text.undelivered, text.expired, text.forward);
+      if (d.reason === "superseded")
+        return explain(text.undelivered, text.superseded, text.forward);
+      return `${subject}${text.undelivered}。${d.note}`;
     case "claiming":
-      return "正在送到群組（成員打 /進度，正在用回覆補送）";
+      return `${subject}${text.claiming}。`;
     case "pending":
-      return d.reason ? `正在送到群組：${d.note}` : "正在送到群組";
-    case "failed":
-      return d.reason === "reply_failed"
-        ? `這則群組訊息沒有送出：${d.note}`
-        : `重試 ${maxPushAttempts} 次仍沒送出（${d.note}）`;
+    case "failed": {
+      if (!d.reason) return `${subject}${text.queued}。`;
+      const failed = d.status === "failed";
+      if (d.reason === "reply_failed")
+        return failed
+          ? explain(text.undelivered, text.replyFailed, text.forward)
+          : `${subject}${text.pending}。${d.note}。`;
+      const status = failed ? text.failed(maxPushAttempts) : text.pending;
+      if (Object.values(discordDeliveryNotes).some((note) => note === d.note))
+        return `${subject}${status}。${d.note}`;
+      const reason = d.note?.startsWith(text.lineError)
+        ? text.lineUnavailable
+        : d.note;
+      return explain(status, reason, failed ? text.forward : text.retry);
+    }
   }
 }
+
+const deliverySubjects: Record<string, string> = {
+  group_received: groupDeliveryText.receivedNotice,
+  group_merged: groupDeliveryText.mergedNotice,
+  group_closed: groupDeliveryText.closedNotice,
+};
 
 /** 群組通知種類的名稱（聊天室標示機器人說的是什麼）。 */
 export const groupKindLabels: Record<string, string> = {

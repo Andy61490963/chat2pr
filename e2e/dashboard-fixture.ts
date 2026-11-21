@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 import type { Detail, State } from "../src/app/shared";
-import type { Group, Project, Task } from "../shared/types";
+import type { DashboardGroup, Project, Task } from "../shared/types";
 import { endedStatuses } from "../shared/types";
 import {
   checkEnvironmentLimits,
@@ -108,7 +108,7 @@ export const project: Project = {
   created_at: timestamp,
 };
 
-export const group: Group = {
+export const group: DashboardGroup = {
   id: "group-demo",
   platform: "line",
   name: "測試群組",
@@ -122,9 +122,26 @@ export const group: Group = {
   triage_error: null,
   first_pending_at: null,
   last_pending_at: null,
+  created_at: timestamp,
+  last_message_at: null,
 };
 
-export const discordGroup: Group = {
+export const unnamedLineGroup: DashboardGroup = {
+  ...group,
+  id: "Cfictional6d7e8f",
+  name: "群組 6d7e8f",
+  last_message_at: "2026-01-02T05:30:00Z",
+};
+
+export const departedLineGroup: DashboardGroup = {
+  ...group,
+  id: "CfictionalDeparted",
+  name: "範例舊群組",
+  enabled: false,
+  left_at: "2026-01-03T00:00:00Z",
+};
+
+export const discordGroup: DashboardGroup = {
   ...group,
   id: "discord:100000000000000001",
   platform: "discord",
@@ -318,6 +335,24 @@ export const detail: Detail = {
   runs: [],
   groupDeliveries: [],
   thread: { before: [], after: [] },
+};
+
+export const answeredDetail: Detail = {
+  ...detail,
+  task: { ...task, status: "answered", answer: "示範報表每天更新一次。" },
+  groupDeliveries: [
+    {
+      id: "demo-undelivered-answer",
+      kind: "group_answered",
+      created_at: timestamp,
+      text: "示範報表每天更新一次。",
+      delivery: {
+        status: "pending",
+        reason: "quota",
+        note: "LINE 本月推播額度已用完",
+      },
+    },
+  ],
 };
 
 export const defaultState: State = {

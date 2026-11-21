@@ -44,6 +44,7 @@ import type {
   Task,
 } from "../shared/types.js";
 import { LINE_QUOTA } from "../shared/line-quota.js";
+import { groupPageText } from "../shared/status-glossary.js";
 import { taskListQuery, type TaskStatusFilter } from "../shared/task-list.js";
 import {
   reservedQuotaHold,
@@ -127,7 +128,7 @@ const views = [
     label: "群組",
     icon: UsersRound,
     section: "管理",
-    hint: "設定每個 LINE 群組可修改的專案與 AI 記憶",
+    hint: groupPageText.subtitle,
   },
   {
     id: "projects",
@@ -952,7 +953,12 @@ export function App() {
             >
               {current.label}
             </h1>
-            <p className="mt-0.5 hidden text-sm text-muted-foreground sm:block">
+            <p
+              className={cn(
+                "mt-0.5 text-sm text-muted-foreground",
+                current.id !== "groups" && "hidden sm:block",
+              )}
+            >
               {current.hint}
             </p>
           </div>

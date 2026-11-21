@@ -44,11 +44,8 @@ import {
 } from "@/components/ui/sheet";
 import { AssignProject, BudgetRetry, EndTaskButton } from "./inbox";
 import { CopyButton } from "./copy-button";
-import {
-  deliveryNotice,
-  groupKindLabels,
-  undelivered,
-} from "../../shared/group-delivery.js";
+import { deliveryNotice, undelivered } from "../../shared/group-delivery.js";
+import { followupText } from "../../shared/status-glossary.js";
 import { useUnsaved } from "./unsaved";
 import {
   type Act,
@@ -80,9 +77,7 @@ function GroupDeliveryNotes({
 }) {
   const latest = kinds.flatMap((kind) => {
     const d = deliveries?.filter((x) => x.kind === kind).at(-1);
-    return d && d.delivery.reason !== "superseded"
-      ? [d]
-      : [];
+    return d && d.delivery.reason !== "superseded" ? [d] : [];
   });
   if (!latest.length) return null;
   return (
@@ -99,12 +94,12 @@ function GroupDeliveryNotes({
               d.delivery.status === "sent"
                 ? "bg-good-soft text-good"
                 : !pending
-                ? "bg-muted text-muted-foreground"
-                : d.delivery.status === "failed"
-                  ? "bg-danger-soft text-danger"
-                  : d.delivery.reason
-                    ? "bg-warn-soft text-warn"
-                    : "bg-info-soft text-info",
+                  ? "bg-muted text-muted-foreground"
+                  : d.delivery.status === "failed"
+                    ? "bg-danger-soft text-danger"
+                    : d.delivery.reason
+                      ? "bg-warn-soft text-warn"
+                      : "bg-info-soft text-info",
             )}
           >
             {d.delivery.status === "sent" ? (
@@ -115,11 +110,8 @@ function GroupDeliveryNotes({
               <Clock className="mt-0.5 size-4 shrink-0" />
             )}
             <div className="flex min-w-0 flex-1 flex-col gap-1">
-              <p className="[overflow-wrap:anywhere]">
-                <span className="font-medium">
-                  {groupKindLabels[d.kind] ?? "群組訊息"}：
-                </span>
-                {deliveryNotice(d.delivery)}
+              <p className="font-medium [overflow-wrap:anywhere]">
+                {deliveryNotice(d.delivery, d.kind)}
               </p>
               {pending && d.kind === "group_question" && (
                 <p className="text-xs [overflow-wrap:anywhere]">
@@ -129,7 +121,11 @@ function GroupDeliveryNotes({
               {pending &&
                 (d.text ? (
                   <div>
-                    <CopyButton text={d.text} label="複製群組訊息" />
+                    <CopyButton
+                      text={d.text}
+                      label="複製群組訊息"
+                      className="min-h-11"
+                    />
                   </div>
                 ) : (
                   <p className="text-xs">
@@ -238,6 +234,10 @@ export function TaskDrawer({
     (t.mode === "query" && t.status === "answered") ||
     (t.mode !== "query" && ["ready", "merged", "closed"].includes(t.status));
   const adding = t.mode !== "query";
+  const followupPlatform = state.groups.find(
+    (g) => g.id === t.group_id,
+  )?.platform;
+  const followupHelpId = useId();
   const thread = detail.thread;
   const [relinkTo, setRelinkTo] = useState("");
   const canRelink = [
@@ -830,48 +830,50 @@ export function TaskDrawer({
           />
           {t.status !== "answered" && resultReport}
           {canFollowup && (
-            <section
-              aria-label={adding ? "再改一點" : "接著問"}
-              className="flex flex-col gap-2"
-            >
-              <Label htmlFor="followup">{adding ? "再改一點" : "接著問"}</Label>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="followup">
+                {adding ? "再改一點" : followupText.label}
+              </Label>
               <Textarea
                 id="followup"
+                aria-describedby={followupHelpId}
                 rows={3}
                 maxLength={2000}
                 value={ask}
                 placeholder={
                   adding
                     ? "例如：按鈕顏色再深一點；錯誤訊息也寫出欄位名稱"
-                    : "例如：那 ch3 呢？剛剛說的那張表有哪些欄位？"
+                    : followupText.example
                 }
                 onChange={(e) => setAsk(e.target.value)}
               />
-              <p className="text-xs text-muted-foreground">
-                {adding
-                  ? t.status === "ready"
-                    ? "你確認新的一題後，修改會接在同一個 PR。"
-                    : "你確認新的一題後，系統會從目標分支另開 PR。"
-                  : "你可以沿用專案與分支開新的一題，原本的問答會保留。"}
-              </p>
-              <details className="text-xs text-muted-foreground">
-                <summary className="cursor-pointer">說明</summary>
-                {adding
-                  ? "你也可以在 LINE 引用完成通知，說明還想調整的地方。"
-                  : "你也可以在 LINE 引用機器人的回答接著問。"}
-              </details>
-              <div>
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                 <Button
+                  className="min-h-11"
                   disabled={busy || !ask.trim()}
                   onClick={async () => {
                     // 送出失敗（例如 409、連線中斷）時保留原字，離開提醒也跟著保留。
                     if (await followup(t, ask.trim())) setAsk("");
                   }}
                 >
-                  {adding ? "再改一點" : "接著問"}
+                  {adding ? "再改一點" : followupText.action}
                 </Button>
+                <p
+                  id={followupHelpId}
+                  className="min-w-0 flex-[1_1_12rem] text-xs text-muted-foreground"
+                >
+                  {adding
+                    ? t.status === "ready"
+                      ? "你確認新的一題後，修改會接在同一個 PR。"
+                      : "你確認新的一題後，系統會從目標分支另開 PR。"
+                    : followupText.description}
+                  {adding
+                    ? followupPlatform === "line" &&
+                      "也可以在 LINE 引用完成通知，說明還想調整的地方。"
+                    : followupPlatform && followupText[followupPlatform]}
+                </p>
               </div>
-            </section>
+            </div>
           )}
           {["awaiting_approval", "failed", "budget_wait"].includes(
             t.status,

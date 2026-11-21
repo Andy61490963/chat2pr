@@ -41,6 +41,9 @@ describe("群組訊息送達狀態", () => {
       { platform: "discord", quotaBlocked: true },
     );
     expect(rate).toEqual({ status: "pending", reason: "rate", note: discordDeliveryNotes.rate });
+    expect(deliveryNotice(rate, "group_answered")).toBe(
+      "查詢回答還沒送到群組。Discord 暫時限制送訊速度，系統會在解除限制後重試。",
+    );
     const denied = deliveryState(
       { sent_at: null, attempts: 3, last_error: discordDeliveryNotes.permission },
       { platform: "discord" },
@@ -52,6 +55,9 @@ describe("群組訊息送達狀態", () => {
     expect(
       state({ sent_at: sentAt, has_message_id: true, attempts: 1 }),
     ).toEqual({ status: "sent", reason: null, note: "已送到群組" });
+    expect(deliveryNotice(state({ sent_at: sentAt }), "group_merged")).toBe(
+      "合併通知已送到群組。",
+    );
     // LINE 回 409 已收下時沒有訊息 ID，仍算送出。
     expect(state({ sent_at: sentAt, attempts: 1 }).status).toBe("sent");
   });
@@ -63,8 +69,8 @@ describe("群組訊息送達狀態", () => {
       note: "LINE 本月推播額度已用完",
     });
     expect(undelivered(d)).toBe(true);
-    expect(deliveryNotice(d)).toBe(
-      "這則群組訊息沒有送出：LINE 本月推播額度已用完",
+    expect(deliveryNotice(d, "group_answered")).toBe(
+      "查詢回答沒有送到群組，因為 LINE 本月推播額度已用完。可請群組成員用 /進度 取回，或在看板查看並轉達。",
     );
     expect(deliveryLabel(d)).toBe("額度不足，未送出");
   });
@@ -79,8 +85,8 @@ describe("群組訊息送達狀態", () => {
       reason: "quota",
       note: "LINE 本月推播額度已用完",
     });
-    expect(deliveryNotice(queued)).toBe(
-      "這則群組訊息沒有送出：LINE 本月推播額度已用完",
+    expect(deliveryNotice(queued)).toContain(
+      "群組訊息沒有送到群組，因為 LINE 本月推播額度已用完。",
     );
     // 之前限流失敗過、還沒到 3 次：暫停期間不會再試，原因改說額度。
     expect(
@@ -123,7 +129,9 @@ describe("群組訊息送達狀態", () => {
   it("剩餘額度不夠群組人數也算額度原因", () => {
     const d = state({ last_error: "剩餘推播額度不足群組人數，額度恢復後再送" });
     expect(d).toMatchObject({ status: "pending", reason: "group_size" });
-    expect(deliveryNotice(d)).toContain("這則群組訊息沒有送出");
+    expect(deliveryNotice(d)).toContain(
+      "群組訊息沒有送到群組，因為 LINE 剩餘推播額度不夠這個群組的人數。",
+    );
     // flushNotifications 實際寫入的字（人數已知與未知兩種）。
     for (const members of [12, null])
       expect(
@@ -152,7 +160,9 @@ describe("群組訊息送達狀態", () => {
       last_error: stored(`${rateLimitedPrefix}，稍後會再送（429）`),
     });
     expect(rate).toMatchObject({ status: "pending", reason: "rate" });
-    expect(deliveryNotice(rate)).toBe("正在送到群組：LINE 暫時限制推播速度");
+    expect(deliveryNotice(rate)).toBe(
+      "群組訊息還沒送到群組，因為 LINE 暫時限制推播速度。系統會再試。",
+    );
     expect(
       deliveryNotice(
         state({
@@ -160,7 +170,7 @@ describe("群組訊息送達狀態", () => {
           last_error: stored(`${rateLimitedPrefix}，稍後會再送（429）`),
         }),
       ),
-    ).toBe("重試 3 次仍沒送出（LINE 暫時限制推播速度）");
+    ).toBe("群組訊息重試 3 次後仍沒有送到群組，因為 LINE 暫時限制推播速度。需要時請在看板查看並轉達。");
     const failed = state({
       attempts: 3,
       last_error: stored("LINE 通知失敗（500）"),
@@ -171,14 +181,14 @@ describe("群組訊息送達狀態", () => {
       note: "LINE 回應錯誤（500）",
     });
     expect(deliveryNotice(failed)).toBe(
-      "重試 3 次仍沒送出（LINE 回應錯誤（500））",
+      "群組訊息重試 3 次後仍沒有送到群組，因為 LINE 無法處理這則訊息。需要時請在看板查看並轉達。",
     );
     expect(state({ attempts: 0 })).toEqual({
       status: "pending",
       reason: null,
       note: "排隊等待送出",
     });
-    expect(deliveryNotice(state())).toBe("正在送到群組");
+    expect(deliveryNotice(state())).toBe("群組訊息正在排隊等待送到群組。");
   });
   it("不回傳原始錯誤：認不得的錯誤只留狀態碼或通用說明", () => {
     const d = state({
@@ -205,7 +215,9 @@ describe("群組訊息送達狀態", () => {
     const claiming = state({ sent_at: sentAt, last_error: claimingNote });
     expect(claiming.status).toBe("claiming");
     expect(undelivered(claiming)).toBe(true);
-    expect(deliveryNotice(claiming)).toMatch(/^正在送到群組/);
+    expect(deliveryNotice(claiming, "group_question")).toBe(
+      "補問正在透過成員的 /進度 指令補送到群組。",
+    );
     // 寫回訊息 ID 後就是已送出。
     expect(
       state({ sent_at: sentAt, last_error: claimingNote, has_message_id: true })
@@ -234,7 +246,9 @@ describe("群組訊息送達狀態", () => {
       note: "群組回覆已關閉，未送出",
     });
     expect(undelivered(off)).toBe(false);
-    expect(deliveryNotice(off)).toBe("沒有送到群組：群組回覆已關閉，未送出");
+    expect(deliveryNotice(off, "group_answered")).toBe(
+      "查詢回答沒有送到群組，因為群組回覆已關閉。如需恢復通知，請確認群組回覆設定。",
+    );
     expect(state({ sent_at: sentAt, last_error: expiredNote })).toMatchObject({
       status: "skipped",
       reason: "expired",

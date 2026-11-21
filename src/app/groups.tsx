@@ -1,7 +1,9 @@
 import {
   groupLabels,
+  groupPageText,
   groupPlatformLabels,
   groupStatus,
+  isUnnamedLineGroup,
 } from "../../shared/status-glossary.js";
 import { groupReplyStatus } from "../../shared/group-reply-status.js";
 import { useEffect, useState } from "react";
@@ -13,7 +15,7 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import type { Group, Memory } from "../../shared/types.js";
+import type { DashboardGroup, Group, Memory } from "../../shared/types.js";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -45,7 +47,15 @@ const usable = (g: Group, state: State) =>
     (p) => g.project_ids.includes(p.id) && p.enabled && p.validated_at,
   );
 // LINE 的多人聊天室（不是群組）沒有名稱可同步，讓管理者自己取名。
-const room = (g: Group) => g.id.startsWith("R");
+const room = (g: Group) => g.platform === "line" && g.id.startsWith("R");
+const groupName = (g: Group) =>
+  isUnnamedLineGroup(g) ? groupPageText.unnamed : g.name;
+const createdDate = new Intl.DateTimeFormat("zh-TW", {
+  timeZone: "Asia/Taipei",
+  year: "numeric",
+  month: "numeric",
+  day: "numeric",
+});
 // 這些狀態的任務會因為群組綁定變更而退回待審核。
 const underway = ["queued", "budget_wait", "failed", "running", "reviewing"];
 const noProjectHint =
@@ -248,14 +258,14 @@ export function GroupsView({
         </Empty>
       </Card>
     );
-  // 機器人已離開的群組留著查紀錄，但排到最後、不算進統計。
+  // 機器人已離開的群組放在頁尾，仍可查看紀錄。
   const matches = state.groups.filter(
     (g) => platform === "all" || g.platform === platform,
   );
   const present = matches.filter((g) => !g.left_at);
-  const gone = matches.length - present.length;
-  const groups = [...present, ...matches.filter((g) => g.left_at)];
+  const departed = matches.filter((g) => g.left_at);
   const states = present.map((g) => groupStatus(g, usable(g, state)));
+  const ready = states.filter((status) => status === "ready").length;
   const stuck = states.filter((status) => status === "unbound").length;
   const halted = states.filter((status) => status === "stopped").length;
   return (
@@ -285,96 +295,27 @@ export function GroupsView({
         </Select>
       </div>
       <p role="status" className="text-sm text-muted-foreground">
-        共 {present.length} 個群組，
-        {
-          present.filter((g) => groupStatus(g, usable(g, state)) === "ready")
-            .length
-        }{" "}
-        個{groupLabels.ready}
+        共 {present.length} 個群組，{ready} 個{groupLabels.ready}
         {stuck > 0 && `，${stuck} 個${groupLabels.unbound}`}
         {halted > 0 && `，${halted} 個${groupLabels.stopped}`}
-        {gone > 0 && `；另有 ${gone} 個${groupLabels.left}`}
       </p>
-      {groups.length === 0 ? (
+      {matches.length === 0 && (
         <Empty icon={<MessageSquare />} title="這個平台還沒有群組">
           把機器人加入群組或伺服器，並傳一則訊息。
         </Empty>
-      ) : (
-        <div className="@container">
-          <div className="@3xl:rounded-xl @3xl:border @3xl:bg-card @3xl:text-card-foreground">
-            <div
-              aria-hidden="true"
-              className="hidden grid-cols-[minmax(0,1.6fr)_8rem_minmax(0,2fr)_5rem_7rem] gap-4 border-b px-5 py-2.5 text-xs text-muted-foreground @3xl:grid"
-            >
-              <span>群組</span>
-              <span>觸發方式</span>
-              <span>可修改的專案</span>
-              <span>記憶</span>
-              <span className="text-right">狀態</span>
-            </div>
-            <ul role="list" className="grid gap-3 @3xl:block @3xl:divide-y">
-              {groups.map((g) => {
-                const projects = state.projects.filter((p) =>
-                  g.project_ids.includes(p.id),
-                );
-                const memories = state.memories.filter(
-                  (m) => m.group_id === g.id,
-                ).length;
-                return (
-                  <li
-                    key={g.id}
-                    className="rounded-xl border bg-card text-card-foreground @3xl:rounded-none @3xl:border-0"
-                  >
-                    <button
-                      className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-2 rounded-[inherit] px-5 py-3 text-left transition-colors hover:bg-muted/40 @3xl:grid-cols-[minmax(0,1.6fr)_8rem_minmax(0,2fr)_5rem_7rem] @3xl:items-center"
-                      onClick={() => setOpenId(g.id)}
-                    >
-                      <span className="flex min-w-0 flex-wrap items-center gap-2 font-medium">
-                        <span className="[overflow-wrap:anywhere]">
-                          {g.name}
-                        </span>
-                        <Badge variant="secondary">
-                          {groupPlatformLabels[g.platform]}
-                        </Badge>
-                      </span>
-                      <span className="col-span-2 text-sm @3xl:col-auto">
-                        <span className="mr-2 text-xs text-muted-foreground @3xl:sr-only">
-                          觸發方式
-                        </span>
-                        {g.trigger_mode === "auto"
-                          ? "自動辨識"
-                          : g.platform === "discord"
-                            ? "指令或提及機器人"
-                            : "指令與引用追問"}
-                      </span>
-                      <span
-                        className={cn(
-                          "col-span-2 text-sm [overflow-wrap:anywhere] @3xl:col-auto",
-                          !projects.length && "text-warn",
-                        )}
-                      >
-                        <span className="mr-2 text-xs text-muted-foreground @3xl:sr-only">
-                          可修改的專案
-                        </span>
-                        <span>
-                          {projects.map((p) => p.name).join("、") || "尚未綁定"}
-                        </span>
-                      </span>
-                      <span className="col-span-2 text-sm text-muted-foreground tabular-nums @3xl:col-auto">
-                        <span className="mr-2 text-xs @3xl:sr-only">記憶</span>
-                        {memories} 筆
-                      </span>
-                      <span className="col-start-2 row-start-1 flex justify-end @3xl:col-auto @3xl:row-auto">
-                        <span className="sr-only">狀態</span>
-                        <GroupStatusBadge group={g} state={state} />
-                      </span>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
+      )}
+      {present.length > 0 && (
+        <GroupList groups={present} state={state} onOpen={setOpenId} />
+      )}
+      {departed.length > 0 && (
+        <details className="rounded-xl border bg-card px-4 text-card-foreground">
+          <summary className="min-h-11 cursor-pointer py-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
+            {groupPageText.departed(departed.length)}
+          </summary>
+          <div className="pb-4">
+            <GroupList groups={departed} state={state} onOpen={setOpenId} />
           </div>
-        </div>
+        </details>
       )}
       {open && (
         <Sheet
@@ -386,7 +327,7 @@ export function GroupsView({
           <SheetContent className="sm:max-w-xl">
             <SheetHeader>
               <SheetTitle className="text-lg [overflow-wrap:anywhere]">
-                {open.name}
+                {groupName(open)}
               </SheetTitle>
               <SheetDescription>
                 {open.platform === "discord"
@@ -414,6 +355,116 @@ export function GroupsView({
   );
 }
 
+function GroupList({
+  groups,
+  state,
+  onOpen,
+}: {
+  groups: DashboardGroup[];
+  state: State;
+  onOpen: (id: string) => void;
+}) {
+  return (
+    <div className="@container">
+      <div className="@3xl:rounded-xl @3xl:border @3xl:bg-card @3xl:text-card-foreground">
+        <div
+          aria-hidden="true"
+          className="hidden grid-cols-[minmax(0,1.6fr)_8rem_minmax(0,2fr)_5rem_7rem] gap-4 border-b px-5 py-2.5 text-xs text-muted-foreground @3xl:grid"
+        >
+          <span>群組</span>
+          <span>觸發方式</span>
+          <span>可修改的專案</span>
+          <span>記憶</span>
+          <span className="text-right">狀態</span>
+        </div>
+        <ul role="list" className="grid gap-3 @3xl:block @3xl:divide-y">
+          {groups.map((g) => {
+            const projects = state.projects.filter((p) =>
+              g.project_ids.includes(p.id),
+            );
+            const memories = state.memories.filter(
+              (m) => m.group_id === g.id,
+            ).length;
+            return (
+              <li
+                key={g.id}
+                className="rounded-xl border bg-card text-card-foreground @3xl:rounded-none @3xl:border-0"
+              >
+                <button
+                  className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-2 rounded-[inherit] px-5 py-3 text-left transition-colors hover:bg-muted/40 @3xl:grid-cols-[minmax(0,1.6fr)_8rem_minmax(0,2fr)_5rem_7rem] @3xl:items-center"
+                  onClick={() => onOpen(g.id)}
+                >
+                  <span className="flex min-w-0 flex-col gap-1">
+                    <span className="flex flex-wrap items-center gap-2 font-medium">
+                      <span className="[overflow-wrap:anywhere]">
+                        {groupName(g)}
+                      </span>
+                      <Badge variant="secondary">
+                        {groupPlatformLabels[g.platform]}
+                      </Badge>
+                    </span>
+                    {isUnnamedLineGroup(g) && (
+                      <span className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+                        <span>
+                          {groupPageText.created}{" "}
+                          <time dateTime={g.created_at}>
+                            {createdDate.format(new Date(g.created_at))}
+                          </time>
+                        </span>
+                        <span>
+                          {groupPageText.lastMessage}{" "}
+                          {g.last_message_at ? (
+                            <time dateTime={g.last_message_at}>
+                              {date(g.last_message_at)}
+                            </time>
+                          ) : (
+                            groupPageText.noSavedMessages
+                          )}
+                        </span>
+                      </span>
+                    )}
+                  </span>
+                  <span className="col-span-2 text-sm @3xl:col-auto">
+                    <span className="mr-2 text-xs text-muted-foreground @3xl:sr-only">
+                      觸發方式
+                    </span>
+                    {g.trigger_mode === "auto"
+                      ? "自動辨識"
+                      : g.platform === "discord"
+                        ? "指令或提及機器人"
+                        : "指令與引用追問"}
+                  </span>
+                  <span
+                    className={cn(
+                      "col-span-2 text-sm [overflow-wrap:anywhere] @3xl:col-auto",
+                      !projects.length && "text-warn",
+                    )}
+                  >
+                    <span className="mr-2 text-xs text-muted-foreground @3xl:sr-only">
+                      可修改的專案
+                    </span>
+                    <span>
+                      {projects.map((p) => p.name).join("、") || "尚未綁定"}
+                    </span>
+                  </span>
+                  <span className="col-span-2 text-sm text-muted-foreground tabular-nums @3xl:col-auto">
+                    <span className="mr-2 text-xs @3xl:sr-only">記憶</span>
+                    {memories} 筆
+                  </span>
+                  <span className="col-start-2 row-start-1 flex justify-end @3xl:col-auto @3xl:row-auto">
+                    <span className="sr-only">狀態</span>
+                    <GroupStatusBadge group={g} state={state} />
+                  </span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
 function GroupCard({
   group: g,
   state,
@@ -429,7 +480,8 @@ function GroupCard({
   request: Request;
   openSettings: () => void;
 }) {
-  const [name, setName] = useState(g.name),
+  const savedName = isUnnamedLineGroup(g) ? "" : g.name;
+  const [name, setName] = useState(savedName),
     [ids, setIds] = useState<string[]>(g.project_ids),
     [enabled, setEnabled] = useState(g.enabled),
     [triggerMode, setTriggerMode] = useState(g.trigger_mode),
@@ -439,7 +491,7 @@ function GroupCard({
   // 即時狀態更新不應清掉管理者尚未儲存的修改：每個欄位只在它自己的已存值改變時才同步，
   // 例如 LINE 群組改名不會把還沒儲存的專案綁定洗掉。
   const savedIds = g.project_ids.join();
-  useEffect(() => setName(g.name), [g.name]);
+  useEffect(() => setName(savedName), [savedName]);
   useEffect(() => setIds(g.project_ids), [savedIds]);
   useEffect(() => setEnabled(g.enabled), [g.enabled]);
   useEffect(() => setTriggerMode(g.trigger_mode), [g.trigger_mode]);
@@ -557,7 +609,12 @@ function GroupCard({
         <p role="status" className="text-sm font-medium">
           目前：{groupReplyStatus(g, state.settings, state.health).text}
           {!g.left_at && state.settings.group_replies === false && (
-            <Button size="sm" variant="link" className="min-h-11" onClick={openSettings}>
+            <Button
+              size="sm"
+              variant="link"
+              className="min-h-11"
+              onClick={openSettings}
+            >
               前往設定
             </Button>
           )}
@@ -571,13 +628,22 @@ function GroupCard({
             setReplyMode(v as NonNullable<Group["reply_mode"]>)
           }
         >
-          <SelectTrigger id={`reply-${g.id}`} className="min-h-11 w-full sm:max-w-sm">
+          <SelectTrigger
+            id={`reply-${g.id}`}
+            className="min-h-11 w-full sm:max-w-sm"
+          >
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem className="min-h-11" value="results">只回覆結果</SelectItem>
-            <SelectItem className="min-h-11" value="all">收到需求時也回覆</SelectItem>
-            <SelectItem className="min-h-11" value="off">不在群組回覆</SelectItem>
+            <SelectItem className="min-h-11" value="results">
+              只回覆結果
+            </SelectItem>
+            <SelectItem className="min-h-11" value="all">
+              收到需求時也回覆
+            </SelectItem>
+            <SelectItem className="min-h-11" value="off">
+              不在群組回覆
+            </SelectItem>
           </SelectContent>
         </Select>
         <p className="text-xs text-muted-foreground">
@@ -687,7 +753,7 @@ function GroupCard({
             <Button
               variant="ghost"
               onClick={() => {
-                setName(g.name);
+                setName(savedName);
                 setIds(g.project_ids);
                 setEnabled(g.enabled);
                 setTriggerMode(g.trigger_mode);
