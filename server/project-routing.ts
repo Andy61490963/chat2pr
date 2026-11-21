@@ -222,7 +222,7 @@ export async function requireProjectConfirmation(c: DbClient, taskId: string) {
     throw new AppError(409, "目標專案尚未確認或確認已失效，請到看板重新確認");
 }
 
-export async function approvalNotice(c: DbClient, task: Task) {
+export async function approvalNotice(c: DbClient, task: Task, announce = true) {
   const p = task.project_id
     ? (
         await c.query("SELECT name,repo FROM projects WHERE id=$1", [
@@ -249,12 +249,13 @@ export async function approvalNotice(c: DbClient, task: Task) {
       `待確認${task.mode === "query" ? "查詢" : "修改"}：${task.title}\n目標專案：${p ? `${p.name}（${p.repo}）` : "尚未指定"}\n目標分支：${task.target_branch ?? "待選擇"}\n${reason}${suggested.length ? `\n看起來是 ${suggested.join("、")}（尚未綁定這個群組）。` : ""}\n${task.branch_selection?.reason ?? "請核對目標分支"}\n請到看板檢視需求、專案與分支後確認。`,
     ],
   );
-  await notifyGroup(
-    c,
-    task.id,
-    "received",
-    `received:${task.id}`,
-    `收到${task.mode === "query" ? "查詢" : "需求"}「${task.title}」，等管理者確認後開始處理。`,
-    "all",
-  );
+  if (announce)
+    await notifyGroup(
+      c,
+      task.id,
+      "received",
+      `received:${task.id}`,
+      `收到${task.mode === "query" ? "查詢" : "需求"}「${task.title}」，等管理者確認後開始處理。`,
+      "all",
+    );
 }

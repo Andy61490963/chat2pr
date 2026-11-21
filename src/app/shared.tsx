@@ -75,6 +75,7 @@ export type Audit = {
   task_mode?: Task["mode"] | null;
 };
 export type State = {
+  pickLists?: import("../../shared/pick-list.js").PickList[];
   settings: Settings;
   rag: {
     active: boolean;

@@ -733,3 +733,16 @@ CREATE TABLE IF NOT EXISTS derived_images (
 );
 -- 每次執行使用的系統套件與衍生映像（裝了什麼、為什麼、誰放行）；任務詳情顯示。
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS install_report jsonb;
+
+-- 待挑選清單獨立於派工；清單結束後清除草稿，選中的需求只保存在任務裡。
+CREATE TABLE IF NOT EXISTS pick_lists (
+ id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ group_id text NOT NULL REFERENCES groups(id),
+ root_id text NOT NULL,
+ version int NOT NULL DEFAULT 1,
+ items jsonb NOT NULL,
+ created_at timestamptz NOT NULL DEFAULT now(),
+ closed_at timestamptz,
+ UNIQUE (group_id, root_id)
+);
+CREATE INDEX IF NOT EXISTS pending_pick_lists ON pick_lists(group_id,created_at) WHERE closed_at IS NULL;

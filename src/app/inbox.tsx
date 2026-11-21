@@ -4,6 +4,8 @@ import {
 } from "../../shared/status-glossary.js";
 import { taskListTitle } from "../../shared/task-title.js";
 import { useId, useRef, useState } from "react";
+import type { PickList } from "../../shared/pick-list.js";
+import { PickListForm } from "./pick-list";
 import {
   Activity,
   AlertCircle,
@@ -135,6 +137,7 @@ export function InboxView({
   open,
   act,
   endTasks,
+  resolvePickList,
   more,
 }: {
   state: State;
@@ -151,6 +154,7 @@ export function InboxView({
     reason: string,
     notify: boolean,
   ) => Promise<boolean>;
+  resolvePickList: (list: PickList, ids: string[]) => Promise<boolean>;
   more: () => unknown;
 }) {
   const [selected, setSelected] = useState(new Map<string, EndTaskSelection>());
@@ -178,7 +182,8 @@ export function InboxView({
   };
   const submitEnd = async () => {
     setConfirmEnd(false);
-    if (!(await endTasks([...selected.values()], reason.trim(), notify))) return;
+    if (!(await endTasks([...selected.values()], reason.trim(), notify)))
+      return;
     if (
       document.activeElement === endButton.current ||
       document.activeElement === document.body
@@ -195,6 +200,7 @@ export function InboxView({
   const ready = state.tasks.filter((t) => readyStatuses.includes(t.status));
   const held = state.tasks.filter((t) => waitingStatuses.includes(t.status));
   const needCount = countOf(state, attention);
+  const lists = admin ? (state.pickLists ?? []) : [];
   const week = Date.now() - 7 * 86400000;
   const mergedWeek =
     state.totals?.mergedWeek ??
@@ -289,6 +295,28 @@ export function InboxView({
             )}
           </div>
         )}
+        {lists.length > 0 && (
+          <section
+            aria-label="需要你決定"
+            className="work-ledger mb-4 divide-y"
+          >
+            {lists.map((list) => (
+              <PickListForm
+                key={`${list.id}:${list.version}`}
+                list={list}
+                group={
+                  state.groups.find((group) => group.id === list.groupId)
+                    ?.name ?? "LINE 群組"
+                }
+                busy={busy}
+                resolve={async (ids) => {
+                  if (await resolvePickList(list, ids))
+                    decisionSection.current?.focus();
+                }}
+              />
+            ))}
+          </section>
+        )}
         {needs.length ? (
           <div className="work-ledger divide-y">
             {needs.map((t) => (
@@ -308,22 +336,26 @@ export function InboxView({
                         className={batchCheckbox}
                         checked={selected.has(t.id)}
                         disabled={busy}
-                        onChange={(event) => toggleTask(t.id, event.target.checked)}
+                        onChange={(event) =>
+                          toggleTask(t.id, event.target.checked)
+                        }
                       />
-                      <span className="sr-only">選取「{taskListTitle(t)}」</span>
+                      <span className="sr-only">
+                        選取「{taskListTitle(t)}」
+                      </span>
                     </label>
                   ) : undefined
                 }
               />
             ))}
           </div>
-        ) : (
+        ) : lists.length === 0 ? (
           <Card className="py-1">
             <Empty compact icon={<CheckCircle2 />} title="都處理完了">
               有需求需要你決定時，你會在這裡看到它，也會收到私訊。
             </Empty>
           </Card>
-        )}
+        ) : null}
         {admin && (
           <Dialog open={confirmEnd} onOpenChange={setConfirmEnd}>
             <DialogContent
@@ -347,7 +379,9 @@ export function InboxView({
                 </DialogDescription>
               </DialogHeader>
               <div className="grid gap-2">
-                <Label htmlFor={reasonId}>結束原因（選填，僅記在任務活動）</Label>
+                <Label htmlFor={reasonId}>
+                  結束原因（選填，僅記在任務活動）
+                </Label>
                 <Textarea
                   id={reasonId}
                   value={reason}
@@ -955,7 +989,9 @@ function WaitingRow({
         className="work-touch flex min-w-0 flex-col gap-1 text-left"
         onClick={() => open(t.id)}
       >
-        <span className="font-medium [overflow-wrap:anywhere]">{taskListTitle(t)}</span>
+        <span className="font-medium [overflow-wrap:anywhere]">
+          {taskListTitle(t)}
+        </span>
         <TaskRowFields task={t} state={state} />
         {reason && (
           <span className="text-sm text-warn [overflow-wrap:anywhere]">
