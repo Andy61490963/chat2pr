@@ -451,6 +451,21 @@ describe("管理 API", () => {
     await app.close();
   });
 
+  it("沒有群組使用的專案可以刪除；還有群組在用時要先解除綁定", async () => {
+    const id = await fixture(),
+      headers = await session(),
+      app = await buildApp(db);
+    const remove = () =>
+      app.inject({ method: "DELETE", url: `/api/projects/${id}`, headers });
+    const blocked = await remove();
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.json().error).toContain("先到群組頁解除綁定");
+    await db.query("DELETE FROM group_projects");
+    expect((await remove()).statusCode).toBe(200);
+    expect(await db.query("SELECT 1 FROM projects")).toHaveLength(0);
+    await app.close();
+  });
+
   it("找不到儲存庫的專案可以改選另一個儲存庫：綁定與任務掛回，環境要重新驗證", async () => {
     const id = await fixture(),
       headers = await session(),

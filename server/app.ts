@@ -1229,7 +1229,7 @@ export async function buildApp(
       message: queued === false ? "已在驗證中" : "你的專案已排入環境驗證。",
     });
   });
-  // 只有找不到儲存庫的專案可以刪除；歷史任務保留，只是不再掛在這個專案下。
+  // 找不到儲存庫、或沒有任何群組使用的專案可以刪除；歷史任務保留，只是不再掛在這個專案下。
   app.delete("/api/projects/:id", async (req) => {
     await requireAdmin(db, req);
     const id = z
@@ -1241,8 +1241,15 @@ export async function buildApp(
         await c.query("SELECT * FROM projects WHERE id=$1 FOR UPDATE", [id])
       ).rows[0] as Project | undefined;
       if (!p) throw new AppError(404, "找不到專案");
-      if (!p.repo_missing_at)
-        throw new AppError(409, "只有找不到儲存庫的專案可以刪除");
+      const bound = await c.query(
+        "SELECT 1 FROM group_projects WHERE project_id=$1 LIMIT 1",
+        [id],
+      );
+      if (!p.repo_missing_at && bound.rowCount)
+        throw new AppError(
+          409,
+          "這個專案還有群組在使用，無法刪除。請先到群組頁解除綁定，再刪除專案。",
+        );
       const active = await c.query(
         "SELECT 1 FROM tasks WHERE project_id=$1 AND status IN ('running','reviewing') LIMIT 1",
         [id],

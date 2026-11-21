@@ -485,7 +485,11 @@ export function ProjectsView({
                     >
                       <RefreshCw /> {validateLabel(open)}
                     </Button>
-                    {open.repo_missing_at && (
+                    {(open.repo_missing_at ||
+                      // 沒有群組使用的專案也能刪；還有群組在用時要先到群組頁解除綁定。
+                      !state.groups.some((g) =>
+                        g.project_ids.includes(open.id),
+                      )) && (
                       <ConfirmButton
                         variant="destructive"
                         disabled={busy}
