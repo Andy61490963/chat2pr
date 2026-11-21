@@ -8,7 +8,7 @@ vi.mock("../server/config.js", async (original) => ({
 }));
 import { db, reset, fixture, session } from "./helpers.js";
 import { buildApp } from "../server/app.js";
-import type { StateTotals, Task } from "../shared/types.js";
+import type { StateTotals, Task, TaskPage } from "../shared/types.js";
 
 beforeEach(reset);
 afterAll(() => db.close());
@@ -108,4 +108,64 @@ describe("/api/state 完整載入待處理任務", () => {
       failed: 1,
     });
   });
+});
+
+it("任務清單先篩選再分批，相同更新時間也不會漏列或重複", async () => {
+  const project = await fixture();
+  const archived = await db.query<Pick<Task, "id">>(
+    `INSERT INTO tasks(project_id,group_id,title,summary,status,dedupe_key,updated_at)
+     SELECT $1,'group-a','範例歷史任務 '||i,'列印清單','merged','archive-demo-'||i,
+       '2026-01-01T01:00:00.123456Z'::timestamptz
+     FROM generate_series(1,34) i RETURNING id`,
+    [project],
+  );
+  await db.query(
+    `INSERT INTO tasks(project_id,group_id,title,summary,status,dedupe_key,updated_at) VALUES
+      ($1,'group-a','範例待執行任務','列印清單','queued','queued-demo','2026-01-03T01:00:00Z'),
+      ($1,'group-a','範例歷史任務','更新圖示','closed','closed-demo','2026-01-02T01:00:00Z'),
+      (NULL,'group-a','範例未指定專案','列印清單','answered','no-project-demo','2026-01-02T01:00:00Z')`,
+    [project],
+  );
+  const app = await buildApp(db);
+  try {
+    expect((await app.inject("/api/tasks?filter=all")).statusCode).toBe(401);
+    const headers = await session();
+    const list = async (params: Record<string, string>) => {
+      const response = await app.inject({
+        url: `/api/tasks?${new URLSearchParams(params)}`,
+        headers,
+      });
+      expect(response.statusCode).toBe(200);
+      return response.json<TaskPage>();
+    };
+    const filters = {
+      filter: "closed",
+      project,
+      group: "group-a",
+      q: "列印清單",
+    };
+    const expected = archived
+      .map(({ id }) => id)
+      .sort()
+      .reverse();
+    const first = await list(filters);
+    expect(first.tasks.map(({ id }) => id)).toEqual(expected.slice(0, 30));
+    expect(first.next).toEqual({
+      before: "2026-01-01T01:00:00.123456Z",
+      beforeId: expected[29],
+    });
+    const last = await list({ ...filters, ...first.next! });
+    expect(last.tasks.map(({ id }) => id)).toEqual(expected.slice(30));
+    expect(last.next).toBeNull();
+    expect((await list({ filter: "all" })).tasks[0].title).toBe(
+      "範例待執行任務",
+    );
+    expect(
+      (await list({ filter: "closed", project: "none" })).tasks.map(
+        ({ title }) => title,
+      ),
+    ).toEqual(["範例未指定專案"]);
+  } finally {
+    await app.close();
+  }
 });

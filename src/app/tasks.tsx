@@ -1,7 +1,13 @@
-import { statusLabels } from "../../shared/status-glossary.js";
-import { useEffect, useState } from "react";
+import { statusLabels, taskListLabels } from "../../shared/status-glossary.js";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Search } from "lucide-react";
-import type { Task, TaskStatus } from "../../shared/types.js";
+import {
+  endedStatuses,
+  unfinishedStatuses,
+  type Task,
+  type TaskPage,
+  type TaskStatus,
+} from "../../shared/types.js";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -21,10 +27,11 @@ import {
 import { TaskRow } from "./inbox";
 import {
   type State,
+  type Request,
   attention,
   countOf,
   Empty,
-  LoadMore,
+  message,
   moving,
   ready,
   SectionTitle,
@@ -32,186 +39,408 @@ import {
   writeQuery,
 } from "./shared";
 
-const ended: TaskStatus[] = [
-  "merged",
-  "answered",
-  "closed",
-  "rejected",
-  "cancelled",
-];
-// statuses 為 null 代表全部。分頁上的數字用伺服器的實際數量；清單、搜尋與群組篩選只看已載入的任務。
 const filters: { id: string; label: string; statuses: TaskStatus[] | null }[] =
   [
-    { id: "all", label: "全部", statuses: null },
+    {
+      id: "active",
+      label: taskListLabels.active,
+      statuses: unfinishedStatuses,
+    },
     { id: "todo", label: "待處理", statuses: attention },
     { id: "waiting", label: statusLabels.budget_wait, statuses: waiting },
     { id: "moving", label: "進行中", statuses: moving },
     { id: "ready", label: statusLabels.ready, statuses: ready },
-    { id: "closed", label: "已結束", statuses: ended },
+    { id: "closed", label: taskListLabels.ended, statuses: endedStatuses },
+    { id: "all", label: "全部", statuses: null },
   ];
-const matcher = (statuses: TaskStatus[] | null) => (t: Task) =>
-  !statuses || statuses.includes(t.status);
 type By = "project" | "group" | "none";
+const defaults = {
+  filter: "active",
+  group: "all",
+  project: "all",
+  by: "",
+  q: "",
+};
+const preferenceKeys = ["filter", "group", "project", "by", "q"] as const;
+
+function readPreferences(state: State, storageKey: string) {
+  let params = new URLSearchParams(location.search);
+  if (!preferenceKeys.some((key) => params.has(key))) {
+    try {
+      params = new URLSearchParams(localStorage.getItem(storageKey) ?? "");
+    } catch {
+      // 停用瀏覽器儲存時仍可用網址保留篩選。
+    }
+  }
+  const pick = (
+    key: keyof typeof defaults,
+    valid: (value: string) => boolean,
+  ) => {
+    const value = params.get(key);
+    return value && valid(value) ? value : defaults[key];
+  };
+  return {
+    filter: pick("filter", (value) => filters.some((f) => f.id === value)),
+    group: pick("group", (value) => state.groups.some((g) => g.id === value)),
+    project: pick(
+      "project",
+      (value) => value === "none" || state.projects.some((p) => p.id === value),
+    ),
+    by: pick("by", (value) => ["project", "group", "none"].includes(value)),
+    q: params.get("q") ?? "",
+  };
+}
+
+function TaskRows({
+  list,
+  by,
+  state,
+  open,
+}: {
+  list: Task[];
+  by: By;
+  state: State;
+  open: (id: string) => unknown;
+}) {
+  const sections = new Map<string, Task[]>();
+  for (const task of list) {
+    const key =
+      by === "project"
+        ? (task.project_id ?? "none")
+        : by === "group"
+          ? task.group_id
+          : "";
+    const section = sections.get(key);
+    if (section) section.push(task);
+    else sections.set(key, [task]);
+  }
+  return [...sections].map(([key, tasks]) => (
+    <section key={key}>
+      {by !== "none" && (
+        <SectionTitle count={tasks.length}>
+          {by === "project"
+            ? (state.projects.find((p) => p.id === key)?.name ?? "未指定專案")
+            : (state.groups.find((g) => g.id === key)?.name ?? "群組")}
+        </SectionTitle>
+      )}
+      <div className="work-ledger">
+        {tasks.map((task) => (
+          <TaskRow
+            key={task.id}
+            task={task}
+            state={state}
+            open={open}
+            hide={by}
+          />
+        ))}
+      </div>
+    </section>
+  ));
+}
+
+function TaskHistory({
+  query,
+  by,
+  state,
+  open,
+  request,
+  empty,
+}: {
+  query: string;
+  by: By;
+  state: State;
+  open: (id: string) => unknown;
+  request: Request;
+  empty: React.ReactNode;
+}) {
+  const [page, setPage] = useState<TaskPage>({ tasks: [], next: null });
+  const [load, setLoad] = useState<{
+    cursor: TaskPage["next"];
+    attempt: number;
+  }>({ cursor: null, attempt: 0 });
+  const [finished, setFinished] = useState<number | null>(null);
+  const [failure, setFailure] = useState("");
+  const [focusId, setFocusId] = useState<string | null>(null);
+  const manual = useRef(false);
+  const list = useRef<HTMLDivElement>(null);
+  const footer = useRef<HTMLDivElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  const loading = finished !== load.attempt;
+
+  useEffect(() => {
+    let current = true;
+    const params = new URLSearchParams(query);
+    if (load.cursor) {
+      params.set("before", load.cursor.before);
+      params.set("beforeId", load.cursor.beforeId);
+    }
+    void request<TaskPage>(`/api/tasks?${params}`)
+      .then((batch) => {
+        if (!current) return;
+        setPage((previous) => {
+          const tasks = new Map(previous.tasks.map((task) => [task.id, task]));
+          for (const task of batch.tasks) tasks.set(task.id, task);
+          return { tasks: [...tasks.values()], next: batch.next };
+        });
+        if (manual.current) setFocusId(batch.tasks[0]?.id ?? null);
+        setFailure("");
+      })
+      .catch((error: unknown) => {
+        if (current) {
+          setFailure(
+            error instanceof TypeError ? "連不到伺服器" : message(error),
+          );
+        }
+      })
+      .finally(() => {
+        if (current) setFinished(load.attempt);
+      });
+    return () => {
+      current = false;
+    };
+  }, [load, query, request]);
+
+  useLayoutEffect(() => {
+    if (!loading && !failure && manual.current) {
+      if (
+        document.activeElement === button.current ||
+        document.activeElement === document.body
+      ) {
+        const row =
+          focusId &&
+          list.current?.querySelector<HTMLElement>(
+            `[data-task-id="${CSS.escape(focusId)}"]`,
+          );
+        (row || list.current)?.focus();
+      }
+      manual.current = false;
+    }
+  }, [failure, focusId, loading]);
+
+  useEffect(() => {
+    const sentinel = footer.current;
+    if (
+      !sentinel ||
+      loading ||
+      failure ||
+      !page.next ||
+      !("IntersectionObserver" in window)
+    )
+      return;
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting && document.activeElement !== button.current) {
+        setLoad((previous) =>
+          previous.attempt === finished
+            ? { cursor: page.next, attempt: previous.attempt + 1 }
+            : previous,
+        );
+      }
+    });
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [failure, finished, loading, page.next]);
+
+  return (
+    <>
+      <div ref={list} className="flex flex-col gap-6" tabIndex={-1}>
+        <TaskRows list={page.tasks} by={by} state={state} open={open} />
+      </div>
+      {!page.tasks.length && !loading && !failure && empty}
+      <div
+        ref={footer}
+        className="flex flex-wrap items-center justify-center gap-3 text-sm text-muted-foreground"
+      >
+        <span role={failure && !loading ? "alert" : "status"}>
+          {loading
+            ? "正在載入任務。"
+            : failure
+              ? `載入任務失敗（${failure.replace(/[。！]$/, "")}），請按「重試載入任務」。`
+              : page.tasks.length > 0 &&
+                `你已看到 ${page.tasks.length} 筆任務。`}
+        </span>
+        {(page.next || failure) && (
+          <Button
+            ref={button}
+            variant="outline"
+            size="sm"
+            aria-disabled={loading}
+            onClick={() => {
+              if (loading) return;
+              manual.current = true;
+              setLoad({
+                cursor: failure ? load.cursor : page.next,
+                attempt: load.attempt + 1,
+              });
+            }}
+          >
+            {failure ? "重試載入任務" : "載入更多任務"}
+          </Button>
+        )}
+      </div>
+    </>
+  );
+}
 
 export function TasksView({
   state,
   open,
-  more,
+  request,
+  login,
+  historyRevision,
 }: {
   state: State;
   open: (id: string) => unknown;
-  more: () => unknown;
+  request: Request;
+  login: string;
+  historyRevision: number;
 }) {
-  // 篩選條件放在網址，重新整理、上一頁或把連結傳給別人都會看到同一份清單。
-  const read = () => {
-    const q = new URLSearchParams(location.search);
-    const pick = (
-      key: string,
-      ok: (v: string) => boolean,
-      fallback: string,
-    ) => {
-      const v = q.get(key);
-      return v && ok(v) ? v : fallback;
-    };
-    return {
-      filter: pick("filter", (v) => filters.some((f) => f.id === v), "all"),
-      group: pick("group", (v) => state.groups.some((g) => g.id === v), "all"),
-      project: pick(
-        "project",
-        (v) => v === "none" || state.projects.some((p) => p.id === v),
-        "all",
-      ),
-      by: pick(
-        "by",
-        (v) => ["project", "group", "none"].includes(v),
-        "project",
-      ) as By,
-      search: q.get("q") ?? "",
-    };
+  const storageKey = `agentflow-tasks:${login}`;
+  const [preferences, setPreferences] = useState(() =>
+    readPreferences(state, storageKey),
+  );
+  const { filter, group, project, q: search } = preferences;
+  const isHistory = filter === "all" || filter === "closed";
+  const by = (preferences.by || (isHistory ? "none" : "project")) as By;
+  const closedTab = useRef<HTMLButtonElement>(null);
+  const allTab = useRef<HTMLButtonElement>(null);
+  const searchField = useRef<HTMLInputElement>(null);
+  const change = (updates: Partial<typeof preferences>) => {
+    const next = { ...preferences, ...updates };
+    setPreferences(next);
+    try {
+      localStorage.setItem(storageKey, new URLSearchParams(next).toString());
+    } catch {
+      // 瀏覽器無法儲存偏好時仍保留此頁的操作。
+    }
   };
-  const [initial] = useState(read);
-  const [filter, setFilter] = useState<string>(initial.filter),
-    [group, setGroup] = useState(initial.group),
-    [project, setProject] = useState(initial.project),
-    [by, setBy] = useState<By>(initial.by),
-    [search, setSearch] = useState(initial.search);
   useEffect(() => {
-    writeQuery([
-      ["filter", filter, "all"],
-      ["group", group, "all"],
-      ["project", project, "all"],
-      ["by", by, "project"],
-      ["q", search, ""],
-    ]);
-  }, [filter, group, project, by, search]);
-  // 上一頁／下一頁換到另一組篩選時，畫面跟著網址走。
+    // 網址明列分頁，分享預設分頁時也不會套用收件者的上次選擇。
+    if (location.pathname === "/tasks") {
+      writeQuery(
+        preferenceKeys.map((key) => [
+          key,
+          preferences[key],
+          key === "filter" ? "" : defaults[key],
+        ]),
+      );
+    }
+  }, [preferences]);
   useEffect(() => {
     const onPop = () => {
-      const v = read();
-      setFilter(v.filter);
-      setGroup(v.group);
-      setProject(v.project);
-      setBy(v.by);
-      setSearch(v.search);
+      if (location.pathname === "/tasks")
+        setPreferences(readPreferences(state, storageKey));
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  });
-  const narrowed =
-    filter !== "all" || group !== "all" || project !== "all" || search !== "";
-  const clear = () => {
-    setFilter("all");
-    setGroup("all");
-    setProject("all");
-    setSearch("");
-  };
-  const match = matcher(filters.find((f) => f.id === filter)!.statuses);
+  }, [state, storageKey]);
+  const narrowed = group !== "all" || project !== "all" || search !== "";
+  const currentFilter = filters.find((f) => f.id === filter)!;
   // 分頁數字：全部用總筆數，其餘依伺服器的各狀態數量加總。
   const tabCount = (statuses: TaskStatus[] | null) =>
     statuses
       ? countOf(state, statuses)
       : (state.totals?.tasks ?? state.tasks.length);
   const omitted = state.totals?.unfinishedOmitted ?? 0;
-  const list = state.tasks.filter(
-    (t) =>
-      match(t) &&
-      (group === "all" || t.group_id === group) &&
-      (project === "all" || (t.project_id ?? "none") === project) &&
-      `${t.title}${t.summary}`.toLowerCase().includes(search.toLowerCase()),
-  );
-  // 依專案或群組分段，任務多時一眼看出各自的進度。
-  const keyOf = (t: Task) =>
-    by === "project" ? (t.project_id ?? "none") : t.group_id;
-  const sections =
-    by === "none"
-      ? [{ key: "all", name: "", tasks: list }]
-      : [...new Set(list.map(keyOf))].map((key) => ({
-          key,
-          name:
-            by === "project"
-              ? (state.projects.find((p) => p.id === key)?.name ?? "未指定專案")
-              : (state.groups.find((g) => g.id === key)?.name ?? "群組"),
-          tasks: list.filter((t) => keyOf(t) === key),
-        }));
-  const results = (
-    <>
-      {list.length ? (
-        sections.map((s) => (
-          <section key={s.key}>
-            {s.name && (
-              <SectionTitle count={s.tasks.length}>{s.name}</SectionTitle>
-            )}
-            <div className="work-ledger">
-              {s.tasks.map((t) => (
-                <TaskRow
-                  key={t.id}
-                  task={t}
-                  state={state}
-                  open={open}
-                  hide={by}
-                />
-              ))}
-            </div>
-          </section>
-        ))
+  const list = isHistory
+    ? []
+    : state.tasks.filter(
+        (t) =>
+          currentFilter.statuses?.includes(t.status) &&
+          (group === "all" || t.group_id === group) &&
+          (project === "all" || (t.project_id ?? "none") === project) &&
+          `${t.title} ${t.summary}`
+            .toLowerCase()
+            .includes(search.toLowerCase()),
+      );
+  const params = new URLSearchParams({ filter });
+  if (group !== "all") params.set("group", group);
+  if (project !== "all") params.set("project", project);
+  if (search) params.set("q", search);
+  const noActiveTasks =
+    filter === "active" && tabCount(unfinishedStatuses) === 0;
+  const empty = (
+    <Card>
+      {noActiveTasks ? (
+        <Empty title="目前沒有進行中或待處理的任務">
+          <span className="flex flex-col items-center gap-3">
+            有新任務或進度變動時，你會在這裡看到。
+            <Button
+              variant="outline"
+              onClick={() => {
+                change({ filter: "closed" });
+                closedTab.current?.focus();
+              }}
+            >
+              看已結束的任務
+            </Button>
+          </span>
+        </Empty>
+      ) : narrowed ? (
+        <Empty title="沒有符合條件的任務">
+          <span className="flex flex-col items-center gap-3">
+            你可以清除篩選，或換個字詞搜尋。
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                change({ group: "all", project: "all", q: "" });
+                searchField.current?.focus();
+              }}
+            >
+              清除篩選
+            </Button>
+          </span>
+        </Empty>
       ) : (
-        <Card>
-          {narrowed ? (
-            <Empty title="沒有符合條件的任務">
-              <span className="flex flex-col items-center gap-3">
-                換個篩選或搜尋字詞試試；目前已載入 {state.tasks.length} 個任務。
-                <Button variant="outline" size="sm" onClick={clear}>
-                  清除篩選
-                </Button>
-              </span>
-            </Empty>
+        <Empty
+          title={
+            filter === "all"
+              ? "還沒有任務"
+              : `目前沒有「${currentFilter.label}」的任務`
+          }
+        >
+          {filter === "all" ? (
+            "你可以在已綁定專案的群組提出需求，整理完成後就會出現在這裡。"
           ) : (
-            <Empty title="還沒有任務">
-              你可以在已綁定專案的群組提出需求，整理完成後就會出現在這裡。
-            </Empty>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                change({ filter: "all" });
+                allTab.current?.focus();
+              }}
+            >
+              看全部任務
+            </Button>
           )}
-        </Card>
+        </Empty>
       )}
-      {/* 伺服器只先給最近的任務；更早的要按了才載入，篩選與搜尋也只看得到已載入的。 */}
-      <LoadMore
-        shown={state.tasks.length}
-        total={state.totals?.tasks}
-        unit="個任務"
-        more={more}
-      />
-    </>
+    </Card>
   );
   return (
     <Tabs
       value={filter}
-      onValueChange={setFilter}
+      onValueChange={(filter) => change({ filter })}
       className="work-surface min-w-0 gap-6"
     >
       <div className="flex flex-col gap-3">
-        {/* 六個分頁在手機上放不下要左右捲；置中排列時左邊超出的部分捲不到，改靠左。 */}
-        <TabsList aria-label="任務狀態" className="justify-start">
+        <TabsList
+          aria-label="任務狀態"
+          className="h-auto w-full flex-wrap justify-start"
+        >
           {filters.map((f) => (
-            <TabsTrigger key={f.id} value={f.id}>
+            <TabsTrigger
+              key={f.id}
+              ref={
+                f.id === "closed"
+                  ? closedTab
+                  : f.id === "all"
+                    ? allTab
+                    : undefined
+              }
+              value={f.id}
+              className="min-h-11 flex-none whitespace-normal"
+            >
               {f.label}
               <span className="text-xs text-muted-foreground">
                 {tabCount(f.statuses)}
@@ -219,14 +448,13 @@ export function TasksView({
             </TabsTrigger>
           ))}
         </TabsList>
-        {omitted > 0 && (
+        {!isHistory && omitted > 0 && (
           <p role="status" className="text-sm text-warn">
-            未結束的任務太多，較舊的 {omitted}{" "}
-            個沒有載入；先處理或關閉一部分後就會出現。
+            你可以到「全部」查看這裡尚未載入的 {omitted} 筆較舊任務。
           </p>
         )}
         <div className="flex flex-wrap gap-2">
-          <Select value={group} onValueChange={setGroup}>
+          <Select value={group} onValueChange={(group) => change({ group })}>
             <SelectTrigger className="w-40" aria-label="群組">
               <SelectValue />
             </SelectTrigger>
@@ -239,7 +467,10 @@ export function TasksView({
               ))}
             </SelectContent>
           </Select>
-          <Select value={project} onValueChange={setProject}>
+          <Select
+            value={project}
+            onValueChange={(project) => change({ project })}
+          >
             <SelectTrigger className="w-44" aria-label="專案">
               <SelectValue />
             </SelectTrigger>
@@ -253,7 +484,7 @@ export function TasksView({
               <SelectItem value="none">未指定專案</SelectItem>
             </SelectContent>
           </Select>
-          <Select value={by} onValueChange={(v) => setBy(v as By)}>
+          <Select value={by} onValueChange={(by) => change({ by })}>
             <SelectTrigger className="w-36" aria-label="分組方式">
               <SelectValue />
             </SelectTrigger>
@@ -266,11 +497,12 @@ export function TasksView({
           <div className="relative min-w-48 flex-1">
             <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
+              ref={searchField}
               className="pl-9"
               placeholder="搜尋任務"
               aria-label="搜尋任務"
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={(e) => change({ q: e.target.value })}
             />
           </div>
         </div>
@@ -281,7 +513,22 @@ export function TasksView({
           value={f.id}
           className="data-[state=active]:flex flex-col gap-6"
         >
-          {results}
+          {f.id === filter &&
+            (isHistory ? (
+              <TaskHistory
+                key={`${historyRevision}:${params}`}
+                query={params.toString()}
+                by={by}
+                state={state}
+                open={open}
+                request={request}
+                empty={empty}
+              />
+            ) : list.length ? (
+              <TaskRows list={list} by={by} state={state} open={open} />
+            ) : (
+              empty
+            ))}
         </TabsContent>
       ))}
     </Tabs>

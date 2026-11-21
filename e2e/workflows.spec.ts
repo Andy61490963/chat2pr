@@ -566,6 +566,8 @@ test("你能在手機首屏看到查詢重點，並從底部修改這一題", as
     },
   });
   await page.goto("/tasks");
+  // 任務頁預設只列進行中與待處理；已回覆的查詢在「已結束」。
+  await page.getByRole("tab", { name: /^已結束/ }).click();
   await page
     .getByRole("button", { name: new RegExp(`${shortTitle}…`) })
     .click();

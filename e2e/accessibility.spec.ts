@@ -111,7 +111,7 @@ const screens: {
 ];
 const narrowScreens = screens
   .filter(({ path }) =>
-    ["/groups", "/projects", "/system", "/settings"].includes(path),
+    ["/tasks", "/groups", "/projects", "/system", "/settings"].includes(path),
   )
   .map((screen) => ({
     ...screen,
@@ -124,7 +124,7 @@ test("方向鍵切換任務狀態與詳情時，選取的分頁會標示對應�
 }) => {
   await mockDashboard(page);
   await page.goto("/tasks");
-  await page.getByRole("tab", { name: /^全部/ }).focus();
+  await page.getByRole("tab", { name: /^進行中與待處理/ }).focus();
   await page.keyboard.press("ArrowRight");
   const list = page.getByRole("tabpanel", { name: /^待處理/ });
   await expect(list.getByText(task.title)).toBeVisible();

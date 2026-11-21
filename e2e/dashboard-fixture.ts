@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 import type { Detail, State } from "../src/app/shared";
 import type { Group, Project, Task } from "../shared/types";
+import { endedStatuses } from "../shared/types";
 import {
   checkEnvironmentLimits,
   defaultCheckEnvironmentPolicy,
@@ -236,6 +237,15 @@ export async function mockDashboard(
     if (!pathname.startsWith("/api/")) return route.continue();
     if (request.method() === "GET" && Object.hasOwn(routes, pathname)) {
       return route.fulfill({ json: routes[pathname] });
+    }
+    // 任務頁「已結束／全部」分批讀取：預設用狀態快照裡的任務回應，個別測試可自行覆寫。
+    if (request.method() === "GET" && pathname === "/api/tasks") {
+      const closed =
+        new URL(request.url()).searchParams.get("filter") === "closed";
+      const tasks = ((routes["/api/state"] as { tasks?: Task[] }).tasks ?? [])
+        .filter((entry) => !closed || endedStatuses.includes(entry.status))
+        .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+      return route.fulfill({ json: { tasks, next: null } });
     }
     if (request.method() === "POST" && pathname === "/api/alerts/seen") {
       return route.fulfill({ json: { ok: true } });

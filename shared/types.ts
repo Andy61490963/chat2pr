@@ -25,6 +25,13 @@ export const taskGroups = {
 export const unfinishedStatuses: TaskStatus[] = Object.values(
   taskGroups,
 ).flat() as TaskStatus[];
+export const endedStatuses: TaskStatus[] = [
+  "merged",
+  "answered",
+  "closed",
+  "rejected",
+  "cancelled",
+];
 /** `/api/state` 一次最多完整載入的未結束任務數；超過的筆數記在 `StateTotals.unfinishedOmitted`。 */
 export const UNFINISHED_LIMIT = 1000;
 /** `/api/state` 的 totals：資料庫裡的實際數量，不受看板載入範圍影響。 */
@@ -133,6 +140,11 @@ export interface CheckSchedule {
   intervalMinutes: number | null;
   dailyAt: string | null;
 }
+export interface TaskPage {
+  tasks: Task[];
+  next: { before: string; beforeId: string } | null;
+}
+
 export interface Task {
   /** 草擬定期檢查的查詢任務：記下要求的排程。 */
   check_draft?: CheckSchedule | null;
@@ -169,7 +181,7 @@ export interface Task {
   answer: string | null;
   created_at: string;
   updated_at: string;
-  /** 只有 /api/state 帶：進行中執行的階段（runs.status）；沒有未完成的執行時為 null。 */
+  /** 看板清單帶入目前執行階段（runs.status）；沒有未完成的執行時為 null。 */
   run_phase?: string | null;
   run_started_at?: string | null;
   run_deadline?: string | null;
