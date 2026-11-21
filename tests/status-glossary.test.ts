@@ -1,5 +1,9 @@
 import { expect, it } from "vitest";
-import { groupStatus, projectStatus } from "../shared/status-glossary.js";
+import {
+  groupStatus,
+  isUnnamedLineGroup,
+  projectStatus,
+} from "../shared/status-glossary.js";
 import type { Project } from "../shared/types.js";
 it("專案同時有多個條件時顯示下一步能處理的狀態", () => {
   const p = { enabled: true, validated_at: "2026-01-01" };
@@ -46,4 +50,15 @@ it("群組狀態優先說明離開、停用與辨識異常", () => {
   );
   expect(groupStatus(g, false)).toBe("unbound");
   expect(groupStatus(g, true)).toBe("ready");
+});
+
+it("只將空白或符合自身預設名稱的 LINE 群組判為未命名", () => {
+  const line = { platform: "line", id: "Cfictional6d7e8f" } as const;
+  expect(isUnnamedLineGroup({ ...line, name: "群組 6d7e8f" })).toBe(true);
+  expect(isUnnamedLineGroup({ ...line, name: " " })).toBe(true);
+  expect(isUnnamedLineGroup({ ...line, name: "群組 abcdef" })).toBe(false);
+  expect(isUnnamedLineGroup({ ...line, name: "範例群組" })).toBe(false);
+  expect(
+    isUnnamedLineGroup({ ...line, platform: "discord", name: "群組 6d7e8f" }),
+  ).toBe(false);
 });

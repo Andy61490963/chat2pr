@@ -35,7 +35,7 @@ import {
 } from "lucide-react";
 import type {
   Action,
-  Group,
+  DashboardGroup,
   Knowledge,
   Memory,
   Project,
@@ -91,7 +91,7 @@ export type State = {
     counts: Record<string, number>;
   };
   projects: Project[];
-  groups: Group[];
+  groups: DashboardGroup[];
   tasks: Task[];
   memories: Memory[];
   knowledge: Knowledge[];

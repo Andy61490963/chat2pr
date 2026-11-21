@@ -16,6 +16,7 @@ import {
 } from "../../shared/line-private.js";
 import {
   adminNotificationLabels,
+  dataRetentionSecretText,
   discordServiceLabels,
   discordServiceText,
   groupPlatformLabels,
@@ -1342,7 +1343,7 @@ export function SettingsView({
             </p>
             <Separator className="my-3" />
             <p className="text-xs text-muted-foreground">
-              機密只能透過本機設定頁修改，這裡不會顯示金鑰。
+              {dataRetentionSecretText}
             </p>
           </CardContent>
         </Card>

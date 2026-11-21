@@ -87,7 +87,7 @@ import {
 } from "./repo-missing.js";
 import type {
   Action,
-  Group,
+  DashboardGroup,
   NotificationFailures,
   NotificationRetryResult,
   Project,
@@ -559,8 +559,14 @@ export async function buildApp(
       db.query<Project>(
         "SELECT p.*,r.phase AS index_phase,r.chunks AS index_chunks,r.error AS index_error FROM projects p LEFT JOIN repo_indexes r ON r.project_id=p.id ORDER BY p.created_at",
       ),
-      db.query<Group>(
-        "SELECT g.*,COALESCE((SELECT array_agg(gp.project_id ORDER BY gp.created_at) FROM group_projects gp WHERE gp.group_id=g.id),'{}') AS project_ids,(SELECT count(*)::int FROM tasks t WHERE t.group_id=g.id AND t.status IN ('queued','budget_wait','failed','running','reviewing')) AS affected_tasks FROM groups g ORDER BY g.created_at,g.id",
+      db.query<DashboardGroup>(
+        `SELECT g.*,
+           COALESCE((SELECT array_agg(gp.project_id ORDER BY gp.created_at) FROM group_projects gp WHERE gp.group_id=g.id),'{}') AS project_ids,
+           (SELECT count(*)::int FROM tasks t WHERE t.group_id=g.id AND t.status IN ('queued','budget_wait','failed','running','reviewing')) AS affected_tasks,
+           (SELECT m.received_at FROM messages m
+             WHERE m.group_id=g.id AND NOT m.revoked AND m.received_at>message_retention_cutoff()
+             ORDER BY m.received_at DESC LIMIT 1) AS last_message_at
+         FROM groups g ORDER BY g.created_at,g.id`,
       ),
       // 未結束的任務（待審核、失敗、等待額度、進行中、待合併）一律載入，較舊的也不會從收件匣消失；
       // 其餘只給最近 N 筆。進行中的執行只帶階段與時間四欄，執行細節由任務詳情提供。

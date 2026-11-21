@@ -4,6 +4,61 @@ export const groupPlatformLabels = {
   line: "LINE",
   discord: "Discord",
 } as const;
+export const groupPageText = {
+  subtitle: "設定 LINE 群組與 Discord 頻道可修改的專案與 AI 記憶",
+  unnamed: "未命名的 LINE 群組",
+  departed: (count: number) => `已離開的群組（${count}）`,
+  created: "建立日期",
+  lastMessage: "最近一則訊息",
+  noSavedMessages: "沒有保留的訊息",
+} as const;
+
+export function isUnnamedLineGroup(group: Pick<Group, "platform" | "id" | "name">) {
+  return (
+    group.platform === "line" &&
+    (!group.name.trim() || group.name === `群組 ${group.id.slice(-6)}`)
+  );
+}
+
+export const dataRetentionSecretText =
+  "金鑰只會寫入，不會顯示。擁有者可在「連線金鑰」更新。GitHub 與入口設定請在主機的本機設定頁修改。";
+
+export const followupText = {
+  label: "後續問題",
+  action: "接著問",
+  example: "例如剛才提到的報表有哪些欄位？",
+  description: "沿用原本的專案與分支提出新問題，原問答會保留。",
+  line: "也可以在 LINE 引用機器人的回答追問。",
+  discord: "也可以在 Discord 回覆機器人的回答追問。",
+} as const;
+
+export const groupDeliveryText = {
+  generic: "群組訊息",
+  receivedNotice: "需求接收通知",
+  mergedNotice: "合併通知",
+  closedNotice: "結束通知",
+  quota: "LINE 本月推播額度已用完",
+  groupSize: "LINE 剩餘推播額度不夠這個群組的人數",
+  lineRate: "LINE 暫時限制推播速度",
+  lineRejected: "LINE 沒有收下這則訊息",
+  lineError: "LINE 回應錯誤",
+  lineUnavailable: "LINE 無法處理這則訊息",
+  sent: "已送到群組",
+  claiming: "正在透過成員的 /進度 指令補送到群組",
+  queued: "正在排隊等待送到群組",
+  pending: "還沒送到群組",
+  undelivered: "沒有送到群組",
+  failed: (attempts: number) => `重試 ${attempts} 次後仍沒有送到群組`,
+  repliesOff: "群組回覆已關閉",
+  expired: "已超過補送期限",
+  superseded: "已有較新的回覆",
+  retry: "系統會再試",
+  replyFailed: "透過 /進度 補送失敗",
+  forward: "需要時請在看板查看並轉達",
+  tryProgress: "可請群組成員用 /進度 取回，或在看板查看並轉達",
+  enableReplies: "如需恢復通知，請確認群組回覆設定",
+  lineConnection: "連不上 LINE",
+} as const;
 export const discordServiceLabels = {
   unconfigured: "尚未設定",
   configError: "設定無法讀取",
