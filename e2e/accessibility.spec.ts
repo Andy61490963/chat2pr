@@ -13,6 +13,13 @@ import {
 const question = "要查哪個月份的資料？";
 const message = "請整理範例服務的狀態。";
 const member = "example-member";
+const skipped = {
+  id: "example-skip",
+  task_id: null,
+  kind: "triage_skipped",
+  detail: "你在「範例看板跨部門設計與開發討論群組」的訊息屬於同事之間的分工，系統未建立任務。",
+  created_at: task.created_at,
+};
 const chat: ChatPage = {
   messages: [
     {
@@ -84,6 +91,7 @@ const check: ScheduledCheck = {
 
 const screens = [
   { name: "收件匣", path: "/", loaded: task.title },
+  { name: "手機收件匣", path: "/", loaded: skipped.detail, mobile: true },
   { name: "任務清單", path: "/tasks", loaded: task.title },
   { name: "任務詳情", path: `/tasks?task=${task.id}`, loaded: question },
   { name: "聊天室", path: "/chat", loaded: message },
@@ -140,7 +148,10 @@ for (const theme of ["light", "dark"] as const) {
     test.use({ colorScheme: theme });
     for (const screen of screens) {
       test(screen.name, async ({ page }) => {
+        if (screen.mobile)
+          await page.setViewportSize({ width: 375, height: 812 });
         await mockDashboard(page, {
+          state: { activity: [skipped] },
           routes: {
             [`/api/tasks/${task.id}`]: {
               ...detail,
@@ -168,6 +179,15 @@ for (const theme of ["light", "dark"] as const) {
         await expect(
           page.getByText(screen.loaded, { exact: true }),
         ).toBeVisible();
+        if (screen.path === "/" && screen.name !== "登入") {
+          const reason = page.getByText(skipped.detail, { exact: true });
+          await expect(reason).toBeVisible();
+          expect(
+            await reason.evaluate(
+              (element) => element.scrollHeight <= element.clientHeight,
+            ),
+          ).toBe(true);
+        }
         expect(
           await page
             .locator("html")

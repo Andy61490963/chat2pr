@@ -12,11 +12,12 @@ vi.mock("../server/config.js", async (original) => ({
   ...(await original<typeof import("../server/config.js")>()),
   secrets: () => ({ openaiKey: "fictional-classifier-key" }),
 }));
-import { db, reset, fixture } from "./helpers.js";
+import { db, reset, fixture, session } from "./helpers.js";
 import { Triage, OpenAIClassifier } from "../server/triage.js";
 import { Line } from "../server/line.js";
 import { Budget } from "../server/budget.js";
 import { GitHub } from "../server/github.js";
+import { buildApp } from "../server/app.js";
 import type {
   Group,
   Project,
@@ -65,6 +66,86 @@ async function setup(type = "text") {
   };
 }
 describe("需求判斷後的確定性關卡", () => {
+  it.each(["ignore", "memory"] as const)(
+    "替身判讀回傳 %s 與同事分工原因時，管理者能在看板查到原因",
+    async (kind) => {
+      const s = await setup();
+      await db.query("UPDATE messages SET text=$1 WHERE id='m1'", [
+        "@小禾 你處理範例看板的按鈕，相關問題以後都找範例看板專案。",
+      ]);
+      const github = new GitHub();
+      github.context = async () => ({
+        branches: { names: ["main"], defaultBranch: "main", truncated: false },
+        branchError: null,
+        sha: "fixture-base",
+        paths: [],
+        files: {},
+        truncated: false,
+      });
+      const classify = vi.fn(async () => [
+        decision({
+          kind,
+          noTaskReason: "coworker_assignment",
+          title: kind === "memory" ? "inferred" : "",
+          summary: kind === "memory" ? "按鈕問題由範例看板專案處理。" : "",
+          acceptance: [],
+        }),
+      ]);
+      await new Triage(
+        db,
+        { classify },
+        github,
+        new Line(db),
+        new Budget(db),
+      ).process(s.group.id);
+      expect(classify).toHaveBeenCalledTimes(1);
+      expect(await db.query("SELECT id FROM tasks")).toHaveLength(0);
+      expect(
+        await db.one("SELECT processed FROM messages WHERE id='m1'"),
+      ).toEqual({ processed: true });
+      expect(await db.query("SELECT content FROM group_memories")).toHaveLength(
+        kind === "memory" ? 1 : 0,
+      );
+      const app = await buildApp(db);
+      try {
+        const response = await app.inject({
+          url: "/api/state",
+          headers: await session(),
+        });
+        expect(response.statusCode).toBe(200);
+        expect(response.json().activity).toContainEqual(
+          expect.objectContaining({
+            kind: "triage_skipped",
+            task_id: null,
+            detail: "你在「測試群組」的訊息屬於同事之間的分工，系統未建立任務。",
+          }),
+        );
+      } finally {
+        await app.close();
+      }
+    },
+  );
+  it.each([false, true])(
+    "未定案的討論不轉成任務（已等候到期：%s）",
+    async (expired) => {
+      const s = await setup();
+      await s.triage.apply(
+        s.group,
+        [s.project],
+        s.messages,
+        [decision({ kind: "defer", noTaskReason: "undecided_discussion" })],
+        crypto.randomUUID(),
+        expired ? ["m1"] : [],
+      );
+      expect(await db.query("SELECT id FROM tasks")).toHaveLength(0);
+      expect(
+        await db.one("SELECT processed FROM messages WHERE id='m1'"),
+      ).toEqual({ processed: expired });
+      expect(
+        await db.one("SELECT detail FROM audit WHERE kind='triage_skipped'"),
+      ).toEqual({ detail: "你在「測試群組」的討論尚未定案，系統未建立任務。" });
+    },
+  );
   it("每日額度不足仍收訊，保留原文且不呼叫模型或累計辨識故障", async () => {
     const s = await setup();
     await db.query(

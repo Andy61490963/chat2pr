@@ -469,7 +469,7 @@ function GroupCard({
         <p className="text-xs leading-relaxed text-muted-foreground">
           {triggerMode === "command"
             ? "你可以用 /任務 或引用機器人的回答提出需求。"
-            : "你儲存後，AI 會自動從新訊息辨識需求。"}
+            : "你在群組提出明確需求時，AI 會自動辨識並略過同事分工與未定案的討論。"}
         </p>
         <details className="text-xs text-muted-foreground">
           <summary className="cursor-pointer">說明</summary>
