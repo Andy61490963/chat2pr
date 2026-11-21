@@ -44,6 +44,7 @@ import type {
   Task,
 } from "../shared/types.js";
 import { LINE_QUOTA } from "../shared/line-quota.js";
+import { taskListQuery, type TaskStatusFilter } from "../shared/task-list.js";
 import {
   reservedQuotaHold,
   subscriptionGateName,
@@ -562,11 +563,16 @@ export function App() {
     e.preventDefault();
     heading.current?.focus({ preventScroll: true });
   };
-  // 收件匣統計卡直接開啟對應篩選的任務列表。
-  const showTasks = (filter: string) =>
+  // 收件匣與通知直接開啟對應篩選的任務清單。
+  const showTasks = (filter: TaskStatusFilter | "closed", taskId?: string) =>
     guard(() => {
       leave("tasks");
-      history.replaceState(null, "", `${viewPaths.tasks}?filter=${filter}`);
+      history.replaceState(
+        null,
+        "",
+        `${viewPaths.tasks}?${taskListQuery(filter, taskId)}`,
+      );
+      if (taskId) void openTask(taskId, false);
     });
   // 收件匣「縮小需求範圍」：打開任務詳情後直接展開補充需求編輯。只對下一次開啟的那個任務有效。
   const amendNext = useRef<string | null>(null);
@@ -925,7 +931,9 @@ export function App() {
                 tasks={state.tasks}
                 seenAt={state.alertsSeenAt ?? null}
                 request={request}
-                open={showTask}
+                open={(id, filter) =>
+                  filter ? showTasks(filter, id) : showTask(id)
+                }
                 openView={admin ? goFromMenu : undefined}
                 onCloseAutoFocus={headingAfterMenu}
               />

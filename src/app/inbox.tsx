@@ -1,7 +1,9 @@
 import {
   notificationLabels,
   projectLabels,
+  taskStatusFilterLabels,
 } from "../../shared/status-glossary.js";
+import type { TaskStatusFilter } from "../../shared/task-list.js";
 import { taskListTitle } from "../../shared/task-title.js";
 import { useId, useRef, useState } from "react";
 import type { PickList } from "../../shared/pick-list.js";
@@ -145,7 +147,7 @@ export function InboxView({
   busy: boolean;
   go: (v: View, projectId?: string | null) => void;
   admin: boolean;
-  showTasks: (filter: string) => void;
+  showTasks: (filter: TaskStatusFilter | "closed") => void;
   /** amend 為 true 時打開任務詳情並直接展開補充需求編輯。 */
   open: (id: string, amend?: boolean) => unknown;
   act: Act;
@@ -430,13 +432,14 @@ export function InboxView({
       {held.length > 0 && (
         <section aria-labelledby="waiting-title">
           <div className="mb-3 flex items-center gap-2">
-            <h2
+            <TaskSectionTitle
               id="waiting-title"
-              className="text-sm font-medium text-muted-foreground"
+              count={countOf(state, waitingStatuses)}
+              open={() => showTasks("waiting")}
+              subdued
             >
-              {statusLabels.budget_wait}（會自動繼續）
-            </h2>
-            <Badge variant="secondary">{countOf(state, waitingStatuses)}</Badge>
+              {`${taskStatusFilterLabels.waiting}（會自動繼續）`}
+            </TaskSectionTitle>
             {admin && (
               <Button
                 variant="link"
@@ -470,7 +473,7 @@ export function InboxView({
               count={countOf(state, moving)}
               open={() => showTasks("moving")}
             >
-              進行中
+              {taskStatusFilterLabels.moving}
             </TaskSectionTitle>
             <div className="work-ledger">
               {working.length ? (
@@ -553,19 +556,31 @@ function TaskSectionTitle({
   id,
   count,
   open,
+  subdued = false,
   children,
 }: {
   id: string;
   count: number;
   open: () => void;
+  subdued?: boolean;
   children: string;
 }) {
   return (
-    <h2 id={id} className="text-lg font-semibold">
+    <h2
+      id={id}
+      className={
+        subdued
+          ? "text-sm font-medium text-muted-foreground"
+          : "text-lg font-semibold"
+      }
+    >
       <button
         type="button"
         onClick={open}
-        className="work-touch inline-flex items-center gap-2 pb-2 text-left hover:underline"
+        className={cn(
+          "work-touch inline-flex items-center gap-2 text-left hover:underline",
+          !subdued && "pb-2",
+        )}
       >
         {children}{" "}
         <Badge variant="secondary" className="tabular-nums">

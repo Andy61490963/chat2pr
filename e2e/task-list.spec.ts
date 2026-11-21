@@ -1,7 +1,13 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 import type { Task } from "../shared/types";
-import { group, mockDashboard, project, task } from "./dashboard-fixture";
+import {
+  detail,
+  group,
+  mockDashboard,
+  project,
+  task,
+} from "./dashboard-fixture";
 
 const archived: Task[] = Array.from({ length: 65 }, (_, i) => ({
   ...task,
@@ -26,6 +32,13 @@ const held: Task = {
   title: "範例報表等待額度",
   status: "budget_wait",
   updated_at: "2026-01-12T00:00:00Z",
+};
+const working: Task = {
+  ...task,
+  id: "55555555-5555-4555-8555-555555555555",
+  title: "範例庫存查詢",
+  status: "running",
+  updated_at: "2026-01-13T00:00:00Z",
 };
 
 async function mockTasks(page: Page, active: Task[] = []) {
@@ -66,6 +79,8 @@ async function mockTasks(page: Page, active: Task[] = []) {
 const rows = (page: Page) =>
   page.getByRole("tabpanel").locator("[data-task-id]");
 const tabs = (page: Page, name: RegExp) => page.getByRole("tab", { name });
+const statusFilter = (page: Page, name: string) =>
+  page.getByRole("checkbox", { name, exact: true });
 
 test("預設顯示進行中與待處理，等待額度與待合併的任務都標示種類", async ({
   page,
@@ -87,6 +102,120 @@ test("預設顯示進行中與待處理，等待額度與待合併的任務都�
       .getByRole("button", { name: /範例匯出待合併/ })
       .getByText("修改", { exact: true }),
   ).toBeVisible();
+});
+
+test("375px 顯示三個分頁與各狀態數量，鍵盤多選後保留篩選", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockTasks(page, [task, held, working, ready]);
+  await page.goto("/tasks");
+  const tablist = page.getByRole("tablist", { name: "任務分頁" });
+  await expect(tablist.getByRole("tab")).toHaveText([
+    /^進行中與待處理\s*4$/,
+    /^已結束\s*65$/,
+    /^全部\s*69$/,
+  ]);
+  await expect(rows(page)).toHaveCount(4);
+  for (const name of ["待處理 1", "等待額度 1", "進行中 1", "待合併 1"]) {
+    const checkbox = statusFilter(page, name);
+    await expect(checkbox).not.toBeChecked();
+    const box = (await checkbox.locator("..").boundingBox())!;
+    expect(box.width).toBeGreaterThanOrEqual(44);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+  }
+  const waiting = statusFilter(page, "等待額度 1");
+  await waiting.focus();
+  await page.keyboard.press("Space");
+  await expect(waiting).toBeFocused();
+  await expect(waiting).toBeChecked();
+  await expect(rows(page)).toHaveCount(1);
+  await expect(rows(page).first()).toContainText(held.title);
+  await statusFilter(page, "待合併 1").check();
+  await expect(rows(page)).toHaveCount(2);
+  await expect(rows(page).last()).toContainText(ready.title);
+  await expect(statusFilter(page, "待處理 1")).not.toBeChecked();
+  expect(new URL(page.url()).searchParams.get("status")).toBe("waiting,ready");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(
+    375,
+  );
+  expect(
+    await tablist.evaluate((element) => element.scrollWidth),
+  ).toBeLessThanOrEqual(
+    await tablist.evaluate((element) => element.clientWidth),
+  );
+  const axe = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+    .analyze();
+  expect(axe.violations).toEqual([]);
+
+  await page.reload();
+  await expect(waiting).toBeChecked();
+  await expect(statusFilter(page, "待合併 1")).toBeChecked();
+  await page.goto("/tasks");
+  await expect(waiting).toBeChecked();
+  await expect(statusFilter(page, "待合併 1")).toBeChecked();
+  await tabs(page, /^已結束/).click();
+  await expect(waiting).toHaveCount(0);
+  await tabs(page, /^進行中與待處理/).click();
+  await expect(rows(page)).toHaveCount(2);
+
+  const search = page.getByRole("textbox", { name: "搜尋任務" });
+  await search.fill("範例不存在的任務");
+  await page.getByRole("button", { name: "清除篩選" }).click();
+  await expect(search).toBeFocused();
+  await expect(waiting).not.toBeChecked();
+  await expect(rows(page)).toHaveCount(4);
+});
+
+test("收件匣標題與舊的任務分頁網址會開啟對應的狀態篩選", async ({ page }) => {
+  await mockTasks(page, [task, held, working, ready]);
+  await page.goto("/");
+  await page
+    .getByRole("heading", { name: "進行中 1" })
+    .getByRole("button")
+    .click();
+  await expect(page).toHaveURL(/\/tasks\?filter=active&status=moving$/);
+  await expect(tabs(page, /^進行中與待處理/)).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(statusFilter(page, "進行中 1")).toBeChecked();
+  await expect(rows(page)).toHaveCount(1);
+  await expect(rows(page).first()).toContainText(working.title);
+  await page.goto("/tasks?filter=waiting");
+  await expect(page).toHaveURL(/\/tasks\?filter=active&status=waiting$/);
+  await expect(statusFilter(page, "等待額度 1")).toBeChecked();
+  await expect(rows(page)).toHaveCount(1);
+  await expect(rows(page).first()).toContainText(held.title);
+});
+
+test("從鈴鐺開啟待合併通知時保留任務詳情並套用待合併篩選", async ({ page }) => {
+  await mockDashboard(page, {
+    state: {
+      tasks: [task, ready],
+      alerts: [
+        {
+          id: "demo-ready",
+          task_id: ready.id,
+          kind: "ready",
+          disposition: "action",
+          title: ready.title,
+          text: "你可以查看範例 PR。",
+          created_at: "2026-01-11T08:00:00Z",
+        },
+      ],
+    },
+    routes: { [`/api/tasks/${ready.id}`]: { ...detail, task: ready } },
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /^通知(?:，|$)/ }).click();
+  await page.getByRole("menuitem", { name: /範例匯出待合併/ }).click();
+  await expect(page.getByRole("dialog", { name: ready.title })).toBeVisible();
+  expect(new URL(page.url()).searchParams.get("status")).toBe("ready");
+  await page.keyboard.press("Escape");
+  await expect(statusFilter(page, "待合併 1")).toBeChecked();
+  await expect(rows(page)).toHaveCount(1);
+  await expect(rows(page).first()).toContainText(ready.title);
 });
 
 for (const width of [1280, 375]) {

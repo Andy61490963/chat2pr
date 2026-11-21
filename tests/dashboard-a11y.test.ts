@@ -93,3 +93,15 @@ it("LINE 私訊與看板使用相同的專案分頁，舊通知找不到專案�
     "projects",
   );
 });
+
+it("任務狀態的 LINE 私訊開啟任務詳情並套用對應篩選", () => {
+  expect(notificationPath({ task_id: "demo-task", kind: "approval" })).toBe(
+    "tasks?task=demo-task&filter=active&status=todo",
+  );
+  expect(notificationPath({ task_id: "demo-task", kind: "ready" })).toBe(
+    "tasks?task=demo-task&filter=active&status=ready",
+  );
+  expect(notificationPath({ task_id: "demo-task", kind: "answered" })).toBe(
+    "tasks?task=demo-task",
+  );
+});

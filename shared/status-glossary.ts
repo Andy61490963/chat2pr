@@ -30,6 +30,13 @@ export const taskListLabels = {
   ended: "已結束",
 } as const;
 
+export const taskStatusFilterLabels = {
+  todo: "待處理",
+  waiting: statusLabels.budget_wait,
+  moving: "進行中",
+  ready: statusLabels.ready,
+} as const;
+
 export const pickListLabels = {
   pending: "待挑選清單",
   closed: "已結束",

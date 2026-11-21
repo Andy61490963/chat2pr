@@ -25,9 +25,11 @@ import {
 } from "lucide-react";
 import {
   notificationTarget,
+  notificationTaskFilter,
   projectNoticeTab,
   type NotificationView,
 } from "../../shared/notifications.js";
+import type { TaskStatusFilter } from "../../shared/task-list.js";
 import { LINE_QUOTA } from "../../shared/line-quota.js";
 import { taskListTitle } from "../../shared/task-title.js";
 import { Button } from "@/components/ui/button";
@@ -160,7 +162,7 @@ export function AlertBell({
   tasks: Task[];
   seenAt: string | null;
   request: Request;
-  open: (id: string) => unknown;
+  open: (id: string, filter?: TaskStatusFilter) => unknown;
   // 只有管理者看得到專案、群組與設定頁；沒給就不可點。
   openView?: (
     view: NotificationView,
@@ -175,7 +177,8 @@ export function AlertBell({
     const target = notificationTarget(a, !!openView);
     if ("note" in target) return;
     setMenuOpen(false);
-    if ("task" in target) void openTask(target.task);
+    if ("task" in target)
+      void openTask(target.task, notificationTaskFilter(a.kind));
     else void openView?.(target.view, a.project_id, projectNoticeTab(a.kind));
   };
   // 推播額度用完的提示由伺服器依 service_health 附上，固定放在清單頂端，不算未讀、不跳桌面通知。
