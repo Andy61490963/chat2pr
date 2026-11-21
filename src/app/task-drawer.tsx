@@ -302,6 +302,10 @@ export function TaskDrawer({
   const queuePage = admin && queue ? fixPage(queue.hint) : null;
   // 自動重試排隊或重跑期間，last_error 是上一次嘗試的原因，不是目前已失敗。
   const retrying = ["queued", "running", "reviewing"].includes(t.status);
+  const quotaWaitHint =
+    t.status === "budget_wait"
+      ? waitHint(t.last_error, state.settings.ai_mode)
+      : null;
   const failure = t.status === "failed" ? parseFailure(t.last_error) : null;
   // 主動作與收件匣卡片共用 primaryFix；前往頁面只給管理者。
   const fix = primaryFix(failure);
@@ -648,11 +652,7 @@ export function TaskDrawer({
                 <span className="whitespace-pre-wrap [overflow-wrap:anywhere]">
                   <Linkified text={t.last_error.replace(/^Error: /, "")} />
                 </span>
-                {t.status === "budget_wait" && (
-                  <p className="text-xs">
-                    {waitHint(t.last_error, state.settings.ai_mode)}
-                  </p>
-                )}
+                {quotaWaitHint && <p className="text-xs">{quotaWaitHint}</p>}
               </div>
             </div>
           )}
@@ -1195,7 +1195,7 @@ export function TaskDrawer({
             <BudgetRetry task={t} state={state} busy={busy} act={act} />
             {t.status === "budget_wait" && admin && (
               <Button variant="ghost" size="sm" onClick={() => go("settings")}>
-                調整每日次數／預算
+                調整額度設定
               </Button>
             )}
           </SheetFooter>

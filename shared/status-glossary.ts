@@ -13,6 +13,7 @@ export const statusLabels: Record<TaskStatus, string> = {
   answered: "已回覆",
   closed: "已關閉",
 };
+export const projectQuotaWaitPrefix = `${statusLabels.budget_wait}｜`;
 
 /** 專案優先顯示驗證進度與需要處理的狀態。 */
 export const projectLabels = {

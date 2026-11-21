@@ -64,7 +64,7 @@ test("主機記憶體不足或訂閱額度用完時，頁首顯示派工自動�
       },
     },
     {
-      reason: "Codex 訂閱額度已達上限",
+      reason: "Codex 訂閱額度已達上限，重置時間待確認",
       options: {
         routes: {
           "/api/codex/account": {
@@ -96,6 +96,85 @@ test("主機記憶體不足或訂閱額度用完時，頁首顯示派工自動�
       await page.close();
     });
   }
+});
+
+test("你可以儲存個人保留比例並看到 chat2pr 上限與重置時間", async ({
+  page,
+}) => {
+  const checkedAt = "2026-02-01T00:00:00Z";
+  const hold =
+    "已用到 chat2pr 可用的上限（保留 60% 給你），預計臺北時間 2/6 12:30 重置";
+  let reserve = 0;
+  await mockDashboard(page, {
+    routes: {
+      "/api/codex/account": {
+        plan: "demo",
+        allowed: true,
+        limits: [
+          {
+            id: "demo",
+            windows: [
+              {
+                usedPercent: 40,
+                minutes: 10080,
+                resetsAt: "2026-02-06T04:30:00Z",
+              },
+            ],
+          },
+        ],
+        models: [],
+        checkedAt,
+      },
+    },
+  });
+  await page.route(/\/api\/state\?/, (route) =>
+    route.fulfill({
+      json: {
+        ...defaultState,
+        settings: { ...defaultState.settings, codex_reserve_percent: reserve },
+        tasks:
+          reserve === 60
+            ? [
+                {
+                  ...task,
+                  status: "budget_wait",
+                  last_error: `${hold}，額度恢復或你調低保留比例至額度可用後會自動繼續。`,
+                },
+              ]
+            : [task],
+      },
+    }),
+  );
+  await page.route("**/api/settings/codex-reserve", (route) => {
+    expect(route.request().method()).toBe("PUT");
+    reserve = route.request().postDataJSON().codex_reserve_percent;
+    return route.fulfill({ json: { ok: true } });
+  });
+  await page.goto("/settings");
+  const input = page.getByRole("spinbutton", { name: "保留給你個人使用（%）" });
+  await expect(input).toHaveValue("0");
+  const save = page.getByRole("button", { name: "儲存保留比例" });
+  await input.fill("91");
+  await expect(save).toBeDisabled();
+  await input.fill("60");
+  await save.click();
+  const banner = page.getByRole("status").filter({ hasText: hold });
+  await expect(banner).toBeVisible();
+  expect(reserve).toBe(60);
+  await page.goto("/");
+  await expect(
+    page
+      .getByRole("button")
+      .filter({ hasText: task.title })
+      .filter({ hasText: hold }),
+  ).toBeVisible();
+  await page.goto("/settings");
+  await expect(input).toHaveValue("60");
+  await expect(banner).toBeVisible();
+  await input.fill("59");
+  await save.click();
+  await expect(banner).toHaveCount(0);
+  expect(reserve).toBe(59);
 });
 
 test("LINE 推播額度用完時，每個看板頁面都提示替代取回答案的方式", async ({

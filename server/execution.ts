@@ -1,4 +1,6 @@
 import { validateLabel } from "../shared/project-setup.js";
+import { reservedQuotaHold } from "../shared/subscription-quota.js";
+import { projectQuotaWaitPrefix } from "../shared/status-glossary.js";
 import { saveEvents, safeDetail, connectionFailure } from "./observation.js";
 import { diskPaused } from "./docker-disk.js";
 import type { RunEvent } from "../shared/observation.js";
@@ -43,6 +45,7 @@ import {
 } from "./failure.js";
 import {
   SubscriptionGate,
+  SubscriptionBlocked,
   readSubscriptionAccount,
   type SubscriptionAccount,
 } from "./subscription-gate.js";
@@ -499,6 +502,7 @@ export class Execution {
   async validate(
     project: Project,
     reportProgress?: (message: string) => Promise<void>,
+    resumeQuota = false,
   ) {
     if (project.setup_input?.configVersion === project.config_version)
       return { ok: false, waiting: true };
@@ -537,11 +541,19 @@ export class Execution {
       await reportProgress?.(message);
     };
     let sha: string;
+    let waitForQuota = false;
     try {
       await progress("你的專案正在等待執行器。");
+      const settings = await this.db.settings();
+      waitForQuota =
+        settings.ai_mode === "subscription" &&
+        (resumeQuota || (settings.codex_reserve_percent ?? 0) > 0);
+      if (waitForQuota) {
+        await this.subscriptionGate.ensure();
+        await current();
+      }
       if (project.setup_mode === "auto") {
         await progress("你的專案正在由 AI 讀取環境設定。");
-        const settings = await this.db.settings();
         if (settings.ai_mode === "api")
           setupReservation = await this.budget.reserve(
             settings.task_budget,
@@ -748,6 +760,19 @@ export class Execution {
       });
       if (!validated) throw new AppError(409, "環境設定已變更，請重新驗證");
     } catch (e) {
+      if (
+        e instanceof SubscriptionBlocked &&
+        (waitForQuota || e.message.startsWith(reservedQuotaHold))
+      ) {
+        const quotaWait = e.message.startsWith(reservedQuotaHold)
+          ? e.message
+          : `${e.message}，確認你有可用額度後會自動繼續驗證。`;
+        await this.db.query(
+          "UPDATE projects SET setup_status=$2,validation_error=NULL WHERE id=$1 AND config_version=$3",
+          [project.id, `${projectQuotaWaitPrefix}${quotaWait}`, project.config_version],
+        );
+        return { ok: false, quota: quotaWait };
+      }
       if (e instanceof NeedsProjectInput) {
         await requestProjectInput(this.db, project, e);
         return { ok: false, waiting: true };
@@ -2060,7 +2085,9 @@ ${querySummary(answer)}`,
           taskId,
           "budget",
           `quota:${runId ?? taskId}`,
-          `${e.message}，工作已保留，額度恢復後自動繼續。`,
+          e.message.startsWith(reservedQuotaHold)
+            ? e.message
+            : `${e.message}，工作已保留，額度恢復後自動繼續。`,
         );
         await tellGroupWaiting(this.db, taskId, "quota");
         return;

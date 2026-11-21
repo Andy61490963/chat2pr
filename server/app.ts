@@ -63,7 +63,12 @@ import {
 import { Tasks } from "./tasks.js";
 import { Budget } from "./budget.js";
 import { ProjectSetup } from "./project-setup.js";
-import { SubscriptionGate } from "./subscription-gate.js";
+import {
+  lockSubscriptionGate,
+  SubscriptionGate,
+  subscriptionGateName,
+} from "./subscription-gate.js";
+import { maxCodexReserve } from "../shared/subscription-quota.js";
 import { GitHub } from "./github.js";
 import { TargetBranch } from "./task-branch.js";
 import { registerProxy } from "./proxy.js";
@@ -1505,6 +1510,43 @@ export async function buildApp(
     if (!r.ok)
       throw new AppError(r.status, data.error ?? "無法讀取 Codex 額度");
     return data;
+  });
+  app.put("/api/settings/codex-reserve", async (req) => {
+    const admin = await requireAdmin(db, req);
+    const rangeMessage = "Codex 個人保留比例請填 0 到 90 的整數";
+    const changes = z
+      .object({
+        codex_reserve_percent: z
+          .number(rangeMessage)
+          .int(rangeMessage)
+          .min(0, rangeMessage)
+          .max(maxCodexReserve, rangeMessage),
+      })
+      .parse(req.body);
+    await db.transaction(async (c) => {
+      // 設定與快取一起生效，舊比例的額度查詢也不能在儲存後寫回快取。
+      await lockSubscriptionGate(c);
+      const before = (
+        await c.query<{ value: Partial<Settings> }>(
+          "SELECT value FROM settings WHERE id=1 FOR UPDATE",
+        )
+      ).rows[0].value;
+      const diff = settingsDiff(before, changes);
+      if (!diff.length) return;
+      await c.query("UPDATE settings SET value=value || $1::jsonb WHERE id=1", [
+        JSON.stringify(changes),
+      ]);
+      await c.query("DELETE FROM service_health WHERE name=$1", [
+        subscriptionGateName,
+      ]);
+      await db.audit(
+        null,
+        "settings",
+        `管理者 ${admin.login} 更新 Codex 訂閱額度：${describeChanges(diff)}`,
+        c,
+      );
+    });
+    return { ok: true };
   });
   app.post("/api/integrations/check", async (req) => {
     await requireAdmin(db, req);

@@ -161,6 +161,39 @@ describe("工作流程設定的活動紀錄", () => {
         "SELECT detail FROM audit WHERE kind='settings' ORDER BY id",
       )
     ).map((r) => r.detail);
+  it("個人保留比例驗證整數範圍、儲存並清除額度快取，活動紀錄保留前後值", async () => {
+    const headers = await session(),
+      app = await buildApp(db);
+    try {
+      const put = (percent: number) =>
+        app.inject({
+          method: "PUT",
+          url: "/api/settings/codex-reserve",
+          headers,
+          payload: { codex_reserve_percent: percent },
+        });
+      for (const invalid of [-1, 60.5, 91])
+        expect((await put(invalid)).statusCode).toBe(400);
+      expect((await db.settings()).codex_reserve_percent).toBe(0);
+      await db.query(
+        "INSERT INTO service_health(name,ok,detail) VALUES('codex_subscription_gate',true,'測試額度可用') ON CONFLICT(name) DO NOTHING",
+      );
+      expect((await put(60)).statusCode).toBe(200);
+      expect((await db.settings()).codex_reserve_percent).toBe(60);
+      expect(
+        await db.query(
+          "SELECT 1 FROM service_health WHERE name='codex_subscription_gate'",
+        ),
+      ).toEqual([]);
+      expect(await settingsAudits()).toEqual([
+        expect.stringContaining("保留給你個人使用：0% → 60%"),
+      ]);
+      expect((await put(0)).statusCode).toBe(200);
+      expect((await db.settings()).codex_reserve_percent).toBe(0);
+    } finally {
+      await app.close();
+    }
+  });
   it("寫出操作者與改了什麼；開放容器網路寫成「隔離 → 完全開放」", async () => {
     const headers = await session(),
       app = await buildApp(db);

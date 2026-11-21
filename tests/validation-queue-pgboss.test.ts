@@ -111,3 +111,31 @@ it("確定性失敗只跑一輪就結束，暫時性失敗交給佇列重試", a
     }),
   ).rejects.toBe(transient);
 });
+
+it("Codex 額度受阻時交接成等待額度的新工作，下一輪先確認額度", async () => {
+  const id = await fixture();
+  const queue = new ValidationQueue(db, boss);
+  await queue.enqueue(id);
+  const [job] = (await boss.fetch("validate", {
+    includeMetadata: true,
+  })) as JobWithMetadata<ValidationJob>[];
+  const wait = "已用到 chat2pr 可用的上限（保留 60% 給你），額度恢復後會自動繼續。";
+  const resumed: boolean[] = [];
+  await queue.work(job!, {
+    validate: async (_project, _report, resumeQuota) => {
+      resumed.push(resumeQuota === true);
+      return { ok: false, quota: wait };
+    },
+  });
+  expect(resumed).toEqual([false]);
+  expect(await live(id)).toEqual([
+    { state: "created", progress: wait, version: "1" },
+  ]);
+  const next = await db.one<{ resume: boolean }>(
+    "SELECT (data->>'resumeQuota')::boolean AS resume FROM pgboss.job WHERE name='validate' AND state='created' AND data->>'id'=$1",
+    [id],
+  );
+  expect(next?.resume).toBe(true);
+  // 等額度期間再按驗證仍視為已在驗證中。
+  expect(await queue.enqueue(id)).toBe(false);
+});

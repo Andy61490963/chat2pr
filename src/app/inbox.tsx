@@ -266,7 +266,7 @@ export function InboxView({
                 className="ml-auto h-auto p-0"
                 onClick={() => go("settings")}
               >
-                調整每日次數／預算 <ChevronRight />
+                調整額度設定 <ChevronRight />
               </Button>
             )}
           </div>
@@ -662,8 +662,8 @@ function DecisionCard({
 }
 
 /**
- * 等待額度時的次要按鈕：只有 API 模式顯示（管理者可能剛提高預算）。訂閱模式的額度由
- * Codex 決定，手動再試只會立刻回到等待額度，所以不給。伺服器的重試規則不變。
+ * 等待額度時的次要按鈕只在 API 模式顯示，因為管理者可能剛提高預算。
+ * 訂閱模式在額度恢復或保留比例調低至額度可用後由排程自動重試。
  */
 export function BudgetRetry({
   task: t,
@@ -707,6 +707,7 @@ function WaitingRow({
   act: Act;
 }) {
   const reason = t.last_error?.replace(/^Error: /, "");
+  const hint = waitHint(t.last_error, state.settings.ai_mode);
   return (
     <div className="flex flex-col gap-2 border-b px-5 py-3 last:border-0 sm:flex-row sm:items-center sm:gap-3">
       <button
@@ -725,9 +726,9 @@ function WaitingRow({
               {reason}
             </span>
           )}
-          <span className="text-sm text-muted-foreground">
-            {waitHint(t.last_error, state.settings.ai_mode)}
-          </span>
+          {hint && (
+            <span className="text-sm text-muted-foreground">{hint}</span>
+          )}
         </span>
       </button>
       <div className="flex shrink-0 flex-wrap gap-2 pl-7 sm:pl-0">

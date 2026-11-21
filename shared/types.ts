@@ -200,6 +200,8 @@ export interface Settings {
   egress_domains?: string[];
   ai_mode: AiMode;
   daily_runs: number;
+  /** 訂閱額度保留給個人使用的百分比，舊設定預設 0。 */
+  codex_reserve_percent?: number;
   /** 全系統同時執行的任務數（系統頁設定，預設 2）；同一專案的修改仍一次一個。 */
   max_runs?: number;
   /** 定期檢查環境閒置多久清除（分鐘，系統頁設定，預設 120）。 */

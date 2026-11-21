@@ -850,6 +850,43 @@ it("安裝與基底測試都通過後才自動啟用專案，清除舊錯誤", a
   await s.execution.execute(s.task.id);
   expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("ready");
 });
+it("專案驗證達到個人保留上限時保留原狀，額度恢復後可繼續驗證", async () => {
+  const s = await scenario();
+  await db.query(
+    `UPDATE settings SET value=value||'{"ai_mode":"subscription","codex_reserve_percent":60}'::jsonb WHERE id=1`,
+  );
+  await db.query("DELETE FROM service_health WHERE name=$1", [
+    subscriptionGateName,
+  ]);
+  let usedPercent = 40;
+  s.runner.account = async () => ({
+    allowed: true,
+    checkedAt: new Date().toISOString(),
+    limits: [{ windows: [{ usedPercent, resetsAt: null }] }],
+  });
+  const execution = new Execution(db, s.github, s.line, s.budget, s.runner);
+  const project = await db.one<Project>("SELECT * FROM projects");
+  expect(await execution.validate(project)).toEqual({
+    ok: false,
+    quota: expect.stringContaining("已用到 chat2pr 可用的上限（保留 60% 給你）"),
+  });
+  const held = await db.one<Project>("SELECT * FROM projects");
+  expect(held.setup_status).toContain(
+    "已用到 chat2pr 可用的上限（保留 60% 給你）",
+  );
+  expect(held.enabled).toBe(project.enabled);
+  expect(held.validated_at).toEqual(project.validated_at);
+  expect(held.validation_error).toBeNull();
+  expect(s.counts().testCalls).toBe(0);
+
+  usedPercent = 39;
+  await db.query(
+    "UPDATE service_health SET checked_at=now()-interval '2 minutes' WHERE name=$1",
+    [subscriptionGateName],
+  );
+  expect(await execution.validate(held)).toEqual({ ok: true });
+  expect(s.counts().testCalls).toBe(1);
+});
 it.each(["install", "test"])(
   "%s 階段失敗時不會自動啟用，並清理驗證資源",
   async (failedPhase) => {
@@ -1361,7 +1398,9 @@ it("查詢任務只執行調查，存下報告並通知，不收集變更、不�
   await s.execution.execute(s.task.id);
   const task = await db.one<Task>("SELECT * FROM tasks");
   expect(task.status).toBe("answered");
-  expect(task.answer).toBe("## 先看重點\n\n進站會更新 WIP_LOT 與 WIP_HISTORY。");
+  expect(task.answer).toBe(
+    "## 先看重點\n\n進站會更新 WIP_LOT 與 WIP_HISTORY。",
+  );
   expect(phases).not.toContain("collect");
   expect(phases).not.toContain("test");
   expect(phases).not.toContain("review");
