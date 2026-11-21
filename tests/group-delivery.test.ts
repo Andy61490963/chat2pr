@@ -29,6 +29,15 @@ const state = (row: Partial<Parameters<typeof deliveryState>[0]> = {}) =>
   });
 
 describe("群組訊息送達狀態", () => {
+  it("Discord 待送通知顯示尚未支援，沿用看板的未送出標籤", () => {
+    const delivery = deliveryState(
+      { sent_at: null, attempts: 0, last_error: null },
+      { platform: "discord", quotaBlocked: true },
+    );
+    expect(deliveryLabel(delivery)).toBe("未送出");
+    expect(deliveryNotice(delivery)).toContain("目前尚未支援 Discord 通知");
+    expect(deliveryNotice(delivery)).toContain("請在看板查看或手動轉達");
+  });
   it("已送出：sent_at 有值且沒有錯誤", () => {
     expect(
       state({ sent_at: sentAt, has_message_id: true, attempts: 1 }),

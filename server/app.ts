@@ -53,6 +53,7 @@ import { AppError, verifySignature } from "./policy.js";
 import { Line } from "./line.js";
 import {
   expireStaleNotifications,
+  lineNotificationTarget,
   lineQuotaBlocked,
   staleNotification,
 } from "./line-quota.js";
@@ -83,6 +84,7 @@ import {
 } from "./repo-missing.js";
 import type {
   Action,
+  Group,
   NotificationFailures,
   NotificationRetryResult,
   Project,
@@ -550,7 +552,7 @@ export async function buildApp(
       db.query<Project>(
         "SELECT p.*,r.phase AS index_phase,r.chunks AS index_chunks,r.error AS index_error FROM projects p LEFT JOIN repo_indexes r ON r.project_id=p.id ORDER BY p.created_at",
       ),
-      db.query(
+      db.query<Group>(
         "SELECT g.*,COALESCE((SELECT array_agg(gp.project_id ORDER BY gp.created_at) FROM group_projects gp WHERE gp.group_id=g.id),'{}') AS project_ids,(SELECT count(*)::int FROM tasks t WHERE t.group_id=g.id AND t.status IN ('queued','budget_wait','failed','running','reviewing')) AS affected_tasks FROM groups g ORDER BY g.created_at,g.id",
       ),
       // 未結束的任務（待審核、失敗、等待額度、進行中、待合併）一律載入，較舊的也不會從收件匣消失；
@@ -592,7 +594,7 @@ export async function buildApp(
            count(*) FILTER (WHERE NOT stale AND attempts>=3 AND group_id IS NOT NULL)::int AS "group",
            count(*) FILTER (WHERE stale)::int AS stale
          FROM (SELECT n.group_id,n.attempts,${staleNotification} AS stale FROM notifications n
-           LEFT JOIN tasks t ON t.id=n.task_id WHERE n.sent_at IS NULL) x`,
+           LEFT JOIN tasks t ON t.id=n.task_id WHERE n.sent_at IS NULL AND ${lineNotificationTarget}) x`,
       ),
       validationProgress?.() ?? [],
       admin ? pickLists(db) : [],
@@ -1557,7 +1559,8 @@ export async function buildApp(
       const expired = await expireStaleNotifications(c);
       const reset = (
         await c.query<{ group_id: string | null }>(
-          "UPDATE notifications SET attempts=0,last_error=NULL WHERE sent_at IS NULL AND attempts>=3 RETURNING group_id",
+          `UPDATE notifications n SET attempts=0,last_error=NULL
+           WHERE n.sent_at IS NULL AND n.attempts>=3 AND ${lineNotificationTarget} RETURNING n.group_id`,
         )
       ).rows;
       const group = reset.filter((r) => r.group_id).length;

@@ -125,7 +125,10 @@ export interface Project {
   repo_missing_state?: RepoMissingState | null;
   created_at: string;
 }
+export type ChatPlatformId = "line" | "discord";
+
 export interface Group {
+  platform: ChatPlatformId;
   binding_version?: number;
   trigger_mode: "auto" | "command";
   /** 是否在群組回覆：off 不回覆、results 只回覆結果、all 另外通知已收到。 */

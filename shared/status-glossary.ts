@@ -1,4 +1,8 @@
 import type { TaskStatus, Project, Group } from "./types.js";
+
+export const groupDeliveryLabels = {
+  unsupportedPlatform: "目前尚未支援 Discord 通知，請在看板查看或手動轉達。",
+} as const;
 export const statusLabels: Record<TaskStatus, string> = {
   awaiting_approval: "待審核",
   queued: "待執行",

@@ -8,6 +8,7 @@ import {
   vi,
 } from "vitest";
 import { createHmac } from "node:crypto";
+import { readFile } from "node:fs/promises";
 vi.mock("../server/config.js", async (original) => ({
   ...(await original<typeof import("../server/config.js")>()),
   secrets: () => ({
@@ -18,6 +19,7 @@ vi.mock("../server/config.js", async (original) => ({
 import { db, reset, fixture, session } from "./helpers.js";
 import { buildApp } from "../server/app.js";
 import { Line } from "../server/line.js";
+import { discordId } from "../server/chat-platform.js";
 import {
   aiQuotaAck,
   answerAck,
@@ -83,7 +85,7 @@ const settings = (extra: Record<string, unknown> = {}) =>
       ...extra,
     },
   });
-async function receive(id: string, text: string) {
+async function receive(id: string, text: string, groupId = "group-a") {
   const payload = JSON.stringify({
     events: [
       {
@@ -92,7 +94,7 @@ async function receive(id: string, text: string) {
         replyToken: `fictional-reply-${id}`,
         source: {
           type: "group",
-          groupId: "group-a",
+          groupId,
           userId: "private-member-id",
         },
         message: { id, type: "text", text },
@@ -124,6 +126,131 @@ const groupRows = () =>
   db.query<{ kind: string; text: string; group_id: string }>(
     "SELECT kind,text,group_id FROM notifications WHERE group_id IS NOT NULL ORDER BY created_at",
   );
+
+const exampleDiscordGroup = discordId("100000000000000001");
+
+async function addDiscordGroup() {
+  await db.query(
+    "INSERT INTO groups(id,name,platform,enabled) VALUES($1,'範例頻道','discord',true)",
+    [exampleDiscordGroup],
+  );
+}
+
+it("遷移將既有群組標為 LINE，重跑保留 Discord，兩種平台都出現在看板 API", async () => {
+  const schema = await readFile(new URL("../server/schema.sql", import.meta.url), "utf8");
+  await db.transaction(async (c) => {
+    await c.query("ALTER TABLE groups DROP COLUMN platform");
+    await c.query(schema);
+    await c.query(
+      "INSERT INTO groups(id,name,platform) VALUES($1,'範例頻道','discord')",
+      [exampleDiscordGroup],
+    );
+    await c.query(schema);
+  });
+  await expect(db.query(
+    "INSERT INTO groups(id,name,platform) VALUES('group-invalid','範例群組','未知平台')",
+  )).rejects.toMatchObject({ code: "23514" });
+  const state = await app.inject({ url: "/api/state", headers });
+  expect(state.statusCode).toBe(200);
+  expect(state.json().groups).toEqual([
+    expect.objectContaining({ id: "group-a", platform: "line" }),
+    expect.objectContaining({ id: exampleDiscordGroup, platform: "discord" }),
+  ]);
+});
+
+describe("群組通知依聊天平台分流", () => {
+  afterEach(() => db.query("DELETE FROM service_health WHERE name='line_quota'"));
+
+  it("較早的 Discord 通知不佔 LINE 推播批次，也不查 LINE 人數或扣額度", async () => {
+    await addDiscordGroup();
+    await db.query(
+      `INSERT INTO notifications(kind,dedupe_key,text,group_id,created_at)
+       SELECT 'group_answered','discord:'||i,'範例頻道的回覆',$1,now()-interval '1 hour'
+       FROM generate_series(1,11) i`,
+      [exampleDiscordGroup],
+    );
+    await notifyGroup(db, await task(), "answered", "line:result", "測試群組的回覆");
+    await db.query(
+      `INSERT INTO service_health(name,ok,detail) VALUES('line_quota',true,'本月已用 10／上限 200 則')
+       ON CONFLICT(name) DO UPDATE SET ok=EXCLUDED.ok,detail=EXCLUDED.detail`,
+    );
+    const fetch = vi.fn(async (url: string, init?: RequestInit) =>
+      url.endsWith("/members/count")
+        ? Response.json({ count: 3 })
+        : Response.json({ sentMessages: [{ id: "fictional-push" }] }),
+    );
+    vi.stubGlobal("fetch", fetch);
+
+    await new Line(db).flushNotifications();
+
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual([
+      "https://api.line.me/v2/bot/group/group-a/members/count",
+      "https://api.line.me/v2/bot/message/push",
+    ]);
+    expect(JSON.parse(String(fetch.mock.calls[1][1]?.body)).to).toBe("group-a");
+    expect(await db.one("SELECT detail FROM service_health WHERE name='line_quota'"))
+      .toEqual({ detail: "本月已用 13／上限 200 則" });
+    await db.query("UPDATE settings SET value=value||'{\"group_replies\":false}'::jsonb WHERE id=1");
+    await new Line(db).flushNotifications();
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(await db.query(
+      `SELECT id FROM notifications WHERE group_id=$1
+       AND (attempts<>0 OR sent_at IS NOT NULL OR last_error IS NOT NULL)`,
+      [exampleDiscordGroup],
+    )).toEqual([]);
+  });
+
+  it("LINE 的過期處理與手動重送不變更 Discord 通知，聊天室顯示尚未支援", async () => {
+    await addDiscordGroup();
+    const quotaNote = "推播額度剩 1 則，不足這個群組的人數，額度恢復後再送";
+    await db.query(
+      `INSERT INTO notifications(kind,dedupe_key,text,group_id,created_at,attempts,last_error)
+       VALUES('group_answered','discord:old','範例頻道的舊回覆',$1,now()-interval '2 days',3,$2)`,
+      [exampleDiscordGroup, quotaNote],
+    );
+    await db.query(
+      `INSERT INTO service_health(name,ok,detail) VALUES('line_quota',false,$1)
+       ON CONFLICT(name) DO UPDATE SET ok=EXCLUDED.ok,detail=EXCLUDED.detail`,
+      [quotaExhaustedDetail],
+    );
+    const chat = await app.inject({
+      url: `/api/groups/${encodeURIComponent(exampleDiscordGroup)}/messages`,
+      headers,
+    });
+    expect(chat.statusCode).toBe(200);
+    expect(chat.json().bot_messages[0].delivery).toMatchObject({
+      status: "skipped",
+      reason: "unsupported_platform",
+    });
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => url.endsWith("/consumption")
+      ? Response.json({ totalUsage: 0 })
+      : Response.json({ type: "limited", value: 200 }),
+    ));
+    await syncLineQuota(db, "虛構權杖");
+    await new Line(db).flushNotifications();
+    const retry = await app.inject({ method: "POST", url: "/api/notifications/retry", headers });
+    expect(retry.statusCode).toBe(200);
+    expect(retry.json().group).toBe(0);
+    expect(await db.one(
+      "SELECT sent_at,attempts,last_error FROM notifications WHERE dedupe_key='discord:old'",
+    )).toEqual({ sent_at: null, attempts: 3, last_error: quotaNote });
+  });
+
+  it("LINE 的 /進度 不會回覆 Discord 頻道或領取其待送通知", async () => {
+    await addDiscordGroup();
+    const id = await db.one<{ id: string }>(
+      "INSERT INTO tasks(group_id,title,summary,dedupe_key) VALUES($1,'範例需求','顯示進度','discord:task') RETURNING id",
+      [exampleDiscordGroup],
+    );
+    await notifyGroup(db, id.id, "answered", "discord:result", "範例頻道的回覆");
+    await receive("fictional-discord-progress", "/進度", exampleDiscordGroup);
+    expect(replies()).toEqual([]);
+    expect(await db.one(
+      "SELECT sent_at,attempts,last_error FROM notifications WHERE group_id=$1",
+      [exampleDiscordGroup],
+    )).toEqual({ sent_at: null, attempts: 0, last_error: null });
+  });
+});
 
 describe("「/任務」的立即回覆", () => {
   it("預設只回覆結果時，/任務 仍立刻用 reply token 回覆收到；一般聊天不回", async () => {

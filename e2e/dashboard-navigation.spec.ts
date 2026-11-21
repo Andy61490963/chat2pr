@@ -1,6 +1,7 @@
 import { expect, test, type Request } from "@playwright/test";
 import {
   defaultState,
+  discordGroup,
   emitDashboardEvent,
   group,
   mockDashboard,
@@ -8,6 +9,18 @@ import {
 } from "./dashboard-fixture";
 
 const managementPages = ["群組", "專案", "定期檢查", "系統", "成員", "設定"];
+
+test("手機群組頁可同時載入 LINE 群組與 Discord 頻道", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await mockDashboard(page, { state: { groups: [group, discordGroup] } });
+  await page.goto("/groups");
+  for (const name of [group.name, discordGroup.name])
+    await expect(page.getByText(name, { exact: true })).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(375);
+});
 
 test("375px 底部只顯示四格，並可用鍵盤從「更多」前往群組", async ({
   page,

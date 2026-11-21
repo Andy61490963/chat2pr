@@ -5,6 +5,7 @@ import { requireUser } from "./auth.js";
 import { AppError } from "./policy.js";
 import { memberNames } from "./line-members.js";
 import type { ChatMessage, ChatPage } from "../shared/chat.js";
+import type { Group } from "../shared/types.js";
 import { type BotMessage, deliveryState } from "../shared/group-delivery.js";
 import { lineQuotaBlocked } from "./line-quota.js";
 
@@ -23,7 +24,7 @@ const botLimit = 200;
  */
 async function botMessages(
   db: Database,
-  groupId: string,
+  group: Pick<Group, "id" | "platform">,
   before: string | null,
   oldest: string | null,
   /** 機器人訊息自己的游標：只取比這則通知舊的（同時間以 id 排序），用於超過 botLimit 的接續頁。 */
@@ -50,10 +51,11 @@ async function botMessages(
        AND ($3::text IS NULL OR n.created_at>=(SELECT received_at FROM messages WHERE id=$3 AND group_id=$1))
        AND ($4::uuid IS NULL OR (n.created_at,n.id)<(SELECT created_at,id FROM notifications WHERE id=$4 AND group_id=$1))
      ORDER BY n.created_at DESC,n.id DESC LIMIT ${botLimit + 1}`,
-    [groupId, before, oldest, botBefore],
+    [group.id, before, oldest, botBefore],
   );
   // 額度用完期間排入的通知 last_error 是空的，要靠推播暫停狀態才說得出「額度用完」。
-  const quotaBlocked = rows.length ? await lineQuotaBlocked(db) : false;
+  const quotaBlocked =
+    rows.length > 0 && group.platform === "line" && (await lineQuotaBlocked(db));
   // 原始 last_error 與 LINE 訊息 ID 只在這裡用來判斷狀態，不回傳給瀏覽器。
   return rows.reverse().map((n) => ({
     id: n.id,
@@ -62,7 +64,7 @@ async function botMessages(
     task_title: n.task_title,
     created_at: n.created_at,
     text: n.text,
-    delivery: deliveryState(n, { quotaBlocked }),
+    delivery: deliveryState(n, { quotaBlocked, platform: group.platform }),
   }));
 }
 
@@ -83,8 +85,11 @@ export function registerChat(app: FastifyInstance, db: Database) {
     const { before } = z
       .object({ before: z.string().min(1).max(200).optional() })
       .parse(req.query);
-    if (!(await db.one("SELECT 1 FROM groups WHERE id=$1", [id])))
-      throw new AppError(404, "找不到群組");
+    const group = await db.one<Pick<Group, "id" | "platform">>(
+      "SELECT id,platform FROM groups WHERE id=$1",
+      [id],
+    );
+    if (!group) throw new AppError(404, "找不到群組");
     const cursor = before ? botCursor.exec(before) : null;
     if (cursor) {
       const [, botBefore, floor] = cursor;
@@ -100,7 +105,7 @@ export function registerChat(app: FastifyInstance, db: Database) {
           ])))
       )
         throw new AppError(400, "訊息分頁已失效，請重新整理");
-      const bots = await botMessages(db, id, null, floor || null, botBefore);
+      const bots = await botMessages(db, group, null, floor || null, botBefore);
       const more = bots.length > botLimit;
       const page = bots.slice(-botLimit);
       return {
@@ -160,7 +165,7 @@ export function registerChat(app: FastifyInstance, db: Database) {
     );
     let visible = rows.slice(0, 50);
     let next = rows.length > 50 ? rows[49].id : null;
-    let bots = await botMessages(db, id, before ?? null, next);
+    let bots = await botMessages(db, group, before ?? null, next);
     if (bots.length > botLimit && visible.length) {
       // 這段時間機器人訊息太多：把本頁成員訊息縮到「第 botLimit 新的機器人訊息」之後，
       // 下一頁從那裡接著，較舊的機器人訊息才不會因為上限被丟掉。
@@ -176,17 +181,20 @@ export function registerChat(app: FastifyInstance, db: Database) {
       if (keep > 0 && (keep < visible.length || !next)) {
         visible = visible.slice(0, keep);
         next = visible[keep - 1].id;
-        bots = await botMessages(db, id, before ?? null, next);
+        bots = await botMessages(db, group, before ?? null, next);
       }
     }
     // LINE 使用者 ID 只在伺服器端用來查名稱，不回傳給瀏覽器。
-    const names = await memberNames(
-      db,
-      id,
-      visible.flatMap((m) =>
-        [m.user_id, m.quoted_user_id].filter((v): v is string => !!v),
-      ),
-    );
+    const names =
+      group.platform === "line"
+        ? await memberNames(
+            db,
+            id,
+            visible.flatMap((m) =>
+              [m.user_id, m.quoted_user_id].filter((v): v is string => !!v),
+            ),
+          )
+        : new Map<string, string>();
     const messages = visible.map(({ user_id, quoted_user_id, ...m }) => ({
       ...m,
       sender: (user_id && names.get(user_id)) || m.sender,
