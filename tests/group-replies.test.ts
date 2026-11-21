@@ -590,6 +590,11 @@ describe("LINE 每月推播額度用完", () => {
     await notifyGroup(db, id, "ready", "ready:second", "群組第二則");
     const line = new Line(db);
     await line.notify(null, "ready", "direct:1", "管理者私訊");
+    // 送出順序依 created_at（毫秒）；同一毫秒建立時私訊會排到群組前面，用量就差 1 則。
+    // 固定私訊在群組之後，讓先撞上限、再送私訊的順序可重現。
+    await db.query(
+      "UPDATE notifications SET created_at=now()+interval '1 second' WHERE dedupe_key='direct:1'",
+    );
     const usage = { limit: 200, used: 197 };
     // 人數讀不到（未知），用量也還沒查過：照送，由 LINE 的 429 判斷。
     const calls = billedApi({
