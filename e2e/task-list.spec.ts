@@ -210,9 +210,14 @@ test("從鈴鐺開啟待合併通知時保留任務詳情並套用待合併篩�
   await page.goto("/");
   await page.getByRole("button", { name: /^通知(?:，|$)/ }).click();
   await page.getByRole("menuitem", { name: /範例匯出待合併/ }).click();
-  await expect(page.getByRole("dialog", { name: ready.title })).toBeVisible();
+  const dialog = page.getByRole("dialog", { name: ready.title });
+  await expect(dialog).toBeVisible();
   expect(new URL(page.url()).searchParams.get("status")).toBe("ready");
+  // 詳情開啟後會把焦點移到標題；等焦點就位再按 Esc，避免面板還沒接管鍵盤。
+  await expect(dialog.getByRole("heading", { name: ready.title })).toBeFocused();
   await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator("#root")).not.toHaveAttribute("aria-hidden");
   await expect(statusFilter(page, "待合併 1")).toBeChecked();
   await expect(rows(page)).toHaveCount(1);
   await expect(rows(page).first()).toContainText(ready.title);

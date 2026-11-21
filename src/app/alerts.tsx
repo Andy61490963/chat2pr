@@ -172,14 +172,23 @@ export function AlertBell({
   /** 選單關閉時的焦點處理；換頁後由看板把焦點移到頁面標題。 */
   onCloseAutoFocus?: (e: Event) => void;
 }) {
+  const taskAfterMenu = useRef<{ id: string; filter: TaskStatusFilter } | null>(
+    null,
+  );
   // 跟任務有關的通知開任務；其餘帶去能處理它的頁面（專案、群組或設定）。
-  const follow = (a: Alert) => {
+  const follow = (a: Alert, fromMenu = false) => {
     const target = notificationTarget(a, !!openView);
     if ("note" in target) return;
     setMenuOpen(false);
-    if ("task" in target)
-      void openTask(target.task, notificationTaskFilter(a.kind));
-    else void openView?.(target.view, a.project_id, projectNoticeTab(a.kind));
+    if ("task" in target) {
+      const filter = notificationTaskFilter(a.kind);
+      // 等選單卸載並還原焦點，避免關閉動畫與任務詳情交錯接管焦點。
+      if (fromMenu && filter)
+        taskAfterMenu.current = { id: target.task, filter };
+      else void openTask(target.task, filter);
+    } else {
+      void openView?.(target.view, a.project_id, projectNoticeTab(a.kind));
+    }
   };
   // 推播額度用完的提示由伺服器依 service_health 附上，固定放在清單頂端，不算未讀、不跳桌面通知。
   const quota = all.find((a) => a.kind === LINE_QUOTA);
@@ -320,7 +329,13 @@ export function AlertBell({
         align="end"
         collisionPadding={12}
         className="w-[22rem] max-w-[calc(100vw-2rem)] p-0"
-        onCloseAutoFocus={onCloseAutoFocus}
+        onCloseAutoFocus={(event) => {
+          onCloseAutoFocus?.(event);
+          const task = taskAfterMenu.current;
+          if (!task) return;
+          taskAfterMenu.current = null;
+          void openTask(task.id, task.filter);
+        }}
       >
         <div className="flex items-center justify-between border-b px-3 py-2">
           <span className="text-sm font-medium">通知</span>
@@ -375,7 +390,7 @@ export function AlertBell({
                       e.preventDefault();
                       return;
                     }
-                    follow(a);
+                    follow(a, true);
                   }}
                   className={cn(
                     "w-full items-start gap-3 rounded-none border-b px-3 py-2.5 text-left last:border-0 focus:bg-muted/60 focus:text-foreground",
