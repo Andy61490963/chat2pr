@@ -442,7 +442,7 @@ import "@fontsource-variable/inter";
       anim: function (tl) { phase(tl, 2, "run"); travel(tl, "slot_relay", 0.4, "推論", "var(--ai)"); travel(tl, "relay_gpt", 0.5, "推論", "var(--ai)"); travel(tl, "relay_gpt", 0.5, "回應", "var(--ai)", true); travel(tl, "slot_relay", 0.4, "回應", "var(--ai)", true); phase(tl, 2, "done", 0.6); } },
 
     { modes: ["change"], title: "收集差異、跑測試", where: "工作容器（沒有網路）", cam: "work", focus: [],
-      text: "用可信的原始基底計算這次改了什麼（不相信容器裡可以被改動的 .git），再在沒有網路的容器裡跑專案的測試命令。測試寫死 LocalDB 時，系統在同一個容器啟動 SQL Server、把連線導過去，跑完再還原檔案。",
+      text: "用可信的原始基底收集差異。有變更時，在沒有網路的容器裡跑專案的測試命令；測試寫死 LocalDB 時，系統會暫時把連線導向容器內的 SQL Server。沒有變更且 Codex 確認已符合需求時，你可以在看板查看判斷依據，群組和管理者都會收到無需修改的通知。",
       chips: ["測試沒有網路", "不信任容器內 .git", "LocalDB 自動導向"],
       data: "<k>變更</k>  2 個檔案（+2 −1）\n\n$ npm test\n  <ok>✓</ok> OrderButton 顯示品牌綠\n  <ok>✓</ok> 手機版按鈕樣式\n  <ok>✓</ok> 點擊後送出訂單\n<ok>Tests  128 passed (128)</ok>",
       end: { ph: ["done", "done", "done", "done", "done"] },

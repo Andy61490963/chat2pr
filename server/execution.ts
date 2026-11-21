@@ -76,6 +76,7 @@ import {
   type ExcludedSummary,
 } from "../shared/build-output.js";
 import { clip, failureSummary, prReport, reviewVerdict } from "./pr-body.js";
+import { noChangeInstruction, noChangeResult } from "./change-result.js";
 import { threadHistory } from "./followup.js";
 import { environmentFailure, sqlServerTestCommand } from "./sqlserver-test.js";
 import { askInGroup } from "./answers.js";
@@ -1446,6 +1447,7 @@ export class Execution {
         title: task.title,
         summary: task.summary,
         acceptance: task.acceptance,
+        ...(task.mode === "query" ? {} : { noChange: noChangeInstruction }),
         approvedSensitivePaths: task.approved_paths,
         projectConventions: knowledge.map((k) => k.content),
         projectContext: project.project_context ?? {},
@@ -1507,7 +1509,8 @@ export class Execution {
             `Codex 執行失敗：${redact(code.stderr).slice(-4000)}`,
           );
         try {
-          codexSummary = redact(String(JSON.parse(code.stdout).final ?? ""));
+          const final = JSON.parse(code.stdout).final;
+          codexSummary = typeof final === "string" ? redact(scrub(final)) : "";
         } catch {
           codexSummary = "";
         }
@@ -1671,6 +1674,34 @@ ${querySummary(answer)}`,
               "…（完整清單見 PR 說明）",
             ),
           );
+        const unchanged = noChangeResult(
+          files.length,
+          codexSummary,
+          task.title,
+        );
+        if (unchanged) {
+          await this.github.base(project);
+          await assertCurrent();
+          await this.db.transaction(async (c) => {
+            const completed = await c.query(
+              "UPDATE tasks SET status='answered',answer=$2,last_error=NULL,review_note=NULL,updated_at=now() WHERE id=$1 AND version=$3 AND approved_version=$3 AND status='reviewing' RETURNING id",
+              [task.id, unchanged.answer, task.version],
+            );
+            if (!completed.rowCount) return;
+            await c.query("UPDATE runs SET result=$2 WHERE id=$1", [
+              runId,
+              JSON.stringify({ answer: unchanged.answer }),
+            ]);
+            const key = `no_changes:${task.id}:${task.version}`;
+            await c.query(
+              "INSERT INTO notifications(task_id,kind,dedupe_key,text) VALUES($1,'no_changes',$2,$3) ON CONFLICT DO NOTHING",
+              [task.id, key, unchanged.notice],
+            );
+            await notifyGroup(c, task.id, "no_changes", key, unchanged.notice);
+            await this.db.audit(task.id, "answered", unchanged.notice, c);
+          });
+          return;
+        }
         const sensitivePaths = files
           .map((f) => f.path)
           .filter((path) =>

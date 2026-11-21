@@ -488,7 +488,9 @@ export function Stepper({
   const at = stepOf[status];
   const labels = query
     ? ["整理需求", "審核", "排程", "調查", "整理報告", statusLabels.answered]
-    : steps;
+    : status === "answered"
+      ? [...steps.slice(0, 4), statusLabels.answered]
+      : steps;
   if (at === undefined) return null;
   return (
     <ol className="mt-2 flex gap-1" aria-label="任務進度">

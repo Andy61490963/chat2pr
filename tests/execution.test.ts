@@ -38,7 +38,8 @@ async function scenario() {
   let failTests = false,
     mutateCandidate = false,
     cancelDuringPublish = false,
-    sensitive = false;
+    sensitive = false,
+    emptyResult: string | undefined;
   github.base = async () => "base-sha";
   github.archive = async () => new Blob(["archive"]).stream();
   github.ensureIssue = async () => ({
@@ -66,17 +67,25 @@ async function scenario() {
           testCalls++;
           if (failTests) result.exitCode = 1;
         }
-        if (body.phase === "code") codeCalls++;
+        if (body.phase === "code") {
+          codeCalls++;
+          if (emptyResult !== undefined)
+            result.stdout = JSON.stringify({ final: emptyResult });
+        }
         if (body.phase === "collect") {
           collectCalls++;
           result.stdout = JSON.stringify({
-            files: [
-              {
-                path: sensitive ? "server/auth.ts" : "src/button.ts",
-                content: mutateCandidate && collectCalls > 1 ? "Yg==" : "YQ==",
-                mode: "100644",
-              },
-            ],
+            files:
+              emptyResult !== undefined
+                ? []
+                : [
+                    {
+                      path: sensitive ? "server/auth.ts" : "src/button.ts",
+                      content:
+                        mutateCandidate && collectCalls > 1 ? "Yg==" : "YQ==",
+                      mode: "100644",
+                    },
+                  ],
           });
         }
         if (body.phase === "review")
@@ -101,11 +110,13 @@ async function scenario() {
       mutateCandidate?: boolean;
       cancelDuringPublish?: boolean;
       sensitive?: boolean;
+      emptyResult?: string;
     }) => {
       failTests = !!o.failTests;
       mutateCandidate = !!o.mutateCandidate;
       cancelDuringPublish = !!o.cancelDuringPublish;
       sensitive = !!o.sensitive;
+      emptyResult = o.emptyResult;
     },
     counts: () => ({ published, testCalls, codeCalls }),
   };
@@ -115,6 +126,56 @@ it("只發布通過測試與獨立審查的同一份候選內容", async () => {
   await s.execution.execute(s.task.id);
   expect(s.counts()).toEqual({ published: 1, testCalls: 1, codeCalls: 1 });
   expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("ready");
+});
+it("需求已符合時結束空變更任務，並以同一句話通知群組與管理者", async () => {
+  const s = await scenario();
+  const explanation = "範例按鈕已是綠色，且有現成的測試覆蓋。";
+  s.change({ emptyResult: `${explanation}\nAGENTFLOW_ALREADY_SATISFIED` });
+  await s.execution.execute(s.task.id);
+
+  const task = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [
+    s.task.id,
+  ]);
+  const result = "已經符合需求，沒有需要修改的地方。";
+  expect(task).toMatchObject({
+    status: "answered",
+    answer: `${result}\n\n${explanation}`,
+    last_error: null,
+    pr_number: null,
+  });
+  expect(s.counts()).toEqual({ published: 0, testCalls: 0, codeCalls: 1 });
+  expect(
+    await db.query(
+      "SELECT kind,text FROM notifications WHERE task_id=$1 AND kind IN ('no_changes','group_no_changes','failed','group_failed') ORDER BY kind",
+      [s.task.id],
+    ),
+  ).toEqual([
+    { kind: "group_no_changes", text: `「${s.task.title}」${result}` },
+    { kind: "no_changes", text: `「${s.task.title}」${result}` },
+  ]);
+});
+it("Codex 做不到時，空變更仍是失敗並保留說明", async () => {
+  const s = await scenario();
+  const explanation = "無法完成修改，範例元件缺少可驗證的樣式規格。";
+  s.change({ emptyResult: explanation });
+  await s.execution.execute(s.task.id);
+
+  const task = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [
+    s.task.id,
+  ]);
+  expect(task).toMatchObject({
+    status: "failed",
+    answer: null,
+    pr_number: null,
+  });
+  expect(task?.last_error).toContain(explanation);
+  expect(s.counts()).toEqual({ published: 0, testCalls: 0, codeCalls: 1 });
+  expect(
+    await db.query(
+      "SELECT kind FROM notifications WHERE task_id=$1 AND kind IN ('no_changes','group_no_changes','failed','group_failed') ORDER BY kind",
+      [s.task.id],
+    ),
+  ).toEqual([{ kind: "failed" }, { kind: "group_failed" }]);
 });
 it.each([false, true])(
   "自動設定派工使用任務分支，先驗證新基底（基底失敗：%s）",

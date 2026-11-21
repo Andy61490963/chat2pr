@@ -364,6 +364,28 @@ test("你能在任務詳情追查查詢版本，閱讀答案時只看到報告",
   await expect(dialog.getByText(/範例來源（demo\/source）/)).toBeVisible();
 });
 
+test("你能在已回覆的修改任務查看無需修改的原因", async ({ page }) => {
+  const conclusion = "已經符合需求，沒有需要修改的地方。";
+  const explanation = "範例按鈕已使用綠色，現有測試涵蓋此條件。";
+  const completed: Task = {
+    ...task,
+    mode: "change",
+    status: "answered",
+    answer: `${conclusion}\n\n${explanation}`,
+  };
+  await mockDashboard(page, {
+    state: { tasks: [completed] },
+    routes: { [`/api/tasks/${task.id}`]: { ...detail, task: completed } },
+  });
+  await page.goto(`/tasks?task=${task.id}`);
+  const dialog = page.getByRole("dialog");
+  await expect(dialog.getByText("已回覆").first()).toBeVisible();
+  await expect(dialog.getByRole("heading", { name: "修改結果" })).toBeVisible();
+  await expect(dialog.getByText(conclusion)).toBeVisible();
+  await expect(dialog.getByText(explanation)).toBeVisible();
+  await expect(dialog.getByRole("link", { name: /開啟 PR/ })).toHaveCount(0);
+});
+
 test("專案補問通知直接開啟環境驗證，方向鍵可切換其他分頁", async ({ page }) => {
   await mockDashboard(page, {
     state: {

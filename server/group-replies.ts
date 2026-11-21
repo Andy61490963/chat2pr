@@ -4,7 +4,7 @@ import { splitQueryAnswer } from "../shared/query-answer.js";
  *
  * 群組推播會依群組人數計入 LINE 的推播額度，所以每個群組可以選：
  * - off：不回覆群組。
- * - results：只回覆結果（查詢答案、PR 完成、合併、取消、需要人工處理）。預設。
+ * - results：只回覆結果（查詢答案、無需修改、PR 完成、合併、取消、需要人工處理）。預設。
  * - all：另外在需求整理完成、等待確認時通知。
  * 「/任務」訊息的立即回覆使用 reply token，不計入推播額度，off 以外都會回。
  */
@@ -257,7 +257,8 @@ const retrievable = (n: string) =>
    AND ${n}.reply_failures<${REPLY_FAILURE_LIMIT}
    AND (${n}.kind<>'group_question' OR (t.status='awaiting_approval' AND t.question IS NOT NULL AND ${n}.dedupe_key='group:question:'||t.id||':'||t.version))
    AND (${n}.kind<>'group_received' OR t.status='awaiting_approval')
-   AND (${n}.kind<>'group_failed' OR t.status='failed')`;
+   AND (${n}.kind<>'group_failed' OR t.status='failed')
+   AND (${n}.kind<>'group_no_changes' OR (t.status='answered' AND ${n}.dedupe_key='group:no_changes:'||t.id||':'||t.version))`;
 /**
  * 每個任務只取最新一則：同一任務有較新、也可取回的通知時，舊的不送。
  * group_received 排最後：它和補問常在同一個交易排入（approvalNotice 後接 askInGroup），created_at 相同，

@@ -191,6 +191,7 @@ export function deliveryNotice(d: Delivery) {
 /** 群組通知種類的名稱（聊天室標示機器人說的是什麼）。 */
 export const groupKindLabels: Record<string, string> = {
   group_answered: "查詢回答",
+  group_no_changes: "無需修改",
   group_question: "補問",
   group_failed: "失敗說明",
   group_received: "收到需求",
@@ -204,6 +205,7 @@ export const groupKindLabels: Record<string, string> = {
 /** 任務詳情要提醒送達狀態的群組訊息種類。 */
 export const drawerKinds = [
   "group_answered",
+  "group_no_changes",
   "group_question",
   "group_failed",
 ] as const;

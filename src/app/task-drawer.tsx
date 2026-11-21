@@ -185,7 +185,10 @@ export function TaskDrawer({
   relink: (t: Detail["task"], parentId: string | null) => unknown;
 }) {
   const t = detail.task;
-  const report = splitQueryAnswer(t.answer ?? "");
+  const report =
+    t.mode === "query"
+      ? splitQueryAnswer(t.answer ?? "")
+      : { body: t.status === "answered" ? (t.answer ?? "") : "", source: null };
   const sources = detail.runs.find(
     (r) => r.version === t.version && r.query_sources,
   )?.query_sources;
@@ -196,7 +199,7 @@ export function TaskDrawer({
     "failed",
     "budget_wait",
   ].includes(t.status);
-  // 查詢回覆後也能改需求再查一次；其餘已結束的任務不能改。
+  // 已回覆的任務可以補充需求後重新處理。
   const canAmend = editable || t.status === "answered";
   const saved = { summary: t.summary, acceptance: t.acceptance.join("\n") };
   const [summary, setSummary] = useState(saved.summary);
@@ -666,15 +669,15 @@ export function TaskDrawer({
           <GroupDeliveryNotes
             deliveries={detail.groupDeliveries}
             kinds={[
-              "group_answered",
+              t.mode === "query" ? "group_answered" : "group_no_changes",
               ...(t.status === "failed" ? ["group_failed"] : []),
             ]}
           />
-          {t.answer && (
+          {report.body && (
             <section className="flex flex-col gap-2">
               <div className="flex items-center justify-between gap-2">
                 <h3 className="text-xs font-medium text-muted-foreground">
-                  調查結果
+                  {t.mode === "query" ? "調查結果" : "修改結果"}
                 </h3>
                 <Button
                   variant="ghost"
@@ -1222,7 +1225,9 @@ export function TaskDrawer({
                   ? "PR 已合併，任務完成。要再調整，用上方的「再改一點」。"
                   : t.status === "closed"
                     ? "PR 沒有合併就關閉了（儲存庫被移除時也會這樣）。要重做，用上方的「再改一點」另開 PR。"
-                    : "查詢已回覆。要接著問，請用上方的「接著問」；想換個問法整個重查，才用「修改這一題」，原回答會被取代。"}
+                    : t.mode === "query"
+                      ? "查詢已回覆。要接著問，請用上方的「接著問」；想換個問法整個重查，才用「修改這一題」，原回答會被取代。"
+                      : "你可以用「修改這一題」補充需求後重新送審。"}
             </span>
             {t.status === "answered" ? (
               <Button variant="outline" onClick={openAmend}>

@@ -159,6 +159,7 @@ export async function markGroupTooLarge(
  * - group_waiting／group_received：超過 6 小時，或任務已不在等待中。
  * - group_question：任務不再等回答、問題已清掉，或不是目前版本的提問（與 answers.ts questionByQuote 相同條件）。
  * - group_failed：任務已不是 failed。
+ * - group_no_changes：超過 24 小時，或這個版本的任務已不再是已回覆。
  * - 其他群組通知：超過 24 小時。
  */
 export const staleNotification = `COALESCE(CASE
@@ -167,6 +168,7 @@ export const staleNotification = `COALESCE(CASE
   WHEN n.kind='group_received' THEN n.created_at<now()-interval '6 hours' OR t.status IS NULL OR t.status<>'awaiting_approval'
   WHEN n.kind='group_question' THEN t.status IS NULL OR t.status<>'awaiting_approval' OR t.question IS NULL OR n.dedupe_key<>'group:question:'||t.id||':'||t.version
   WHEN n.kind='group_failed' THEN t.status IS NULL OR t.status<>'failed'
+  WHEN n.kind='group_no_changes' THEN n.created_at<now()-interval '24 hours' OR t.status IS NULL OR t.status<>'answered' OR n.dedupe_key<>'group:no_changes:'||t.id||':'||t.version
   ELSE n.created_at<now()-interval '24 hours'
 END,false)`;
 

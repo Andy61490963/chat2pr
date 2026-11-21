@@ -290,7 +290,7 @@ export class Tasks {
             throw new AppError(422, "請先在需求中補充回答，再重新確認");
         }
         await c.query(
-          "UPDATE tasks SET summary=$2,acceptance=$3,missing='[]',question=NULL,assumptions='[]',suggestions='[]',version=version+1,approved_version=NULL,approved_paths='{}',pending_paths='{}',base_sha=NULL,branch=NULL,status='awaiting_approval',last_error=NULL,updated_at=now() WHERE id=$1",
+          "UPDATE tasks SET summary=$2,acceptance=$3,missing='[]',question=NULL,assumptions='[]',suggestions='[]',version=version+1,approved_version=NULL,approved_paths='{}',pending_paths='{}',base_sha=NULL,branch=NULL,status='awaiting_approval',answer=CASE WHEN mode='change' THEN NULL ELSE answer END,last_error=NULL,updated_at=now() WHERE id=$1",
           [id, a.summary, JSON.stringify(a.acceptance)],
         );
         await c.query(
