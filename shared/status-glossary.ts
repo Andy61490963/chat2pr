@@ -15,6 +15,10 @@ export const statusLabels: Record<TaskStatus, string> = {
 };
 export const projectQuotaWaitPrefix = `${statusLabels.budget_wait}｜`;
 
+export const notificationLabels = {
+  action: "需要你處理",
+} as const;
+
 /** 專案優先顯示驗證進度與需要處理的狀態。 */
 export const projectLabels = {
   missing: "找不到儲存庫",

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Database } from "./db.js";
 
-// 會讓收訊、派工或通知停擺的服務；其餘項目只在設定頁顯示，不另外通知。
+// 會讓收訊、派工或通知停擺的服務；其餘項目只在設定頁顯示。
 const critical: Record<string, string> = {
   line: "LINE",
   github: "GitHub App",
@@ -12,13 +12,67 @@ const critical: Record<string, string> = {
   host_resources: "主機資源",
 };
 
+type HealthReading = {
+  ok: boolean;
+  notified_ok: boolean | null;
+  reading_ok: boolean | null;
+  checked_at: Date;
+  outage_started_at: Date | null;
+};
+
+const minute = 60_000;
+
+export function healthTransition(
+  name: string,
+  before: HealthReading,
+  ok: boolean,
+  detail: string,
+  observedAt: Date,
+  confirm: boolean,
+) {
+  const label = critical[name];
+  const baseline = before.notified_ok ?? before.ok;
+  const confirmed = !confirm || before.reading_ok === ok;
+  let notifiedOk = baseline;
+  let outageStartedAt = before.outage_started_at;
+  let notice: { kind: "service_up" | "service_down"; text: string } | null =
+    null;
+
+  if (name === "tunnel" && baseline && !ok && confirmed) {
+    outageStartedAt ??=
+      before.reading_ok === false ? before.checked_at : observedAt;
+  }
+  const elapsed = outageStartedAt
+    ? observedAt.getTime() - outageStartedAt.getTime()
+    : 0;
+
+  if (ok && confirmed && (!baseline || outageStartedAt)) {
+    notice = {
+      kind: "service_up",
+      text: baseline
+        ? `${label}曾中斷約 ${Math.max(1, Math.round(elapsed / minute))} 分鐘，已恢復。`
+        : `服務已恢復：${label}`,
+    };
+    notifiedOk = true;
+    outageStartedAt = null;
+  } else if (
+    !ok &&
+    baseline &&
+    confirmed &&
+    (name !== "tunnel" || elapsed >= 5 * minute)
+  ) {
+    notice = {
+      kind: "service_down",
+      text: `服務異常：${label}（${detail}）。恢復前相關功能會停擺，請到設定頁查看。`,
+    };
+    notifiedOk = false;
+  }
+  return { notifiedOk, outageStartedAt, notice };
+}
+
 /**
- * 寫入服務狀態；重要服務由正常變異常、或由異常恢復時通知管理者一次。
- * 第一次觀察只建立基準不通知。confirm 用於定期檢查的項目：轉異常與恢復都要連續兩次
- * 同方向的讀數才通知，避免在門檻上下徘徊時「異常／已恢復」交替洗版、耗推播額度。
- * silent 只更新目前狀態與說明，不動通知基準也不通知（例如暫時讀不到資料，不能算一次恢復）。
- * 連續判斷比對上一次真實讀數 `reading_ok`，不比對 `ok`：silent 會把 ok 寫成正常（讀不到資源時不擋派工），
- * 拿 ok 比對的話，已通知異常後中間讀不到一次，下一次單一的正常讀數就會被當成第二次、立刻通知「已恢復」。
+ * 第一次觀察建立基準；confirm 以連續兩次真實讀數確認轉換。
+ * silent 更新目前狀態與說明，保留真實讀數及通知基準。
  */
 export async function recordHealth(
   db: Database,
@@ -27,56 +81,57 @@ export async function recordHealth(
   detail: string,
   options: { confirm?: boolean; silent?: boolean } = {},
 ) {
-  if (options.silent) {
+  if (options.silent || !Object.hasOwn(critical, name)) {
     await db.query(
-      `INSERT INTO service_health(name,ok,detail) VALUES($1,$2,$3)
-       ON CONFLICT(name) DO UPDATE SET ok=$2,detail=$3,checked_at=now()`,
-      [name, ok, detail],
+      `INSERT INTO service_health(name,ok,detail,reading_ok) VALUES($1,$2,$3,$4)
+       ON CONFLICT(name) DO UPDATE SET ok=$2,detail=$3,checked_at=now(),
+       reading_ok=coalesce($4,service_health.reading_ok)`,
+      [name, ok, detail, options.silent ? null : ok],
     );
     return;
   }
-  const [before] = await db.query<{
-    was: boolean | null;
-    told: boolean | null;
-    reading: boolean | null;
-  }>(
-    `WITH old AS (SELECT ok,notified_ok,reading_ok FROM service_health WHERE name=$1),
-     saved AS (INSERT INTO service_health(name,ok,detail,reading_ok) VALUES($1,$2,$3,$2)
-       ON CONFLICT(name) DO UPDATE SET ok=$2,detail=$3,reading_ok=$2,checked_at=now() RETURNING 1)
-     SELECT (SELECT ok FROM old) AS was,(SELECT notified_ok FROM old) AS told,
-       (SELECT reading_ok FROM old) AS reading FROM saved`,
-    [name, ok, detail],
-  );
-  const label = critical[name];
-  if (!label) return;
-  const was = before?.was ?? null;
-  const baseline = before?.told ?? was;
-  if (baseline === null || baseline === ok) {
-    if (before?.told !== ok)
-      await db.query("UPDATE service_health SET notified_ok=$2 WHERE name=$1", [
-        name,
-        ok,
-      ]);
-    return;
-  }
-  // 沒有上一次真實讀數（欄位新增前的舊列，或只被 silent 寫過）時不算第一次，不退回比對 ok：
-  // 舊列的 ok 可能正是 silent 寫的「正常」，退回比對會讓部署後第一次單一的正常讀數就通知「已恢復」。
-  if (options.confirm && before?.reading !== ok) return;
-  const marked = await db.query(
-    "UPDATE service_health SET notified_ok=$2 WHERE name=$1 AND notified_ok IS DISTINCT FROM $2 RETURNING name",
-    [name, ok],
-  );
-  if (!marked.length) return;
-  // 上面的更新已保證每次狀態轉換只會走到這裡一次，所以每次轉換都要發。
-  // 不能用時段去重：一小時內異常、恢復、再異常，最後一則會停在「已恢復」。
-  await db.query(
-    "INSERT INTO notifications(kind,dedupe_key,text) VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
-    [
-      ok ? "service_up" : "service_down",
-      `service:${name}:${ok ? "up" : "down"}:${randomUUID()}`,
-      ok
-        ? `服務已恢復：${label}`
-        : `服務異常：${label}（${detail}）。恢復前相關功能會停擺，請到設定頁查看。`,
-    ],
-  );
+
+  // 同一服務的探測依資料列鎖序列化，狀態與通知一起提交。
+  await db.transaction(async (c) => {
+    const inserted = await c.query(
+      `INSERT INTO service_health(name,ok,detail,reading_ok,notified_ok)
+       VALUES($1,$2,$3,$2,$2) ON CONFLICT(name) DO NOTHING RETURNING name`,
+      [name, ok, detail],
+    );
+    if (inserted.rowCount) return;
+    const {
+      rows: [before],
+    } = await c.query<HealthReading>(
+      "SELECT * FROM service_health WHERE name=$1 FOR UPDATE",
+      [name],
+    );
+    const {
+      rows: [{ observed_at: observedAt }],
+    } = await c.query<{ observed_at: Date }>(
+      "SELECT clock_timestamp() AS observed_at",
+    );
+    const { notifiedOk, outageStartedAt, notice } = healthTransition(
+      name,
+      before,
+      ok,
+      detail,
+      observedAt,
+      options.confirm ?? false,
+    );
+    await c.query(
+      `UPDATE service_health SET ok=$2,detail=$3,reading_ok=$2,checked_at=$4,
+       notified_ok=$5,outage_started_at=$6 WHERE name=$1`,
+      [name, ok, detail, observedAt, notifiedOk, outageStartedAt],
+    );
+    if (notice) {
+      await c.query(
+        "INSERT INTO notifications(kind,dedupe_key,text) VALUES($1,$2,$3)",
+        [
+          notice.kind,
+          `service:${name}:${ok ? "up" : "down"}:${randomUUID()}`,
+          notice.text,
+        ],
+      );
+    }
+  });
 }

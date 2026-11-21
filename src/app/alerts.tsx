@@ -1,4 +1,8 @@
-import { projectLabels } from "../../shared/status-glossary.js";
+import {
+  notificationLabels,
+  projectLabels,
+} from "../../shared/status-glossary.js";
+import type { Task } from "../../shared/types.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bell,
@@ -43,13 +47,18 @@ export type Alert = {
   text: string;
   created_at: string;
   title: string | null;
+  disposition: "inbox" | "action" | "result" | "resolved";
 };
+
+const needsAction = (a: Alert) =>
+  a.disposition === "inbox" || a.disposition === "action";
 
 const kinds: Record<
   string,
   { icon: typeof Bell; tone: string; label: string }
 > = {
   approval: { icon: CircleHelp, tone: "text-warn", label: "等你審核" },
+  group_question: { icon: CircleHelp, tone: "text-warn", label: "AI 等你回答" },
   project_input: { icon: CircleHelp, tone: "text-warn", label: "專案等你補充" },
   input_required: { icon: CircleHelp, tone: "text-warn", label: "AI 等你回答" },
   failed: { icon: CircleAlert, tone: "text-danger", label: "需要處理" },
@@ -122,6 +131,8 @@ const desktopEnabled = () => {
 
 export function AlertBell({
   alerts: all,
+  inboxTasks,
+  inboxCount,
   seenAt,
   request,
   open: openTask,
@@ -129,6 +140,8 @@ export function AlertBell({
   onCloseAutoFocus,
 }: {
   alerts: Alert[];
+  inboxTasks: Task[];
+  inboxCount: number;
   seenAt: string | null;
   request: Request;
   open: (id: string) => unknown;
@@ -158,9 +171,38 @@ export function AlertBell({
   const [desktop, setDesktop] = useState(desktopEnabled);
   const known = useRef<Set<string> | null>(null);
   useEffect(() => setSeen(seenAt), [seenAt]);
-  const unread = alerts.filter(
-    (a) => !seen || new Date(a.created_at) > new Date(seen),
+  const unreadResults = new Set(
+    alerts
+      .filter(
+        (a) =>
+          a.disposition === "result" &&
+          (!seen || new Date(a.created_at) > new Date(seen)),
+      )
+      .map((a) => a.id),
   );
+  const actions = alerts.filter(needsAction);
+  const covered = new Set(actions.map((a) => a.task_id));
+  // 任務可能沒有留下通知，仍可從鈴鐺前往收件匣列出的待處理任務。
+  const unlisted: Alert[] = inboxTasks
+    .filter((t) => !covered.has(t.id))
+    .map((t) => ({
+      id: `inbox:${t.id}`,
+      task_id: t.id,
+      kind: t.status === "failed" ? "failed" : "approval",
+      text: "請到任務詳情確認下一步。",
+      created_at: t.updated_at,
+      title: t.title,
+      disposition: "inbox",
+    }));
+  const menuAlerts = [
+    ...actions,
+    ...unlisted,
+    ...alerts.filter((a) => !needsAction(a)),
+  ];
+  const unread =
+    inboxCount +
+    actions.filter((a) => a.disposition === "action").length +
+    unreadResults.size;
   // 看板開著時，新通知以瀏覽器桌面通知推播（第一次載入的舊通知不推）。
   useEffect(() => {
     if (!known.current) {
@@ -170,7 +212,7 @@ export function AlertBell({
     for (const a of alerts) {
       if (known.current.has(a.id)) continue;
       known.current.add(a.id);
-      if (desktop && desktopEnabled()) {
+      if (a.disposition !== "resolved" && desktop && desktopEnabled()) {
         const n = new Notification(`AgentFlow：${kindOf(a.kind).label}`, {
           body: a.title ? `${a.title}\n${a.text}` : a.text,
           tag: a.id,
@@ -183,7 +225,7 @@ export function AlertBell({
     }
   }, [alerts, desktop, openTask]);
   const markSeen = () => {
-    if (!unread.length) return;
+    if (!unreadResults.size) return;
     setSeen(new Date().toISOString());
     void request("/api/alerts/seen", "POST").catch(() => {});
   };
@@ -212,6 +254,7 @@ export function AlertBell({
   };
   return (
     <DropdownMenu
+      modal={false}
       open={menuOpen}
       onOpenChange={(o) => {
         setMenuOpen(o);
@@ -222,14 +265,14 @@ export function AlertBell({
         <Button
           variant="ghost"
           size="icon"
-          aria-label={unread.length ? `通知，${unread.length} 則未讀` : "通知"}
+          aria-label={unread ? `通知，${unread} 則未讀` : "通知"}
           title="通知"
           className="relative"
         >
-          {unread.length ? <BellRing /> : <Bell />}
-          {unread.length > 0 && (
+          {unread ? <BellRing /> : <Bell />}
+          {unread > 0 && (
             <span className="absolute top-1 right-1 min-w-4 rounded-full bg-danger px-1 text-[10px] leading-4 font-semibold text-danger-soft tabular-nums">
-              {unread.length > 9 ? "9+" : unread.length}
+              {unread > 9 ? "9+" : unread}
             </span>
           )}
         </Button>
@@ -267,12 +310,13 @@ export function AlertBell({
           </p>
         )}
         {/* 每則通知都是選單項目：鍵盤開啟鈴鐺後方向鍵可選、Enter 開啟。 */}
-        <div className="max-h-[26rem] overflow-y-auto">
-          {alerts.length ? (
-            alerts.map((a) => {
+        <div className="max-h-[min(26rem,calc(var(--radix-dropdown-menu-content-available-height)-5rem))] overflow-y-auto">
+          {menuAlerts.length ? (
+            menuAlerts.map((a) => {
               const k = kindOf(a.kind);
               const Icon = k.icon;
-              const isNew = !!unread.find((u) => u.id === a.id);
+              const action = needsAction(a);
+              const isNew = action || unreadResults.has(a.id);
               // 不能前往時仍可聚焦（讀得到內容），但說明為什麼點了沒反應。
               const t = notificationTarget(a, !!openView);
               const why = "note" in t ? t.note : null;
@@ -298,6 +342,7 @@ export function AlertBell({
                   <Icon className={cn("mt-0.5 size-4 shrink-0", k.tone)} />
                   <span className="flex min-w-0 flex-1 flex-col gap-0.5">
                     <span className="text-xs text-muted-foreground">
+                      {action ? `${notificationLabels.action} · ` : ""}
                       {k.label} · {ago(a.created_at)}
                     </span>
                     {a.title && (

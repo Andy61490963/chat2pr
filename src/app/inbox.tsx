@@ -1,4 +1,7 @@
-import { projectLabels } from "../../shared/status-glossary.js";
+import {
+  notificationLabels,
+  projectLabels,
+} from "../../shared/status-glossary.js";
 import { useState } from "react";
 import {
   Activity,
@@ -153,7 +156,7 @@ export function InboxView({
     <div className="flex flex-col gap-8">
       <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border bg-border lg:grid-cols-4">
         <StatCard
-          label="需要你處理"
+          label={notificationLabels.action}
           value={needCount}
           hint={
             needCount

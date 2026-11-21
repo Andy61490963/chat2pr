@@ -860,6 +860,8 @@ export function App() {
               )}
               <AlertBell
                 alerts={state.alerts ?? []}
+                inboxTasks={needs}
+                inboxCount={countOf(state, attention)}
                 seenAt={state.alertsSeenAt ?? null}
                 request={request}
                 open={showTask}
