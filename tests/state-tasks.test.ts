@@ -169,3 +169,37 @@ it("任務清單先篩選再分批，相同更新時間也不會漏列或重複"
     await app.close();
   }
 });
+
+it("狀態快照、已結束清單與詳情都只採用該任務最後一筆結束稽核", async () => {
+  const project = await fixture();
+  const task = await db.one<{ id: string }>(
+    `INSERT INTO tasks(project_id,group_id,title,summary,status,dedupe_key)
+     VALUES ($1,'group-a','範例設備報表','整理報表','cancelled','demo-end') RETURNING id`,
+    [project],
+  );
+  await db.query(
+    `INSERT INTO audit(task_id,kind,detail,created_at) VALUES
+       ($1,'reject','小林 拒絕（需求版本 1）','2026-11-20T02:30:00Z'),
+       ($1,'cancel','小陳 取消（需求版本 2；目標分支 main），原因：改由小林整理','2026-11-20T02:30:00Z'),
+       ($1,'note','範例群組的其他紀錄','2026-11-20T02:31:00Z'),
+       (NULL,'unsend','來源訊息已撤回','2026-11-20T02:32:00Z')`,
+    [task.id],
+  );
+  const app = await buildApp(db);
+  try {
+    const headers = await session();
+    for (const url of ["/api/state", "/api/tasks?filter=closed", `/api/tasks/${task.id}`]) {
+      const response = await app.inject({ url, headers });
+      expect(response.statusCode).toBe(200);
+      const body = response.json<{ task?: Task; tasks?: Task[] }>();
+      const entry = body.task ?? body.tasks?.find((candidate) => candidate.id === task.id);
+      expect(entry?.end_summary).toEqual({
+        kind: "cancel", actor: "小陳", at: "2026-11-20T02:30:00.000Z",
+        reason: "改由小林整理", station: null,
+      });
+      expect(entry).not.toHaveProperty("ending_audit");
+    }
+  } finally {
+    await app.close();
+  }
+});

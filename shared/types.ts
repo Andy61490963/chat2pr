@@ -154,7 +154,18 @@ export interface TaskPage {
   next: { before: string; beforeId: string } | null;
 }
 
+export interface TaskEndSummary {
+  kind: keyof typeof import("./status-glossary.js").taskEndLabels;
+  actor: string | null;
+  at: string;
+  reason: string | null;
+  /** 有執行或發布紀錄可確認的最後站別。 */
+  station: "queue" | "work" | "verify" | "pr" | null;
+}
+
 export interface Task {
+  /** 看板讀取任務時提供；進行中的任務為 null。 */
+  end_summary?: TaskEndSummary | null;
   /** 草擬定期檢查的查詢任務：記下要求的排程。 */
   check_draft?: CheckSchedule | null;
   question?: import("./clarification.js").ClarificationQuestion | null;

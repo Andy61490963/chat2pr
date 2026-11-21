@@ -8,6 +8,8 @@ import {
 import { phaseLabels, type RunView } from "../../shared/observation.js";
 import { parseFailure } from "../../shared/failure-text.js";
 import {
+  taskCompletionEvents,
+  taskEndLabels,
   taskStationLabels,
   taskStationStatusLabels,
 } from "../../shared/status-glossary.js";
@@ -42,7 +44,12 @@ import type {
   Task,
   TaskStatus,
 } from "../../shared/types.js";
-import { countStatuses, statusLabels, taskGroups } from "../../shared/types.js";
+import {
+  countStatuses,
+  endedStatuses,
+  statusLabels,
+  taskGroups,
+} from "../../shared/types.js";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -454,6 +461,13 @@ const stationOf: Partial<Record<TaskStatus, number>> = {
   merged: 5,
   answered: 5,
 };
+const endStationIndex = { queue: 2, work: 3, verify: 4, pr: 5 } as const;
+
+const endDay = new Intl.DateTimeFormat("zh-TW", {
+  timeZone: "Asia/Taipei",
+  month: "numeric",
+  day: "numeric",
+});
 
 function failedStation(error: Task["last_error"], query: boolean) {
   const headline = parseFailure(error)?.headline;
@@ -476,12 +490,37 @@ export function StationTrack({
   task,
   labelled = false,
   statusLabel,
+  endAction,
 }: {
-  task: Pick<Task, "status" | "mode" | "last_error">;
+  task: Pick<
+    Task,
+    | "status"
+    | "mode"
+    | "last_error"
+    | "end_summary"
+    | "updated_at"
+    | "pr_number"
+  >;
   labelled?: boolean;
   statusLabel?: string;
+  endAction?: ReactNode;
 }) {
   const { status } = task;
+  const ended = endedStatuses.includes(status);
+  const end = task.end_summary;
+  const endKind =
+    end?.kind ??
+    (status === "rejected"
+      ? "reject"
+      : status === "cancelled"
+        ? "cancel"
+        : "other");
+  const endCopy = taskEndLabels[endKind];
+  const completion =
+    endKind === "other" && (status === "merged" || status === "answered")
+      ? taskCompletionEvents[status]
+      : null;
+  const endAt = end?.at ?? task.updated_at;
   const query = task.mode === "query";
   const station = taskStationLabels;
   const copy = taskStationStatusLabels;
@@ -491,63 +530,85 @@ export function StationTrack({
     station.queue,
     query ? station.query : station.change,
     query ? station.report : station.verify,
-    query || status === "answered" ? station.reply : station.pr,
+    (query || status === "answered") && end?.station !== "pr"
+      ? station.reply
+      : station.pr,
   ];
   // 無需修改的任務在開發站回覆，沒有經過驗證或開 PR。
   if (!query && status === "answered") stations.splice(4, 1);
+  const endStation = end?.station ?? (ended && task.pr_number ? "pr" : null);
   const at =
     status === "failed"
       ? failedStation(task.last_error, query)
       : !query && status === "answered"
         ? stations.length - 1
-        : stationOf[status];
+        : (stationOf[status] ??
+          (endStation ? endStationIndex[endStation] : undefined));
   const label =
-    status === "awaiting_approval"
-      ? copy.decision
-      : status === "running" && query
-        ? copy.runningQuery
-        : status === "failed" && at === 4 && !query
-          ? copy.blockedAtVerification
-          : status === "ready"
-            ? copy.ready
-            : statusLabels[status];
+    ended && !completion
+      ? endCopy.badge
+      : status === "awaiting_approval"
+        ? copy.decision
+        : status === "running" && query
+          ? copy.runningQuery
+          : status === "failed" && at === 4 && !query
+            ? copy.blockedAtVerification
+            : status === "ready"
+              ? copy.ready
+              : statusLabels[status];
   const position = at === undefined ? copy.unknownStation : stations[at];
 
   return (
     <span className="station-track" data-tone={statusVariant[status]}>
       <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <StatusBadge status={status} label={statusLabel ?? label} />
-        <span className="text-xs text-muted-foreground">
-          {at === undefined ? position : `${position}站`}
+        <span className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+          {ended ? (
+            <>
+              {end?.actor && `${end.actor}於 `}
+              <time dateTime={endAt}>
+                {labelled ? date(endAt) : endDay.format(new Date(endAt))}
+              </time>{" "}
+              {completion ?? endCopy.event}
+              {labelled && end?.reason && `，原因是${end.reason}`}
+            </>
+          ) : at === undefined ? (
+            position
+          ) : (
+            `${position}站`
+          )}
         </span>
+        {ended && endAction}
       </span>
-      <span
-        role="img"
-        aria-label={`站別軌道，${at === undefined ? position : `目前在${position}站`}${labelled ? `，依序為${stations.join("、")}` : ""}`}
-        className={cn("station-rail", labelled && "station-rail--labelled")}
-      >
-        {stations.map((name, index) => (
-          <span
-            key={name}
-            aria-hidden
-            className="station"
-            data-state={
-              index === at
-                ? "current"
-                : at !== undefined && index < at
-                  ? "past"
-                  : "future"
-            }
-          >
-            <span className="station-dot" />
-            {labelled && (
-              <span className="station-name text-xs text-muted-foreground">
-                {name}
-              </span>
-            )}
-          </span>
-        ))}
-      </span>
+      {(!ended || at !== undefined) && (
+        <span
+          role="img"
+          aria-label={`站別軌道，${at === undefined ? position : `${ended ? "結束前到達" : "目前在"}${position}站`}${labelled ? `，依序為${stations.join("、")}` : ""}`}
+          className={cn("station-rail", labelled && "station-rail--labelled")}
+        >
+          {stations.map((name, index) => (
+            <span
+              key={name}
+              aria-hidden
+              className="station"
+              data-state={
+                index === at
+                  ? "current"
+                  : at !== undefined && index < at
+                    ? "past"
+                    : "future"
+              }
+            >
+              <span className="station-dot" />
+              {labelled && (
+                <span className="station-name text-xs text-muted-foreground">
+                  {name}
+                </span>
+              )}
+            </span>
+          ))}
+        </span>
+      )}
     </span>
   );
 }

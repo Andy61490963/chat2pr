@@ -95,6 +95,12 @@ import type {
 import { describeChanges, settingsDiff } from "../shared/settings-diff.js";
 import { containsCredential } from "../shared/credentials.js";
 import {
+  taskEndColumns,
+  taskEndJoins,
+  withTaskEnd,
+  type TaskWithEndAudit,
+} from "./task-end.js";
+import {
   countStatuses,
   efforts,
   endedStatuses,
@@ -549,15 +555,17 @@ export async function buildApp(
       ),
       // 未結束的任務（待審核、失敗、等待額度、進行中、待合併）一律載入，較舊的也不會從收件匣消失；
       // 其餘只給最近 N 筆。進行中的執行只帶階段與時間四欄，執行細節由任務詳情提供。
-      db.query(
+      db.query<TaskWithEndAudit>(
         `WITH picked AS (
            (SELECT id FROM tasks WHERE status=ANY($2::text[]) ORDER BY updated_at DESC LIMIT $3)
            UNION
            (SELECT id FROM tasks ORDER BY updated_at DESC LIMIT $1))
-         SELECT t.*,r.status AS run_phase,r.started_at AS run_started_at,r.deadline AS run_deadline,r.heartbeat_at AS run_heartbeat_at
+         SELECT t.*,r.status AS run_phase,r.started_at AS run_started_at,r.deadline AS run_deadline,r.heartbeat_at AS run_heartbeat_at,
+           ${taskEndColumns}
          FROM tasks t JOIN picked p ON p.id=t.id
          LEFT JOIN LATERAL (SELECT status,started_at,deadline,heartbeat_at FROM runs
            WHERE task_id=t.id AND completed_at IS NULL ORDER BY started_at DESC LIMIT 1) r ON true
+         ${taskEndJoins}
          ORDER BY t.updated_at DESC,t.id`,
         [limits.tasks, unfinishedStatuses, UNFINISHED_LIMIT],
       ),
@@ -638,7 +646,7 @@ export async function buildApp(
           : project;
       }),
       groups,
-      tasks,
+      tasks: tasks.map(withTaskEnd),
       pickLists: pendingLists,
       rag,
       usage: { ...usage, runs_today: runsToday.count },
@@ -815,7 +823,7 @@ export async function buildApp(
       })
       .parse(req.query);
     const pageSize = 30;
-    const rows = await db.query<Task & { cursor_time: string }>(
+    const rows = await db.query<TaskWithEndAudit & { cursor_time: string }>(
       `WITH picked AS (
          SELECT t.* FROM tasks t
          WHERE ($1::text[] IS NULL OR t.status=ANY($1))
@@ -827,10 +835,12 @@ export async function buildApp(
        )
        SELECT t.*,r.status AS run_phase,r.started_at AS run_started_at,r.deadline AS run_deadline,
          r.heartbeat_at AS run_heartbeat_at,
+         ${taskEndColumns},
          to_char(t.updated_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_time
        FROM picked t
        LEFT JOIN LATERAL (SELECT status,started_at,deadline,heartbeat_at FROM runs
          WHERE task_id=t.id AND completed_at IS NULL ORDER BY started_at DESC LIMIT 1) r ON true
+       ${taskEndJoins}
        ORDER BY t.updated_at DESC,t.id DESC`,
       [
         query.filter === "closed" ? endedStatuses : null,
@@ -844,7 +854,9 @@ export async function buildApp(
     );
     const last = rows[pageSize - 1];
     return {
-      tasks: rows.slice(0, pageSize).map(({ cursor_time, ...task }) => task),
+      tasks: rows
+        .slice(0, pageSize)
+        .map(({ cursor_time, ...task }) => withTaskEnd(task)),
       // 保留資料庫的微秒精度，同一時間更新的任務再用編號決定順序。
       next:
         rows.length > pageSize

@@ -1,6 +1,7 @@
 import { createFollowupInTransaction, threadOf } from "./followup.js";
 import { withAssumptions } from "../shared/clarification.js";
 import { fullTaskTitle } from "../shared/task-title.js";
+import { taskEndLabels } from "../shared/status-glossary.js";
 import { referencedSources } from "./retrieval.js";
 import { taskImageEvidence } from "./image-context.js";
 import { readReportImages } from "./query-report.js";
@@ -29,6 +30,12 @@ import {
 } from "../shared/types.js";
 import { deliveryState, type GroupDelivery } from "../shared/group-delivery.js";
 import { lineQuotaBlocked } from "./line-quota.js";
+import {
+  taskEndColumns,
+  taskEndJoins,
+  withTaskEnd,
+  type TaskWithEndAudit,
+} from "./task-end.js";
 export const Assignment = z.object({
   project_id: z.string().uuid(),
   remember: z.string().trim().max(1000).optional(),
@@ -73,8 +80,8 @@ export const BatchEnd = z.object({
 // 時間軸寫明做了什麼，不只寫「操作」。
 export const actionLabels: Record<string, string> = {
   approve: "核准",
-  reject: "拒絕",
-  cancel: "取消",
+  reject: taskEndLabels.reject.event,
+  cancel: taskEndLabels.cancel.event,
   retry: "重試",
   amend: "補充需求",
   assumption: "修改假設",
@@ -546,10 +553,12 @@ export class Tasks {
     };
   }
   async detail(id: string) {
-    const task = await this.db.one<Task>("SELECT * FROM tasks WHERE id=$1", [
-      id,
-    ]);
-    if (!task) throw new AppError(404, "找不到任務");
+    const row = await this.db.one<TaskWithEndAudit>(
+      `SELECT t.*,${taskEndColumns} FROM tasks t ${taskEndJoins} WHERE t.id=$1`,
+      [id],
+    );
+    if (!row) throw new AppError(404, "找不到任務");
+    const task = withTaskEnd(row);
     const [rawSources, history, runs, fullTitle] = await Promise.all([
       this.db.query<{
         user_id: string | null;
