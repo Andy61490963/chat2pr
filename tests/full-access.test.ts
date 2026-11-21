@@ -10,6 +10,7 @@ import { Line } from "../server/line.js";
 import { Budget } from "../server/budget.js";
 import { seal } from "../server/project-database.js";
 import { FULL_ACCESS_ENV } from "../server/containers.js";
+import { fullAccessNote, noFullAccess } from "../server/full-access.js";
 import { SCRUBBED, scrubber, scrubResult } from "../server/secret-scrub.js";
 import { buildApp } from "../server/app.js";
 import type { Task } from "../shared/types.js";
@@ -21,8 +22,6 @@ vi.mock("../server/config.js", async (original) => ({
 
 // 全部是虛構憑證。
 const password = "Fictional-Mes-Pass-789";
-beforeEach(reset);
-afterAll(() => db.close());
 
 async function scenario(opts: { full: boolean; leak?: boolean }) {
   const projectId = await fixture();
@@ -105,6 +104,9 @@ async function scenario(opts: { full: boolean; leak?: boolean }) {
 }
 
 describe("專案的完全存取", () => {
+  beforeEach(reset);
+  afterAll(() => db.close());
+
   it("開啟後每個階段都開全網路，資料庫連線以環境變數交給容器；收集階段不給", async () => {
     const s = await scenario({ full: true });
     await s.execution.execute(s.task.id);
@@ -215,6 +217,14 @@ describe("專案的完全存取", () => {
       await app.close();
     }
   });
+});
+
+it("完全存取提示提供內網連線診斷", () => {
+  const note = fullAccessNote(noFullAccess);
+  expect(note).toContain("ping -c 1 -W 3 <主機> 與 nc -z -w 3 <主機> <埠>");
+  expect(note).toContain("這台伺服器到不了該位址（可能缺路由或 VPN）");
+  expect(note).toContain("主機有回應但服務沒開");
+  expect(note).toContain("若僅有逾時或未收到回應，寫明各項檢查結果");
 });
 
 describe("完全存取的安全邊界", () => {
