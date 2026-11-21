@@ -95,6 +95,7 @@ const screens: {
   path: string;
   loaded: string | RegExp;
   width?: number;
+  signedOut?: boolean;
 }[] = [
   { name: "收件匣", path: "/", loaded: task.title },
   { name: "手機收件匣", path: "/", loaded: task.title, width: 375 },
@@ -107,11 +108,13 @@ const screens: {
   { name: "定期檢查", path: "/checks", loaded: check.name },
   { name: "系統", path: "/system", loaded: /^最後盤點 / },
   { name: "設定", path: "/settings", loaded: /^方案 demo/ },
-  { name: "登入", path: "/", loaded: "使用 GitHub 登入" },
+  { name: "登入", path: "/", loaded: "使用 GitHub 登入", signedOut: true },
 ];
 const narrowScreens = screens
-  .filter(({ path }) =>
-    ["/tasks", "/groups", "/projects", "/system", "/settings"].includes(path),
+  .filter(
+    ({ path, signedOut }) =>
+      signedOut ||
+      ["/tasks", "/groups", "/projects", "/system", "/settings"].includes(path),
   )
   .map((screen) => ({
     ...screen,
@@ -185,7 +188,7 @@ for (const theme of ["light", "dark"] as const) {
             "/api/checks": [{ ...check, last_summary: "範例服務正常" }],
           },
         });
-        if (screen.name === "登入") {
+        if (screen.signedOut) {
           await page.route("**/api/me", (route) =>
             route.fulfill({ status: 401, json: { error: "請先登入" } }),
           );
@@ -194,7 +197,13 @@ for (const theme of ["light", "dark"] as const) {
         await expect(
           page.getByText(screen.loaded, { exact: true }),
         ).toBeVisible();
-        if (screen.path === "/" && screen.name !== "登入") {
+        if (screen.signedOut) {
+          await expect(
+            page.getByText("chat2pr", { exact: true }).filter({ visible: true }),
+          ).toBeVisible();
+          await expect(page).toHaveTitle("chat2pr｜LINE 需求到 PR");
+        }
+        if (screen.path === "/" && !screen.signedOut) {
           const reason = page.getByText(skipped.detail, { exact: true });
           await expect(reason).toHaveCount(0);
           await page.getByRole("button", { name: "顯示系統紀錄" }).click();

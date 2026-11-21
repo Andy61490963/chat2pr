@@ -158,6 +158,10 @@ for (const width of [1280, 920, 375]) {
       expect(refreshBox.y).toBeLessThan(titleBox.y + titleBox.height);
       expect(refreshBox.x).toBeGreaterThanOrEqual(titleBox.x + titleBox.width);
     }
+    if (width >= 768)
+      await expect(
+        page.getByRole("complementary").getByText("chat2pr", { exact: true }),
+      ).toBeVisible();
   });
 }
 
@@ -534,6 +538,7 @@ test("375px 寬時八個看板頁面的內容都能在視窗內閱讀，整頁�
         main.getByRole("heading", { level: 1, name: title, exact: true }),
       ).toBeVisible();
       await expect(main.getByText(content, { exact: true })).toBeVisible();
+      await expect(page).toHaveTitle(new RegExp(`${title}｜chat2pr$`));
       const width = await page.evaluate(async () => {
         await document.fonts.ready;
         return {
@@ -581,6 +586,9 @@ test("系統頁的架構動畫可以播放，並跟著看板外觀切換深色",
   await mockDashboard(page, { routes: systemWithEntry("cloudflare") });
   await page.goto("/system");
   const frame = flowFrame(page);
+  await expect(
+    frame.locator("svg text").filter({ hasText: /^chat2pr$/ }).first(),
+  ).toHaveText("chat2pr");
   await frame.getByRole("button", { name: "開始播放" }).click();
   await expect(frame.locator("#live-text")).toHaveText("播放中");
   await expect(frame.locator("#lower-title")).toHaveText("成員在群組提需求");

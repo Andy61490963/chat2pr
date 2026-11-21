@@ -349,8 +349,8 @@ export function App() {
   const taskTitle = selected?.task.title;
   useEffect(() => {
     document.title = user
-      ? `${waiting ? `(${waiting}) ` : ""}${taskTitle ?? pageLabel}｜AgentFlow`
-      : "AgentFlow｜LINE 需求到 PR";
+      ? `${waiting ? `(${waiting}) ` : ""}${taskTitle ?? pageLabel}｜chat2pr`
+      : "chat2pr｜LINE 需求到 PR";
   }, [user, waiting, pageLabel, taskTitle]);
   // 一般成員打開管理頁的網址時回到收件匣，網址也跟著改。
   useEffect(() => {
@@ -1418,7 +1418,7 @@ function Login({
                 role="alert"
                 className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
               >
-                暫時連不上 AgentFlow 服務，可能正在重新啟動，請稍後再試。
+                你暫時連不上 chat2pr，服務可能正在重新啟動，請稍後再試。
               </p>
               <Button size="lg" className="w-full" onClick={retry}>
                 <RefreshCw /> 重新連線
