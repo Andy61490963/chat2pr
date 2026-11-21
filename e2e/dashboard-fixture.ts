@@ -139,6 +139,57 @@ export const statusProjects: Project[] = [
   { ...project, name: "示範專案", image: "line-agentflow-worker:demo-old" },
 ];
 
+export const projectSectionsState: Pick<State, "projects" | "groups"> = {
+  projects: [
+    { ...project, id: "unbound-2", name: "示範專案 2" },
+    { ...project, id: "ready-10", name: "範例專案 10" },
+    {
+      ...project,
+      id: "missing",
+      name: "待處理專案 10",
+      enabled: false,
+      validated_at: null,
+      repo_missing_at: timestamp,
+    },
+    {
+      ...project,
+      id: "ready-2",
+      name: "範例專案 2",
+      validation_progress: "你的專案正在執行基底測試。",
+    },
+    {
+      ...project,
+      id: "failed",
+      name: "待處理專案 2",
+      enabled: false,
+      validated_at: null,
+      validation_error: "範例測試沒有通過，請修正後重新驗證。",
+    },
+    {
+      ...project,
+      id: "unbound-1",
+      name: "示範專案 1",
+      validation_progress: "你的專案正在安裝相依套件。",
+    },
+    { ...project, id: "ready-1", name: "範例專案 1" },
+    {
+      ...project,
+      id: "unverified",
+      name: "待處理專案 1",
+      enabled: false,
+      validated_at: null,
+      validation_progress: "你的專案正在排隊等待執行器。",
+    },
+  ],
+  groups: [
+    {
+      ...group,
+      name: "範例群組",
+      project_ids: ["ready-1", "ready-2", "ready-10"],
+    },
+  ],
+};
+
 export const exhaustedPushHealth: State["health"] = [
   {
     name: "notifications",

@@ -1,5 +1,6 @@
-import type { Project } from "./types.js";
+import type { Group, Project } from "./types.js";
 import type { InstallReview } from "./install-plan.js";
+import { projectStatus, type projectSectionLabels } from "./status-glossary.js";
 
 /** 自動設定的依據及實際驗證方式；手動指令獨立保存，不被 AI 覆寫。 */
 export interface SetupPlan {
@@ -84,6 +85,66 @@ export const repoNotice = {
 
 export const isRepoNotice = (text: string | null | undefined) =>
   text === repoNotice.found || text === repoNotice.changed;
+
+/**
+ * 驗證失敗會留下原因。已驗證的專案遇到暫時性問題時沿用先前設定，
+ * 儲存庫接回後也可能只留下重新驗證的提醒。補問、缺少儲存庫與驗證進度另有標示。
+ */
+export function validationKind(
+  p: Pick<
+    Project,
+    | "setup_input"
+    | "repo_missing_at"
+    | "validated_at"
+    | "validation_error"
+    | "validation_progress"
+  >,
+): "failed" | "transient" | "notice" | null {
+  if (
+    p.setup_input ||
+    p.repo_missing_at ||
+    p.validation_progress ||
+    !p.validation_error
+  )
+    return null;
+  if (isRepoNotice(p.validation_error)) return "notice";
+  return p.validated_at ? "transient" : "failed";
+}
+
+export type ProjectListEntry = { project: Project; groups: Group[] };
+const projectNameOrder = new Intl.Collator("zh-Hant-TW", { numeric: true });
+
+export function projectListSections(
+  projects: readonly Project[],
+  groups: readonly Group[],
+) {
+  const sections: Record<
+    keyof typeof projectSectionLabels,
+    ProjectListEntry[]
+  > = { attention: [], ready: [], unbound: [] };
+  const sorted = [...projects].sort((a, b) =>
+    projectNameOrder.compare(a.name, b.name),
+  );
+  for (const project of sorted) {
+    const bindings = groups.filter((group) =>
+      group.project_ids.includes(project.id),
+    );
+    const bound = bindings.length > 0;
+    // 佇列進度只覆蓋卡片徽章，分區沿用目前保留的驗證結果。
+    const settled = { ...project, validation_progress: undefined };
+    const status = projectStatus(
+      settled,
+      bound,
+      validationKind(settled) === "failed",
+    );
+    const entry = { project, groups: bindings };
+    if (status === "ready") sections.ready.push(entry);
+    else if (status === "unbound" || (status === "disabled" && !bound))
+      sections.unbound.push(entry);
+    else sections.attention.push(entry);
+  }
+  return sections;
+}
 
 /** 詳情側欄驗證按鈕的文字；存檔後提示重試時也用同一個名稱，管理者才找得到。 */
 export function validateLabel(

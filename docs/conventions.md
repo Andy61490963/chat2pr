@@ -18,7 +18,7 @@
 | PR 說明分「改了什麼」「驗證」「待人工確認」三段。                                                                                                                                                                               | 審查者先看結論；需要人或正式環境才能確認的事項不能被淹沒。                                                                                                                                                                                                                                              |
 | 看板表單會送到的 API 輸入檢查（zod），每條規則都要寫繁體中文訊息；子區塊的欄位在訊息前加區塊名稱（例如「SSH 連接埠請填 1–65535」）。                                                                                            | 看板只把 400 回應 `details` 裡含中文的提示接在「輸入格式錯誤」後面（`src/app/api-response.ts`），zod 的英文預設訊息與欄位路徑會被略過；沒寫中文訊息的規則，使用者只看到「輸入格式錯誤」，不知道哪一欄錯了。                                                                                             |
 | `server/app.ts` 的 `app.setErrorHandler(replyError)` 必須在所有 `register*` 與 `app.get`／`app.post` 之前；新的 `register*` 一律放在它之後。                                                                                    | Fastify 的路由在註冊當下就取用當時的錯誤處理器，之後才呼叫 `setErrorHandler` 不會套到已註冊的路由。早於它的路由會回 Fastify 預設格式 `{ statusCode, error: "Bad Request", message }`，看板只讀 `error`，使用者只看到英文狀態名稱；成員、聊天室、專案資訊與資料庫連線的錯誤原因曾因此到不了畫面（#58）。 |
-| `projects.validation_error` 除了驗證失敗原因，也用來放「請重新驗證」這類提醒；寫入不是失敗的提醒時，文字要放進 `shared/project-setup.ts` 的 `repoNotice`（或同類常數）並在 `src/app/project-form.ts` 的 `validationKind` 判斷。 | 專案頁看到 `validated_at` 為空又有 `validation_error` 就標「驗證失敗」（紅色徽章與提示）；儲存庫接回後的提醒曾因此被標成驗證失敗，管理者會以為環境壞了。                                                                                                                                                |
+| `projects.validation_error` 除了驗證失敗原因，也用來放「請重新驗證」這類提醒；寫入不是失敗的提醒時，文字要放進 `shared/project-setup.ts` 的 `repoNotice`（或同類常數）並由同檔的 `validationKind` 判斷。 | 專案頁看到 `validated_at` 為空又有 `validation_error` 就標「驗證失敗」（紅色徽章與提示）；儲存庫接回後的提醒曾因此被標成驗證失敗，管理者會以為環境壞了。                                                                                                                                                |
 
 ## 2. 兩個目錄：部署目錄與開發目錄
 
@@ -79,6 +79,8 @@
 | 執行器 `/alive` 與 `/api/system` 的失敗分類（`probeSystem`）                                                                                                                                                                              | `/alive` 保持不碰 Docker；執行器 `/system` 出錯要回 5xx（授權失敗等 4xx 會照舊拋出）；`tests/system-status.test.ts` 的分類樣本                                                                        | 系統頁靠「有沒有 HTTP 回應」分辨執行器沒回應（紅）與 Docker 沒回應（黃）；`/alive` 一碰 Docker，Docker 卡住時就被誤判成執行器停了，管理者會去重啟錯的東西。                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 
 專案頁的驗證按鈕與失敗建議共用 `shared/project-setup.ts` 的 `validateLabel`。你調整按鈕名稱時，請同步核對自動與手動設定的失敗樣本，讓使用者能照建議找到按鈕。
+
+專案頁的分區與頁首可派工數量共用 `shared/project-setup.ts` 的 `projectListSections`。分區依已保存的驗證結果、啟用狀態與群組綁定判斷，驗證進度只影響卡片顯示，避免同一專案在驗證途中移動分區或使摘要數字變動。
 
 服務異常通知使用 `shared/service-health-text.ts` 的固定說明。新增錯誤對照時，在 `tests/health.test.ts` 補上探測原文及對應說明，避免把讀數裡的技術字串帶進鈴鐺或 LINE 私訊。恢復通知的去重鍵使用服務名稱與中斷起點，重試同一段中斷時沿用原鍵。
 

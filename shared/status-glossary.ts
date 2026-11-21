@@ -90,7 +90,10 @@ export const taskEndLabels = {
 } as const;
 
 export const taskEndSystemActor = "系統";
-export const taskCompletionEvents = { merged: "合併", answered: "回覆" } as const;
+export const taskCompletionEvents = {
+  merged: "合併",
+  answered: "回覆",
+} as const;
 
 export const taskStatusFilterLabels = {
   todo: "待處理",
@@ -160,9 +163,14 @@ export const projectLabels = {
   validating: "驗證中",
   failed: "驗證失敗",
   unverified: "需要驗證",
-  disabled: "已驗證・未啟用",
+  disabled: "已驗證（未啟用）",
   unbound: "未綁定群組",
   ready: "可派工",
+} as const;
+export const projectSectionLabels = {
+  attention: "需要處理",
+  ready: projectLabels.ready,
+  unbound: "沒有群組使用",
 } as const;
 export const projectVerificationLabels = {
   passed: "通過",
