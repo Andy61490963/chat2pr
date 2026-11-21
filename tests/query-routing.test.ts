@@ -1,6 +1,6 @@
 import { beforeEach, afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import { db, reset, fixture } from "./helpers.js";
+import { db, reset, fixture, dashboardAction } from "./helpers.js";
 import { Triage } from "../server/triage.js";
 import { GitHub } from "../server/github.js";
 import { Line } from "../server/line.js";
@@ -94,6 +94,104 @@ const explicit = (): NonNullable<TriageDecision["routing"]> => ({
   basis: "explicit",
   reason: "訊息指名專案",
   evidence: [],
+});
+
+it("建議未綁定專案時保留待確認，管理者可同時綁定並指定", async () => {
+  const warehouse = await db.one<Project>(
+    "INSERT INTO projects(name,repo,enabled,validated_at) VALUES('範例倉庫','example/warehouse',true,now()) RETURNING *",
+  );
+  await db.query(
+    "INSERT INTO projects(name,repo,enabled,validated_at) VALUES('停用倉庫','example/disabled',false,now()),('待驗證倉庫','example/unverified',true,NULL)",
+  );
+  const task = await propose("範例倉庫、停用倉庫、待驗證倉庫的庫存如何查詢？");
+  expect(task).toMatchObject({
+    project_id: null,
+    status: "awaiting_approval",
+    approved_version: null,
+    target_branch: null,
+  });
+  expect(task.project_routing?.unboundSuggestions).toEqual([
+    expect.objectContaining({
+      projectId: warehouse.id,
+      sourceIds: task.source_ids,
+    }),
+  ]);
+  expect(
+    await db.one(
+      "SELECT 1 FROM group_projects WHERE group_id=$1 AND project_id=$2",
+      [task.group_id, warehouse.id],
+    ),
+  ).toBeUndefined();
+  const notice = await db.one<{ text: string }>(
+    "SELECT text FROM notifications WHERE task_id=$1 AND kind='approval'",
+    [task.id],
+  );
+  expect(notice.text).toContain("看起來是 範例倉庫（尚未綁定這個群組）");
+  const body = {
+    project_id: warehouse.id,
+    config_version: undefined,
+    target_branch: undefined,
+  };
+  await expect(
+    dashboardAction(task.id, "assign", task.version, body),
+  ).rejects.toThrow("未綁定");
+  await expect(
+    dashboardAction(task.id, "bind_assign", task.version + 1, body),
+  ).rejects.toThrow("版本");
+  const assigned = await dashboardAction(
+    task.id,
+    "bind_assign",
+    task.version,
+    body,
+  );
+  expect(assigned).toMatchObject({
+    project_id: warehouse.id,
+    status: "awaiting_approval",
+    approved_version: null,
+    version: task.version + 1,
+  });
+  expect(assigned.project_routing.unboundSuggestions).toBeUndefined();
+  expect(
+    await db.one(
+      "SELECT project_id FROM group_projects WHERE group_id=$1 AND project_id=$2",
+      [task.group_id, warehouse.id],
+    ),
+  ).toEqual({ project_id: warehouse.id });
+  expect(
+    await db.one(
+      "SELECT detail FROM audit WHERE task_id=$1 AND kind='bind_assign'",
+      [task.id],
+    ),
+  ).toEqual({ detail: expect.stringContaining("綁定並指定專案「範例倉庫」") });
+});
+
+it("從未綁定專案的有效索引取得建議，且只保存訊息引用", async () => {
+  const p = await db.one<Project>(
+    "INSERT INTO projects(name,repo,enabled,validated_at) VALUES('範例目錄','example/catalog',true,now()) RETURNING *",
+  );
+  await db.query(
+    "INSERT INTO repo_indexes(project_id,wanted_sha,active_sha,phase) VALUES($1,'current','current','ready')",
+    [p.id],
+  );
+  await db.query(
+    `INSERT INTO embeddings(kind,ref_id,project_id,sha,embedding,path,content)
+     VALUES('repo','index-1',$1,'current',$2,'src/CatalogEntry.ts','export type StockItem = string;')`,
+    [p.id, JSON.stringify(Array(1024).fill(1))],
+  );
+  const task = await propose("CatalogEntry 與 StockItem 的關係是什麼？");
+  expect(task).toMatchObject({
+    project_id: null,
+    status: "awaiting_approval",
+    approved_version: null,
+  });
+  expect(task.project_routing?.unboundSuggestions).toEqual([
+    {
+      projectId: p.id,
+      configVersion: p.config_version,
+      reason: "你的訊息用詞與這個專案的程式內容相符。",
+      sourceIds: task.source_ids,
+    },
+  ]);
 });
 
 describe("查詢的風險審核", () => {

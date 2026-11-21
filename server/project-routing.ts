@@ -231,12 +231,22 @@ export async function approvalNotice(c: DbClient, task: Task) {
       ).rows[0]
     : null;
   const reason = task.project_routing?.reason ?? "請確認本次需求與目標專案";
+  const suggestedIds =
+    task.project_routing?.unboundSuggestions?.map((s) => s.projectId) ?? [];
+  const suggested = suggestedIds.length
+    ? (
+        await c.query<{ name: string }>(
+          "SELECT name FROM projects WHERE id=ANY($1::uuid[]) ORDER BY array_position($1::uuid[],id)",
+          [suggestedIds],
+        )
+      ).rows.map(({ name }) => name)
+    : [];
   await c.query(
     "INSERT INTO notifications(task_id,kind,dedupe_key,text) VALUES($1,'approval',$2,$3) ON CONFLICT DO NOTHING",
     [
       task.id,
       `approval:${task.id}:${task.version}`,
-      `待確認${task.mode === "query" ? "查詢" : "修改"}：${task.title}\n目標專案：${p ? `${p.name}（${p.repo}）` : "尚未指定"}\n目標分支：${task.target_branch ?? "待選擇"}\n${reason}\n${task.branch_selection?.reason ?? "請核對目標分支"}\n請到看板檢視需求、專案與分支後確認。`,
+      `待確認${task.mode === "query" ? "查詢" : "修改"}：${task.title}\n目標專案：${p ? `${p.name}（${p.repo}）` : "尚未指定"}\n目標分支：${task.target_branch ?? "待選擇"}\n${reason}${suggested.length ? `\n看起來是 ${suggested.join("、")}（尚未綁定這個群組）。` : ""}\n${task.branch_selection?.reason ?? "請核對目標分支"}\n請到看板檢視需求、專案與分支後確認。`,
     ],
   );
   await notifyGroup(

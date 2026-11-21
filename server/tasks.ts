@@ -25,6 +25,11 @@ export const Assignment = z.object({
   project_id: z.string().uuid(),
   remember: z.string().trim().max(1000).optional(),
 });
+const BindAssignment = z.object({
+  project_id: z
+    .string("請選擇要綁定並指定的專案")
+    .uuid("請選擇有效的專案"),
+});
 export const Amendment = z.object({
   summary: z.string().min(5).max(15000),
   acceptance: z.array(z.string().min(1).max(1000)).min(1).max(30),
@@ -38,6 +43,7 @@ export const actionLabels: Record<string, string> = {
   amend: "補充需求",
   assumption: "修改假設",
   assign: "指定專案",
+  bind_assign: "綁定並指定專案",
   adopt: "採用方案",
   mode: "切換任務類型",
   target: "更換目標分支",
@@ -66,6 +72,7 @@ export class Tasks {
     body: unknown = {},
     channel: "dashboard" | "internal" = "internal",
   ) {
+    const binding = action === "bind_assign" ? BindAssignment.parse(body) : null;
     // 更換分支要先問 GitHub 分支在不在。這一步放在交易之外，
     // GitHub 回應慢時才不會一直握著任務與專案的鎖，卡住同一筆任務的其他操作。
     const checked =
@@ -75,13 +82,26 @@ export class Tasks {
     return this.db.transaction(async (c) => {
       // 與綁定、專案設定異動採相同鎖定順序，避免核准舊畫面。
       await c.query(
-        "SELECT g.id FROM groups g JOIN tasks t ON t.group_id=g.id WHERE t.id=$1 FOR SHARE OF g",
+        `SELECT g.id FROM groups g JOIN tasks t ON t.group_id=g.id WHERE t.id=$1 ${binding ? "FOR UPDATE" : "FOR SHARE"} OF g`,
         [id],
       );
-      await c.query(
-        "SELECT p.id FROM projects p JOIN tasks t ON t.project_id=p.id WHERE t.id=$1 FOR SHARE OF p",
-        [id],
-      );
+      const candidate = binding
+        ? (
+            await c.query<Pick<Project, "name" | "config_version">>(
+              `SELECT p.name,p.config_version FROM projects p
+               WHERE p.id=$1 AND p.enabled AND p.validated_at IS NOT NULL AND p.repo_missing_at IS NULL
+                 AND NOT EXISTS(SELECT 1 FROM tasks t JOIN group_projects gp ON gp.group_id=t.group_id
+                                WHERE t.id=$2 AND gp.project_id=p.id)
+               FOR SHARE OF p`,
+              [binding.project_id, id],
+            )
+          ).rows[0]
+        : null;
+      if (!binding)
+        await c.query(
+          "SELECT p.id FROM projects p JOIN tasks t ON t.project_id=p.id WHERE t.id=$1 FOR SHARE OF p",
+          [id],
+        );
       const t = (
         await c.query("SELECT * FROM tasks WHERE id=$1 FOR UPDATE", [id])
       ).rows[0] as Task | undefined;
@@ -123,6 +143,7 @@ export class Tasks {
           "approve",
           "adopt",
           "assign",
+          "bind_assign",
           "mode",
           "amend",
           "assumption",
@@ -197,23 +218,42 @@ export class Tasks {
             }),
           ],
         );
-      } else if (action === "assign") {
-        const a = Assignment.parse(body);
-        const bound = await c.query(
-          "SELECT 1 FROM group_projects WHERE group_id=$1 AND project_id=$2",
-          [t.group_id, a.project_id],
+      } else if (action === "assign" || binding) {
+        const a = binding ?? Assignment.parse(body);
+        const bound = await c.query<{ project_id: string }>(
+          "SELECT project_id FROM group_projects WHERE group_id=$1",
+          [t.group_id],
         );
-        if (!bound.rowCount) throw new AppError(409, "此群組未綁定該專案");
+        const alreadyBound = bound.rows.some(
+          (p) => p.project_id === a.project_id,
+        );
+        if (binding) {
+          const suggested = t.project_routing?.unboundSuggestions?.find(
+            (s) => s.projectId === binding.project_id,
+          );
+          if (
+            !candidate ||
+            t.project_id ||
+            !suggested ||
+            suggested.configVersion !== candidate.config_version
+          )
+            throw new AppError(409, "這個專案建議已失效，請重新整理後選擇專案");
+          if (bound.rows.length >= 30)
+            throw new AppError(409, "這個群組已綁定 30 個專案，請到群組設定調整後再指定");
+        } else if (!alreadyBound)
+          throw new AppError(409, "此群組未綁定該專案");
+        // 新綁定由資料庫觸發器更新群組與任務版本，並以本次指定的專案產生待確認通知。
         await c.query(
-          "UPDATE tasks SET project_id=$2,version=version+1,approved_version=NULL,approved_paths='{}',pending_paths='{}',base_sha=NULL,branch=NULL,issue_number=NULL,issue_url=NULL,issue_version=NULL,status='awaiting_approval',updated_at=now() WHERE id=$1",
-          [id, a.project_id],
+          "UPDATE tasks SET project_id=$2,version=version+$3,approved_version=NULL,approved_paths='{}',pending_paths='{}',base_sha=NULL,branch=NULL,issue_number=NULL,issue_url=NULL,issue_version=NULL,status='awaiting_approval',updated_at=now() WHERE id=$1",
+          [id, a.project_id, binding ? 0 : 1],
         );
-        await c.query(
-          "INSERT INTO task_versions(task_id,version,summary,acceptance) SELECT id,version,summary,acceptance FROM tasks WHERE id=$1 ON CONFLICT DO NOTHING",
-          [id],
-        );
+        if (binding)
+          await c.query(
+            "INSERT INTO group_projects(group_id,project_id) VALUES($1,$2)",
+            [t.group_id, binding.project_id],
+          );
         // 管理者指定時可一併記住，之後同類需求由 AI 直接選對專案。
-        if (a.remember)
+        if ("remember" in a && a.remember)
           await c.query(
             "INSERT INTO group_memories(group_id,project_id,content,source) VALUES($1,$2,$3,'admin')",
             [t.group_id, a.project_id, a.remember],
@@ -357,9 +397,15 @@ export class Tasks {
       if (["approve", "adopt"].includes(action))
         await saveProjectConfirmation(c, result, "manual", actor);
       if (
-        ["assign", "amend", "assumption", "mode", "target", "reopen"].includes(
-          action,
-        )
+        [
+          "assign",
+          "bind_assign",
+          "amend",
+          "assumption",
+          "mode",
+          "target",
+          "reopen",
+        ].includes(action)
       ) {
         await c.query(
           "UPDATE tasks SET project_routing=jsonb_build_object('status','uncertain','basis','none','reason',$2::text,'evidence','[]'::jsonb,'bindingVersion',0) WHERE id=$1",
@@ -373,7 +419,7 @@ export class Tasks {
       await this.db.audit(
         id,
         action,
-        `${actor} ${actionLabels[action] ?? "操作"}（需求版本 ${version}；目標分支 ${result.target_branch ?? "待選擇"}）`,
+        `${actor} ${actionLabels[action] ?? "操作"}${candidate ? `「${candidate.name}」` : ""}（需求版本 ${version}；目標分支 ${result.target_branch ?? "待選擇"}）`,
         c,
       );
       return (await c.query("SELECT * FROM tasks WHERE id=$1", [id])).rows[0];

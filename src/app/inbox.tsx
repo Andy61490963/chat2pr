@@ -569,7 +569,7 @@ function DecisionCard({
   const reason =
     t.status === "awaiting_approval"
       ? pick
-        ? "AI 無法判斷要改哪個專案"
+        ? "請選擇這次需求要處理的專案。"
         : (t.risk_reasons[0] ?? t.missing[0] ?? "需求等待確認")
       : failure
         ? failure.headline
@@ -619,7 +619,15 @@ function DecisionCard({
           </div>
         )}
         {pick ? (
-          <AssignProject task={t} state={state} busy={busy} act={act} go={go} />
+          <AssignProject
+            task={t}
+            state={state}
+            busy={busy}
+            act={act}
+            go={go}
+            open={() => open(t.id)}
+            onBound={() => open(t.id)}
+          />
         ) : (
           <>
             {t.status === "awaiting_approval" && t.suggestions.length > 0 && (
@@ -810,6 +818,9 @@ export function AssignProject({
   busy,
   act,
   go,
+  sources,
+  open,
+  onBound,
 }: {
   task: Task;
   state: State;
@@ -817,6 +828,9 @@ export function AssignProject({
   act: Act;
   // 只有管理者能去群組與專案頁；沒給就只說明原因。
   go?: (v: View, projectId?: string | null) => void;
+  sources?: { id: string; text: string | null }[];
+  open?: () => unknown;
+  onBound?: () => unknown;
 }) {
   const group = state.groups.find((g) => g.id === t.group_id);
   const bound = state.projects.filter((p) => group?.project_ids.includes(p.id));
@@ -834,15 +848,110 @@ export function AssignProject({
   const [remember, setRemember] = useState(false);
   const chosen = options.find((p) => p.id === pick);
   const rule = chosen ? `「${t.title}」這類需求改 ${chosen.name}` : "";
+  const suggestions = (
+    !t.project_id ? (t.project_routing?.unboundSuggestions ?? []) : []
+  ).flatMap((suggestion) => {
+    const project = state.projects.find((p) => p.id === suggestion.projectId);
+    return project &&
+      !blocked(project) &&
+      project.config_version === suggestion.configVersion &&
+      !bound.some((p) => p.id === project.id)
+      ? [{ suggestion, project }]
+      : [];
+  });
   return (
     <div className="mt-4 flex flex-col gap-3">
-      <span className="text-sm font-medium">這次需求要處理哪個專案？</span>
+      {suggestions.length > 0 && (
+        <ul className="space-y-4">
+          {suggestions.map(({ suggestion, project }) => {
+            const cited =
+              sources?.filter(
+                (m) => m.text && suggestion.sourceIds.includes(m.id),
+              ) ?? [];
+            return (
+              <li
+                key={project.id}
+                className="min-w-0 space-y-1 [overflow-wrap:anywhere]"
+              >
+                <p className="font-semibold">
+                  看起來是 {project.name}（尚未綁定這個群組）
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  {suggestion.reason}
+                </p>
+                {cited.length > 0 && (
+                  <details className="text-sm">
+                    <summary className="flex min-h-11 cursor-pointer items-center underline underline-offset-4 focus-visible:outline-2 focus-visible:outline-offset-2">
+                      查看引用訊息
+                    </summary>
+                    {cited.map((m) => (
+                      <blockquote
+                        key={m.id}
+                        className="mb-2 border-l-2 pl-3 whitespace-pre-wrap"
+                      >
+                        {m.text}
+                      </blockquote>
+                    ))}
+                  </details>
+                )}
+                {go ? (
+                  <Button
+                    type="button"
+                    variant={suggestions.length === 1 ? "default" : "outline"}
+                    className="h-auto min-h-11 max-w-full whitespace-normal border-muted-foreground motion-reduce:transition-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground dark:border-muted-foreground"
+                    disabled={busy}
+                    aria-label={`綁定並指定這個專案（${project.name}）`}
+                    onClick={async () => {
+                      const assigned = await act(
+                        t,
+                        "bind_assign",
+                        { project_id: project.id },
+                        "已綁定並指定專案",
+                      );
+                      if (assigned) onBound?.();
+                    }}
+                  >
+                    綁定並指定這個專案
+                  </Button>
+                ) : (
+                  <p className="text-sm text-muted-foreground">
+                    你可以請管理者綁定並指定這個專案。
+                  </p>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {open && suggestions.length > 0 && (
+        <Button
+          type="button"
+          variant="link"
+          className="min-h-11 self-start px-0 motion-reduce:transition-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
+          onClick={open}
+        >
+          查看引用訊息
+        </Button>
+      )}
+      <span className="text-sm font-medium">
+        {suggestions.length
+          ? "你也可以選擇已綁定的專案。"
+          : "這次需求要處理哪個專案？"}
+      </span>
       <div className="flex flex-wrap gap-2">
         {bound.map((p) => (
           <Button
             key={p.id}
             size="sm"
-            variant={pick === p.id ? "default" : "outline"}
+            variant={
+              pick === p.id && !suggestions.length ? "default" : "outline"
+            }
+            aria-pressed={pick === p.id}
+            className={
+              suggestions.length
+                ? "h-auto min-h-11 max-w-full motion-reduce:transition-none"
+                : undefined
+            }
             disabled={!!blocked(p)}
             onClick={() => setPick(p.id)}
           >
@@ -888,6 +997,12 @@ export function AssignProject({
       )}
       <div className="flex flex-wrap gap-2">
         <Button
+          variant={suggestions.length ? "outline" : "default"}
+          className={
+            suggestions.length
+              ? "min-h-11 motion-reduce:transition-none"
+              : undefined
+          }
           disabled={busy || !chosen}
           onClick={() =>
             void act(

@@ -17,6 +17,13 @@ export interface ProjectRouting extends Omit<RoutingDecision, "basis"> {
   followupOf?: { id: string; title: string };
   /** 查詢明確指名多個已綁定專案時，除主要專案外一併提供原始碼的專案。 */
   relatedProjects?: { id: string; name: string; repo: string }[];
+  unboundSuggestions?: UnboundProjectSuggestion[];
+}
+export interface UnboundProjectSuggestion {
+  projectId: string;
+  configVersion: number;
+  reason: string;
+  sourceIds: string[];
 }
 export interface ProjectConfirmation {
   target_branch: string;
