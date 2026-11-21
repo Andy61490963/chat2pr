@@ -665,6 +665,17 @@ test("系統頁的架構動畫可以播放，並跟著看板外觀切換深色",
     .toBe("dark");
 });
 
+test("系統架構說明 Discord 補送時可收訊，遇到限流會延後", async ({ page }) => {
+  await mockDashboard(page);
+  await page.goto("/system?tab=architecture");
+  const frame = flowFrame(page);
+  await frame.getByRole("button", { name: /步：開 PR、回報群組$/ }).press("Enter");
+  await expect(frame.locator("#cap-text")).toContainText(
+    "Discord 補送時，頻道仍可接收新訊息。",
+  );
+  await expect(frame.locator("#cap-data")).toContainText("遇到限流時延後補送");
+});
+
 for (const [entry, title] of [
   ["cloudflare", "Cloudflare Tunnel 固定 HTTPS 入口"],
   ["ngrok", "ngrok 固定 HTTPS 入口"],

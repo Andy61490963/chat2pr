@@ -8,6 +8,10 @@ import {
   type DiscordMessageEvent,
 } from "../server/discord.js";
 import { discordId } from "../server/chat-platform.js";
+import {
+  handleDiscordInteraction,
+  replyDiscordText,
+} from "../server/discord-interactions.js";
 import { cleanup, downloadPendingImages } from "../server/maintenance.js";
 import { Line } from "../server/line.js";
 import { dueTriageGroups } from "../server/triage-window.js";
@@ -24,7 +28,11 @@ import {
   type DiscordRest,
 } from "../server/discord-platform.js";
 import { answerPostbackData, askInGroup } from "../server/answers.js";
-import { notifyGroup } from "../server/group-replies.js";
+import {
+  claimingNote,
+  notifyGroup,
+  replyFailedNote,
+} from "../server/group-replies.js";
 import type { Task } from "../shared/types.js";
 
 const channel = "100000000000000001";
@@ -362,6 +370,214 @@ it("Discord 依 429 的等待秒數延後群組送訊，不增加失敗次數，
     attempts: 1,
     last_error: null,
     sent_message_id: expect.stringMatching(/^discord:\d+$/),
+  });
+});
+
+const progressInteraction = { ...interaction, kind: "progress" } as const;
+const progressDelivery = (taskId: string) =>
+  db.one<{
+    sent_at: Date | null;
+    sent_message_id: string | null;
+    last_error: string | null;
+    attempts: number;
+    reply_failures: number;
+    discord_retry_at: Date | null;
+  }>(
+    `SELECT sent_at,sent_message_id,last_error,attempts,reply_failures,discord_retry_at
+     FROM notifications WHERE task_id=$1 AND kind='group_question'`,
+    [taskId],
+  );
+
+it.each(["斜線指令", "文字指令"])(
+  "Discord /進度 從%s送出摘要及補問時，其他交易都能鎖住群組",
+  async (entry) => {
+    const { platform, rest } = fakeRest();
+    const task = await discordTask();
+    await askInGroup(db.pool, task);
+    const takeGroupLock = async () => {
+      await db.transaction(async (c) => {
+        const groupRow = await c.query(
+          "SELECT id FROM groups WHERE id=$1 FOR UPDATE NOWAIT",
+          [group],
+        );
+        expect(groupRow.rowCount).toBe(1);
+      });
+      expect(await progressDelivery(task.id)).toMatchObject({
+        sent_at: expect.any(Date),
+        last_error: claimingNote,
+      });
+    };
+    const resultId = "100000000000000098";
+    const sendSummary = vi.fn(async () => {
+      await takeGroupLock();
+      return { id: interactionReplyId };
+    });
+    const sendNotice = vi.fn(async () => {
+      await takeGroupLock();
+      const unlocked = await db.query(
+        "SELECT id FROM notifications WHERE task_id=$1 FOR UPDATE SKIP LOCKED",
+        [task.id],
+      );
+      expect(unlocked).toEqual([]);
+      return { id: resultId };
+    });
+    if (entry === "斜線指令") {
+      rest.patch.mockImplementationOnce(sendSummary);
+      rest.post.mockResolvedValueOnce(null).mockImplementationOnce(sendNotice);
+      await handleDiscordInteraction(db, platform, progressInteraction);
+    } else {
+      const event = create("100000000000000099", { text: "/進度" });
+      const reply = await ingestDiscord(db, event);
+      expect(reply).toEqual({ progress: true });
+      rest.post
+        .mockImplementationOnce(sendSummary)
+        .mockImplementationOnce(sendNotice);
+      await replyDiscordText(db, platform, event, reply!);
+    }
+    expect(sendSummary).toHaveBeenCalledOnce();
+    expect(sendNotice).toHaveBeenCalledOnce();
+    expect(await progressDelivery(task.id)).toMatchObject({
+      sent_message_id: discordId(resultId),
+      last_error: null,
+    });
+  },
+);
+
+it.each([
+  { status: 403, note: discordDeliveryNotes.permission },
+  { status: 429, retry_after: 45.5, note: discordDeliveryNotes.rate },
+])("Discord /進度 補送遇到 $status 時歸還通知並依限流時間安排下一次補送", async (error) => {
+  const { platform, rest } = fakeRest();
+  const task = await discordTask();
+  await askInGroup(db.pool, task);
+  rest.post.mockResolvedValueOnce(null).mockRejectedValueOnce(error);
+  const before = Date.now();
+  await handleDiscordInteraction(db, platform, progressInteraction);
+  const pending = await progressDelivery(task.id);
+  expect(pending).toMatchObject({
+    sent_at: null,
+    sent_message_id: null,
+    last_error: error.note,
+    attempts: 0,
+    reply_failures: 0,
+  });
+  if (error.status === 429) {
+    expect(pending.discord_retry_at?.getTime()).toBeGreaterThanOrEqual(
+      before + 45_500,
+    );
+    await handleDiscordInteraction(db, platform, progressInteraction);
+    await new Line(db, platform).flushNotifications();
+    expect(rest.post).toHaveBeenCalledTimes(3);
+    await db.query(
+      "UPDATE notifications SET discord_retry_at=now()-interval '1 second' WHERE task_id=$1",
+      [task.id],
+    );
+  } else {
+    expect(pending.discord_retry_at).toBeNull();
+  }
+  await handleDiscordInteraction(db, platform, progressInteraction);
+  expect(await progressDelivery(task.id)).toMatchObject({
+    sent_message_id: expect.stringMatching(/^discord:\d+$/),
+    last_error: null,
+    discord_retry_at: null,
+  });
+});
+
+it.each([
+  { status: 503, note: discordDeliveryNotes.unavailable },
+  { status: 429, retry_after: 45.5, note: discordDeliveryNotes.rate },
+])("Discord /進度 摘要遇到 $status 時歸還已領取的通知", async (error) => {
+  const { platform, rest } = fakeRest();
+  const task = await discordTask();
+  await askInGroup(db.pool, task);
+  rest.patch.mockRejectedValueOnce(error);
+  const before = Date.now();
+  await expect(
+    handleDiscordInteraction(db, platform, progressInteraction),
+  ).rejects.toBe(error);
+  expect(rest.post).toHaveBeenCalledTimes(1);
+  const pending = await progressDelivery(task.id);
+  expect(pending).toMatchObject({
+    sent_at: null,
+    sent_message_id: null,
+    last_error: error.note,
+    attempts: 0,
+    reply_failures: 0,
+  });
+  if (error.status === 429)
+    expect(pending.discord_retry_at?.getTime()).toBeGreaterThanOrEqual(
+      before + 45_500,
+    );
+});
+
+it("Discord /進度 領取較新的通知後，另一個指令和推播都會等新通知結算", async () => {
+  const { platform, rest } = fakeRest();
+  const task = await discordTask();
+  await notifyGroup(db.pool, task.id, "answered", "舊答案", "示範專案的舊答案");
+  await db.query(
+    "UPDATE notifications SET created_at=now()-interval '1 minute' WHERE task_id=$1",
+    [task.id],
+  );
+  await askInGroup(db.pool, task);
+  rest.patch.mockImplementationOnce(async () => {
+    await handleDiscordInteraction(db, platform, {
+      ...progressInteraction,
+      id: "100000000000000095",
+      token: "fictional-parallel-interaction-token",
+    });
+    await new Line(db, platform).flushNotifications();
+    expect(rest.post).toHaveBeenCalledTimes(2);
+    expect(rest.patch.mock.calls[1][1]?.body).toMatchObject({
+      content: expect.stringContaining("目前沒有待取回的結果"),
+    });
+    return { id: interactionReplyId };
+  });
+  await handleDiscordInteraction(db, platform, progressInteraction);
+  expect(rest.post).toHaveBeenCalledTimes(3);
+  expect(await progressDelivery(task.id)).toMatchObject({
+    sent_message_id: expect.stringMatching(/^discord:\d+$/),
+  });
+  expect(
+    await db.one(
+      "SELECT sent_message_id,last_error FROM notifications WHERE task_id=$1 AND kind='group_answered'",
+      [task.id],
+    ),
+  ).toEqual({ sent_message_id: null, last_error: "已有較新的回覆，未補送" });
+});
+
+it("Discord /進度 領取逾時後由通知排程回收，舊請求不會送出新一輪的補問", async () => {
+  const { platform, rest } = fakeRest();
+  const task = await discordTask();
+  await askInGroup(db.pool, task);
+  const line = new Line(db);
+  const newMessageId = "100000000000000097";
+  rest.patch.mockImplementationOnce(async () => {
+    await line.flushNotifications();
+    expect((await progressDelivery(task.id)).last_error).toBe(claimingNote);
+    await db.query(
+      "UPDATE notifications SET sent_at=now()-interval '3 minutes' WHERE task_id=$1",
+      [task.id],
+    );
+    await line.flushNotifications();
+    expect(await progressDelivery(task.id)).toMatchObject({
+      sent_at: null,
+      last_error: replyFailedNote,
+    });
+    rest.post
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: newMessageId });
+    await handleDiscordInteraction(db, platform, {
+      ...progressInteraction,
+      id: "100000000000000096",
+      token: "fictional-next-interaction-token",
+    });
+    return { id: interactionReplyId };
+  });
+  await handleDiscordInteraction(db, platform, progressInteraction);
+  expect(rest.post).toHaveBeenCalledTimes(3);
+  expect(await progressDelivery(task.id)).toMatchObject({
+    sent_message_id: discordId(newMessageId),
+    last_error: null,
   });
 });
 

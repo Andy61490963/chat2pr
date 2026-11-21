@@ -1185,8 +1185,8 @@ describe("用 reply token 取回與說實話", () => {
     expect(replyCalls).toHaveLength(1);
     const [summary, answer, question] = lastReply();
     expect(lastReply()).toHaveLength(3);
-    expect(summary).toContain("・查訂單欄位：已回答");
-    expect(summary).toContain("・匯出問題：等你們回答一個問題");
+    expect(summary).toContain("- 查訂單欄位：已回答");
+    expect(summary).toContain("- 匯出問題：等你們回答一個問題");
     expect(answer).toContain("「查訂單欄位」的查詢結果");
     expect(answer).toContain(detailHint);
     expect(question).toContain("是按了沒下載，還是內容不對？");
@@ -1492,7 +1492,7 @@ describe("用 reply token 取回與說實話", () => {
     replyStatus = 200;
     await send("p3", "/進度");
     expect(lastReply()).toHaveLength(1);
-    expect(lastReply()[0]).toContain("・內容壞掉的查詢：已回答");
+    expect(lastReply()[0]).toContain("- 內容壞掉的查詢：已回答");
     expect(lastReply()[0]).toContain("目前沒有待取回的結果");
     // 「收到」的 /進度 提示也不再算它。
     await db.query(
