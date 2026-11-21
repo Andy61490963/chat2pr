@@ -81,6 +81,14 @@ const matches = (pattern: RegExp) => (body: string) => pattern.test(body);
 // 再認暫時性錯誤，避免測試輸出裡剛好出現的 ECONNREFUSED 被誤當成網路問題而重試。
 const rules: Rule[] = [
   {
+    category: "project",
+    test: matches(/^沒有可提交的程式變更，Codex 未確認需求已符合/),
+    plain: "Codex 沒有交付變更，也未確認需求已符合",
+    action: "請到看板查看 Codex 的說明，補足所需資訊後再重試",
+    group: "這次還沒完成修改，請管理者查看原因後處理。",
+    keep: true,
+  },
+  {
     category: "environment",
     test: matches(/測試環境問題/),
     plain: "測試需要的環境（例如 SQL Server）沒有啟動成功，不是程式沒過",
