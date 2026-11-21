@@ -23,7 +23,7 @@ import {
   extractResult,
   probeList,
 } from "./connection-extract.js";
-import type { ProbeResult } from "./network-probe.js";
+import { measureTargets } from "./network-probe.js";
 import { requireAdmin } from "./auth.js";
 import { replyError } from "./error-reply.js";
 import { secrets } from "./config.js";
@@ -522,12 +522,7 @@ export function registerProjectDatabase(
     const parsed = ExtractSchema.parse(
       await ask(extractPrompt(text), z.toJSONSchema(ExtractSchema)),
     );
-    const targets = probeList(parsed);
-    const probes = targets.length
-      ? await call<ProbeResult[]>("network/probe", { targets }, 30000).catch(
-          () => [] as ProbeResult[],
-        )
-      : [];
+    const probes = await measureTargets(call, probeList(parsed));
     await db.audit(
       null,
       "project_database",

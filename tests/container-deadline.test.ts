@@ -126,6 +126,34 @@ function fakeRequest(immediate: boolean) {
   return { req, stream, upgrade };
 }
 
+it("連線整理的容器停用日誌驅動程式並保留即時附接輸出", async () => {
+  const { c, runId, create } = fixture();
+  create.mockRejectedValueOnce(new Error("虛構容器未建立"));
+  await expect(
+    c.phase(
+      runId,
+      "fake",
+      ["node"],
+      "none",
+      "fictional-connection",
+      1000,
+      false,
+      false,
+      undefined,
+      { sensitive: true },
+    ),
+  ).rejects.toThrow("虛構容器未建立");
+  expect(create).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      AttachStdout: true,
+      AttachStderr: true,
+      HostConfig: expect.objectContaining({
+        LogConfig: { Type: "none", Config: {} },
+      }),
+    }),
+  );
+});
+
 it.each(["cancel", "cleanup", "dispose"] as const)(
   "%s 列出容器永不回覆也必須有界失敗，不猜測刪除資源",
   async (mode) => {

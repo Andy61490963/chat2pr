@@ -1,10 +1,13 @@
 import { useEffect, useState } from "react";
 import type { Project } from "../../shared/types.js";
 import {
+  maxSshDescriptionLength,
   sshHostNamePattern,
+  type SshExtractDraft,
   type SshHostView,
   type SshTestResult,
 } from "../../shared/project-ssh.js";
+import { sshProbeLabels } from "../../shared/status-glossary.js";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -48,9 +51,18 @@ export function ProjectSsh({
   const [formError, setFormError] = useState("");
   const [tests, setTests] = useState<Record<string, SshTestResult>>({});
   const [testing, setTesting] = useState("");
+  const [description, setDescription] = useState("");
+  const [extracting, setExtracting] = useState(false);
+  const [extractError, setExtractError] = useState("");
+  const [candidates, setCandidates] = useState<
+    (SshExtractDraft & { index: number })[]
+  >([]);
+  const [reviewing, setReviewing] = useState<number | null>(null);
   useUnsaved(
     `project-ssh:${project.id}`,
-    editing !== null && JSON.stringify(draft) !== JSON.stringify(blank),
+    !!description.trim() ||
+      candidates.length > 0 ||
+      (editing !== null && JSON.stringify(draft) !== JSON.stringify(blank)),
   );
 
   useEffect(() => {
@@ -69,6 +81,7 @@ export function ProjectSsh({
     setFormError("");
   };
   const open = (host?: SshHostView) => {
+    setReviewing(null);
     setEditing(host?.id ?? "new");
     setFormError("");
     setDraft(
@@ -86,9 +99,47 @@ export function ProjectSsh({
     );
   };
   const close = () => {
+    setReviewing(null);
     setEditing(null);
     setDraft(blank);
     setFormError("");
+  };
+  const extract = async () => {
+    setExtracting(true);
+    setExtractError("");
+    try {
+      const result = await request<{ hosts: SshExtractDraft[] }>(
+        `${base}/extract`,
+        "POST",
+        { text: description.trim() },
+      );
+      setDescription("");
+      setCandidates(result.hosts.map((host, index) => ({ ...host, index })));
+      if (!result.hosts.length)
+        setExtractError("請在描述中寫出你要登記的 SSH 主機。");
+    } catch (e) {
+      setExtractError(message(e));
+    } finally {
+      setExtracting(false);
+    }
+  };
+  const review = (host: SshExtractDraft & { index: number }) => {
+    open();
+    setReviewing(host.index);
+    setDraft({
+      name: host.name ?? "",
+      host: host.host ?? "",
+      port: String(host.port),
+      username: host.username ?? "",
+      auth: host.privateKey ? "key" : "password",
+      password: host.password ?? "",
+      privateKey: host.privateKey ?? "",
+      passphrase: host.passphrase ?? "",
+      note: host.note ?? "",
+    });
+  };
+  const discard = (index: number) => {
+    setCandidates((current) => current.filter((host) => host.index !== index));
   };
   const save = async () => {
     const isNew = editing === "new";
@@ -130,7 +181,10 @@ export function ProjectSsh({
       );
       setHosts(next);
     }, `已儲存 SSH 主機 ${body.name}`);
-    if (ok) close();
+    if (ok) {
+      if (reviewing !== null) discard(reviewing);
+      close();
+    }
   };
   const test = async (host: SshHostView) => {
     setTesting(host.id);
@@ -157,6 +211,7 @@ export function ProjectSsh({
       <Label htmlFor={`ssh-${key}`}>{label}</Label>
       <Input
         id={`ssh-${key}`}
+        autoFocus={key === "name" && reviewing !== null}
         type={options.type ?? "text"}
         placeholder={options.placeholder}
         autoComplete={
@@ -224,7 +279,7 @@ export function ProjectSsh({
                 <Button
                   variant="outline"
                   size="sm"
-                  disabled={busy}
+                  disabled={busy || reviewing !== null}
                   onClick={() => open(h)}
                 >
                   編輯
@@ -254,6 +309,107 @@ export function ProjectSsh({
           ))}
         </ul>
       )}
+      <div className="space-y-2 rounded-lg border p-3">
+        <Label htmlFor="ssh-describe">用白話描述主機</Label>
+        <Textarea
+          id="ssh-describe"
+          rows={3}
+          maxLength={maxSshDescriptionLength}
+          spellCheck={false}
+          autoComplete="off"
+          disabled={extracting || candidates.length > 0}
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="例如 U01 工控電腦 u01.example.test，帳號 reader，日誌在 C:/logs"
+          aria-describedby="ssh-describe-help"
+        />
+        <p id="ssh-describe-help" className="text-xs text-muted-foreground">
+          你可以貼上多台主機的資料，帳密與私鑰也會交給 AI
+          判讀，原文只用於這次整理。
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={
+            busy || extracting || candidates.length > 0 || !description.trim()
+          }
+          onClick={() => void extract()}
+        >
+          {extracting ? "AI 整理中…" : "交給 AI 整理"}
+        </Button>
+        {extractError && (
+          <p role="alert" className="text-sm text-danger">
+            {extractError}
+          </p>
+        )}
+        {candidates.length > 0 && (
+          <>
+            <p role="status" className="text-sm font-medium">
+              請逐台核對草稿，再儲存你要登記的主機。
+            </p>
+            <ul aria-label="SSH 主機草稿" className="space-y-2">
+              {candidates.map((host) => {
+                const status =
+                  host.probe === null
+                    ? "unmeasured"
+                    : host.probe.reachable
+                      ? "reachable"
+                      : "unreachable";
+                return (
+                  <li
+                    key={host.index}
+                    className="space-y-1 rounded-lg border p-3 text-sm"
+                  >
+                    <p className="font-medium">{host.name || "未命名的主機"}</p>
+                    <p className="break-all text-muted-foreground">
+                      {host.host
+                        ? `${host.username ? `${host.username}@` : ""}${host.host}:${host.port}`
+                        : "請填主機位址"}
+                    </p>
+                    {host.note && (
+                      <p className="text-muted-foreground">{host.note}</p>
+                    )}
+                    <p
+                      className={
+                        status === "reachable"
+                          ? "text-good"
+                          : status === "unreachable"
+                            ? "text-danger"
+                            : "text-muted-foreground"
+                      }
+                    >
+                      {sshProbeLabels[status]}
+                    </p>
+                    {host.probe && (
+                      <p className="text-muted-foreground">
+                        {host.probe.detail}
+                      </p>
+                    )}
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={busy || editing !== null}
+                        onClick={() => review(host)}
+                      >
+                        核對草稿
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={busy || reviewing === host.index}
+                        onClick={() => discard(host.index)}
+                      >
+                        略過草稿
+                      </Button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </>
+        )}
+      </div>
       {editing === null ? (
         <div>
           <Button
@@ -326,7 +482,7 @@ export function ProjectSsh({
             <Textarea
               id="ssh-note"
               rows={2}
-              placeholder="例如：住友 U01 的工控電腦，Windows，採集日誌在 C:/WeYuJet/logs"
+              placeholder="例如 U01 工控電腦，採集日誌在 C:/logs"
               value={draft.note}
               onChange={(e) => set("note", e.target.value)}
             />
@@ -338,9 +494,9 @@ export function ProjectSsh({
           )}
           <div className="flex gap-2">
             <Button size="sm" disabled={busy} onClick={() => void save()}>
-              儲存
+              {reviewing === null ? "儲存" : "確認並儲存"}
             </Button>
-            <Button variant="outline" size="sm" onClick={close}>
+            <Button variant="outline" size="sm" disabled={busy} onClick={close}>
               取消
             </Button>
           </div>

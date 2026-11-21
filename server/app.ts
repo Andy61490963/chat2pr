@@ -202,22 +202,26 @@ export async function buildApp(
   app.setErrorHandler(replyError);
   registerChat(app, db);
   registerProjectContext(app, db, enqueueValidation);
+  const askConnection = (prompt: string, schema: Record<string, unknown>) =>
+    new ProjectSetup(
+      db,
+      new GitHub(),
+      runner as Runner,
+      new Budget(db),
+      new SubscriptionGate(db),
+    ).structured(prompt, schema, "connection_extract", "整理連線資訊");
   registerProjectDatabase(
     app,
     db,
     (path, body, timeoutMs) => runner.call(path, body, timeoutMs),
     enqueueValidation,
-    (prompt, schema) =>
-      new ProjectSetup(
-        db,
-        new GitHub(),
-        runner as Runner,
-        new Budget(db),
-        new SubscriptionGate(db),
-      ).structured(prompt, schema, "connection_extract", "整理連線資訊"),
+    askConnection,
   );
-  registerProjectSsh(app, db, (path, body, timeoutMs) =>
-    runner.call(path, body, timeoutMs),
+  registerProjectSsh(
+    app,
+    db,
+    (path, body, timeoutMs) => runner.call(path, body, timeoutMs),
+    askConnection,
   );
   registerMembers(app, db, githubUser);
   await app.register(helmet, {

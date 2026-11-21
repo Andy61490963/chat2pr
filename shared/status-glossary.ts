@@ -33,6 +33,12 @@ export const groupLabels = {
   unbound: "沒有可用專案",
 } as const;
 
+export const sshProbeLabels = {
+  reachable: "你可以從伺服器連到這個連接埠。",
+  unreachable: "你無法從伺服器連到這個連接埠。",
+  unmeasured: "你目前沒有這台主機的 TCP 實測結果。",
+} as const;
+
 export function projectStatus(
   p: Pick<
     Project,
