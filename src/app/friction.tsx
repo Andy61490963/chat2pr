@@ -5,7 +5,6 @@ import {
   CardContent,
   CardDescription,
   CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import { type Request, type State, message } from "./shared";
 
@@ -81,7 +80,7 @@ export function FrictionCard({
     <Card>
       <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex flex-col gap-1">
-          <CardTitle>使用摩擦</CardTitle>
+          <h2 className="leading-none font-semibold">使用摩擦</h2>
           <CardDescription>
             {data ? `近 ${data.days} 天建立的 ${data.tasks} 件任務` : "讀取中…"}
           </CardDescription>
@@ -99,7 +98,7 @@ export function FrictionCard({
           </select>
           <select
             aria-label="群組"
-            className="rounded-md border bg-background px-2 py-1"
+            className="min-w-0 max-w-full rounded-md border bg-background px-2 py-1"
             value={group}
             onChange={(e) => setGroup(e.target.value)}
           >

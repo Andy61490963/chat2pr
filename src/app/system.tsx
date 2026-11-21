@@ -16,6 +16,7 @@ import { DockerDiskCard } from "./docker-disk";
 import { entryText, type EntryKind } from "../../shared/entry.js";
 import { EgressCard } from "./egress";
 import { CheckEnvironmentCard } from "./check-environments";
+import { FrictionCard } from "./friction";
 
 type ContainerStatus = {
   name: string;
@@ -112,6 +113,7 @@ export function SystemView({
   return (
     <div className="flex flex-col gap-6">
       <CapacityCard request={request} />
+      {admin && <FrictionCard state={state} request={request} />}
       <Card>
         <CardHeader className="flex flex-row items-start justify-between gap-3">
           <div className="flex flex-col gap-1">
@@ -371,6 +373,36 @@ function FlowAnimation({ entry }: { entry: EntryKind }) {
 function Architecture({ state, entry }: { state: State; entry: EntryKind }) {
   const open = state.settings.container_network === "open";
   const downloads = state.settings.code_downloads !== false;
+  const permissionFields = ["做什麼", "網路", "工作區"];
+  const permissions = [
+    [
+      "系統套件",
+      "以 root 安裝審查放行的系統套件，存成專案衍生映像（同設定重用）",
+      "下載來源白名單（系統頁可改）",
+      "不掛載",
+    ],
+    ["安裝", "執行專案的安裝命令", "下載來源白名單（系統頁可改）", "可寫"],
+    [
+      "開發",
+      "Codex 依需求修改程式",
+      open
+        ? "完全開放（網際網路、公司內網）＋推論轉送"
+        : downloads
+          ? "推論轉送＋套件白名單"
+          : "只有推論轉送",
+      "可寫",
+    ],
+    ["收集", "以可信基底計算變更", "無", "可寫"],
+    ["測試", "執行專案的測試命令", open ? "完全開放" : "無", "可寫"],
+    [
+      "審查",
+      "另一個 Codex 獨立檢查",
+      open ? "完全開放＋推論轉送" : "只有推論轉送",
+      "唯讀",
+    ],
+  ];
+  const permissionTone = (field: string, value: string) =>
+    field === "網路" && value.startsWith("完全開放") && "text-warn";
   return (
     <Card>
       <CardHeader>
@@ -420,67 +452,74 @@ function Architecture({ state, entry }: { state: State; entry: EntryKind }) {
           </ol>
         </section>
 
-        <section className="flex flex-col gap-2">
-          <h3 className="text-sm font-medium">工作容器各階段的權限</h3>
-          <div className="overflow-x-auto rounded-lg border">
-            <table className="w-full min-w-[640px] text-sm">
+        <section
+          aria-labelledby="architecture-permissions"
+          className="flex flex-col gap-2"
+        >
+          <h3 id="architecture-permissions" className="text-sm font-medium">
+            工作容器各階段的權限
+          </h3>
+          <ul className="divide-y rounded-lg border md:hidden">
+            {permissions.map(([phase, ...values]) => (
+              <li key={phase} className="space-y-2 px-3 py-2.5 text-sm">
+                <h4 className="font-medium">{phase}</h4>
+                <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
+                  {permissionFields.map((field, i) => (
+                    <div
+                      key={field}
+                      className="grid grid-cols-subgrid col-span-2"
+                    >
+                      <dt className="text-muted-foreground">{field}</dt>
+                      <dd
+                        className={cn(
+                          "wrap-anywhere",
+                          permissionTone(field, values[i]),
+                        )}
+                      >
+                        {values[i]}
+                      </dd>
+                    </div>
+                  ))}
+                </dl>
+              </li>
+            ))}
+          </ul>
+          <div className="hidden rounded-lg border md:block">
+            <table className="w-full text-sm">
               <thead className="bg-muted/50 text-left text-xs text-muted-foreground">
                 <tr>
-                  <th className="px-3 py-2 font-medium">階段</th>
-                  <th className="px-3 py-2 font-medium">做什麼</th>
-                  <th className="px-3 py-2 font-medium">網路</th>
-                  <th className="px-3 py-2 font-medium">工作區</th>
+                  <th scope="col" className="px-3 py-2 font-medium">
+                    階段
+                  </th>
+                  {permissionFields.map((field) => (
+                    <th
+                      key={field}
+                      scope="col"
+                      className="px-3 py-2 font-medium"
+                    >
+                      {field}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {[
-                  [
-                    "系統套件",
-                    "以 root 安裝審查放行的系統套件，存成專案衍生映像（同設定重用）",
-                    "下載來源白名單（系統頁可改）",
-                    "不掛載",
-                  ],
-                  [
-                    "安裝",
-                    "執行專案的安裝命令",
-                    "下載來源白名單（系統頁可改）",
-                    "可寫",
-                  ],
-                  [
-                    "開發",
-                    "Codex 依需求修改程式",
-                    open
-                      ? "完全開放（網際網路、公司內網）＋推論轉送"
-                      : downloads
-                        ? "推論轉送＋套件白名單"
-                        : "只有推論轉送",
-                    "可寫",
-                  ],
-                  ["收集", "以可信基底計算變更", "無", "可寫"],
-                  [
-                    "測試",
-                    "執行專案的測試命令",
-                    open ? "完全開放" : "無",
-                    "可寫",
-                  ],
-                  [
-                    "審查",
-                    "另一個 Codex 獨立檢查",
-                    open ? "完全開放＋推論轉送" : "只有推論轉送",
-                    "唯讀",
-                  ],
-                ].map((r) => (
-                  <tr key={r[0]}>
-                    {r.map((c, i) => (
+                {permissions.map(([phase, ...values]) => (
+                  <tr key={phase}>
+                    <th
+                      scope="row"
+                      className="px-3 py-2 text-left font-medium whitespace-nowrap"
+                    >
+                      {phase}
+                    </th>
+                    {permissionFields.map((field, i) => (
                       <td
-                        key={i}
+                        key={field}
                         className={cn(
-                          "px-3 py-2",
-                          i === 0 && "font-medium",
-                          i === 2 && c.startsWith("完全開放") && "text-warn",
+                          "px-3 py-2 wrap-anywhere",
+                          permissionTone(field, values[i]),
                         )}
                       >
-                        {c}
+                        {values[i]}
                       </td>
                     ))}
                   </tr>
@@ -490,10 +529,15 @@ function Architecture({ state, entry }: { state: State; entry: EntryKind }) {
           </div>
         </section>
 
-        <section className="flex flex-col gap-2">
-          <h3 className="text-sm font-medium">資料存放位置</h3>
-          <div className="overflow-x-auto rounded-lg border">
-            <table className="w-full min-w-[640px] text-sm">
+        <section
+          aria-labelledby="architecture-storage"
+          className="flex flex-col gap-2"
+        >
+          <h3 id="architecture-storage" className="text-sm font-medium">
+            資料存放位置
+          </h3>
+          <div className="rounded-lg border">
+            <table className="w-full table-fixed text-sm">
               <tbody className="divide-y">
                 {[
                   ["資料庫", "Docker volume line-agentflow_database"],
@@ -513,8 +557,13 @@ function Architecture({ state, entry }: { state: State; entry: EntryKind }) {
                   ],
                 ].map(([k, v]) => (
                   <tr key={k}>
-                    <td className="w-36 px-3 py-2 font-medium">{k}</td>
-                    <td className="px-3 py-2 font-mono text-xs break-all text-muted-foreground">
+                    <th
+                      scope="row"
+                      className="w-24 px-3 py-2 text-left font-medium sm:w-36"
+                    >
+                      {k}
+                    </th>
+                    <td className="px-3 py-2 font-mono text-xs wrap-anywhere text-muted-foreground">
                       {v}
                     </td>
                   </tr>

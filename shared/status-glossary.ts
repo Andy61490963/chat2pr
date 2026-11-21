@@ -30,6 +30,13 @@ export const projectLabels = {
   unbound: "未綁定群組",
   ready: "可派工",
 } as const;
+export const projectVerificationLabels = {
+  passed: "通過",
+  partial: "部分通過",
+  failed: "失敗",
+  validating: projectLabels.validating,
+  unverified: projectLabels.unverified,
+} as const;
 export const groupLabels = {
   left: "機器人已離開",
   disabled: "已停用",

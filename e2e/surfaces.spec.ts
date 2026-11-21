@@ -42,6 +42,153 @@ const pages = [
   { path: "/settings", title: "設定", content: /^方案 demo/ },
 ];
 
+test("專案列表只顯示驗證結果，測試指令可在詳情查看", async ({ page }) => {
+  const command =
+    'dotnet test Demo.sln --filter "Category!=Slow&Category!=External"';
+  const manual = { ...project, name: "範例手動驗證", test_command: command };
+  const partial = {
+    ...project,
+    id: "project-partial",
+    name: "範例部分驗證",
+    setup_mode: "auto",
+    setup_status: command,
+    setup_plan: {
+      branch: "main",
+      sha: "demo",
+      fingerprint: "demo",
+      configVersion: 1,
+      install: "",
+      test: command,
+      verification: "partial",
+      explanation: "只執行範例單元測試。",
+      evidence: [],
+    },
+  } satisfies typeof project;
+  const failed = {
+    ...manual,
+    id: "project-failed",
+    name: "範例驗證失敗",
+    validated_at: null,
+    validation_error: command,
+  };
+  const validating = {
+    ...manual,
+    id: "project-validating",
+    name: "範例驗證進行中",
+    validated_at: null,
+    validation_progress: "你的專案正在執行基底測試。",
+  };
+  const unverified = {
+    ...manual,
+    id: "project-unverified",
+    name: "範例未驗證",
+    validated_at: null,
+  };
+  await mockDashboard(page, {
+    state: { projects: [manual, partial, failed, validating, unverified] },
+  });
+  await page.goto("/projects");
+  const list = page.getByRole("main").getByRole("list");
+  for (const [name, result] of [
+    [manual.name, "通過"],
+    [partial.name, "部分通過"],
+    [failed.name, "失敗"],
+    [validating.name, "驗證中"],
+    [unverified.name, "需要驗證"],
+  ]) {
+    const row = list.getByRole("button").filter({ hasText: name });
+    await expect(row.getByText(result, { exact: true }).first()).toBeVisible();
+  }
+  await expect(list).not.toContainText(command);
+  await expect(list.locator('[title*="dotnet test"]')).toHaveCount(0);
+  await list.getByRole("button").filter({ hasText: manual.name }).click();
+  const detail = page.getByRole("dialog", { name: manual.name });
+  await expect(
+    detail.locator("code").filter({ hasText: command }),
+  ).toBeVisible();
+});
+
+for (const width of [1280, 920, 375]) {
+  test(`${width}px 寬時可讀到完整的群組與專案名稱，頁首操作維持在右上角`, async ({
+    page,
+  }) => {
+    const groupName = "範例北區跨部門服務與資訊系統維護協作小組".repeat(4);
+    const projectName =
+      "ExamplePlatformReportingAndReconciliationService".repeat(3);
+    await page.setViewportSize({ width, height: 812 });
+    await mockDashboard(page, {
+      state: {
+        groups: [{ ...group, name: groupName }],
+        projects: [{ ...project, name: projectName }],
+      },
+    });
+    await page.goto("/groups");
+    const row = page.getByRole("button").filter({ hasText: groupName });
+    for (const name of [groupName, projectName]) {
+      const fullName = row.getByText(name, { exact: true });
+      await expect(fullName).toBeVisible();
+      const fits = await fullName.evaluate((element) => {
+        const row = element.closest("button")!.getBoundingClientRect();
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        const lines = Array.from(range.getClientRects());
+        return (
+          lines.length > 1 &&
+          lines.every(
+            (line) => line.left >= row.left && line.right <= row.right,
+          )
+        );
+      });
+      expect(fits, name).toBe(true);
+    }
+    await expect(row.getByText("可修改的專案", { exact: true })).toHaveCSS(
+      "position",
+      width === 1280 ? "absolute" : "static",
+    );
+
+    for (const path of ["/groups", "/projects", "/settings", "/system"]) {
+      if (path !== "/groups") await page.goto(path);
+      const header = page.getByRole("main").locator("header").first();
+      const title = header.getByRole("heading", { level: 1 });
+      const refresh = header.getByRole("button", { name: "重新整理" });
+      await expect(refresh).toBeVisible();
+      const titleBox = (await title.boundingBox())!;
+      const refreshBox = (await refresh.boundingBox())!;
+      expect(refreshBox.y).toBeLessThan(titleBox.y + titleBox.height);
+      expect(refreshBox.x).toBeGreaterThanOrEqual(titleBox.x + titleBox.width);
+    }
+  });
+}
+
+test("設定分區可用鍵盤跳轉，使用摩擦可在系統頁查看", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await mockDashboard(page);
+  await page.goto("/settings");
+  const sections = page.getByRole("navigation", { name: "設定分區" });
+  for (const [name, id] of [
+    ["AI 與額度", "settings-ai"],
+    ["LINE", "settings-line"],
+    ["服務連線", "settings-services"],
+    ["資料與外觀", "settings-data"],
+  ]) {
+    const link = sections.getByRole("link", { name, exact: true });
+    await link.focus();
+    await link.press("Enter");
+    await expect(page).toHaveURL(new RegExp(`/settings#${id}$`));
+    const heading = page.getByRole("heading", { level: 2, name, exact: true });
+    await expect(heading).toBeFocused();
+    await expect(heading).toBeInViewport();
+  }
+  await page.reload();
+  await expect(
+    page.getByRole("heading", { name: "資料與外觀" }),
+  ).toBeInViewport();
+  await expect(page.getByText("使用摩擦", { exact: true })).toHaveCount(0);
+  await page.goto("/system");
+  await expect(page.getByRole("heading", { name: "使用摩擦" })).toBeVisible();
+  await expect(page.getByText("每件任務要切到看板")).toBeVisible();
+});
+
 test("主機記憶體不足或訂閱額度用完時，頁首顯示派工自動暫停與原因", async ({
   context,
 }) => {

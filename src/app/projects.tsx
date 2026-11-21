@@ -1,8 +1,7 @@
 import {
   projectLabels,
-  projectQuotaWaitPrefix,
   projectStatus,
-  statusLabels,
+  projectVerificationLabels,
 } from "../../shared/status-glossary.js";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import {
@@ -60,6 +59,7 @@ import {
 import {
   configChanged as settingsChanged,
   offersValidation,
+  projectVerification,
   repoListStatus,
   takenRepos,
   validateLabel,
@@ -144,7 +144,7 @@ export function ProjectsView({
   }, [focusId, focusTab]);
   const open = state.projects.find((p) => p.id === openId);
   return (
-    <div className="flex flex-col gap-4">
+    <div className="@container flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
           共 {state.projects.length} 個專案，
@@ -165,31 +165,38 @@ export function ProjectsView({
         </Button>
       </div>
       {state.projects.length ? (
-        <Card className="gap-0 py-0">
-          <div className="hidden grid-cols-[minmax(0,2fr)_6rem_minmax(0,1.2fr)_minmax(0,1.2fr)_7.5rem] gap-4 border-b px-5 py-2.5 text-xs text-muted-foreground md:grid">
+        <div className="@3xl:rounded-xl @3xl:border @3xl:bg-card @3xl:text-card-foreground">
+          <div
+            aria-hidden="true"
+            className="hidden grid-cols-[minmax(0,2fr)_6rem_minmax(0,1.2fr)_minmax(0,1.2fr)_7.5rem] gap-4 border-b px-5 py-2.5 text-xs text-muted-foreground @3xl:grid"
+          >
             <span>專案</span>
             <span>分支</span>
             <span>環境驗證</span>
             <span>使用群組</span>
             <span className="text-right">狀態</span>
           </div>
-          <ul className="divide-y">
+          <ul role="list" className="grid gap-3 @3xl:block @3xl:divide-y">
             {state.projects.map((p) => {
               const groups = state.groups.filter((g) =>
                 g.project_ids.includes(p.id),
               );
+              const verification = projectVerification(p);
               return (
-                <li key={p.id}>
+                <li
+                  key={p.id}
+                  className="rounded-xl border bg-card text-card-foreground @3xl:rounded-none @3xl:border-0"
+                >
                   <button
-                    className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-5 py-3 text-left transition-colors hover:bg-muted/40 md:grid-cols-[minmax(0,2fr)_6rem_minmax(0,1.2fr)_minmax(0,1.2fr)_7.5rem]"
+                    className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-2 rounded-[inherit] px-5 py-3 text-left transition-colors hover:bg-muted/40 @3xl:grid-cols-[minmax(0,2fr)_6rem_minmax(0,1.2fr)_minmax(0,1.2fr)_7.5rem] @3xl:items-center"
                     onClick={() => {
                       setTab("overview");
                       setOpenId(p.id);
                     }}
                   >
-                    <span className="flex min-w-0 flex-col">
-                      <span className="truncate font-medium">{p.name}</span>
-                      <span className="truncate font-mono text-xs text-muted-foreground">
+                    <span className="flex min-w-0 flex-col [overflow-wrap:anywhere]">
+                      <span className="font-medium">{p.name}</span>
+                      <span className="font-mono text-xs text-muted-foreground">
                         {p.repo}
                       </span>
                       {p.validation_progress && (
@@ -198,59 +205,40 @@ export function ProjectsView({
                         </span>
                       )}
                     </span>
-                    <span className="hidden truncate text-sm md:block">
+                    <span className="col-span-2 text-sm [overflow-wrap:anywhere] @3xl:col-auto">
+                      <span className="mr-2 text-xs text-muted-foreground @3xl:sr-only">
+                        分支
+                      </span>
                       {p.base_branch}
                     </span>
                     <span
                       className={cn(
-                        "hidden truncate text-sm md:block",
-                        p.setup_mode !== "auto" &&
-                          !p.test_command &&
-                          "text-warn",
-                        p.setup_mode !== "auto" &&
-                          validationFailed(p) &&
-                          "text-danger",
+                        "col-span-2 text-sm @3xl:col-auto",
+                        verification === "partial" && "text-warn",
+                        verification === "failed" && "text-danger",
                       )}
                     >
-                      {!p.validation_progress &&
-                      p.setup_status?.startsWith(projectQuotaWaitPrefix) ? (
-                        statusLabels.budget_wait
-                      ) : p.setup_mode === "auto" ? (
-                        (!p.validation_progress && p.setup_status) ||
-                        "AI 自動設定"
-                      ) : validationFailed(p) ? (
-                        <>
-                          {projectLabels.failed}
-                          {p.test_command && (
-                            <>
-                              {" · "}
-                              <code className="text-xs">{p.test_command}</code>
-                            </>
-                          )}
-                        </>
-                      ) : p.test_command ? (
-                        <code className="text-xs">{p.test_command}</code>
-                      ) : (
-                        "未設定"
-                      )}
+                      <span className="mr-2 text-xs text-muted-foreground @3xl:sr-only">
+                        環境驗證
+                      </span>
+                      <span>{projectVerificationLabels[verification]}</span>
                     </span>
-                    <span className="hidden truncate text-sm text-muted-foreground md:block">
+                    <span className="col-span-2 text-sm [overflow-wrap:anywhere] @3xl:col-auto">
+                      <span className="mr-2 text-xs text-muted-foreground @3xl:sr-only">
+                        使用群組
+                      </span>
                       {groups.map((g) => g.name).join("、") || "—"}
                     </span>
-                    <span className="flex justify-end">
-                      <ProjectBadge
-                        project={p}
-                        bound={state.groups.some((g) =>
-                          g.project_ids.includes(p.id),
-                        )}
-                      />
+                    <span className="col-start-2 row-start-1 flex justify-end @3xl:col-auto @3xl:row-auto">
+                      <span className="sr-only">狀態</span>
+                      <ProjectBadge project={p} bound={groups.length > 0} />
                     </span>
                   </button>
                 </li>
               );
             })}
           </ul>
-        </Card>
+        </div>
       ) : (
         <Card>
           <Empty icon={<FolderGit2 />} title="還沒有專案">
@@ -763,11 +751,9 @@ function ProjectBadge({
   const title =
     status === "missing"
       ? "GitHub 上找不到儲存庫，請檢查儲存庫位置與 GitHub App 權限。"
-      : status === "failed"
-        ? validationErrorParts(p.validation_error ?? "").headline
-        : status === "unbound"
-          ? "到群組管理勾選這個專案後才會收到需求"
-          : undefined;
+      : status === "unbound"
+        ? "到群組管理勾選這個專案後才會收到需求"
+        : undefined;
   return (
     <Badge variant={variant[status]} title={title}>
       {projectLabels[status]}

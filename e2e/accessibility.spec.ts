@@ -17,7 +17,8 @@ const skipped = {
   id: "example-skip",
   task_id: null,
   kind: "triage_skipped",
-  detail: "你在「範例看板跨部門設計與開發討論群組」的訊息屬於同事之間的分工，系統未建立任務。",
+  detail:
+    "你在「範例看板跨部門設計與開發討論群組」的訊息屬於同事之間的分工，系統未建立任務。",
   created_at: task.created_at,
 };
 const chat: ChatPage = {
@@ -89,9 +90,14 @@ const check: ScheduledCheck = {
   updated_at: task.updated_at,
 };
 
-const screens = [
+const screens: {
+  name: string;
+  path: string;
+  loaded: string | RegExp;
+  width?: number;
+}[] = [
   { name: "收件匣", path: "/", loaded: task.title },
-  { name: "手機收件匣", path: "/", loaded: skipped.detail, mobile: true },
+  { name: "手機收件匣", path: "/", loaded: skipped.detail, width: 375 },
   { name: "任務清單", path: "/tasks", loaded: task.title },
   { name: "任務詳情", path: `/tasks?task=${task.id}`, loaded: question },
   { name: "聊天室", path: "/chat", loaded: message },
@@ -103,6 +109,15 @@ const screens = [
   { name: "設定", path: "/settings", loaded: /^方案 demo/ },
   { name: "登入", path: "/", loaded: "使用 GitHub 登入" },
 ];
+const narrowScreens = screens
+  .filter(({ path }) =>
+    ["/groups", "/projects", "/system", "/settings"].includes(path),
+  )
+  .map((screen) => ({
+    ...screen,
+    name: `${screen.name}（375px）`,
+    width: 375,
+  }));
 
 test("方向鍵切換任務狀態與詳情時，選取的分頁會標示對應面板", async ({
   page,
@@ -146,10 +161,10 @@ test("外觀選項可用方向鍵選取，重新載入後保留深色偏好", as
 for (const theme of ["light", "dark"] as const) {
   test.describe(theme === "light" ? "淺色可及性" : "深色可及性", () => {
     test.use({ colorScheme: theme });
-    for (const screen of screens) {
+    for (const screen of [...screens, ...narrowScreens]) {
       test(screen.name, async ({ page }) => {
-        if (screen.mobile)
-          await page.setViewportSize({ width: 375, height: 812 });
+        const width = screen.width;
+        if (width) await page.setViewportSize({ width, height: 812 });
         await mockDashboard(page, {
           state: { activity: [skipped] },
           routes: {
@@ -188,12 +203,31 @@ for (const theme of ["light", "dark"] as const) {
             ),
           ).toBe(true);
         }
+        if (screen.path === "/system") {
+          await expect(page.getByText("每件任務要切到看板")).toBeVisible();
+        }
         expect(
           await page
             .locator("html")
             .evaluate((element) => element.classList.contains("dark")),
         ).toBe(theme === "dark");
         await page.evaluate(() => document.fonts.ready);
+        if (screen.path === "/system" && width) {
+          for (const name of ["工作容器各階段的權限", "資料存放位置"]) {
+            const section = page.getByRole("region", { name, exact: true });
+            await expect(section).toBeVisible();
+            expect(
+              await section.evaluate((element) =>
+                [element, ...element.querySelectorAll("*")].some(
+                  (child) =>
+                    child.clientWidth > 0 &&
+                    child.scrollWidth > child.clientWidth,
+                ),
+              ),
+              `${name}應完整顯示於手機寬度內`,
+            ).toBe(false);
+          }
+        }
         const { violations } = await new AxeBuilder({ page }).analyze();
         const failures = violations
           .filter(

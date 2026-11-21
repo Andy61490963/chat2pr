@@ -263,57 +263,74 @@ export function GroupsView({
         {halted > 0 && `，${halted} 個${groupLabels.stopped}`}
         {gone > 0 && `；另有 ${gone} 個${groupLabels.left}`}
       </p>
-      <Card className="gap-0 py-0">
-        <div className="hidden grid-cols-[minmax(0,1.6fr)_8rem_minmax(0,2fr)_5rem_7rem] gap-4 border-b px-5 py-2.5 text-xs text-muted-foreground md:grid">
-          <span>群組</span>
-          <span>觸發方式</span>
-          <span>可修改的專案</span>
-          <span>記憶</span>
-          <span className="text-right">狀態</span>
-        </div>
-        <ul className="divide-y">
-          {groups.map((g) => {
-            const projects = state.projects.filter((p) =>
-              g.project_ids.includes(p.id),
-            );
-            const memories = state.memories.filter(
-              (m) => m.group_id === g.id,
-            ).length;
-            return (
-              <li key={g.id}>
-                <button
-                  className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 px-5 py-3 text-left transition-colors hover:bg-muted/40 md:grid-cols-[minmax(0,1.6fr)_8rem_minmax(0,2fr)_5rem_7rem]"
-                  onClick={() => setOpenId(g.id)}
+      <div className="@container">
+        <div className="@3xl:rounded-xl @3xl:border @3xl:bg-card @3xl:text-card-foreground">
+          <div
+            aria-hidden="true"
+            className="hidden grid-cols-[minmax(0,1.6fr)_8rem_minmax(0,2fr)_5rem_7rem] gap-4 border-b px-5 py-2.5 text-xs text-muted-foreground @3xl:grid"
+          >
+            <span>群組</span>
+            <span>觸發方式</span>
+            <span>可修改的專案</span>
+            <span>記憶</span>
+            <span className="text-right">狀態</span>
+          </div>
+          <ul role="list" className="grid gap-3 @3xl:block @3xl:divide-y">
+            {groups.map((g) => {
+              const projects = state.projects.filter((p) =>
+                g.project_ids.includes(p.id),
+              );
+              const memories = state.memories.filter(
+                (m) => m.group_id === g.id,
+              ).length;
+              return (
+                <li
+                  key={g.id}
+                  className="rounded-xl border bg-card text-card-foreground @3xl:rounded-none @3xl:border-0"
                 >
-                  <span className="flex min-w-0 flex-col">
-                    <span className="truncate font-medium">{g.name}</span>
-                    <span className="truncate text-xs text-muted-foreground md:hidden">
-                      {projects.map((p) => p.name).join("、") || "尚未綁定專案"}
-                    </span>
-                  </span>
-                  <span className="hidden text-sm md:block">
-                    {g.trigger_mode === "auto" ? "自動辨識" : "指令與引用追問"}
-                  </span>
-                  <span
-                    className={cn(
-                      "hidden truncate text-sm md:block",
-                      !projects.length && "text-warn",
-                    )}
+                  <button
+                    className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-2 rounded-[inherit] px-5 py-3 text-left transition-colors hover:bg-muted/40 @3xl:grid-cols-[minmax(0,1.6fr)_8rem_minmax(0,2fr)_5rem_7rem] @3xl:items-center"
+                    onClick={() => setOpenId(g.id)}
                   >
-                    {projects.map((p) => p.name).join("、") || "尚未綁定"}
-                  </span>
-                  <span className="hidden text-sm text-muted-foreground tabular-nums md:block">
-                    {memories} 筆
-                  </span>
-                  <span className="flex justify-end">
-                    <GroupStatusBadge group={g} state={state} />
-                  </span>
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      </Card>
+                    <span className="min-w-0 font-medium [overflow-wrap:anywhere]">
+                      {g.name}
+                    </span>
+                    <span className="col-span-2 text-sm @3xl:col-auto">
+                      <span className="mr-2 text-xs text-muted-foreground @3xl:sr-only">
+                        觸發方式
+                      </span>
+                      {g.trigger_mode === "auto"
+                        ? "自動辨識"
+                        : "指令與引用追問"}
+                    </span>
+                    <span
+                      className={cn(
+                        "col-span-2 text-sm [overflow-wrap:anywhere] @3xl:col-auto",
+                        !projects.length && "text-warn",
+                      )}
+                    >
+                      <span className="mr-2 text-xs text-muted-foreground @3xl:sr-only">
+                        可修改的專案
+                      </span>
+                      <span>
+                        {projects.map((p) => p.name).join("、") || "尚未綁定"}
+                      </span>
+                    </span>
+                    <span className="col-span-2 text-sm text-muted-foreground tabular-nums @3xl:col-auto">
+                      <span className="mr-2 text-xs @3xl:sr-only">記憶</span>
+                      {memories} 筆
+                    </span>
+                    <span className="col-start-2 row-start-1 flex justify-end @3xl:col-auto @3xl:row-auto">
+                      <span className="sr-only">狀態</span>
+                      <GroupStatusBadge group={g} state={state} />
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      </div>
       {open && (
         <Sheet
           open

@@ -402,30 +402,44 @@ export function App() {
     writeUrl(viewRef.current, null);
   };
   // 記下目前網址：按上一頁時若選擇繼續編輯，要把網址改回來。
-  const lastUrl = useRef(location.pathname + location.search);
+  const lastUrl = useRef(location.href);
   useEffect(() => {
-    lastUrl.current = location.pathname + location.search;
+    lastUrl.current = location.href;
   });
   // 瀏覽器上一頁／下一頁：依網址切換頁面與任務詳情。
   useEffect(() => {
     const onPop = () => {
       // 確認視窗開啟期間仍可能收到 SSE；先保存網址，避免重新渲染改寫返回位置。
       const previousUrl = lastUrl.current;
-      const destination = location.pathname + location.search;
+      const destination = new URL(location.href);
+      const previous = new URL(previousUrl);
+      // 設定分區的上一頁／下一頁只移動錨點，表單仍留在同一頁。
+      if (
+        destination.pathname === viewPaths.settings &&
+        destination.pathname === previous.pathname &&
+        destination.search === previous.search
+      )
+        return;
       guard(
         () => {
-          const url = new URL(destination, location.origin);
-          setView(viewFromPath(url.pathname));
-          setSavedProject(linkedProject(url));
-          const id = url.searchParams.get("task");
+          setView(viewFromPath(destination.pathname));
+          setSavedProject(linkedProject(destination));
+          const id = destination.searchParams.get("task");
           if (id) void openTask(id, false);
           else setSelected(null);
         },
         { cancel: () => history.pushState(null, "", previousUrl) },
       );
     };
+    const onHash = () => {
+      lastUrl.current = location.href;
+    };
     window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
+    window.addEventListener("hashchange", onHash);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      window.removeEventListener("hashchange", onHash);
+    };
   }, [openTask, guard]);
   useEffect(() => {
     const id = selected?.task.id;
@@ -518,7 +532,7 @@ export function App() {
     setView(v);
     setSelected(null);
     // 從導覽進入一律是乾淨的頁面：不帶上一輪的篩選。
-    if (viewPaths[v] !== location.pathname || location.search)
+    if (viewPaths[v] !== location.pathname || location.search || location.hash)
       history.pushState(null, "", viewPaths[v]);
     setVisit((n) => n + 1);
     window.scrollTo({ top: 0 });
@@ -817,23 +831,21 @@ export function App() {
       >
         <header
           className={cn(
-            "mb-7 flex flex-wrap items-start justify-between gap-3",
+            "mb-7 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3",
             current.id === "chat" && "mb-4 shrink-0",
           )}
         >
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="min-w-0">
-              <h1
-                ref={heading}
-                tabIndex={-1}
-                className="text-2xl font-semibold tracking-tight outline-none md:text-[26px]"
-              >
-                {current.label}
-              </h1>
-              <p className="mt-0.5 hidden text-sm text-muted-foreground sm:block">
-                {current.hint}
-              </p>
-            </div>
+          <div className="min-w-0">
+            <h1
+              ref={heading}
+              tabIndex={-1}
+              className="text-2xl font-semibold tracking-tight outline-none md:text-[26px]"
+            >
+              {current.label}
+            </h1>
+            <p className="mt-0.5 hidden text-sm text-muted-foreground sm:block">
+              {current.hint}
+            </p>
           </div>
           {state && (
             <div className="flex items-center gap-1.5">

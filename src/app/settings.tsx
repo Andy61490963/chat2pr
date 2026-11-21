@@ -1,4 +1,3 @@
-import { FrictionCard } from "./friction";
 import { groupReplyStatus } from "../../shared/group-reply-status.js";
 import { useEffect, useRef, useState } from "react";
 import { Check, Copy, RefreshCw, Send } from "lucide-react";
@@ -749,6 +748,34 @@ function ThemeCard() {
   );
 }
 
+const settingsSections = {
+  "settings-ai": "AI 與額度",
+  "settings-line": "LINE",
+  "settings-services": "服務連線",
+  "settings-data": "資料與外觀",
+} as const;
+
+function SettingsSection({
+  id,
+  children,
+}: {
+  id: keyof typeof settingsSections;
+  children: React.ReactNode;
+}) {
+  return (
+    <section aria-labelledby={id} className="flex flex-col gap-3">
+      <h2 id={id} tabIndex={-1} className="scroll-mt-4 text-lg font-semibold">
+        {settingsSections[id]}
+      </h2>
+      <div className="@container">
+        <div className="grid items-start gap-4 @3xl:grid-cols-[repeat(auto-fit,minmax(20rem,1fr))]">
+          {children}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 export function SettingsView({
   state,
   busy,
@@ -848,59 +875,25 @@ export function SettingsView({
         ),
       };
     });
+  useEffect(() => {
+    // 設定內容在登入與載入狀態後才出現，直接開啟分區網址時補上錨點跳轉。
+    const id = location.hash.slice(1);
+    if (!Object.hasOwn(settingsSections, id)) return;
+    const target = document.getElementById(id);
+    target?.scrollIntoView();
+    target?.focus({ preventScroll: true });
+  }, []);
+
   return (
-    <div className="grid items-start gap-4 lg:grid-cols-2">
-      <div className="flex flex-col gap-4">
-        {s.ai_mode === "subscription" && (
-          <QuotaCard
-            account={account}
-            reload={reload}
-            reserve={s.codex_reserve_percent ?? 0}
-            busy={busy}
-            run={run}
-            request={request}
-          />
-        )}
-        <Card>
-          <CardHeader>
-            <CardTitle>對話、記憶與任務結果索引</CardTitle>
-          </CardHeader>
-          <CardContent className="grid gap-3 text-sm">
-            <dl className="grid grid-cols-2 gap-2">
-              {Object.entries({
-                message: "對話",
-                task: "任務",
-                memory: "群組記憶",
-                knowledge: "專案記憶",
-                outcome: "任務結果",
-              }).map(([key, label]) => (
-                <div key={key}>
-                  <dt>{label}</dt>
-                  <dd>{state.rag.counts[key] ?? 0} 筆</dd>
-                </div>
-              ))}
-            </dl>
-            <p>
-              最近完成補建：
-              {state.rag.completed_at
-                ? date(state.rag.completed_at)
-                : "尚無紀錄"}
-            </p>
-            <Button
-              variant="outline"
-              disabled={busy || state.rag.active}
-              onClick={() =>
-                void run(
-                  () => request("/api/rag/backfill", "POST"),
-                  "已排程補建索引",
-                )
-              }
-            >
-              {state.rag.active ? "補建中" : "補建索引"}
-            </Button>
-          </CardContent>
-        </Card>
-        <FrictionCard state={state} request={request} />
+    <div className="flex flex-col gap-6">
+      <nav aria-label="設定分區" className="flex flex-wrap gap-2">
+        {Object.entries(settingsSections).map(([id, label]) => (
+          <Button key={id} asChild variant="outline" className="min-h-11">
+            <a href={`#${id}`}>{label}</a>
+          </Button>
+        ))}
+      </nav>
+      <SettingsSection id="settings-ai">
         <AiCard
           replyCount={
             state.groups.filter(
@@ -913,55 +906,18 @@ export function SettingsView({
           run={run}
           request={request}
         />
-      </div>
-      <div className="flex flex-col gap-4">
-        <Card>
-          <CardHeader>
-            <CardTitle>服務連線</CardTitle>
-            <CardAction>
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={busy}
-                onClick={() =>
-                  void run(
-                    () => request("/api/integrations/check", "POST"),
-                    "連線檢查完成",
-                  )
-                }
-              >
-                <RefreshCw /> 檢查連線
-              </Button>
-            </CardAction>
-          </CardHeader>
-          <CardContent>
-            <ul>
-              {!allServicesOpen &&
-                serviceRows
-                  .filter((entry) => entry.action)
-                  .map((entry) => entry.row)}
-            </ul>
-            {!allServicesOpen && !serviceRows.some((entry) => entry.action) && (
-              <p className="text-sm">目前沒有需要處理的服務。</p>
-            )}
-            <details
-              className="mt-3 text-sm"
-              onToggle={(e) => setAllServicesOpen(e.currentTarget.open)}
-            >
-              <summary className="cursor-pointer">全部服務</summary>
-              <ul>{serviceRows.map((entry) => entry.row)}</ul>
-            </details>
-            <details className="mt-3 text-sm">
-              <summary className="cursor-pointer text-muted-foreground">
-                Webhook 網址
-              </summary>
-              <div className="mt-2 flex flex-col gap-1 font-mono text-xs break-all">
-                <span>LINE：{state.webhooks.line}</span>
-                <span>GitHub：{state.webhooks.github}</span>
-              </div>
-            </details>
-          </CardContent>
-        </Card>
+        {s.ai_mode === "subscription" && (
+          <QuotaCard
+            account={account}
+            reload={reload}
+            reserve={s.codex_reserve_percent ?? 0}
+            busy={busy}
+            run={run}
+            request={request}
+          />
+        )}
+      </SettingsSection>
+      <SettingsSection id="settings-line">
         <Card>
           <CardHeader>
             <CardTitle>LINE 推播（群組回覆與私訊）</CardTitle>
@@ -1079,6 +1035,57 @@ export function SettingsView({
             )}
           </CardContent>
         </Card>
+      </SettingsSection>
+      <SettingsSection id="settings-services">
+        <Card>
+          <CardHeader>
+            <CardTitle>連線狀態</CardTitle>
+            <CardAction>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() =>
+                  void run(
+                    () => request("/api/integrations/check", "POST"),
+                    "連線檢查完成",
+                  )
+                }
+              >
+                <RefreshCw /> 檢查連線
+              </Button>
+            </CardAction>
+          </CardHeader>
+          <CardContent>
+            <ul>
+              {!allServicesOpen &&
+                serviceRows
+                  .filter((entry) => entry.action)
+                  .map((entry) => entry.row)}
+            </ul>
+            {!allServicesOpen && !serviceRows.some((entry) => entry.action) && (
+              <p className="text-sm">目前沒有需要處理的服務。</p>
+            )}
+            <details
+              className="mt-3 text-sm"
+              onToggle={(e) => setAllServicesOpen(e.currentTarget.open)}
+            >
+              <summary className="cursor-pointer">全部服務</summary>
+              <ul>{serviceRows.map((entry) => entry.row)}</ul>
+            </details>
+            <details className="mt-3 text-sm">
+              <summary className="cursor-pointer text-muted-foreground">
+                Webhook 網址
+              </summary>
+              <div className="mt-2 flex flex-col gap-1 font-mono text-xs break-all">
+                <span>LINE：{state.webhooks.line}</span>
+                <span>GitHub：{state.webhooks.github}</span>
+              </div>
+            </details>
+          </CardContent>
+        </Card>
+      </SettingsSection>
+      <SettingsSection id="settings-data">
         <ThemeCard />
         <Card>
           <CardHeader>
@@ -1096,7 +1103,46 @@ export function SettingsView({
             </p>
           </CardContent>
         </Card>
-      </div>
+        <Card>
+          <CardHeader>
+            <CardTitle>對話、記憶與任務結果索引</CardTitle>
+          </CardHeader>
+          <CardContent className="grid gap-3 text-sm">
+            <dl className="grid grid-cols-2 gap-2">
+              {Object.entries({
+                message: "對話",
+                task: "任務",
+                memory: "群組記憶",
+                knowledge: "專案記憶",
+                outcome: "任務結果",
+              }).map(([key, label]) => (
+                <div key={key}>
+                  <dt>{label}</dt>
+                  <dd>{state.rag.counts[key] ?? 0} 筆</dd>
+                </div>
+              ))}
+            </dl>
+            <p>
+              最近完成補建：
+              {state.rag.completed_at
+                ? date(state.rag.completed_at)
+                : "尚無紀錄"}
+            </p>
+            <Button
+              variant="outline"
+              disabled={busy || state.rag.active}
+              onClick={() =>
+                void run(
+                  () => request("/api/rag/backfill", "POST"),
+                  "已排程補建索引",
+                )
+              }
+            >
+              {state.rag.active ? "補建中" : "補建索引"}
+            </Button>
+          </CardContent>
+        </Card>
+      </SettingsSection>
     </div>
   );
 }
