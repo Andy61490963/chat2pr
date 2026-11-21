@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Database } from "./db.js";
+import { lineServiceOutageMinutes } from "../shared/line-private.js";
 
 // 會讓收訊、派工或通知停擺的服務；其餘項目只在設定頁顯示。
 const critical: Record<string, string> = {
@@ -18,6 +19,7 @@ type HealthReading = {
   reading_ok: boolean | null;
   checked_at: Date;
   outage_started_at: Date | null;
+  line_outage_confirmed?: boolean;
 };
 
 const minute = 60_000;
@@ -35,18 +37,21 @@ export function healthTransition(
   const confirmed = !confirm || before.reading_ok === ok;
   let notifiedOk = baseline;
   let outageStartedAt = before.outage_started_at;
+  let lineOutageConfirmed = before.line_outage_confirmed ?? false;
   let notice: { kind: "service_up" | "service_down"; text: string } | null =
     null;
 
-  if (name === "tunnel" && baseline && !ok && confirmed) {
+  if (!ok && confirmed) {
     outageStartedAt ??=
       before.reading_ok === false ? before.checked_at : observedAt;
   }
   const elapsed = outageStartedAt
     ? observedAt.getTime() - outageStartedAt.getTime()
     : 0;
+  if (!ok && confirmed && elapsed >= lineServiceOutageMinutes * minute)
+    lineOutageConfirmed = true;
 
-  if (ok && confirmed && (!baseline || outageStartedAt)) {
+  if (ok && confirmed && (!baseline || (name === "tunnel" && outageStartedAt))) {
     notice = {
       kind: "service_up",
       text: baseline
@@ -54,7 +59,6 @@ export function healthTransition(
         : `服務已恢復：${label}`,
     };
     notifiedOk = true;
-    outageStartedAt = null;
   } else if (
     !ok &&
     baseline &&
@@ -67,7 +71,11 @@ export function healthTransition(
     };
     notifiedOk = false;
   }
-  return { notifiedOk, outageStartedAt, notice };
+  if (ok && confirmed) {
+    outageStartedAt = null;
+    lineOutageConfirmed = false;
+  }
+  return { notifiedOk, outageStartedAt, lineOutageConfirmed, notice };
 }
 
 /**
@@ -115,26 +123,26 @@ export async function recordHealth(
     } = await c.query<{ observed_at: Date }>(
       "SELECT clock_timestamp() AS observed_at",
     );
-    const { notifiedOk, outageStartedAt, notice } = healthTransition(
-      name,
-      before,
-      ok,
-      detail,
-      observedAt,
-      options.confirm ?? false,
-    );
+    const { notifiedOk, outageStartedAt, lineOutageConfirmed, notice } =
+      healthTransition(name, before, ok, detail, observedAt, options.confirm ?? false);
     await c.query(
       `UPDATE service_health SET ok=$2,detail=$3,reading_ok=$2,checked_at=$4,
-       notified_ok=$5,outage_started_at=$6 WHERE name=$1`,
-      [name, ok, detail, observedAt, notifiedOk, outageStartedAt],
+       notified_ok=$5,outage_started_at=$6,line_outage_confirmed=$7 WHERE name=$1`,
+      [name, ok, detail, observedAt, notifiedOk, outageStartedAt, lineOutageConfirmed],
     );
     if (notice) {
+      const noticeOutage = ok
+        ? (before.line_outage_confirmed ? before.outage_started_at : null)
+        : outageStartedAt;
       await c.query(
-        "INSERT INTO notifications(kind,dedupe_key,text) VALUES($1,$2,$3)",
+        `INSERT INTO notifications(kind,dedupe_key,text,created_at,line_outage_started_at)
+         VALUES($1,$2,$3,$4,$5)`,
         [
           notice.kind,
           `service:${name}:${ok ? "up" : "down"}:${randomUUID()}`,
           notice.text,
+          observedAt,
+          noticeOutage,
         ],
       );
     }

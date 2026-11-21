@@ -70,6 +70,7 @@ import {
   subscriptionGateName,
 } from "./subscription-gate.js";
 import { maxCodexReserve } from "../shared/subscription-quota.js";
+import { linePrivateModes } from "../shared/line-private.js";
 import { GitHub } from "./github.js";
 import { TargetBranch } from "./task-branch.js";
 import { registerProxy } from "./proxy.js";
@@ -1503,6 +1504,31 @@ export async function buildApp(
     );
     if (b.paused && !before.paused)
       await db.audit(null, "settings", "暫停新派工");
+    return { ok: true };
+  });
+  app.put("/api/settings/line-push", async (req) => {
+    const admin = await requireAdmin(db, req);
+    const range = "LINE 保留給群組回覆的比例請填 0 到 100 的整數";
+    const changes = z.object({
+      line_private_mode: z.enum(linePrivateModes, "請選擇 LINE 私訊範圍"),
+      line_group_reserve_percent: z.number(range).int(range).min(0, range).max(100, range),
+    }).parse(req.body);
+    await db.transaction(async (c) => {
+      const { rows: [{ value: before }] } = await c.query<{ value: Partial<Settings> }>(
+        "SELECT value FROM settings WHERE id=1 FOR UPDATE",
+      );
+      const diff = settingsDiff(before, changes);
+      if (!diff.length) return;
+      await c.query("UPDATE settings SET value=value || $1::jsonb WHERE id=1", [
+        JSON.stringify(changes),
+      ]);
+      await db.audit(
+        null,
+        "settings",
+        `管理者 ${admin.login} 更新 LINE 推播設定：${describeChanges(diff)}`,
+        c,
+      );
+    });
     return { ok: true };
   });
   app.post("/api/notifications/retry", async (req) => {

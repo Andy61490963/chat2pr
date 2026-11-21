@@ -380,7 +380,7 @@ import "@fontsource-variable/inter";
       } },
 
     { title: { change: "修改一定先等你點頭", query: "明確的查詢可以自動開始" }, where: { change: "看板收件匣・LINE 私訊", query: "app" }, cam: { change: "approve", query: "core" }, focus: { change: ["app", "admin"], query: ["app"] },
-      text: { change: "修改程式一律要人確認。任務進到看板收件匣「待審核」，你也會收到 LINE 私訊。打開任務詳情核對目標儲存庫、需求與假設，按「確認專案並核准修改」。就算群組只綁了一個專案，也不能省略這一步。",
+      text: { change: "修改程式一律要人確認。任務會進到看板收件匣「待審核」。額度足夠時會立即送出 LINE 私訊摘要，若上一則摘要送出未滿 10 分鐘，就等滿 10 分鐘再合併送出。打開任務詳情核對目標儲存庫、需求與假設，按「確認專案並核准修改」。就算群組只綁了一個專案，也不能省略這一步。",
               query: "這次查詢明確指名已綁定的專案，判讀完就直接排程。索取機密實際值的查詢仍須人工確認。當系統無法確認目標時，你可以在收件匣查看符合需求的未綁定專案，管理者可一鍵綁定並指定，再確認任務。" },
       chips: { change: ["待審核", "核准只適用這個版本", "不會自動部署"], query: ["自動排程", "唯讀執行", "回答會遮蔽機密"] },
       data: { change: "<k>任務 #128</k>  待審核\n  首頁訂購按鈕改綠色\n  example-org/ShopWeb ← main\n  我先這樣假設：沿用品牌綠\n\n<s>[ 確認專案並核准修改 ]</s>  ← 你按下\n<ok>✓ 已核准 v1</ok>",
@@ -442,7 +442,7 @@ import "@fontsource-variable/inter";
       anim: function (tl) { phase(tl, 2, "run"); travel(tl, "slot_relay", 0.4, "推論", "var(--ai)"); travel(tl, "relay_gpt", 0.5, "推論", "var(--ai)"); travel(tl, "relay_gpt", 0.5, "回應", "var(--ai)", true); travel(tl, "slot_relay", 0.4, "回應", "var(--ai)", true); phase(tl, 2, "done", 0.6); } },
 
     { modes: ["change"], title: "收集差異、跑測試", where: "工作容器（沒有網路）", cam: "work", focus: [],
-      text: "用可信的原始基底收集差異。有變更時，在沒有網路的容器裡跑專案的測試命令；測試寫死 LocalDB 時，系統會暫時把連線導向容器內的 SQL Server。沒有變更且 Codex 確認已符合需求時，你可以在看板查看判斷依據，群組和管理者都會收到無需修改的通知。",
+      text: "用可信的原始基底收集差異。有變更時，在沒有網路的容器裡跑專案的測試命令；測試寫死 LocalDB 時，系統會暫時把連線導向容器內的 SQL Server。沒有變更且 Codex 確認已符合需求時，群組和看板鈴鐺會顯示結果，你可以在看板查看判斷依據。",
       chips: ["測試沒有網路", "不信任容器內 .git", "LocalDB 自動導向"],
       data: "<k>變更</k>  2 個檔案（+2 −1）\n\n$ npm test\n  <ok>✓</ok> OrderButton 顯示品牌綠\n  <ok>✓</ok> 手機版按鈕樣式\n  <ok>✓</ok> 點擊後送出訂單\n<ok>Tests  128 passed (128)</ok>",
       end: { ph: ["done", "done", "done", "done", "done"] },
@@ -463,18 +463,18 @@ import "@fontsource-variable/inter";
       anim: function (tl) { tl.fromTo(roBadge, { opacity: 0, y: -6 }, { opacity: 1, y: 0, duration: 0.3 }); phase(tl, 5, "run"); travel(tl, "slot_relay", 0.4, "審查", "var(--ai)"); travel(tl, "relay_gpt", 0.5, "審查", "var(--ai)"); travel(tl, "relay_gpt", 0.5, "通過", "var(--good)", true); travel(tl, "slot_relay", 0.4, "通過", "var(--good)", true); phase(tl, 5, "done"); tl.to(roBadge, { opacity: 0, duration: 0.3 }); } },
 
     { title: { change: "開 PR、回報群組", query: "把答案送回來" }, where: "app → GitHub・LINE", follow: true, focus: ["app", "gh", "line", "admin"],
-      text: { change: "app 用 GitHub App 建立分支、Issue 與 PR，私訊你，也在群組回一則訊息。這兩則是 LINE 推播，會算進每月額度，群組依人數計。額度用完時訊息會排隊，群組成員打 /進度 就能用 reply token 免費取回。",
-              query: "報告存到任務上、回覆到 GitHub Issue，並在群組貼出重點、私訊你。群組裡只放重點，「回覆」那則答案打「詳細」，機器人會分段貼出全文，不建任務、不用額度。" },
+      text: { change: "app 用 GitHub App 建立分支、Issue 與 PR，再把結果送到群組和看板鈴鐺。系統優先把 LINE 推播額度留給群組，群組推播按人數計。額度用完時，成員可打 /進度 免費取回回覆。",
+              query: "報告存到任務、回覆到 GitHub Issue，並在群組貼出重點、在看板鈴鐺通知你。群組成員「回覆」答案打「詳細」，機器人會分段貼出全文，不建任務、不用額度。" },
       chips: { change: ["GitHub App", "推播算額度", "/進度 免費取回"], query: ["GitHub Issue", "群組貼重點", "打「詳細」看全文"] },
-      data: { change: "<k>GitHub</k>\n  分支  agentflow/128-order-button-green\n  <s>PR #42</s>  首頁訂購按鈕改綠色（Closes #41）\n\n<k>群組（推播，計入額度）</k>\n  「首頁訂購按鈕改綠色」已修改完成，\n  等管理者檢視後合併：…/pull/42\n\n<k>私訊你</k>\n  PR 已完成，請檢視後合併",
-              query: "<k>GitHub</k>\n  <s>Issue #41</s>  回覆調查報告\n\n<k>群組（推播，計入額度）</k>\n  「訂購按鈕在哪」的查詢結果：…\n  （回覆這則打「詳細」看全文）\n\n<k>私訊你</k>\n  查詢已回覆：訂購按鈕在哪" },
+      data: { change: "<k>GitHub</k>\n  分支  agentflow/128-order-button-green\n  <s>PR #42</s>  首頁訂購按鈕改綠色（Closes #41）\n\n<k>群組（推播，計入額度）</k>\n  「首頁訂購按鈕改綠色」已修改完成，\n  等管理者檢視後合併：…/pull/42\n\n<k>看板鈴鐺</k>\n  PR 已完成，請檢視後合併",
+              query: "<k>GitHub</k>\n  <s>Issue #41</s>  回覆調查報告\n\n<k>群組（推播，計入額度）</k>\n  「訂購按鈕在哪」的查詢結果：…\n  （回覆這則打「詳細」看全文）\n\n<k>看板鈴鐺</k>\n  查詢已回覆：訂購按鈕在哪" },
       end: { slot: false, bub: ["m1", "r1", "m2", "f1"], pr: true, adm: { change: "pr", query: "answered" }, app: { change: "PR #42 等你合併", query: "已回覆" } },
       anim: function (tl, mode) {
         tl.to(slot, { opacity: 0, duration: 0.5 });
         travel(tl, "app_gh", 1.6, mode === "change" ? "PR" : "報告", "var(--fg)");
         tl.fromTo(prTag, { opacity: 0, y: -6 }, { opacity: 1, y: 0, duration: 0.35, ease: "back.out(2)" });
         travel(tl, "out_line", 1.4, "群組", "var(--line)"); showBubble(tl, "f1");
-        travel(tl, "app_admin", 1.0, "私訊", "var(--line)");
+        travel(tl, "app_admin", 1.0, "看板通知", "var(--fg)");
         tl.call(function () { setAdmin(mode === "change" ? "pr" : "answered"); });
         status(tl, mode === "change" ? "PR #42 等你合併" : "已回覆");
       } },
@@ -508,9 +508,9 @@ import "@fontsource-variable/inter";
     none: ["收件匣", "var(--muted-fg)", "var(--card)", "目前沒有待處理", "", false],
     pending: ["待審核", "var(--warn)", "var(--warn-soft)", "首頁訂購按鈕改綠色", "example-org/ShopWeb", true],
     approved: ["已核准・排隊中", "var(--good)", "var(--good-soft)", "首頁訂購按鈕改綠色", "v1・王大同核准", false],
-    pr: ["待你合併", "var(--info)", "var(--info-soft)", "PR #42 首頁訂購按鈕改綠色", "LINE 私訊已送達", false],
+    pr: ["待你合併", "var(--info)", "var(--info-soft)", "PR #42 首頁訂購按鈕改綠色", "你可以到看板鈴鐺查看", false],
     merged: ["已合併", "var(--good)", "var(--good-soft)", "首頁訂購按鈕改綠色", "近 7 天已合併 +1", false],
-    answered: ["查詢已回覆", "var(--good)", "var(--good-soft)", "訂購按鈕在哪", "LINE 私訊已送達", false]
+    answered: ["查詢已回覆", "var(--good)", "var(--good-soft)", "訂購按鈕在哪", "你可以到看板鈴鐺查看", false]
   };
   function setAdmin(s) {
     var m = ADM[s] || ADM.none;

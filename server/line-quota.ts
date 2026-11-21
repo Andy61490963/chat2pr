@@ -7,6 +7,7 @@ import { redact } from "./policy.js";
 import {
   LINE_QUOTA,
   expiredNote,
+  isMonthlyLimit,
   quotaExhaustedDetail,
   quotaShortPrefix,
   quotaUsageOf,
@@ -16,7 +17,7 @@ import {
 /**
  * LINE 每月推播額度用完的處理。
  * - 推播回 429 且訊息寫明 monthly limit：不算失敗次數。先查額度 API：群組撞到、但還剩 1 則以上時，
- *   只是剩下的不夠這個群組的人數，本輪略過群組、私訊照送；剩 0 則或私訊也撞到，才寫入 line_quota（ok=false）整個暫停。
+ *   只是剩下的不夠這個群組的人數，本輪略過其餘群組，私訊另依保留額度判斷。剩 0 則或私訊也撞到，才整個暫停。
  * - 群組推播依人數計費：剩餘則數要用 line_quota 說明裡的用量減掉，與群組人數（groups.member_count）比較，
  *   不能只看 used<limit。flush 每送一則就在本地加上用掉的則數，不必每則都查 API。
  * - 暫停期間由每小時的連線檢查（或管理者按「檢查連線」）查 quota API，有剩餘額度才解除；
@@ -29,6 +30,65 @@ export class LineQuotaExhausted extends Error {
   constructor() {
     super(quotaExhaustedDetail);
   }
+}
+
+// 測試私訊、通知排程與額度同步共用同一把鎖，避免同時計入同一份剩餘額度。
+export async function withLinePushLock<T>(db: Database, run: () => Promise<T>) {
+  const client = await db.pool.connect();
+  try {
+    const { rows: [{ locked }] } = await client.query<{ locked: boolean }>(
+      "SELECT pg_try_advisory_lock(73467) AS locked",
+    );
+    if (!locked) return;
+    try {
+      return await run();
+    } finally {
+      await client.query("SELECT pg_advisory_unlock(73467)");
+    }
+  } finally {
+    client.release();
+  }
+}
+
+export async function pushLineMessage(
+  access: string,
+  to: string,
+  message: { type: "text"; text: string },
+  retryKey: string,
+) {
+  const response = await fetchLine("https://api.line.me/v2/bot/message/push", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${access}`,
+      "Content-Type": "application/json",
+      "X-Line-Retry-Key": retryKey,
+    },
+    body: JSON.stringify({ to, messages: [message] }),
+    signal: AbortSignal.timeout(10000),
+  });
+  if (
+    response.ok ||
+    (response.status === 409 && response.headers.get("x-line-accepted-request-id"))
+  )
+    return response;
+  const body = (await response.json().catch(() => null)) as {
+    message?: unknown;
+  } | null;
+  if (isMonthlyLimit(response.status, body?.message))
+    throw new LineQuotaExhausted();
+  throw new Error(
+    response.status === 429
+      ? "LINE 推播太頻繁，稍後會再送（429）"
+      : `LINE 通知失敗（${response.status}）`,
+  );
+}
+
+export function recordLinePush(db: Database, error?: string) {
+  return db.query(
+    `INSERT INTO service_health(name,ok,detail) VALUES('notifications',$1,$2)
+     ON CONFLICT(name) DO UPDATE SET ok=$1,detail=$2,checked_at=now()`,
+    [error === undefined, error ?? "最近一次 LINE 通知已送達"],
+  );
 }
 
 /** 額度用完、推播暫停中。 */
@@ -81,8 +141,9 @@ export async function markQuotaExhausted(
 export async function saveQuotaUsage(
   db: Database,
   usage: { limit: number | null; used: number },
+  client: DbClient = db.pool,
 ) {
-  await db.query(
+  await client.query(
     `INSERT INTO service_health(name,ok,detail) VALUES($1,true,$2)
      ON CONFLICT(name) DO UPDATE SET detail=EXCLUDED.detail WHERE service_health.ok`,
     [LINE_QUOTA, quotaUsageText(usage)],
@@ -256,6 +317,10 @@ export async function fetchLineQuota(access: string) {
  * 用完就維持（或開始）暫停。讀不到用量時不改變暫停狀態，只更新確認時間。
  */
 export async function syncLineQuota(db: Database, access: string) {
+  await withLinePushLock(db, () => refreshLineQuota(db, access));
+}
+
+async function refreshLineQuota(db: Database, access: string) {
   let usage: Awaited<ReturnType<typeof fetchLineQuota>>;
   try {
     usage = await fetchLineQuota(access);
@@ -274,7 +339,7 @@ export async function syncLineQuota(db: Database, access: string) {
     return;
   }
   const text = quotaUsageText(usage);
-  // 解除條件是「還能送 1 則私訊」；群組要的則數依人數，由 flushNotifications 逐則判斷剩餘額度夠不夠。
+  // 至少還有 1 則才解除整體暫停，之後群組按人數、私訊按保留比例判斷。
   if (usage.limit !== null && usage.used >= usage.limit) {
     await markQuotaExhausted(db, usage);
     return;

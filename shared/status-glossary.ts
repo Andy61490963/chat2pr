@@ -47,6 +47,7 @@ export const projectQuotaWaitPrefix = `${statusLabels.budget_wait}｜`;
 
 export const notificationLabels = {
   action: "需要你處理",
+  privatePushPaused: "私訊暫停",
 } as const;
 
 export const networkStatusLabels = {

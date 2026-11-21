@@ -194,6 +194,34 @@ describe("工作流程設定的活動紀錄", () => {
       await app.close();
     }
   });
+  it("LINE 推播設定驗證輸入並將有效變更寫進活動紀錄", async () => {
+    const headers = await session(), app = await buildApp(db);
+    const put = (mode: string, percent: number) => app.inject({
+      method: "PUT",
+      url: "/api/settings/line-push",
+      headers,
+      payload: { line_private_mode: mode, line_group_reserve_percent: percent },
+    });
+    try {
+      expect((await db.settings()).line_private_mode).toBe("action");
+      expect((await db.settings()).line_group_reserve_percent).toBe(70);
+      for (const percent of [-1, 70.5, 101])
+        expect((await put("action", percent)).statusCode).toBe(400);
+      expect((await put("無效選項", 70)).statusCode).toBe(400);
+      expect((await put("all", 80)).statusCode).toBe(200);
+      expect((await put("all", 80)).statusCode).toBe(200);
+      expect(await db.settings()).toMatchObject({
+        line_private_mode: "all",
+        line_group_reserve_percent: 80,
+      });
+      expect(await settingsAudits()).toEqual([expect.stringMatching(
+        /更新 LINE 推播設定.+只私訊需要動手的事 → 所有通知都私訊.+70% → 80%/,
+      )]);
+    } finally {
+      await app.close();
+    }
+  });
+
   it("寫出操作者與改了什麼；開放容器網路寫成「隔離 → 完全開放」", async () => {
     const headers = await session(),
       app = await buildApp(db);

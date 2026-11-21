@@ -144,7 +144,7 @@ describe("設定頁的 LINE 推播卡片", () => {
     );
   });
 
-  it("還沒查過額度、也沒有失敗通知時不顯示多餘的提示", () => {
+  it("還沒查過額度時照常私訊，由 LINE 回應判斷是否已達上限", () => {
     const panel = linePushPanel([], { direct: 0, group: 0, stale: 0 });
     expect(panel).toMatchObject({
       blocked: false,
@@ -152,6 +152,17 @@ describe("設定頁的 LINE 推播卡片", () => {
       notice: null,
       failedText: null,
       retryDisabled: false,
+      testDisabled: false,
     });
+  });
+  it("已知用量達到群組保留門檻時暫停私訊並說明", () => {
+    const panel = linePushPanel(
+      [{ name: "line_quota", ok: true, detail: "本月已用 150／上限 200 則" }],
+      { direct: 0, group: 0, stale: 0 },
+      70,
+    );
+    expect(panel.blocked).toBe(false);
+    expect(panel.notice).toEqual(expect.any(String));
+    expect(panel.testDisabled).toBe(true);
   });
 });

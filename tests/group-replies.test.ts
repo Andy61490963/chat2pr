@@ -42,6 +42,7 @@ import { dueTriageGroups } from "../server/triage-window.js";
 import { GitHub } from "../server/github.js";
 import { quotaExhaustedDetail } from "../shared/line-quota.js";
 import { syncLineQuota } from "../server/line-quota.js";
+import { recordHealth } from "../server/health.js";
 import type { Task } from "../shared/types.js";
 
 let app: Awaited<ReturnType<typeof buildApp>>;
@@ -202,12 +203,18 @@ describe("群組結果通知", () => {
     ).toHaveLength(1);
 
     await db.query(
-      "UPDATE settings SET value=jsonb_set(value,'{admin_line_id}','\"fictional-admin-id\"')",
+      `UPDATE settings SET value=value||'{"admin_line_id":"fictional-admin-id","line_private_mode":"all","line_group_reserve_percent":0}'::jsonb`,
+    );
+    await db.query(
+      "UPDATE notifications SET created_at=now()-interval '11 minutes' WHERE dedupe_key='answered:admin'",
     );
     await new Line(db).flushNotifications();
     const admin = sent.filter((s) => s.url.endsWith("/push"))[1].body;
     expect(admin.to).toBe("fictional-admin-id");
-    expect(admin.messages[0].text).toContain(`/tasks?task=${id}`);
+    expect(admin.messages).toEqual([
+      { type: "text", text: expect.stringContaining("查詢完成") },
+    ]);
+    expect(admin.messages[0].text).toContain("看板：http://localhost:4310");
   });
 
   it("管理者取消或不採用需求時告訴群組", async () => {
@@ -481,13 +488,22 @@ describe("LINE 每月推播額度用完", () => {
     quota: { limit: number | null; used: number } | null;
     members: number | null;
   }) => {
-    const calls = { pushes: [] as string[], quota: 0, members: 0 };
+    const calls = {
+      pushes: [] as string[],
+      messages: [] as { key: string | null; messages: { text: string }[] }[],
+      quota: 0,
+      members: 0,
+    };
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
         if (url.endsWith("/v2/bot/message/push")) {
           const to = JSON.parse(String(init?.body)).to;
           calls.pushes.push(to);
+          calls.messages.push({
+            key: new Headers(init?.headers).get("X-Line-Retry-Key"),
+            messages: JSON.parse(String(init?.body)).messages,
+          });
           return opts.push(to);
         }
         if (url.endsWith("/members/count")) {
@@ -517,9 +533,18 @@ describe("LINE 每月推播額度用完", () => {
   };
   const delivered = () =>
     Response.json({ sentMessages: [{ id: "fictional-push" }] });
-  const pairAdmin = () =>
+  const pairAdmin = (useDefaults = false) =>
     db.query(
-      `UPDATE settings SET value=value||'{"admin_line_id":"fictional-admin"}'::jsonb WHERE id=1`,
+      "UPDATE settings SET value=value||$1::jsonb WHERE id=1",
+      [JSON.stringify({
+        admin_line_id: "fictional-admin",
+        ...(useDefaults ? {} : { line_private_mode: "all", line_group_reserve_percent: 0 }),
+      })],
+    );
+  const ageDirect = (minutes = 11) =>
+    db.query(
+      "UPDATE notifications SET created_at=now()-$1::int*interval '1 minute' WHERE group_id IS NULL",
+      [minutes],
     );
   const directRow = (key: string) =>
     db.one<{ sent_at: Date | null; attempts: number }>(
@@ -540,6 +565,7 @@ describe("LINE 每月推播額度用完", () => {
       await notifyGroup(db, id, "answered", `answered:big:${n}`, `結果 ${n}`);
     const line = new Line(db);
     await line.notify(null, "ready", "direct:1", "管理者私訊");
+    await ageDirect();
     await setQuota(true, "本月已用 195／上限 200 則");
     const calls = billedApi({ push: delivered, quota: null, members: 8 });
 
@@ -590,10 +616,9 @@ describe("LINE 每月推播額度用完", () => {
     await notifyGroup(db, id, "ready", "ready:second", "群組第二則");
     const line = new Line(db);
     await line.notify(null, "ready", "direct:1", "管理者私訊");
-    // 送出順序依 created_at（毫秒）；同一毫秒建立時私訊會排到群組前面，用量就差 1 則。
-    // 固定私訊在群組之後，讓先撞上限、再送私訊的順序可重現。
+    await ageDirect();
     await db.query(
-      "UPDATE notifications SET created_at=now()+interval '1 second' WHERE dedupe_key='direct:1'",
+      "UPDATE notifications SET created_at=now()-interval '1 minute' WHERE dedupe_key='group:answered:first'",
     );
     const usage = { limit: 200, used: 197 };
     // 人數讀不到（未知），用量也還沒查過：照送，由 LINE 的 429 判斷。
@@ -653,6 +678,7 @@ describe("LINE 每月推播額度用完", () => {
     await pairAdmin();
     const line = new Line(db);
     await line.notify(null, "ready", "direct:1", "管理者私訊");
+    await ageDirect();
     await setQuota(true, "本月已用 150／上限 200 則");
     const calls = billedApi({
       push: () => monthlyLimit(),
@@ -670,6 +696,121 @@ describe("LINE 每月推播額度用完", () => {
       sent_at: null,
       attempts: 0,
     });
+  });
+
+  it("預設立即將已累積的三件待辦合併成一次推播，查詢與 PR 結果留在鈴鐺", async () => {
+    await pairAdmin(true);
+    const line = new Line(db);
+    for (const [kind, message] of [
+      ["approval", "你有一件要確認"],
+      ["failed", "你有一件失敗要處理"],
+      ["project_input", "你有一件專案補問"],
+      ["answered", "範例查詢已回覆"],
+      ["ready", "範例 PR 已完成"],
+    ]) await line.notify(null, kind, `direct:${kind}`, message);
+    await setQuota(true, "本月已用 20／上限 200 則");
+    const calls = billedApi({ push: delivered, quota: null, members: 8 });
+    await line.flushNotifications();
+    expect(calls.pushes).toEqual(["fictional-admin"]);
+    expect(calls.messages[0].messages).toHaveLength(1);
+    const text = calls.messages[0].messages[0].text;
+    for (const item of ["要確認", "失敗要處理", "專案補問", "看板：http://localhost:4310"])
+      expect(text).toContain(item);
+    expect(text).not.toMatch(/範例查詢已回覆|範例 PR 已完成/);
+    expect((await quota())?.detail).toBe("本月已用 21／上限 200 則");
+    const state = await app.inject({ url: "/api/state", headers });
+    expect(state.json().alerts).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "answered", text: "範例查詢已回覆" }),
+      expect.objectContaining({ kind: "ready", text: "範例 PR 已完成" }),
+    ]));
+    await line.flushNotifications();
+    expect(calls.pushes).toHaveLength(1);
+  });
+
+  it("群組先送，用量到 30% 時私訊暫停，下一輪群組也照送", async () => {
+    await pairAdmin(true);
+    const line = new Line(db);
+    const id = await task();
+    await notifyGroup(db, id, "answered", "answered:example", "範例群組結果");
+    await line.notify(null, "approval", "direct:hold", "你有一件要確認");
+    await ageDirect();
+    await setQuota(true, "本月已用 52／上限 200 則");
+    const calls = billedApi({ push: delivered, quota: null, members: 8 });
+    await line.flushNotifications();
+    expect(calls.pushes).toEqual(["group-a"]);
+    expect((await quota())?.detail).toBe("本月已用 60／上限 200 則");
+    await notifyGroup(db, id, "answered", "answered:another", "另一件範例結果");
+    await line.flushNotifications();
+    expect(calls.pushes).toEqual(["group-a", "group-a"]);
+    expect(await directRow("direct:hold")).toMatchObject({ sent_at: null, attempts: 0 });
+    await setQuota(true, "本月已用 1／上限 200 則");
+    await line.flushNotifications();
+    expect(calls.pushes).toEqual(["group-a", "group-a", "fictional-admin"]);
+  });
+
+  it("私訊摘要重試沿用原文字與重試鍵，LINE 已收下時只記一次用量", async () => {
+    await pairAdmin(true);
+    const line = new Line(db);
+    await line.notify(null, "approval", "direct:retry", "你有一件要確認");
+    await ageDirect();
+    await setQuota(true, "本月已用 58／上限 200 則");
+    let response = () => new Response(null, { status: 500 });
+    const calls = billedApi({ push: () => response(), quota: null, members: 8 });
+    await line.flushNotifications();
+    expect(await directRow("direct:retry")).toMatchObject({ sent_at: null, attempts: 1 });
+    await line.notify(null, "failed", "direct:other", "你有另一件事要處理");
+    await db.query(
+      "UPDATE notifications SET created_at=now()-interval '10 minutes' WHERE dedupe_key='direct:other'",
+    );
+    response = () => new Response(null, {
+      status: 409,
+      headers: { "x-line-accepted-request-id": "fictional-request-id" },
+    });
+    await line.flushNotifications();
+    expect(calls.messages).toHaveLength(2);
+    expect(calls.messages[1]).toEqual(calls.messages[0]);
+    expect(await directRow("direct:retry")).toMatchObject({ sent_at: expect.any(Date), attempts: 2 });
+    expect(await directRow("direct:other")).toMatchObject({ sent_at: null, attempts: 0 });
+    expect((await quota())?.detail).toBe("本月已用 59／上限 200 則");
+  });
+
+  it("短暫服務中斷留在鈴鐺，持續滿 15 分鐘才納入私訊", async () => {
+    await pairAdmin();
+    const line = new Line(db);
+    for (const name of ["github", "runner"]) {
+      await db.query("DELETE FROM service_health WHERE name=$1", [name]);
+      await recordHealth(db, name, true, "正常");
+      await recordHealth(db, name, false, "範例服務暫時無回應");
+    }
+    await recordHealth(db, "github", true, "正常");
+    await db.query(
+      `WITH outage AS (
+         UPDATE service_health SET outage_started_at=now()-interval '14 minutes'
+         WHERE name='runner' RETURNING outage_started_at
+       )
+       UPDATE notifications SET line_outage_started_at=outage.outage_started_at,
+       created_at=outage.outage_started_at FROM outage WHERE kind='service_down'
+       AND dedupe_key LIKE 'service:runner:%'`,
+    );
+    const calls = billedApi({ push: delivered, quota: null, members: 8 });
+    await line.flushNotifications();
+    expect(calls.pushes).toEqual([]);
+    await db.query(
+      `WITH outage AS (
+         UPDATE service_health SET outage_started_at=now()-interval '16 minutes'
+         WHERE name='runner' RETURNING outage_started_at
+       )
+       UPDATE notifications SET line_outage_started_at=outage.outage_started_at,
+       created_at=outage.outage_started_at FROM outage WHERE kind='service_down'
+       AND dedupe_key LIKE 'service:runner:%'`,
+    );
+    await recordHealth(db, "runner", false, "範例服務仍無回應");
+    await line.flushNotifications();
+    expect(calls.pushes).toEqual(["fictional-admin"]);
+    expect(calls.messages[0].messages[0].text).toContain("隔離執行器");
+    expect(calls.messages[0].messages[0].text).not.toContain("GitHub");
+    expect(await db.query("SELECT 1 FROM notifications WHERE kind='service_up'")).toHaveLength(1);
+    await db.query("DELETE FROM service_health WHERE name IN ('github','runner')");
   });
 
   it("因額度不夠群組人數而略過的通知：額度恢復續送時，過時的標成已過期、不補送；還在略過時不動", async () => {

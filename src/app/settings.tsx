@@ -3,6 +3,15 @@ import { useEffect, useRef, useState } from "react";
 import { Check, Copy, RefreshCw, Send } from "lucide-react";
 import type { NotificationFailures, Settings } from "../../shared/types.js";
 import { LINE_QUOTA, linePushPanel } from "../../shared/line-quota.js";
+import {
+  lineGroupReserveLabel,
+  linePrivateDefaults,
+  linePrivateDigestMinutes,
+  linePrivateModeLabels,
+  linePrivateModes,
+  lineServiceOutageMinutes,
+  type LinePrivateMode,
+} from "../../shared/line-private.js";
 import { networkStatusLabels } from "../../shared/status-glossary.js";
 import {
   maxCodexReserve,
@@ -292,6 +301,81 @@ function QuotaCard({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function LinePushForm({
+  savedMode,
+  savedReserve,
+  busy,
+  run,
+  request,
+}: {
+  savedMode: LinePrivateMode;
+  savedReserve: number;
+  busy: boolean;
+  run: Run;
+  request: Request;
+}) {
+  const [mode, setMode] = useState(savedMode);
+  const [reserve, setReserve] = useState(String(savedReserve));
+  const dirty = mode !== savedMode || reserve !== String(savedReserve);
+  useUnsaved("settings-line", dirty);
+  return (
+    <form
+      className="flex min-w-0 flex-col gap-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void run(
+          () => request("/api/settings/line-push", "PUT", {
+            line_private_mode: mode,
+            line_group_reserve_percent: Number(reserve),
+          }),
+          "已儲存 LINE 推播設定",
+        );
+      }}
+    >
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="flex min-w-0 flex-col gap-2">
+          <Label htmlFor="line-private-mode">LINE 私訊範圍</Label>
+          <select
+            id="line-private-mode"
+            className="min-h-11 w-full rounded-md border border-muted-foreground bg-background px-3 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary"
+            value={mode}
+            onChange={(event) => setMode(event.target.value as LinePrivateMode)}
+            aria-describedby="line-private-hint"
+          >
+            {linePrivateModes.map((option) => (
+              <option key={option} value={option}>{linePrivateModeLabels[option]}</option>
+            ))}
+          </select>
+          <p id="line-private-hint" className="text-sm text-muted-foreground">
+            你預設只會收到待確認、需要處理的失敗、補問，以及持續 {lineServiceOutageMinutes} 分鐘的服務異常。
+          </p>
+        </div>
+        <div className="flex min-w-0 flex-col gap-2">
+          <Label htmlFor="line-group-reserve">{lineGroupReserveLabel}</Label>
+          <Input
+            id="line-group-reserve"
+            className="min-h-11 border-muted-foreground"
+            type="number"
+            min={0}
+            max={100}
+            step={1}
+            required
+            value={reserve}
+            onChange={(event) => setReserve(event.target.value)}
+            aria-describedby="line-group-reserve-hint"
+          />
+          <p id="line-group-reserve-hint" className="text-sm text-muted-foreground">
+            你可以填 0 到 100，額度只剩你保留的比例時請到看板鈴鐺查看通知。
+          </p>
+        </div>
+      </div>
+      <Button type="submit" className="min-h-11 self-start" disabled={busy || !dirty}>
+        儲存 LINE 推播設定
+      </Button>
+    </form>
   );
 }
 
@@ -808,7 +892,9 @@ export function SettingsView({
     group: 0,
     stale: 0,
   };
-  const push = linePushPanel(state.health, failures);
+  const mode = s.line_private_mode ?? linePrivateDefaults.line_private_mode;
+  const reserve = s.line_group_reserve_percent ?? linePrivateDefaults.line_group_reserve_percent;
+  const push = linePushPanel(state.health, failures, reserve);
   const [allServicesOpen, setAllServicesOpen] = useState(false);
   const serviceRows = services
     .filter((i) => !i.mode || i.mode === s.ai_mode)
@@ -928,8 +1014,7 @@ export function SettingsView({
           <CardHeader>
             <CardTitle>LINE 推播（群組回覆與私訊）</CardTitle>
             <CardDescription>
-              私訊只在需要你決定、執行異常或 PR
-              完成時送出；私訊與群組回覆（「收到」除外）都計入 LINE 每月推播額度
+              過去 {linePrivateDigestMinutes} 分鐘未送出摘要時，新通知會立即送出。接下來累積的通知會在上一則送出滿 {linePrivateDigestMinutes} 分鐘時合併送出，每則最多列 5 件，完整通知在看板鈴鐺。
             </CardDescription>
             {s.admin_line_id && (
               <CardAction>
@@ -943,7 +1028,7 @@ export function SettingsView({
                 {push.usage}
               </p>
             )}
-            {push.notice && (
+            {push.notice && (s.admin_line_id || push.blocked) && (
               <p
                 role="status"
                 className="rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn"
@@ -951,9 +1036,19 @@ export function SettingsView({
                 {push.notice}
               </p>
             )}
+            <LinePushForm
+              key={`${mode}:${reserve}`}
+              savedMode={mode}
+              savedReserve={reserve}
+              busy={busy}
+              run={run}
+              request={request}
+            />
+            <Separator />
             <div className="flex flex-wrap gap-2">
               <Button
                 variant="outline"
+                className="min-h-11"
                 disabled={busy}
                 onClick={() =>
                   void run(async () => {
@@ -969,6 +1064,7 @@ export function SettingsView({
               {s.admin_line_id && (
                 <Button
                   variant="outline"
+                  className="min-h-11"
                   disabled={busy || push.testDisabled}
                   title="每送一則測試通知會用掉一則推播額度"
                   onClick={() =>
@@ -991,6 +1087,7 @@ export function SettingsView({
                 <ConfirmButton
                   variant="outline"
                   size="sm"
+                  className="min-h-11"
                   disabled={busy || push.retryDisabled}
                   title="重送失敗的 LINE 通知？"
                   description={push.confirm}
@@ -1016,6 +1113,7 @@ export function SettingsView({
                   <Button
                     variant="ghost"
                     size="xs"
+                    className="min-h-11 min-w-11"
                     onClick={() =>
                       void navigator.clipboard
                         ?.writeText(`配對 ${pairing}`)

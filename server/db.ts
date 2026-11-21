@@ -2,6 +2,7 @@ import pg from "pg";
 import { readFile } from "node:fs/promises";
 import type { Settings } from "../shared/types.js";
 import { containsCredential } from "../shared/credentials.js";
+import { linePrivateDefaults } from "../shared/line-private.js";
 export type DbClient = Pick<pg.PoolClient, "query">;
 export class Database {
   pool: pg.Pool;
@@ -61,6 +62,11 @@ export class Database {
         auto_memory: stored.auto_memory ?? true,
         code_downloads: stored.code_downloads ?? true,
         group_replies: stored.group_replies ?? true,
+        line_private_mode:
+          stored.line_private_mode ?? linePrivateDefaults.line_private_mode,
+        line_group_reserve_percent:
+          stored.line_group_reserve_percent ??
+          linePrivateDefaults.line_group_reserve_percent,
         container_network: stored.container_network ?? "isolated",
         codex_reserve_percent: stored.codex_reserve_percent ?? 0,
       },
