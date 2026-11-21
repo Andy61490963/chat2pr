@@ -1,6 +1,7 @@
 import {
   networkStatusLabels,
   projectLabels,
+  projectSectionLabels,
   projectStatus,
   projectVerificationLabels,
 } from "../../shared/status-glossary.js";
@@ -73,7 +74,12 @@ import { ProjectSsh } from "./project-ssh";
 import { useUnsaved, useGuard } from "./unsaved";
 import { ProjectContextEditor } from "./project-context";
 import { ProjectDatabase } from "./project-database";
-import { isRepoNotice, verificationLabel } from "../../shared/project-setup.js";
+import {
+  isRepoNotice,
+  projectListSections,
+  type ProjectListEntry,
+  verificationLabel,
+} from "../../shared/project-setup.js";
 import {
   DEFAULT_COLLECT_EXCLUDES,
   MAX_COLLECT_EXCLUDES,
@@ -114,6 +120,86 @@ function indexStatus(project: Project, enabled: boolean) {
       return "待建立";
   }
 }
+function ProjectList({
+  entries,
+  onOpen,
+}: {
+  entries: ProjectListEntry[];
+  onOpen: (id: string) => void;
+}) {
+  return (
+    <div className="@3xl:rounded-xl @3xl:border @3xl:bg-card @3xl:text-card-foreground">
+      <div
+        aria-hidden="true"
+        className="hidden grid-cols-[minmax(0,2fr)_6rem_minmax(0,1.2fr)_minmax(0,1.2fr)_7.5rem] gap-4 border-b px-5 py-2.5 text-xs text-muted-foreground @3xl:grid"
+      >
+        <span>專案</span>
+        <span>分支</span>
+        <span>環境驗證</span>
+        <span>使用群組</span>
+        <span className="text-right">狀態</span>
+      </div>
+      <ul role="list" className="grid gap-3 @3xl:block @3xl:divide-y">
+        {entries.map(({ project: p, groups }) => {
+          const verification = projectVerification(p);
+          return (
+            <li
+              key={p.id}
+              className="rounded-xl border bg-card text-card-foreground @3xl:rounded-none @3xl:border-0"
+            >
+              <button
+                type="button"
+                className="grid min-h-11 w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-2 rounded-[inherit] px-5 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring @3xl:grid-cols-[minmax(0,2fr)_6rem_minmax(0,1.2fr)_minmax(0,1.2fr)_7.5rem] @3xl:items-center"
+                onClick={() => onOpen(p.id)}
+              >
+                <span className="flex min-w-0 flex-col [overflow-wrap:anywhere]">
+                  <span className="font-medium">{p.name}</span>
+                  <span className="font-mono text-xs text-muted-foreground">
+                    {p.repo}
+                  </span>
+                  {p.validation_progress && (
+                    <span className="text-xs text-muted-foreground">
+                      {p.validation_progress}
+                    </span>
+                  )}
+                </span>
+                <span className="col-span-2 text-sm [overflow-wrap:anywhere] @3xl:col-auto">
+                  <span className="mr-2 text-xs text-muted-foreground @3xl:sr-only">
+                    分支
+                  </span>
+                  {p.base_branch}
+                </span>
+                <span
+                  className={cn(
+                    "col-span-2 text-sm @3xl:col-auto",
+                    verification === "partial" && "text-warn",
+                    verification === "failed" && "text-danger",
+                  )}
+                >
+                  <span className="mr-2 text-xs text-muted-foreground @3xl:sr-only">
+                    環境驗證
+                  </span>
+                  <span>{projectVerificationLabels[verification]}</span>
+                </span>
+                <span className="col-span-2 text-sm [overflow-wrap:anywhere] @3xl:col-auto">
+                  <span className="mr-2 text-xs text-muted-foreground @3xl:sr-only">
+                    使用群組
+                  </span>
+                  {groups.map((g) => g.name).join("、") || "—"}
+                </span>
+                <span className="col-start-2 row-start-1 flex justify-end @3xl:col-auto @3xl:row-auto">
+                  <span className="sr-only">狀態</span>
+                  <ProjectBadge project={p} bound={groups.length > 0} />
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 export function ProjectsView({
   state,
   busy,
@@ -144,24 +230,25 @@ export function ProjectsView({
     focused?.();
   }, [focusId, focusTab]);
   const open = state.projects.find((p) => p.id === openId);
+  const sections = useMemo(
+    () => projectListSections(state.projects, state.groups),
+    [state.projects, state.groups],
+  );
+  const openProject = (id: string) => {
+    setTab("overview");
+    setOpenId(id);
+  };
   return (
-    <div className="@container flex flex-col gap-4">
+    <div className="@container flex min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="text-sm text-muted-foreground">
-          共 {state.projects.length} 個專案，
-          {
-            state.projects.filter(
-              (p) =>
-                !p.repo_missing_at &&
-                !p.setup_input &&
-                p.validated_at &&
-                p.enabled &&
-                state.groups.some((g) => g.project_ids.includes(p.id)),
-            ).length
-          }{" "}
-          個{projectLabels.ready}
+          共 {state.projects.length} 個專案，{sections.ready.length} 個
+          {projectLabels.ready}
         </p>
-        <Button onClick={() => edit(emptyProject)}>
+        <Button
+          className="min-h-11 sm:min-h-0"
+          onClick={() => edit(emptyProject)}
+        >
           <Plus /> 新增專案
         </Button>
       </div>
@@ -171,79 +258,46 @@ export function ProjectsView({
         </p>
       )}
       {state.projects.length ? (
-        <div className="@3xl:rounded-xl @3xl:border @3xl:bg-card @3xl:text-card-foreground">
-          <div
-            aria-hidden="true"
-            className="hidden grid-cols-[minmax(0,2fr)_6rem_minmax(0,1.2fr)_minmax(0,1.2fr)_7.5rem] gap-4 border-b px-5 py-2.5 text-xs text-muted-foreground @3xl:grid"
-          >
-            <span>專案</span>
-            <span>分支</span>
-            <span>環境驗證</span>
-            <span>使用群組</span>
-            <span className="text-right">狀態</span>
-          </div>
-          <ul role="list" className="grid gap-3 @3xl:block @3xl:divide-y">
-            {state.projects.map((p) => {
-              const groups = state.groups.filter((g) =>
-                g.project_ids.includes(p.id),
-              );
-              const verification = projectVerification(p);
-              return (
-                <li
-                  key={p.id}
-                  className="rounded-xl border bg-card text-card-foreground @3xl:rounded-none @3xl:border-0"
-                >
-                  <button
-                    className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-2 rounded-[inherit] px-5 py-3 text-left transition-colors hover:bg-muted/40 @3xl:grid-cols-[minmax(0,2fr)_6rem_minmax(0,1.2fr)_minmax(0,1.2fr)_7.5rem] @3xl:items-center"
-                    onClick={() => {
-                      setTab("overview");
-                      setOpenId(p.id);
-                    }}
-                  >
-                    <span className="flex min-w-0 flex-col [overflow-wrap:anywhere]">
-                      <span className="font-medium">{p.name}</span>
-                      <span className="font-mono text-xs text-muted-foreground">
-                        {p.repo}
-                      </span>
-                      {p.validation_progress && (
-                        <span className="text-xs text-muted-foreground">
-                          {p.validation_progress}
-                        </span>
-                      )}
-                    </span>
-                    <span className="col-span-2 text-sm [overflow-wrap:anywhere] @3xl:col-auto">
-                      <span className="mr-2 text-xs text-muted-foreground @3xl:sr-only">
-                        分支
-                      </span>
-                      {p.base_branch}
-                    </span>
-                    <span
-                      className={cn(
-                        "col-span-2 text-sm @3xl:col-auto",
-                        verification === "partial" && "text-warn",
-                        verification === "failed" && "text-danger",
-                      )}
-                    >
-                      <span className="mr-2 text-xs text-muted-foreground @3xl:sr-only">
-                        環境驗證
-                      </span>
-                      <span>{projectVerificationLabels[verification]}</span>
-                    </span>
-                    <span className="col-span-2 text-sm [overflow-wrap:anywhere] @3xl:col-auto">
-                      <span className="mr-2 text-xs text-muted-foreground @3xl:sr-only">
-                        使用群組
-                      </span>
-                      {groups.map((g) => g.name).join("、") || "—"}
-                    </span>
-                    <span className="col-start-2 row-start-1 flex justify-end @3xl:col-auto @3xl:row-auto">
-                      <span className="sr-only">狀態</span>
-                      <ProjectBadge project={p} bound={groups.length > 0} />
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+        <div id="project-sections" className="grid min-w-0 gap-6">
+          {sections.attention.length > 0 && (
+            <section
+              aria-labelledby="projects-attention"
+              className="grid gap-2"
+            >
+              <h2 id="projects-attention" className="font-semibold">
+                {projectSectionLabels.attention}
+              </h2>
+              <ProjectList entries={sections.attention} onOpen={openProject} />
+            </section>
+          )}
+          <section aria-labelledby="projects-ready" className="grid gap-2">
+            <h2 id="projects-ready" className="font-semibold">
+              {projectSectionLabels.ready}
+            </h2>
+            {sections.ready.length ? (
+              <ProjectList entries={sections.ready} onOpen={openProject} />
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                完成驗證、啟用專案並綁定群組後，即可派工。
+              </p>
+            )}
+          </section>
+          <section aria-labelledby="projects-unbound">
+            <details className="border-t">
+              <summary className="min-h-11 cursor-pointer rounded-sm py-3 font-semibold focus-visible:outline-2 focus-visible:outline-ring">
+                <h2 id="projects-unbound" className="inline">
+                  {projectSectionLabels.unbound}（{sections.unbound.length} 個）
+                </h2>
+              </summary>
+              {sections.unbound.length ? (
+                <ProjectList entries={sections.unbound} onOpen={openProject} />
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  目前沒有已驗證且未綁定群組的專案。
+                </p>
+              )}
+            </details>
+          </section>
         </div>
       ) : (
         <Card>
@@ -292,7 +346,11 @@ export function ProjectsView({
                   環境驗證
                   {(open.setup_input || validationFailed(open)) && (
                     <span className="text-warn">
-                      {open.setup_input ? "・等你回答" : "・驗證失敗"}
+                      （
+                      {open.setup_input
+                        ? projectLabels.question
+                        : projectLabels.failed}
+                      ）
                     </span>
                   )}
                 </TabsTrigger>

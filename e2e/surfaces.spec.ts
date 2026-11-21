@@ -89,7 +89,8 @@ test("專案列表只顯示驗證結果，測試指令可在詳情查看", async
     state: { projects: [manual, partial, failed, validating, unverified] },
   });
   await page.goto("/projects");
-  const list = page.getByRole("main").getByRole("list");
+  const lists = page.locator("#project-sections");
+  await lists.getByText("沒有群組使用（1 個）", { exact: true }).click();
   for (const [name, result] of [
     [manual.name, "通過"],
     [partial.name, "部分通過"],
@@ -97,12 +98,12 @@ test("專案列表只顯示驗證結果，測試指令可在詳情查看", async
     [validating.name, "驗證中"],
     [unverified.name, "需要驗證"],
   ]) {
-    const row = list.getByRole("button").filter({ hasText: name });
+    const row = lists.getByRole("button").filter({ hasText: name });
     await expect(row.getByText(result, { exact: true }).first()).toBeVisible();
   }
-  await expect(list).not.toContainText(command);
-  await expect(list.locator('[title*="dotnet test"]')).toHaveCount(0);
-  await list.getByRole("button").filter({ hasText: manual.name }).click();
+  await expect(lists).not.toContainText(command);
+  await expect(lists.locator('[title*="dotnet test"]')).toHaveCount(0);
+  await lists.getByRole("button").filter({ hasText: manual.name }).click();
   const detail = page.getByRole("dialog", { name: manual.name });
   await expect(
     detail.locator("code").filter({ hasText: command }),
