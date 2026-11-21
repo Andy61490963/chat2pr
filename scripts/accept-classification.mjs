@@ -227,7 +227,13 @@ const atDays = (days) => new Date(anchor.getTime() - days * 86400000);
 async function text(
   id,
   value,
-  { days = 0, group = "group-a", processed = false, type = "text" } = {},
+  {
+    days = 0,
+    group = "group-a",
+    processed = false,
+    type = "text",
+    receivedAt = new Date(anchor.getTime() - 20 * 60000),
+  } = {},
 ) {
   await db.query(
     "INSERT INTO messages(id,group_id,type,text,received_at,processed) VALUES($1,$2,$3,$4,$5,$6)",
@@ -236,7 +242,7 @@ async function text(
       group,
       type,
       value,
-      days ? atDays(days) : new Date(anchor.getTime() - 20 * 60000),
+      days ? atDays(days) : receivedAt,
       processed,
     ],
   );
@@ -778,6 +784,53 @@ try {
       assert(tasks[0].missing.length);
     },
   );
+  await run("issue-137-coworker", 1, "指派同事不建立任務", async () => {
+    await reset();
+    await text("assignment", "@小禾 你把測試看板的儲存按鈕改成綠色，改完跟大家說。");
+    assert.equal((await classify()).length, 0);
+    assert(
+      active.decisions.some(
+        (d) => d.kind === "ignore" && d.noTaskReason === "coworker_assignment",
+      ),
+    );
+    assert((await db.query("SELECT 1 FROM audit WHERE kind='triage_skipped'")).length);
+  });
+  await run("issue-137-discussion", 1, "未定案討論先等更多訊息", async () => {
+    await reset();
+    await text(
+      "discussion",
+      "測試看板的儲存按鈕要先改成綠色嗎？我想聽同事的意見，下週再定案。",
+      { receivedAt: new Date(Date.now() - 5 * 60000) },
+    );
+    assert.equal((await classify()).length, 0);
+    assert(
+      active.decisions.some(
+        (d) => d.kind === "defer" && d.noTaskReason === "undecided_discussion",
+      ),
+    );
+    assert((await db.query("SELECT 1 FROM audit WHERE kind='triage_skipped'")).length);
+  });
+  await run("issue-137-direct", 1, "直接請機器人修改會建立待審核任務", async () => {
+    await reset();
+    await new Line(db).ingest({
+      events: [
+        {
+          webhookEventId: "fixture-bot-request",
+          type: "message",
+          source: { type: "group", groupId: "group-a" },
+          message: {
+            id: "direct-request",
+            type: "text",
+            text: "/任務 請把測試看板的儲存按鈕改成綠色，保留點擊功能。",
+          },
+        },
+      ],
+    });
+    const tasks = await classify();
+    assert.equal(tasks.length, 1);
+    assert.equal(tasks[0].status, "awaiting_approval");
+    assert.deepEqual(tasks[0].source_ids, ["direct-request"]);
+  });
 } finally {
   results.finishedAt = new Date().toISOString();
   results.summary = Object.fromEntries(

@@ -368,6 +368,7 @@ const activityKinds: Record<
   attempt: { icon: Bot, tone: "text-muted-foreground" },
   verification: { icon: ScanSearch, tone: "text-muted-foreground" },
   triage: { icon: FileSearch, tone: "text-muted-foreground" },
+  triage_skipped: { icon: FileSearch, tone: "text-muted-foreground" },
   retrieval: { icon: FileSearch, tone: "text-muted-foreground" },
   error: { icon: CircleAlert, tone: "text-danger" },
   retry: { icon: RefreshCw, tone: "text-warn" },
@@ -480,11 +481,16 @@ function ActivityFeed({
                         )}
                         <span
                           className={cn(
-                            "line-clamp-2 [overflow-wrap:anywhere]",
+                            "[overflow-wrap:anywhere]",
+                            a.kind !== "triage_skipped" && "line-clamp-2",
                             (a.task_id || k.system) && "text-muted-foreground",
                           )}
                         >
-                          <Linkified text={brief(a)} />
+                          {a.kind === "triage_skipped" ? (
+                            a.detail
+                          ) : (
+                            <Linkified text={brief(a)} />
+                          )}
                         </span>
                         <span className="text-xs text-muted-foreground">
                           {ago(a.created_at)}

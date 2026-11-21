@@ -245,6 +245,9 @@ export interface Memory {
   created_at: string;
 }
 export interface TriageDecision {
+  noTaskReason?:
+    | keyof typeof import("./status-glossary.js").triageNoTaskLabels
+    | null;
   /** 使用者要求定期、重複檢查時的排程；其他情況為 null。 */
   schedule?: CheckSchedule | null;
   question?: import("./clarification.js").ClarificationQuestion | null;

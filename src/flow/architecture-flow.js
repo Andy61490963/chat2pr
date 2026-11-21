@@ -363,7 +363,7 @@ import "@fontsource-variable/inter";
       anim: function (tl) { travel(tl, "app_emb", 0.6, "檢索"); travel(tl, "db_emb", 0.5, "比對", null, true); travel(tl, "app_db", 0.6, "結果", null, true); status(tl, "上下文已備妥"); } },
 
     { title: "AI 判讀需求", where: "執行器・判讀容器・訂閱轉送・ChatGPT", cam: "ai", focus: ["app", "runner", "relay", "gpt"],
-      text: { change: "app 請主機上的執行器開一個用完即丟的判讀容器。容器裡沒有 ChatGPT 登入檔，推論經「訂閱轉送」與 egress-ai 送到 ChatGPT。AI 判斷這是修改還是查詢、要改哪個專案、有沒有風險，並寫出驗收條件；缺資訊時只問一件事，有合理預設就列成假設。",
+      text: { change: "app 請主機上的執行器開一個用完即丟的判讀容器。容器裡沒有 ChatGPT 登入檔，推論經「訂閱轉送」與 egress-ai 送到 ChatGPT。自動辨識會略過你和同事的分工與未定案討論。明確需求會判斷修改或查詢、目標專案和風險，並寫出驗收條件；缺必要資訊時只問一件事。",
               query: "app 請主機上的執行器開一個用完即丟的判讀容器。容器裡沒有 ChatGPT 登入檔，推論經「訂閱轉送」與 egress-ai 送到 ChatGPT。AI 判斷這是查詢，而且明確指名了專案；要求交出密碼、金鑰實際值的查詢才會被擋下等人確認。" },
       chips: ["一次性容器", "容器不持有登入", "固定風險規則"],
       data: { change: "{\n  \"kind\":    <s>\"修改\"</s>,\n  \"project\": \"example-org/ShopWeb\",\n  \"title\":   \"首頁訂購按鈕改綠色\",\n  \"acceptance\": [\n    \"桌機與手機版首頁的訂購按鈕為綠色\",\n    \"點擊後仍能完成下單\"\n  ],\n  \"assumptions\": [\"沿用品牌綠\"],\n  \"risk\": \"低\"\n}",

@@ -35,6 +35,13 @@ export const groupLabels = {
   unbound: "沒有可用專案",
 } as const;
 
+export const triageNoTaskLabels = {
+  coworker_assignment: "訊息屬於同事之間的分工，系統未建立任務。",
+  undecided_discussion: "討論尚未定案，系統未建立任務。",
+  reusable_memory: "訊息提供了可重複使用的群組規則，系統未建立任務。",
+  no_actionable_request: "訊息沒有明確需求，系統未建立任務。",
+} as const;
+
 export const sshProbeLabels = {
   reachable: "你可以從伺服器連到這個連接埠。",
   unreachable: "你無法從伺服器連到這個連接埠。",
