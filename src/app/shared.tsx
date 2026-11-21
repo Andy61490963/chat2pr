@@ -5,7 +5,12 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import type { RunView } from "../../shared/observation.js";
+import { phaseLabels, type RunView } from "../../shared/observation.js";
+import { parseFailure } from "../../shared/failure-text.js";
+import {
+  taskStationLabels,
+  taskStationStatusLabels,
+} from "../../shared/status-glossary.js";
 import {
   runProgress,
   type RunProgressInput,
@@ -250,7 +255,7 @@ export function RunProgressLine({
     <span
       className={cn(
         "truncate text-sm tabular-nums",
-        p.stale ? "text-warn" : "text-info",
+        p.stale ? "text-warn" : "text-muted-foreground",
         className,
       )}
     >
@@ -307,13 +312,13 @@ export const groupName = (state: State, t: Task) =>
 
 const statusVariant: Record<
   Task["status"],
-  "warn" | "info" | "good" | "danger" | "secondary"
+  "warn" | "good" | "danger" | "secondary"
 > = {
   awaiting_approval: "warn",
   budget_wait: "warn",
-  queued: "info",
-  running: "info",
-  reviewing: "info",
+  queued: "warn",
+  running: "good",
+  reviewing: "good",
   ready: "good",
   merged: "good",
   answered: "good",
@@ -322,8 +327,14 @@ const statusVariant: Record<
   cancelled: "secondary",
   closed: "secondary",
 };
-export function StatusBadge({ status }: { status: Task["status"] }) {
-  return <Badge variant={statusVariant[status]}>{statusLabels[status]}</Badge>;
+export function StatusBadge({
+  status,
+  label = statusLabels[status],
+}: {
+  status: TaskStatus;
+  label?: string;
+}) {
+  return <Badge variant={statusVariant[status]}>{label}</Badge>;
 }
 
 export function Empty({
@@ -358,9 +369,9 @@ export function Empty({
 const statusTone: Record<Task["status"], string> = {
   awaiting_approval: "text-warn",
   budget_wait: "text-warn",
-  queued: "text-muted-foreground",
-  running: "text-info",
-  reviewing: "text-info",
+  queued: "text-warn",
+  running: "text-good",
+  reviewing: "text-good",
   ready: "text-good",
   merged: "text-good",
   answered: "text-good",
@@ -399,7 +410,6 @@ export function StatusIcon({
         "shrink-0",
         small ? "size-3.5" : "size-4",
         statusTone[status],
-        status === "running" && "animate-spin [animation-duration:2.5s]",
       )}
     />
   );
@@ -430,91 +440,110 @@ export function Initials({
   );
 }
 
-// 統計格：放在同一個外框裡，由呼叫端排成一列。只有需要注意的數字上色。
-export function StatCard({
-  label,
-  value,
-  hint,
-  tone = "default",
-  onClick,
-}: {
-  label: string;
-  value: ReactNode;
-  hint?: string;
-  icon?: ReactNode;
-  tone?: "default" | "warn" | "info" | "good";
-  onClick?: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="flex flex-col gap-1 bg-card px-4 py-3.5 text-left transition-colors hover:bg-muted/40 focus-visible:relative focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
-    >
-      <span className="text-sm text-muted-foreground">{label}</span>
-      <span
-        className={cn(
-          "text-2xl font-semibold tracking-tight tabular-nums",
-          tone === "warn" && "text-warn",
-        )}
-      >
-        {value}
-      </span>
-      {hint && (
-        <span className="truncate text-xs text-muted-foreground">{hint}</span>
-      )}
-    </button>
-  );
-}
-
-const steps = ["整理需求", "審核", "排程", "開發", "驗證", statusLabels.ready];
-const stepOf: Partial<Record<Task["status"], number>> = {
+// 站別順序與軌道一致，查詢和修改任務只在後三站使用不同名稱。
+const stationOf: Partial<Record<TaskStatus, number>> = {
   awaiting_approval: 1,
   budget_wait: 2,
   queued: 2,
   running: 3,
   reviewing: 4,
   ready: 5,
-  merged: 6,
-  answered: 6,
+  merged: 5,
+  answered: 5,
 };
-export function Stepper({
-  status,
-  query,
+
+function failedStation(error: Task["last_error"], query: boolean) {
+  const headline = parseFailure(error)?.headline;
+  if (!headline) return undefined;
+  const where = headline.match(/（([^）]+)階段）：/)?.[1];
+  if (
+    [phaseLabels.test, phaseLabels.review, phaseLabels.verify].some(
+      (label) => label === where,
+    )
+  )
+    return 4;
+  if (!query && where === phaseLabels.publish) return 5;
+  if ([phaseLabels.code, phaseLabels.collect].some((label) => label === where))
+    return 3;
+  // 舊資料或準備環境的錯誤沒有可確認的站別。
+  return undefined;
+}
+
+export function StationTrack({
+  task,
+  labelled = false,
 }: {
-  status: Task["status"];
-  /** 查詢任務沒有開發與合併，改顯示調查與回覆。 */
-  query?: boolean;
+  task: Pick<Task, "status" | "mode" | "last_error">;
+  labelled?: boolean;
 }) {
-  const at = stepOf[status];
-  const labels = query
-    ? ["整理需求", "審核", "排程", "調查", "整理報告", statusLabels.answered]
-    : status === "answered"
-      ? [...steps.slice(0, 4), statusLabels.answered]
-      : steps;
-  if (at === undefined) return null;
+  const { status } = task;
+  const query = task.mode === "query";
+  const station = taskStationLabels;
+  const copy = taskStationStatusLabels;
+  const stations = [
+    station.request,
+    station.approval,
+    station.queue,
+    query ? station.query : station.change,
+    query ? station.report : station.verify,
+    query || status === "answered" ? station.reply : station.pr,
+  ];
+  // 無需修改的任務在開發站回覆，沒有經過驗證或開 PR。
+  if (!query && status === "answered") stations.splice(4, 1);
+  const at =
+    status === "failed"
+      ? failedStation(task.last_error, query)
+      : !query && status === "answered"
+        ? stations.length - 1
+        : stationOf[status];
+  const label =
+    status === "awaiting_approval"
+      ? copy.decision
+      : status === "running" && query
+        ? copy.runningQuery
+        : status === "failed" && at === 4 && !query
+          ? copy.blockedAtVerification
+          : status === "ready"
+            ? copy.ready
+            : statusLabels[status];
+  const position = at === undefined ? copy.unknownStation : stations[at];
+
   return (
-    <ol className="mt-2 flex gap-1" aria-label="任務進度">
-      {labels.map((s, i) => (
-        <li key={s} className="flex min-w-0 flex-1 flex-col gap-1" title={s}>
+    <span className="station-track" data-tone={statusVariant[status]}>
+      <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <StatusBadge status={status} label={label} />
+        <span className="text-xs text-muted-foreground">
+          {at === undefined ? position : `${position}站`}
+        </span>
+      </span>
+      <span
+        role="img"
+        aria-label={`站別軌道，${at === undefined ? position : `目前在${position}站`}${labelled ? `，依序為${stations.join("、")}` : ""}`}
+        className={cn("station-rail", labelled && "station-rail--labelled")}
+      >
+        {stations.map((name, index) => (
           <span
-            className={cn(
-              "h-1 rounded-full bg-border",
-              i < at && "bg-primary",
-              i === at && "bg-info",
-            )}
-          />
-          <small
-            className={cn(
-              "hidden truncate text-[11px] text-muted-foreground sm:block",
-              i === at && "font-medium text-info",
-            )}
+            key={name}
+            aria-hidden
+            className="station"
+            data-state={
+              index === at
+                ? "current"
+                : at !== undefined && index < at
+                  ? "past"
+                  : "future"
+            }
           >
-            {s}
-          </small>
-        </li>
-      ))}
-    </ol>
+            <span className="station-dot" />
+            {labelled && (
+              <span className="station-name text-xs text-muted-foreground">
+                {name}
+              </span>
+            )}
+          </span>
+        ))}
+      </span>
+    </span>
   );
 }
 
@@ -529,7 +558,7 @@ export function SectionTitle({
 }) {
   return (
     <div className="mb-3 flex items-center gap-2">
-      <h2 className="text-base font-semibold">{children}</h2>
+      <h2 className="text-lg font-semibold">{children}</h2>
       {count !== undefined && <Badge variant="secondary">{count}</Badge>}
       {action && <div className="ml-auto">{action}</div>}
     </div>

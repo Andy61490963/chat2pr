@@ -13,6 +13,26 @@ export const statusLabels: Record<TaskStatus, string> = {
   answered: "已回覆",
   closed: "已關閉",
 };
+export const taskStationLabels = {
+  request: "整理需求",
+  approval: "審核",
+  queue: "排程",
+  change: "開發",
+  query: "調查",
+  verify: "驗證",
+  report: "整理報告",
+  pr: "PR",
+  reply: "回覆",
+} as const;
+
+export const taskStationStatusLabels = {
+  decision: "等你決定",
+  blockedAtVerification: "卡在驗證",
+  unknownStation: "無法判定站別",
+  runningQuery: "調查中",
+  ready: "已開 PR",
+} as const;
+
 export const projectQuotaWaitPrefix = `${statusLabels.budget_wait}｜`;
 
 export const notificationLabels = {

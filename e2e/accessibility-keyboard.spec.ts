@@ -9,6 +9,7 @@ test("關閉任務詳情與內層的拒絕確認時，焦點逐層回到原按�
   const drawer = page.getByRole("dialog", { name: task.title });
   const reject = drawer.getByRole("button", { name: "結束任務", exact: true });
   await expect(drawer.locator(":focus")).toHaveCount(1);
+  await expect(drawer.getByRole("heading", { name: task.title })).toBeFocused();
   // 從詳情取得的初始焦點走到拒絕按鈕，也驗證鍵盤確實能觸及該動作。
   const stops = await drawer
     .locator("button, input, select, textarea, a[href]")

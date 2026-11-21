@@ -161,7 +161,7 @@ export function TasksView({
             {s.name && (
               <SectionTitle count={s.tasks.length}>{s.name}</SectionTitle>
             )}
-            <Card className="gap-0 py-1">
+            <div className="work-ledger">
               {s.tasks.map((t) => (
                 <TaskRow
                   key={t.id}
@@ -171,7 +171,7 @@ export function TasksView({
                   hide={by}
                 />
               ))}
-            </Card>
+            </div>
           </section>
         ))
       ) : (
@@ -186,7 +186,9 @@ export function TasksView({
               </span>
             </Empty>
           ) : (
-            <Empty title="還沒有任務">群組裡的需求整理好後會出現在這裡。</Empty>
+            <Empty title="還沒有任務">
+              你可以在已綁定專案的群組提出需求，整理完成後就會出現在這裡。
+            </Empty>
           )}
         </Card>
       )}
@@ -200,7 +202,11 @@ export function TasksView({
     </>
   );
   return (
-    <Tabs value={filter} onValueChange={setFilter} className="gap-6">
+    <Tabs
+      value={filter}
+      onValueChange={setFilter}
+      className="work-surface min-w-0 gap-6"
+    >
       <div className="flex flex-col gap-3">
         {/* 六個分頁在手機上放不下要左右捲；置中排列時左邊超出的部分捲不到，改靠左。 */}
         <TabsList aria-label="任務狀態" className="justify-start">

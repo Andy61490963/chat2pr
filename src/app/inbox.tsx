@@ -1,6 +1,7 @@
 import {
   notificationLabels,
   projectLabels,
+  taskStationStatusLabels,
 } from "../../shared/status-glossary.js";
 import { taskListTitle } from "../../shared/task-title.js";
 import { useState } from "react";
@@ -15,11 +16,9 @@ import {
   ChevronRight,
   Circle,
   CircleAlert,
-  FolderGit2,
   GitMerge,
   GitPullRequest,
   Loader2,
-  MessageSquare,
   MessageSquareText,
   Play,
   RefreshCw,
@@ -63,10 +62,7 @@ import {
   ready as readyStatuses,
   RunProgressLine,
   SectionTitle,
-  StatCard,
-  StatusBadge,
-  StatusIcon,
-  Stepper,
+  StationTrack,
   waiting as waitingStatuses,
 } from "./shared";
 
@@ -140,7 +136,7 @@ export function InboxView({
 }) {
   const setup = setupSteps(state);
   const left = setup.filter((s) => !s.done);
-  // 清單用已載入的任務（未結束的伺服器一律載入）；統計卡的數字用伺服器的實際數量。
+  // 清單用已載入的任務（未結束的伺服器一律載入）；摘要的數字用伺服器的實際數量。
   const working = state.tasks.filter((t) => moving.includes(t.status));
   const ready = state.tasks.filter((t) => readyStatuses.includes(t.status));
   const held = state.tasks.filter((t) => waitingStatuses.includes(t.status));
@@ -154,46 +150,44 @@ export function InboxView({
       (t) => t.status === "merged" && new Date(t.updated_at).getTime() > week,
     ).length;
   return (
-    <div className="flex flex-col gap-8">
-      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border bg-border lg:grid-cols-4">
-        <StatCard
-          label={notificationLabels.action}
-          value={needCount}
-          hint={
-            needCount
-              ? "審核、補充或重試"
-              : heldCount
-                ? `另有 ${heldCount} 件${statusLabels.budget_wait}，會自動繼續`
-                : "目前沒有待決定的事"
-          }
-          icon={<CircleAlert />}
-          tone={needCount ? "warn" : "default"}
-          onClick={() => showTasks("todo")}
-        />
-        <StatCard
-          label="進行中"
-          value={countOf(state, moving)}
-          hint="排程、開發與驗證"
-          icon={<Loader2 />}
-          tone="info"
-          onClick={() => showTasks("moving")}
-        />
-        <StatCard
-          label={statusLabels.ready}
-          value={readyCount}
-          hint="PR 已建立"
-          icon={<GitPullRequest />}
-          tone={readyCount ? "good" : "default"}
-          onClick={() => showTasks("ready")}
-        />
-        <StatCard
-          label="近 7 天已合併"
-          value={mergedWeek}
-          hint={`累計 ${state.totals?.tasks ?? state.tasks.length} 個需求`}
-          icon={<GitMerge />}
-          onClick={() => showTasks("closed")}
-        />
-      </div>
+    <div className="work-surface flex min-w-0 flex-col gap-7">
+      <nav
+        aria-label="任務摘要"
+        className="grid grid-cols-2 gap-x-4 border-b pb-2 md:flex md:flex-wrap"
+      >
+        {(
+          [
+            [
+              "todo",
+              notificationLabels.action,
+              needCount,
+              needCount ? "審核、補充或重試" : "目前沒有待決定的事",
+            ],
+            ["moving", "進行中", countOf(state, moving), "排程、開發與驗證"],
+            ["ready", statusLabels.ready, readyCount, "PR 已建立"],
+            ["closed", "近 7 天已合併", mergedWeek, undefined],
+          ] as const
+        ).map(([filter, label, count, hint]) => (
+          <Button
+            key={filter}
+            variant="ghost"
+            size="sm"
+            title={hint}
+            className="max-md:justify-start"
+            onClick={() => showTasks(filter)}
+          >
+            {label} <span className="tabular-nums">{count}</span>
+          </Button>
+        ))}
+        <span className="col-span-2 flex items-center px-3 text-xs text-muted-foreground max-md:mt-2">
+          累計 {state.totals?.tasks ?? state.tasks.length} 個需求
+        </span>
+        {needCount === 0 && heldCount > 0 && (
+          <span className="col-span-2 flex items-center px-3 text-xs text-muted-foreground max-md:mt-2">
+            另有 {heldCount} 件{statusLabels.budget_wait}，會自動繼續
+          </span>
+        )}
+      </nav>
       {left.length > 0 && (
         <Card className="gap-3">
           <CardContent>
@@ -229,9 +223,11 @@ export function InboxView({
         </Card>
       )}
       <section>
-        <SectionTitle count={needs.length}>需要你處理</SectionTitle>
+        <SectionTitle count={needs.length}>
+          {taskStationStatusLabels.decision}
+        </SectionTitle>
         {needs.length ? (
-          <div className="flex flex-col gap-3">
+          <div className="work-ledger divide-y">
             {needs.map((t) => (
               <DecisionCard
                 key={t.id}
@@ -247,7 +243,7 @@ export function InboxView({
         ) : (
           <Card className="py-1">
             <Empty compact icon={<CheckCircle2 />} title="都處理完了">
-              有需求需要你決定時，會出現在這裡並私訊通知你。
+              有需求需要你決定時，你會在這裡看到它，也會收到私訊。
             </Empty>
           </Card>
         )}
@@ -274,7 +270,7 @@ export function InboxView({
               </Button>
             )}
           </div>
-          <Card className="gap-0 bg-muted/30 py-1">
+          <div className="work-ledger">
             {held.map((t) => (
               <WaitingRow
                 key={t.id}
@@ -285,62 +281,47 @@ export function InboxView({
                 act={act}
               />
             ))}
-          </Card>
+          </div>
         </section>
       )}
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <div className="flex flex-col gap-8">
           <section>
             <SectionTitle count={working.length}>進行中</SectionTitle>
-            <Card className="gap-0 py-1">
+            <div className="work-ledger">
               {working.length ? (
                 working.map((t) => (
-                  <TaskRow
-                    key={t.id}
-                    task={t}
-                    state={state}
-                    open={open}
-                    steps
-                  />
+                  <TaskRow key={t.id} task={t} state={state} open={open} />
                 ))
               ) : (
                 <Empty compact icon={<Loader2 />} title="目前沒有執行中的工作">
-                  核准的需求會在這裡顯示開發進度。
+                  你核准需求後，就能在這裡追蹤進度。
                 </Empty>
               )}
-            </Card>
+            </div>
           </section>
           <section>
             <SectionTitle count={ready.length}>
               {statusLabels.ready}
             </SectionTitle>
-            <Card className="gap-0 py-1">
+            <div className="work-ledger">
               {ready.length ? (
                 ready.map((t) => (
-                  <div
+                  <TaskRow
                     key={t.id}
-                    className="flex items-center gap-3 border-b px-5 py-3 last:border-0"
-                  >
-                    <StatusIcon status={t.status} />
-                    <button
-                      className="flex min-w-0 flex-1 flex-col text-left"
-                      onClick={() => open(t.id)}
-                    >
-                      <span className="truncate font-medium">
-                        {taskListTitle(t)}
-                      </span>
-                      <span className="text-sm text-muted-foreground">
-                        {projectName(state, t)}
-                      </span>
-                    </button>
-                    {t.pr_url && (
-                      <Button variant="outline" size="sm" asChild>
-                        <a href={t.pr_url} target="_blank" rel="noreferrer">
-                          PR #{t.pr_number} <ArrowUpRight />
-                        </a>
-                      </Button>
-                    )}
-                  </div>
+                    task={t}
+                    state={state}
+                    open={open}
+                    trailing={
+                      t.pr_url && (
+                        <Button variant="outline" size="sm" asChild>
+                          <a href={t.pr_url} target="_blank" rel="noreferrer">
+                            PR #{t.pr_number} <ArrowUpRight />
+                          </a>
+                        </Button>
+                      )
+                    }
+                  />
                 ))
               ) : (
                 <Empty
@@ -348,10 +329,10 @@ export function InboxView({
                   icon={<GitPullRequest />}
                   title="沒有等待合併的 PR"
                 >
-                  Codex 完成並通過驗證後，PR 會出現在這裡。
+                  修改通過驗證並建立 PR 後，你就能在這裡開啟 PR。
                 </Empty>
               )}
-            </Card>
+            </div>
           </section>
         </div>
         <ActivityFeed state={state} open={open} more={more} />
@@ -479,7 +460,7 @@ function ActivityFeed({
                       <span className="flex min-w-0 flex-1 flex-col pb-3 text-sm">
                         {a.task_id && (
                           <button
-                            className="truncate text-left font-medium hover:text-brand-foreground hover:underline"
+                            className="work-touch text-left font-medium hover:underline [overflow-wrap:anywhere]"
                             onClick={() => open(a.task_id!)}
                           >
                             {a.task_title ?? "查看任務"}
@@ -488,7 +469,9 @@ function ActivityFeed({
                         <span
                           className={cn(
                             "[overflow-wrap:anywhere]",
-                            a.kind !== "triage_skipped" && "line-clamp-2",
+                            a.kind === "triage_skipped"
+                              ? "whitespace-pre-wrap"
+                              : "line-clamp-2",
                             (a.task_id || k.system) && "text-muted-foreground",
                           )}
                         >
@@ -500,8 +483,12 @@ function ActivityFeed({
                         </span>
                         <span className="text-xs text-muted-foreground">
                           {ago(a.created_at)}
-                          {a.times > 1 && `・連續 ${a.times} 次`}
                         </span>
+                        {a.times > 1 && (
+                          <span className="text-xs text-muted-foreground">
+                            連續 {a.times} 次
+                          </span>
+                        )}
                       </span>
                     </div>
                   </li>
@@ -535,7 +522,9 @@ function ActivityFeed({
               )}
             </ol>
           ) : (
-            <Empty compact icon={<Activity />} title="還沒有動態" />
+            <Empty compact icon={<Activity />} title="還沒有動態">
+              你可以在群組提出需求，任務有進展時就會出現在這裡。
+            </Empty>
           )}
         </CardContent>
       </Card>
@@ -575,36 +564,31 @@ function DecisionCard({
         ? failure.headline
         : (t.last_error?.replace(/^Error: /, "") ?? statusLabels[t.status]);
   return (
-    <Card className="gap-0 py-4">
+    <div className="py-4">
       <CardContent>
-        <button
-          className="flex w-full flex-col gap-1 text-left"
-          onClick={() => open(t.id)}
-        >
-          <span className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-            <MessageSquare className="size-3.5" /> {groupName(state, t)}
-            <span>·</span>
-            <FolderGit2 className="size-3.5" /> {projectName(state, t)}
-            <span>·</span>
-            更新於 {ago(t.updated_at)}
-          </span>
-          <span className="text-base font-semibold">{t.title}</span>
-          <span
-            className={cn(
-              "flex items-start gap-1.5 text-sm",
-              pick
-                ? "text-info"
-                : t.status === "failed"
-                  ? "text-danger"
-                  : "text-warn",
-            )}
+        <div className="grid items-start gap-3 md:grid-cols-[minmax(0,1fr)_minmax(11rem,30%)]">
+          <button
+            className="work-touch flex min-w-0 w-full flex-col gap-1 text-left"
+            onClick={() => open(t.id)}
           >
-            <AlertCircle className="mt-0.5 size-4 shrink-0" />
-            <span className="line-clamp-2 [overflow-wrap:anywhere]">
-              {reason}
+            <span className="text-lg font-semibold [overflow-wrap:anywhere]">
+              {taskListTitle(t)}
             </span>
-          </span>
-        </button>
+            <TaskRowFields task={t} state={state} />
+            <span
+              className={cn(
+                "flex items-start gap-1.5 text-sm",
+                t.status === "failed" ? "text-danger" : "text-warn",
+              )}
+            >
+              <AlertCircle className="mt-0.5 size-4 shrink-0" />
+              <span className="line-clamp-2 [overflow-wrap:anywhere]">
+                {reason}
+              </span>
+            </span>
+          </button>
+          <StationTrack task={t} />
+        </div>
         {failure && (
           <div className="mt-1.5 flex flex-col gap-1.5 pl-[1.375rem] text-sm">
             <p className="font-medium [overflow-wrap:anywhere]">
@@ -677,7 +661,7 @@ function DecisionCard({
           </>
         )}
       </CardContent>
-    </Card>
+    </div>
   );
 }
 
@@ -729,29 +713,22 @@ function WaitingRow({
   const reason = t.last_error?.replace(/^Error: /, "");
   const hint = waitHint(t.last_error, state.settings.ai_mode);
   return (
-    <div className="flex flex-col gap-2 border-b px-5 py-3 last:border-0 sm:flex-row sm:items-center sm:gap-3">
+    <div className="work-row">
       <button
-        className="flex min-w-0 flex-1 items-start gap-3 text-left"
+        className="work-touch flex min-w-0 flex-col gap-1 text-left"
         onClick={() => open(t.id)}
       >
-        <StatusIcon status={t.status} />
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="truncate font-medium">{taskListTitle(t)}</span>
-          <span className="text-xs text-muted-foreground">
-            {groupName(state, t)} · {projectName(state, t)} · 更新於{" "}
-            {ago(t.updated_at)}
+        <span className="font-medium [overflow-wrap:anywhere]">{taskListTitle(t)}</span>
+        <TaskRowFields task={t} state={state} />
+        {reason && (
+          <span className="text-sm text-warn [overflow-wrap:anywhere]">
+            {reason}
           </span>
-          {reason && (
-            <span className="text-sm text-warn [overflow-wrap:anywhere]">
-              {reason}
-            </span>
-          )}
-          {hint && (
-            <span className="text-sm text-muted-foreground">{hint}</span>
-          )}
-        </span>
+        )}
+        {hint && <span className="text-sm text-muted-foreground">{hint}</span>}
       </button>
-      <div className="flex shrink-0 flex-wrap gap-2 pl-7 sm:pl-0">
+      <div className="flex min-w-0 flex-col items-start gap-2">
+        <StationTrack task={t} />
         <BudgetRetry task={t} state={state} busy={busy} act={act} />
       </div>
     </div>
@@ -1054,62 +1031,83 @@ export function EndTaskButton({
   );
 }
 
-export function TaskRow({
-  task: t,
+function TaskRowFields({
+  task,
   state,
-  open,
-  steps,
   hide,
 }: {
   task: Task;
   state: State;
-  open: (id: string) => unknown;
-  steps?: boolean;
   hide?: "project" | "group" | "none";
 }) {
-  // 分段標題已顯示的專案或群組，不在每列重複。
-  const meta = [
-    t.mode === "query" && "查詢",
-    hide !== "group" && groupName(state, t),
-    hide !== "project" && projectName(state, t),
-    t.issue_number && `Issue #${t.issue_number}`,
-    `更新於 ${ago(t.updated_at)}`,
-  ].filter(Boolean);
-  // 失敗的列多一行簡短原因，不必逐筆打開才知道哪件為什麼失敗。
-  const why = t.status === "failed" ? failureBrief(t.last_error) : "";
-  // 記憶體不足自動暫停派工時，排隊中的列說明為什麼還沒開始。
-  const held = t.status === "queued" && !!memoryHold(state);
   return (
-    <button
-      className="flex w-full items-center gap-3 border-b px-5 py-3 text-left transition-colors last:border-0 hover:bg-muted/50"
-      onClick={() => open(t.id)}
-    >
-      <StatusIcon status={t.status} />
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate font-medium">{taskListTitle(t)}</span>
-        <span className="text-sm text-muted-foreground">
-          {meta.join(" · ")}
-        </span>
-        {why && <span className="truncate text-sm text-danger">{why}</span>}
-        {held && (
-          <span className="truncate text-sm text-warn">
-            待執行（暫停派工中）
-          </span>
-        )}
-        {/* 開發或驗證中：目前階段、已跑多久與期限；心跳逾時改說狀態待確認。 */}
-        {["running", "reviewing"].includes(t.status) && t.run_phase && (
-          <RunProgressLine
-            run={{
-              phase: t.run_phase,
-              startedAt: t.run_started_at,
-              deadline: t.run_deadline,
-              heartbeatAt: t.run_heartbeat_at,
-            }}
-          />
-        )}
-        {steps && <Stepper status={t.status} query={t.mode === "query"} />}
-      </span>
-      <StatusBadge status={t.status} />
+    <span className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+      {task.mode === "query" && <span>查詢</span>}
+      {hide !== "group" && <span>群組 {groupName(state, task)}</span>}
+      {hide !== "project" && <span>專案 {projectName(state, task)}</span>}
+      {task.issue_number && (
+        <span className="tabular-nums">Issue #{task.issue_number}</span>
+      )}
+      <span className="tabular-nums">更新於 {ago(task.updated_at)}</span>
+    </span>
+  );
+}
+
+export function TaskRow({
+  task: t,
+  state,
+  open,
+  hide,
+  trailing,
+}: {
+  task: Task;
+  state: State;
+  open: (id: string) => unknown;
+  hide?: "project" | "group" | "none";
+  trailing?: React.ReactNode;
+}) {
+  const why = t.status === "failed" ? failureBrief(t.last_error) : "";
+  const held = t.status === "queued" && !!memoryHold(state);
+  const description = (
+    <span className="flex min-w-0 flex-col gap-1 [overflow-wrap:anywhere]">
+      <span className="font-semibold">{taskListTitle(t)}</span>
+      <TaskRowFields task={t} state={state} hide={hide} />
+      {why && <span className="text-sm text-danger">{why}</span>}
+      {held && (
+        <span className="text-sm text-warn">派工暫停，恢復後會自動繼續。</span>
+      )}
+      {["running", "reviewing"].includes(t.status) && t.run_phase && (
+        <RunProgressLine
+          run={{
+            phase: t.run_phase,
+            startedAt: t.run_started_at,
+            deadline: t.run_deadline,
+            heartbeatAt: t.run_heartbeat_at,
+          }}
+        />
+      )}
+    </span>
+  );
+  if (trailing) {
+    return (
+      <div className="work-row">
+        <button
+          className="work-touch min-w-0 text-left hover:underline"
+          onClick={() => open(t.id)}
+        >
+          {description}
+        </button>
+        <div className="flex min-w-0 flex-col items-start gap-2">
+          <StationTrack task={t} />
+          {trailing}
+        </div>
+      </div>
+    );
+  }
+  return (
+    <button className="work-row" onClick={() => open(t.id)}>
+      {description}
+      <StationTrack task={t} />
     </button>
   );
 }
