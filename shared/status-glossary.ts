@@ -75,6 +75,34 @@ export const networkStatusLabels = {
   open: "所有專案已開放網路",
 } as const;
 
+export const workerImageLabels = {
+  current: (rev: string | null) => `版本 ${rev ?? "未回報"}`,
+  outdated: "過舊，請重新驗證使用它的專案",
+  unused: "沒有專案使用，可清理",
+} as const;
+
+export function workerImageStatus(
+  current: boolean,
+  usedByProject: boolean,
+): keyof typeof workerImageLabels {
+  if (current) return "current";
+  return usedByProject ? "outdated" : "unused";
+}
+
+export const linePushServiceLabels = {
+  quota: "本月額度用完，見下一列",
+} as const;
+
+export const checkListLabels = {
+  empty: "還沒有定期檢查",
+} as const;
+
+export const chatRoutingLabels = {
+  linked: "已連結任務",
+  pending: "等待辨識",
+  noRequest: "沒有需求",
+} as const;
+
 /** 專案優先顯示驗證進度與需要處理的狀態。 */
 export const projectLabels = {
   missing: "找不到儲存庫",

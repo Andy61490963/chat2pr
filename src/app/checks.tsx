@@ -15,6 +15,7 @@ import {
 } from "../../shared/checks";
 import type { CheckEnvironmentView } from "../../shared/check-environment";
 import type { ProjectDatabaseView } from "../../shared/project-database";
+import { checkListLabels } from "../../shared/status-glossary";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -659,19 +660,18 @@ export function ChecksView({
     }
   return (
     <div className="flex flex-col gap-4">
-      <Card>
+      <Card id="scheduled-checks">
         <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div className="flex flex-col gap-1">
             <CardTitle>定期檢查</CardTitle>
             <CardDescription>
-              核准後依排程自動執行，不呼叫
-              AI；狀態改變（變成異常、恢復正常）時才通知。檢查本身連續失敗 3
-              次會暫停並通知管理者；執行器或檢查環境的系統問題不計入，會延後自動重試；檢查映像缺少、網路位址用完這類要管理者處理的系統設定問題會在這裡提示。SQL
-              檢查要先在專案頁登記資料庫連線才能核准。每個檢查在自己的檢查容器執行，網路只通到該檢查的目標；環境保留重用，閒置逾時（系統頁設定）或檢查、連線變更時清除。
+              核准後依排程自動檢查，狀態改變時通知，檢查本身不呼叫 AI。
             </CardDescription>
           </div>
           {admin && editing === null && (
-            <Button onClick={() => edit("new")}>新增定期檢查</Button>
+            <Button className="min-h-11" onClick={() => edit("new")}>
+              新增定期檢查
+            </Button>
           )}
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
@@ -747,10 +747,17 @@ export function ChecksView({
             <p className="text-sm text-muted-foreground">載入中…</p>
           )}
           {checks !== null && !checks.length && !editing && (
-            <p className="text-sm text-muted-foreground">
-              還沒有定期檢查。可以在群組說「/任務
-              每小時檢查一次機台連線」，或由管理者在這裡新增。
-            </p>
+            <div className="space-y-2 rounded-lg border px-4 py-5 text-sm">
+              <p className="font-medium">{checkListLabels.empty}</p>
+              <p className="text-muted-foreground">
+                {admin
+                  ? "按「新增定期檢查」建立第一項檢查。"
+                  : "在綁定專案的 LINE 群組輸入「/任務」提出檢查需求。"}
+              </p>
+              <p className="text-muted-foreground">
+                例如每小時檢查一次示範服務是否能連線。
+              </p>
+            </div>
           )}
           <ul className="flex flex-col gap-2">
             {(checks ?? []).map((c) => {
@@ -981,6 +988,24 @@ export function ChecksView({
               );
             })}
           </ul>
+          <details className="border-t text-sm">
+            <summary className="min-h-11 cursor-pointer py-3 font-medium">
+              怎麼運作
+            </summary>
+            <ul className="list-disc space-y-2 pb-3 pl-5 text-muted-foreground">
+              <li>
+                從正常變成異常或恢復正常時才發通知。可另外設定異常時請 AI 調查。
+              </li>
+              <li>
+                檢查本身連續失敗 3
+                次會暫停並通知管理者。執行器或檢查環境出問題時，系統會延後重試，這些問題不計入失敗次數。需要調整系統設定時，這一頁會顯示處理方式。
+              </li>
+              <li>SQL 檢查需要資料庫連線，請先在專案頁登記連線再核准。</li>
+              <li>
+                每項檢查在專用容器執行，網路只通到檢查目標。系統會重用檢查環境，直到超過系統頁設定的閒置期限，或檢查、連線設定有變更。
+              </li>
+            </ul>
+          </details>
         </CardContent>
       </Card>
     </div>

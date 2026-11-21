@@ -17,6 +17,7 @@ import {
   groupKindLabels,
 } from "../../shared/group-delivery.js";
 import { statusLabels } from "../../shared/types.js";
+import { chatRoutingLabels } from "../../shared/status-glossary.js";
 import { CopyButton } from "./copy-button";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -114,7 +115,10 @@ export function ChatView({
         <>
           <div className="flex shrink-0 flex-wrap items-center gap-3">
             <Select value={group.id} onValueChange={setSelected}>
-              <SelectTrigger aria-label="選擇聊天室" className="w-full sm:w-72">
+              <SelectTrigger
+                aria-label="選擇聊天室"
+                className="min-h-11 w-full sm:w-72"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -133,7 +137,12 @@ export function ChatView({
                   : "自動辨識"}
               </span>
             )}
-            <Button variant="ghost" size="sm" onClick={settings}>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="min-h-11"
+              onClick={settings}
+            >
               <Settings2 />
               設定觸發方式
             </Button>
@@ -258,12 +267,13 @@ function Timeline({
   };
   return (
     <>
-      <Card className="min-h-0 flex-1 gap-0 overflow-hidden py-0">
-        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b px-4 py-3 text-xs text-muted-foreground">
-          <span>
-            原文與圖片保留 {state.settings.retention_days} 天 ·
-            無法補抓機器人加入前的歷史
-          </span>
+      <Card
+        id="chat-timeline"
+        className="min-h-0 flex-1 gap-0 overflow-hidden py-0"
+      >
+        <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-1 border-b px-4 py-3 text-xs text-muted-foreground">
+          <span>原文與圖片保留 {state.settings.retention_days} 天</span>
+          <span>無法補抓機器人加入前的歷史</span>
           <span>成員名稱取自 LINE，查不到時顯示代號</span>
         </div>
         <div
@@ -342,12 +352,10 @@ function Timeline({
                       {!m.revoked && !m.expired && (
                         <span>
                           {m.tasks.length
-                            ? "已連結任務"
-                            : m.routing === "chat"
-                              ? "一般聊天・不派工"
-                              : m.routing === "pending"
-                                ? "等待辨識"
-                                : "已辨識"}
+                            ? chatRoutingLabels.linked
+                            : m.routing === "pending"
+                              ? chatRoutingLabels.pending
+                              : chatRoutingLabels.noRequest}
                         </span>
                       )}
                     </div>
@@ -462,8 +470,13 @@ function Timeline({
       <Dialog open={!!shown} onOpenChange={(v) => !v && setPreview(null)}>
         <DialogContent className="sm:max-w-4xl">
           <DialogTitle>群組圖片</DialogTitle>
-          <DialogDescription>
-            {shown ? date(shown.received_at) : ""} · 僅管理者可查看
+          <DialogDescription className="flex flex-wrap gap-x-4 gap-y-1">
+            {shown && (
+              <time dateTime={shown.received_at}>
+                {date(shown.received_at)}
+              </time>
+            )}
+            <span>僅管理者可查看</span>
           </DialogDescription>
           {shown && (
             <img

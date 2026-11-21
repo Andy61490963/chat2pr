@@ -7,6 +7,7 @@ import {
   defaultCheckEnvironmentPolicy,
 } from "../shared/check-environment";
 import { defaultDiskSettings } from "../shared/docker-disk";
+import type { ChatPage } from "../shared/chat";
 
 const timestamp = "2026-01-01T00:00:00Z";
 
@@ -40,6 +41,51 @@ export const group: Group = {
   triage_error: null,
   first_pending_at: null,
   last_pending_at: null,
+};
+
+export const statusProjects: Project[] = [
+  { ...project, name: "示範專案", image: "line-agentflow-worker:demo-old" },
+];
+
+export const exhaustedPushHealth: State["health"] = [
+  {
+    name: "notifications",
+    ok: false,
+    detail: "Error: LINE 通知失敗（429）",
+    checked_at: timestamp,
+  },
+  {
+    name: "line_quota",
+    ok: false,
+    detail: "LINE 本月推播額度已用完（本月已用 200／上限 200 則）",
+    checked_at: timestamp,
+  },
+];
+
+export const statusChat: ChatPage = {
+  messages: ([
+    ["chat", "小林今天會整理測試資料。"],
+    ["processed", "下週的檢查方式還在討論。"],
+    ["pending", "請確認示範服務是否正常。"],
+  ] as const).map(([routing, text]) => ({
+    id: `example-${routing}`,
+    sender: "小林",
+    type: "text",
+    text,
+    received_at: timestamp,
+    quoted_id: null,
+    quoted_text: null,
+    quoted_sender: null,
+    quoted_bot_id: null,
+    revoked: false,
+    expired: false,
+    has_image: false,
+    image_state: null,
+    routing,
+    tasks: [],
+  })),
+  bot_messages: [],
+  next: null,
 };
 
 export const task: Task = {
@@ -211,7 +257,29 @@ export async function mockDashboard(
       runner: { state: "ok" },
       services: [],
       jobs: [],
-      images: [],
+      images: [
+        {
+          tag: "line-agentflow-worker:local",
+          rev: "demo",
+          current: true,
+          sizeMb: 2048,
+          created: timestamp,
+        },
+        {
+          tag: "line-agentflow-worker:demo-old",
+          rev: "demo-old",
+          current: false,
+          sizeMb: 2048,
+          created: timestamp,
+        },
+        {
+          tag: "line-agentflow-worker:demo-unused",
+          rev: null,
+          current: false,
+          sizeMb: 1024,
+          created: timestamp,
+        },
+      ],
       volumes: { jobs: 0, sourceCaches: 0 },
     },
     "/api/capacity": {
