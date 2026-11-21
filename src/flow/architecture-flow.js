@@ -87,16 +87,16 @@ import "@fontsource-variable/inter";
   var frame = document.getElementById("frame");
   el("rect", { x: 330, y: 62, width: 1090, height: 812, rx: 22, class: "host" }, frame);
   el("text", { x: 352, y: 94, class: "t-zone" }, frame, "這台 WINDOWS 主機・DOCKER DESKTOP");
-  el("text", { x: 40, y: 94, class: "t-zone" }, frame, "LINE 與你");
+  el("text", { x: 40, y: 94, class: "t-zone" }, frame, "聊天平台與你");
   el("text", { x: 1450, y: 94, class: "t-zone" }, frame, "外部服務");
 
   // ---------- 元件 ----------
   var C = {
-    line: { x: 40, y: 110, w: 250, h: 430, title: "LINE 群組", sub: "產品討論群（5）", tint: "var(--line)", soft: "var(--line-soft)", ic: "msg" },
+    line: { x: 40, y: 110, w: 250, h: 430, title: "LINE 與 Discord", sub: "範例群組", tint: "var(--line)", soft: "var(--line-soft)", ic: "msg" },
     admin: { x: 40, y: 600, w: 250, h: 250, title: "你（管理者）", sub: "看板・LINE 私訊", tint: "var(--brand)", soft: "var(--brand-soft)", ic: "dash" },
     tunnel: { x: 360, y: 150, w: 210, h: 104, title: entry[0], ts: 15.5, sub: entry[1], tint: "var(--cf)", soft: "var(--cf-soft)", ic: "cloud" },
     app: { x: 600, y: 110, w: 300, h: 336, title: "app 容器", port: ":4310", tint: "var(--brand)", soft: "var(--brand-soft)", ic: "server",
-      lines: ["Webhook 驗簽收訊", "等群組安靜再判讀", "任務與看板 API", "佇列 pg-boss", "LINE 推播・GitHub App"] },
+      lines: ["LINE 驗簽與 Discord 收訊", "等群組安靜再判讀", "任務與看板 API", "佇列 pg-boss", "LINE 推播與 GitHub App"] },
     db: { x: 600, y: 480, w: 140, h: 130, title: "PostgreSQL", sub: "訊息・任務", tint: "var(--db)", soft: "var(--db-soft)", ic: "db" },
     emb: { x: 760, y: 480, w: 140, h: 130, title: "embedder", sub: "本機向量模型", tint: "var(--db)", soft: "var(--db-soft)", ic: "scan" },
     runner: { x: 960, y: 110, w: 220, h: 90, title: "執行器", port: "主機 :4312", tint: "var(--brand)", soft: "var(--brand-soft)", ic: "cpu", row: true },
@@ -149,6 +149,7 @@ import "@fontsource-variable/inter";
   var P = {
     line_tunnel: "M290 202 C 322 202, 330 202, 360 202",
     tunnel_app: "M570 202 L600 202",
+    discord_app: "M290 308 L600 308",
     app_db: "M670 446 L670 480",
     db_emb: "M740 545 L760 545",
     app_emb: "M830 446 L830 480",
@@ -174,6 +175,8 @@ import "@fontsource-variable/inter";
     flowEls[id] = el("path", { d: P[id], class: "flow", stroke: "var(--brand)" }, flows);
     trailEls[id] = el("path", { d: P[id], class: "trail", stroke: "var(--brand)" }, trails);
   });
+
+  el("text", { x: 445, y: 298, "text-anchor": "middle", class: "t-sub" }, frame, "Discord Gateway");
 
   // ---------- LINE 聊天 ----------
   var extras = document.getElementById("extras");
@@ -331,17 +334,17 @@ import "@fontsource-variable/inter";
 
   // ---------- 場景 ----------
   var ALL = [
-    { title: "成員在群組提需求", where: "LINE → Cloudflare Tunnel → app", cam: "entry", focus: ["line", "tunnel", "app"],
-      text: { change: "王小明在「產品討論群」打 /任務 加上需求。LINE 平台把這則訊息用 Webhook（HTTPS POST）送到這台主機的固定網址，經 Cloudflare Tunnel 進到 app 容器。主機不用開放任何對外連接埠。",
-              query: "林佳穎想知道訂購按鈕在程式哪裡，用 /任務 問。LINE 平台把這則訊息用 Webhook（HTTPS POST）送到這台主機的固定網址，經 Cloudflare Tunnel 進到 app 容器。主機不用開放任何對外連接埠。" },
+    { title: "成員在群組提需求", where: "LINE Webhook 與 Discord Gateway", cam: "entry", focus: ["line", "tunnel", "app"],
+      text: { change: "小林在「範例群組」打 /任務 加上需求。LINE 平台把這則訊息用 Webhook（HTTPS POST）送到這台主機的固定網址，經 Cloudflare Tunnel 進到 app 容器。Discord 頻道的需求由 app 對外建立長連線接收，不用經過公開網址。",
+              query: "小禾想知道訂購按鈕在程式哪裡，用 /任務 問。LINE 平台把這則訊息用 Webhook（HTTPS POST）送到這台主機的固定網址，經 Cloudflare Tunnel 進到 app 容器。Discord 頻道也能送出需求，由 app 對外建立長連線接收。" },
       chips: ["指令模式：/任務 開頭", "Webhook", "約 1 秒"],
       data: { change: "<k>POST</k> https://固定網址/webhooks/line\n<k>X-Line-Signature:</k> 3q2+7wQ…  <k>(HMAC-SHA256)</k>\n{\n  \"type\": \"message\",\n  \"source\": { \"groupId\": \"C1f3…\" },\n  \"message\": {\n    \"type\": \"text\",\n    \"text\": <s>\"/任務 把首頁的訂購按鈕改成綠色…\"</s>\n  },\n  \"replyToken\": \"b60d…\"\n}",
               query: "<k>POST</k> https://固定網址/webhooks/line\n<k>X-Line-Signature:</k> 3q2+7wQ…  <k>(HMAC-SHA256)</k>\n{\n  \"type\": \"message\",\n  \"message\": {\n    \"type\": \"text\",\n    \"text\": <s>\"/任務 ShopWeb 的訂購按鈕在哪個元件？…\"</s>\n  },\n  \"replyToken\": \"b60d…\"\n}" },
       end: { bub: ["m1"], app: "收到 Webhook" },
       anim: function (tl) { showBubble(tl, "m1"); travel(tl, "line_tunnel", 1.1, "訊息"); travel(tl, "tunnel_app", 0.6, "訊息"); status(tl, "收到 Webhook"); } },
 
-    { title: "驗簽、存檔，先回「收到」", where: "app・PostgreSQL・LINE", cam: "entry", focus: ["app", "db", "line"],
-      text: "app 用 Channel Secret 驗證簽章，沒簽或簽錯直接回 401。通過後把訊息存進 PostgreSQL；有圖片就在背景下載。接著用這則訊息附的 reply token 回「收到」，reply token 的回覆不算 LINE 每月推播額度。回覆是 app 直接連到 LINE，不經過通道。",
+    { title: "驗證來源並保存群組訊息", where: "app 與 PostgreSQL", cam: "entry", focus: ["app", "db", "line"],
+      text: "app 驗證 LINE 簽章，也接收 Discord 長連線送來的事件。兩邊的群組訊息都存進 PostgreSQL，有圖片就在背景下載。符合即時回覆條件的 LINE 訊息會收到「收到」，不扣 LINE 推播額度。Discord 的進度與結果可在看板查看。",
       chips: ["簽章錯誤回 401", "reply token 不算額度", "原文保留 30 天"],
       data: "<ok>✓ 簽章正確</ok>\n\n<k>messages 新增一列</k>\n  id          \"5129…\"\n  group_id    \"C1f3…\"\n  type        \"text\"\n  received_at 10:02:11\n\n<k>回覆（reply token）</k>\n<s>收到，我會把這則需求整理好交給管理者確認，</s>\n<s>處理完會在這裡回報。</s>",
       end: { bub: ["m1", "r1"], app: "已存檔・已回收到" },

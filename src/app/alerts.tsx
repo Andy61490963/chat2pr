@@ -2,6 +2,7 @@ import {
   notificationLabels,
   projectLabels,
   statusLabels,
+  messageEditLabel,
   taskStationStatusLabels,
 } from "../../shared/status-glossary.js";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -83,6 +84,7 @@ const kinds: Record<
   answered: { icon: MessageSquareText, tone: "text-good", label: "查詢已回覆" },
   no_changes: { icon: MessageSquareText, tone: "text-good", label: "無需修改" },
   budget: { icon: Hourglass, tone: "text-warn", label: "額度用完" },
+  message_edit: { icon: Undo2, tone: "text-warn", label: messageEditLabel },
   unsend: { icon: Undo2, tone: "text-warn", label: "來源已撤回" },
   interrupted: { icon: CircleAlert, tone: "text-danger", label: "執行中斷" },
   publish_race: {

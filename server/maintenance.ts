@@ -8,6 +8,7 @@ import {
 } from "node:crypto";
 import { Database } from "./db.js";
 import type { Line } from "./line.js";
+import { loadChatImage } from "./chat-image.js";
 import { config, secrets } from "./config.js";
 export const backupTables = [
   "settings",
@@ -38,7 +39,7 @@ export async function cleanup(db: Database) {
     "UPDATE run_events SET detail=NULL WHERE detail IS NOT NULL AND NOT run_content_visible(run_id)",
   );
   await db.query(
-    "UPDATE messages SET text=NULL,image=NULL,image_mime=NULL,user_id=NULL,processed=true WHERE received_at<=message_retention_cutoff() AND (text IS NOT NULL OR image IS NOT NULL OR image_mime IS NOT NULL OR user_id IS NOT NULL OR NOT processed)",
+    "UPDATE messages SET text=NULL,image=NULL,image_mime=NULL,user_id=NULL,sender_name=NULL,image_source_url=NULL,processed=true WHERE received_at<=message_retention_cutoff() AND (text IS NOT NULL OR image IS NOT NULL OR image_mime IS NOT NULL OR user_id IS NOT NULL OR sender_name IS NOT NULL OR image_source_url IS NOT NULL OR NOT processed)",
   );
   // 成員名稱只隨仍可讀的訊息保留；發話者清除後名稱一併刪除。
   await db.query(
@@ -59,16 +60,16 @@ export async function downloadPendingImages(
     "SELECT id FROM messages WHERE type='image' AND image IS NULL AND NOT revoked AND content_attempts<3 AND received_at>message_retention_cutoff() ORDER BY received_at LIMIT 10",
   );
   for (const { id } of messages) {
-    const claimed = await db.query(
-      "UPDATE messages SET content_attempts=content_attempts+1 WHERE id=$1 AND image IS NULL AND NOT revoked AND content_attempts<3 AND received_at>message_retention_cutoff() RETURNING id",
+    const claimed = await db.query<{ id: string; image_source_url: string | null; content_revision: number }>(
+      "UPDATE messages SET content_attempts=content_attempts+1 WHERE id=$1 AND image IS NULL AND NOT revoked AND content_attempts<3 AND received_at>message_retention_cutoff() RETURNING id,image_source_url,content_revision",
       [id],
     );
     if (!claimed.length) continue;
     try {
-      const content = await line.image(id);
+      const content = await loadChatImage(line, claimed[0]);
       await db.query(
-        "UPDATE messages SET image=$2,image_mime=$3 WHERE id=$1 AND NOT revoked AND received_at>message_retention_cutoff()",
-        [id, content.data, content.mime],
+        "UPDATE messages SET image=$2,image_mime=$3 WHERE id=$1 AND content_revision=$4 AND NOT revoked AND received_at>message_retention_cutoff()",
+        [id, content.data, content.mime, claimed[0].content_revision],
       );
     } catch {
       await db.query(

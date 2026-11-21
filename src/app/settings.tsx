@@ -13,7 +13,11 @@ import {
   lineServiceOutageMinutes,
   type LinePrivateMode,
 } from "../../shared/line-private.js";
-import { networkStatusLabels } from "../../shared/status-glossary.js";
+import {
+  discordServiceLabels,
+  discordServiceText,
+  networkStatusLabels,
+} from "../../shared/status-glossary.js";
 import {
   maxCodexReserve,
   reserveLabel,
@@ -894,6 +898,15 @@ export function SettingsView({
   reload: () => unknown;
 }) {
   const s = state.settings;
+  const discord = state.health.find((entry) => entry.name === "discord");
+  const discordStatus = discord?.ok
+    ? "connected"
+    : discord
+      ? ((
+          Object.keys(discordServiceText) as (keyof typeof discordServiceText)[]
+        ).find((key) => discord.detail === discordServiceText[key]) ??
+        "disconnected")
+      : "unconfigured";
   const [pairing, setPairing] = useState("");
   const [copied, setCopied] = useState(false);
   // 私訊與群組分開計數（群組依人數計入額度）；過期的重送時略過。
@@ -1213,6 +1226,53 @@ export function SettingsView({
                 <span>LINE：{state.webhooks.line}</span>
                 <span>GitHub：{state.webhooks.github}</span>
               </div>
+            </details>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Discord</CardTitle>
+            <CardAction>
+              <Badge
+                variant={
+                  discordStatus === "connected"
+                    ? "good"
+                    : discordStatus === "disconnected" ||
+                        discordStatus === "configError"
+                      ? "danger"
+                      : "secondary"
+                }
+              >
+                {discordServiceLabels[discordStatus]}
+              </Badge>
+            </CardAction>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <p role="status" className="text-muted-foreground">
+              {discordServiceText[discordStatus]}
+            </p>
+            <details>
+              <summary className="min-h-11 cursor-pointer py-3 font-medium">
+                邀請機器人到伺服器
+              </summary>
+              <p>
+                在 Discord
+                開發者入口開啟你的應用程式，在「安裝」設定選擇伺服器安裝及機器人權限。複製安裝連結，由有管理伺服器權限的人開啟並選擇伺服器。
+              </p>
+              <p className="mt-2">
+                授予機器人檢視頻道（讀取訊息）、讀取訊息歷史、傳送訊息、加入反應、嵌入連結與附加檔案的權限。
+              </p>
+              <p className="mt-2">
+                在要收訊的文字頻道傳一則訊息，然後到群組頁綁定專案並啟用。
+              </p>
+              <a
+                className="inline-flex min-h-11 items-center underline underline-offset-4"
+                href="https://discord.com/developers/applications"
+                target="_blank"
+                rel="noreferrer"
+              >
+                開啟 Discord 開發者入口
+              </a>
             </details>
           </CardContent>
         </Card>

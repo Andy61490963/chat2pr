@@ -1,3 +1,4 @@
+import { loadChatImage } from "./chat-image.js";
 import { Assumptions, Question, clarifyDecision } from "./clarification.js";
 import { askInGroup } from "./answers.js";
 import {
@@ -489,7 +490,8 @@ export class Triage {
       if (!messages.length) return;
       // 只有明確引用的同群組訊息才能跟隨指令，不能把附近閒聊或其他群組的圖派工。
       const attachments = await this.db.query<Message>(
-        "SELECT * FROM messages WHERE group_id=$1 AND id=ANY($2) AND NOT(id=ANY($3)) AND NOT revoked AND received_at>message_retention_cutoff()",
+        `SELECT * FROM messages WHERE group_id=$1 AND (id=ANY($2) OR discord_message_id=ANY($2))
+           AND NOT(id=ANY($3)) AND NOT revoked AND received_at>message_retention_cutoff()`,
         [
           groupId,
           messages.map((m) => m.quoted_id).filter(Boolean),
@@ -629,10 +631,10 @@ export class Triage {
           }
           if (message.type === "image" && !message.image) {
             try {
-              const image = await this.line.image(message.id);
+              const image = await loadChatImage(this.line, message);
               const updated = await this.db.query(
-                "UPDATE messages SET image=$2,image_mime=$3 WHERE id=$1 AND NOT revoked AND received_at>message_retention_cutoff() RETURNING id",
-                [message.id, image.data, image.mime],
+                "UPDATE messages SET image=$2,image_mime=$3 WHERE id=$1 AND content_revision=$4 AND NOT revoked AND received_at>message_retention_cutoff() RETURNING id",
+                [message.id, image.data, image.mime, message.content_revision ?? 0],
               );
               if (!updated.length) throw new AppError(409, "圖片已撤回");
               message.image = image.data;
@@ -918,13 +920,11 @@ export class Triage {
               "指令引用的訊息無法讀取，可能尚未收到、已撤回或到期，請重新提供",
             );
           }
-          for (const m of commands)
-            if (
-              m.quoted_id &&
-              attachments.some((a) => a.id === m.quoted_id) &&
-              !d.sourceIds.includes(m.quoted_id)
-            )
-              d.sourceIds.push(m.quoted_id);
+          const quoted = attachments.filter((a) => commands.some((m) =>
+            m.quoted_id && (m.quoted_id === a.id || m.quoted_id === a.discord_message_id),
+          ));
+          for (const attachment of quoted)
+            if (!d.sourceIds.includes(attachment.id)) d.sourceIds.push(attachment.id);
           const requested = d.imageSourceIds ?? [];
           if (
             requested.some(
@@ -1012,7 +1012,7 @@ export class Triage {
             d.sourceIds.some(
               (id) =>
                 attachments.some((a) => a.id === id) &&
-                !commands.some((m) => m.quoted_id === id),
+                !quoted.some((a) => a.id === id),
             )
           )
             throw new AppError(422, "附件與觸發指令不相符");
@@ -1090,6 +1090,7 @@ export class Triage {
         )
       ).revision;
     const allowed = new Set(messages.map((m) => m.id));
+    const reviewSources = new Set(messages.filter((m) => m.needs_source_review).map((m) => m.id));
     const roots = new Set(
       messages.filter((m) => !m.contextOnly).map((m) => m.id),
     );
@@ -1211,15 +1212,16 @@ export class Triage {
         )
       )
         throw new AppError(409, "專案設定已變更，保留訊息重新判讀");
+      const sourceRevisions = new Map(messages.map((m) => [m.id, m.content_revision ?? 0]));
       const rows = (
         await c.query(
-          "SELECT id,revoked,processed FROM messages WHERE id=ANY($1) AND group_id=$2 AND received_at>message_retention_cutoff() FOR UPDATE",
+          "SELECT id,revoked,processed,content_revision FROM messages WHERE id=ANY($1) AND group_id=$2 AND received_at>message_retention_cutoff() FOR UPDATE",
           [[...allowed], group.id],
         )
       ).rows;
       if (
         rows.length !== allowed.size ||
-        rows.some((r) => r.revoked || (r.processed && roots.has(r.id)))
+        rows.some((r) => r.revoked || (r.processed && roots.has(r.id)) || r.content_revision !== sourceRevisions.get(r.id))
       )
         throw new AppError(409, "來源訊息已改變，重新彙整");
       await saveImageObservations(c, messages, observations);
@@ -1621,6 +1623,7 @@ export class Triage {
             : related.risk_reasons;
           const risks = [...kept, ...(risk ? [risk] : [])];
           const hold =
+            d.sourceIds.some((id) => reviewSources.has(id)) ||
             !branch.automatic ||
             related.mode !== (d.taskType ?? "change") ||
             (d.taskType ?? "change") === "change" ||
@@ -1700,6 +1703,7 @@ export class Triage {
           continue;
         }
         const manual =
+          d.sourceIds.some((id) => reviewSources.has(id)) ||
           !branch.automatic ||
           (d.taskType ?? "change") === "change" ||
           routing.status !== "clear" ||

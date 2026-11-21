@@ -1,10 +1,19 @@
-import type { Database } from "./db.js";
+import type { Database, DbClient } from "./db.js";
 
-// 檢查整個待判讀佇列，而非前 100 則；混有一般需求時必須保留原本的彙整時間。
-const pendingBatch = `SELECT count(*) AS count, bool_and(m.type='text' AND m.bot_reply) AS fast
- FROM messages m WHERE m.group_id=g.id AND NOT m.processed AND NOT m.revoked
+const pendingMessages = `FROM messages m WHERE m.group_id=g.id AND NOT m.processed AND NOT m.revoked
  AND m.received_at>message_retention_cutoff() AND m.trigger_mode<>'chat'
  AND (g.trigger_mode='auto' OR m.trigger_mode='command')`;
+
+// 檢查整個待判讀佇列，而非前 100 則；混有一般需求時必須保留原本的彙整時間。
+const pendingBatch = `SELECT count(*) AS count, bool_and(m.type='text' AND m.bot_reply) AS fast ${pendingMessages}`;
+
+export async function clearEmptyTriageWindow(c: DbClient, group: string) {
+  await c.query(
+    `UPDATE groups g SET first_pending_at=NULL,last_pending_at=NULL
+     WHERE g.id=$1 AND NOT EXISTS (SELECT 1 ${pendingMessages})`,
+    [group],
+  );
+}
 
 export async function dueTriageGroups(
   db: Database,

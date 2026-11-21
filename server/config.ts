@@ -5,6 +5,8 @@ export interface Secrets {
   openaiKey?: string;
   lineSecret?: string;
   lineToken?: string;
+  discordToken?: string;
+  discordApplicationId?: string;
   githubAppId?: string;
   githubPrivateKey?: string;
   githubClientId?: string;

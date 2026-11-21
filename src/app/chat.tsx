@@ -16,7 +16,7 @@ import {
   deliveryLabel,
   groupKindLabels,
 } from "../../shared/group-delivery.js";
-import { statusLabels } from "../../shared/types.js";
+import { statusLabels, type Group } from "../../shared/types.js";
 import { chatRoutingLabels } from "../../shared/status-glossary.js";
 import { CopyButton } from "./copy-button";
 import { Button } from "@/components/ui/button";
@@ -76,6 +76,15 @@ function timeline(rows: ChatMessage[], bots: BotMessage[]): Item[] {
   ].sort((x, y) => x.at - y.at || Number(x.bot) - Number(y.bot));
 }
 
+function chatText(text: string, platform: Group["platform"]) {
+  return platform === "discord"
+    ? text
+        .replace(/<@!?\d+>/g, "@成員")
+        .replace(/<@&\d+>/g, "@身分組")
+        .replace(/<#\d+>/g, "#頻道")
+    : text;
+}
+
 export function ChatView({
   state,
   request,
@@ -133,7 +142,9 @@ export function ChatView({
             {group.enabled && !group.left_at && (
               <span className="text-xs text-muted-foreground">
                 {group.trigger_mode === "command"
-                  ? "指令與引用追問"
+                  ? group.platform === "discord"
+                    ? "指令或提及機器人"
+                    : "指令與引用追問"
                   : "自動辨識"}
               </span>
             )}
@@ -150,6 +161,7 @@ export function ChatView({
           <Timeline
             key={group.id}
             groupId={group.id}
+            platform={group.platform}
             state={state}
             request={request}
             open={open}
@@ -162,11 +174,13 @@ export function ChatView({
 
 function Timeline({
   groupId,
+  platform,
   state,
   request,
   open,
 }: {
   groupId: string;
+  platform: Group["platform"];
   state: State;
   request: Request;
   open: (id: string) => void;
@@ -374,7 +388,7 @@ function Timeline({
                                     回覆 {m.quoted_sender ?? "成員"}：
                                   </span>
                                   <span className="line-clamp-2 [overflow-wrap:anywhere]">
-                                    {m.quoted_text}
+                                    {chatText(m.quoted_text, platform)}
                                   </span>
                                 </>
                               ) : (
@@ -405,27 +419,27 @@ function Timeline({
                           )}
                           {m.text && (
                             <p className="whitespace-pre-wrap break-words text-sm leading-relaxed [overflow-wrap:anywhere]">
-                              {m.text}
+                              {chatText(m.text, platform)}
                             </p>
                           )}
                           {m.has_image ? (
                             <button
                               aria-label="放大圖片"
                               onClick={() => setPreview(m.id)}
-                              className="block rounded-lg focus-visible:outline-2 focus-visible:outline-ring"
+                              className="block min-h-11 min-w-11 rounded-lg focus-visible:outline-2 focus-visible:outline-ring"
                             >
                               <img
                                 loading="lazy"
                                 className="max-h-64 max-w-full rounded-lg object-contain"
                                 src={`/api/messages/${encodeURIComponent(m.id)}/image`}
-                                alt="LINE 群組圖片"
+                                alt="群組圖片"
                               />
                             </button>
                           ) : m.type === "image" ? (
                             <p className="flex items-center gap-2 text-sm text-muted-foreground">
                               <ImageOff className="size-4" />
                               {m.image_state === "failed"
-                                ? "圖片無法取得（下載重試已結束）"
+                                ? "圖片下載重試後仍無法取得，連結可能已失效。請發言者重新附圖。"
                                 : "圖片下載中…"}
                             </p>
                           ) : (
@@ -482,7 +496,7 @@ function Timeline({
             <img
               className="max-h-[75vh] w-full object-contain"
               src={`/api/messages/${encodeURIComponent(shown.id)}/image`}
-              alt="LINE 群組圖片放大檢視"
+              alt="放大的群組圖片"
             />
           )}
         </DialogContent>

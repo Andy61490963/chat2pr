@@ -14,7 +14,8 @@ import {
   linePrivateQuotaHold,
   linePrivateQuotaNotes,
 } from "../shared/line-private.js";
-import { revokePickSource } from "./pick-lists.js";
+import { invalidateMessageSources } from "./message-sources.js";
+import { readChatImage } from "./chat-image.js";
 import {
   commandAck,
   disabledAck,
@@ -248,39 +249,7 @@ export class Line {
             "INSERT INTO messages(id,group_id,type,revoked,processed) VALUES($1,$2,'unsend',true,true) ON CONFLICT(id) DO UPDATE SET text=NULL,image=NULL,image_mime=NULL,user_id=NULL,revoked=true,processed=true",
             [e.unsend.messageId, group],
           );
-          await revokePickSource(c, group, e.unsend.messageId);
-          const affected = (
-            await c.query(
-              "SELECT * FROM tasks WHERE group_id=$1 AND $2=ANY(source_ids) FOR UPDATE",
-              [group, e.unsend.messageId],
-            )
-          ).rows;
-          for (const t of affected) {
-            if (
-              ["queued", "budget_wait", "awaiting_approval", "failed"].includes(
-                t.status,
-              )
-            )
-              await c.query(
-                "UPDATE tasks SET status='awaiting_approval',approved_version=NULL,version=version+1,base_sha=NULL,branch=NULL,pr_number=NULL,pr_url=NULL,approved_paths='{}',missing=missing || '[\"來源訊息已撤回，請重新確認需求\"]'::jsonb,updated_at=now() WHERE id=$1",
-                [t.id],
-              );
-            if (["running", "reviewing"].includes(t.status))
-              await c.query(
-                "UPDATE tasks SET status='awaiting_approval',approved_version=NULL,version=version+1,base_sha=NULL,branch=NULL,pr_number=NULL,pr_url=NULL,approved_paths='{}',missing=missing || '[\"來源訊息已撤回，請重新確認需求\"]'::jsonb,last_error='來源已撤回，執行中止並待重新審核',updated_at=now() WHERE id=$1",
-                [t.id],
-              );
-            await this.db.audit(
-              t.id,
-              "unsend",
-              "來源訊息已撤回；請確認已整理需求及既有 PR",
-              c,
-            );
-            await c.query(
-              "INSERT INTO notifications(task_id,kind,dedupe_key,text) VALUES($1,'unsend',$2,'需求來源已撤回，請查看看板確認處理方式。') ON CONFLICT DO NOTHING",
-              [t.id, `unsend:${e.webhookEventId}:${t.id}`],
-            );
-          }
+          await invalidateMessageSources(this.db, c, group, [e.unsend.messageId], e.webhookEventId, "撤回");
           return;
         }
         if (e.type === "message" && e.message) {
@@ -510,23 +479,7 @@ export class Line {
         signal: AbortSignal.timeout(20000),
       },
     );
-    if (!response.ok)
-      throw new AppError(502, `無法取得圖片（${response.status}）`);
-    const mime = response.headers.get("content-type")?.split(";")[0] ?? "";
-    if (!["image/jpeg", "image/png", "image/webp", "image/gif"].includes(mime))
-      throw new AppError(422, "不支援此圖片格式");
-    const chunks: Uint8Array[] = [];
-    let size = 0;
-    for await (const chunk of response.body! as unknown as AsyncIterable<Uint8Array>) {
-      size += chunk.length;
-      if (size > 10 * 1024 * 1024)
-        throw new AppError(413, "圖片超過 10 MB，請人工確認");
-      chunks.push(chunk);
-    }
-    const data = Buffer.concat(chunks);
-    const { validateImageContent } = await import("./image-content.js");
-    await validateImageContent(data, mime);
-    return { data, mime };
+    return readChatImage(response);
   }
   async notify(taskId: string | null, kind: string, key: string, text: string) {
     // 同一任務 30 分鐘內只通知一次失敗；錯誤仍完整寫進稽核紀錄。

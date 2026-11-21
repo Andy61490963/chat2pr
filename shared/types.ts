@@ -259,6 +259,10 @@ export interface Settings {
 }
 export interface Message {
   contextOrigin?: "direct" | "rag";
+  content_revision?: number;
+  needs_source_review?: boolean;
+  discord_message_id?: string | null;
+  image_source_url?: string | null;
   trigger_mode?: "auto" | "command" | "chat";
   contextOnly?: boolean;
   id: string;

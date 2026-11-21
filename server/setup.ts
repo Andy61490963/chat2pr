@@ -71,6 +71,9 @@ app.post("/api/save", async (req, reply) => {
       openaiKey: z.string().optional(),
       lineSecret: z.string().optional(),
       lineToken: z.string().optional(),
+      discordToken: z.string().max(512).optional(),
+      discordApplicationId: z.string().optional(),
+      disableDiscord: z.literal("on").optional(),
       githubAppId: z.string().regex(/^\d*$/).optional(),
       githubPrivateKey: z.string().optional(),
       githubClientId: z.string().optional(),
@@ -105,7 +108,34 @@ app.post("/api/save", async (req, reply) => {
     }
   }
   const updated = { ...secrets() };
-  for (const [key, value] of Object.entries(b))
+  const { discordToken, discordApplicationId, disableDiscord, ...other } = b;
+  if (disableDiscord && (discordToken || discordApplicationId))
+    return reply
+      .code(400)
+      .send({ error: "請擇一停用 Discord 或更新 Discord 設定。" });
+  if (
+    discordToken &&
+    !/^[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{20,}$/.test(
+      discordToken,
+    )
+  )
+    return reply.code(400).send({
+      error:
+        "無法儲存 Discord 權杖，格式不符。請從 Discord 開發者入口重新複製機器人權杖。",
+    });
+  if (discordApplicationId && !/^\d{17,20}$/.test(discordApplicationId))
+    return reply.code(400).send({
+      error:
+        "無法儲存 Discord 應用程式 ID，格式不符。請從應用程式的一般資訊重新複製數字 ID。",
+    });
+  // 與 LINE 權杖相同：只存在本機設定檔，不回傳看板。
+  if (disableDiscord) {
+    delete updated.discordToken;
+    delete updated.discordApplicationId;
+  }
+  if (discordToken) updated.discordToken = discordToken;
+  if (discordApplicationId) updated.discordApplicationId = discordApplicationId;
+  for (const [key, value] of Object.entries(other))
     if (value)
       Object.assign(updated, {
         [key]: key === "publicUrl" ? value.replace(/\/$/, "") : value,

@@ -1,5 +1,11 @@
+const discordBotToken =
+  /(?<![\w-])[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{20,}(?![\w-])/g;
+
+export const redactDiscordToken = (text: string) =>
+  text.replace(discordBotToken, "[已遮蔽 Discord 權杖]");
+
 export const redact = (value: string) =>
-  value
+  redactDiscordToken(value)
     .replace(/sk-[\w-]{12,}/g, "[已遮蔽金鑰]")
     .replace(/(gh[pousr]_[\w]{10,}|github_pat_[\w]{10,})/g, "[已遮蔽憑證]")
     .slice(0, 10000);

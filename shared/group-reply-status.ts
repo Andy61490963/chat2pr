@@ -1,13 +1,16 @@
 import type { Group, Settings } from "./types.js";
+import { groupDeliveryLabels } from "./status-glossary.js";
 import { quotaBlocked } from "./line-quota.js";
 
 /** 依已儲存的總開關、群組設定與推播狀態顯示結果。即時回覆不使用推播額度。 */
 export function groupReplyStatus(
-  group: Pick<Group, "reply_mode" | "left_at">,
+  group: Pick<Group, "reply_mode" | "left_at"> & Partial<Pick<Group, "platform">>,
   settings: Pick<Settings, "group_replies">,
   health: { name: string; ok: boolean }[] | undefined,
   now = new Date(),
 ) {
+  if (group.platform === "discord")
+    return { replies: false, text: groupDeliveryLabels.unsupportedPlatform };
   if (group.left_at)
     return { replies: false, text: "不會回覆，機器人已離開群組" };
   if (settings.group_replies === false)

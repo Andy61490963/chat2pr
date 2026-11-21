@@ -1276,7 +1276,8 @@ export async function buildApp(
     await requireAdmin(db, req);
     const b = z
       .object({
-        name: z.string().min(1).max(100),
+        // Discord 伺服器與頻道各可有 100 個字，名稱還包含「／#」，並可能含表情符號。
+        name: z.string().min(1).max(402),
         project_ids: z.array(z.string().uuid()).max(30),
         trigger_mode: z.enum(["auto", "command"]).optional(),
         reply_mode: z.enum(["off", "results", "all"]).optional(),
@@ -1304,6 +1305,8 @@ export async function buildApp(
         await c.query("SELECT * FROM groups WHERE id=$1 FOR UPDATE", [id])
       ).rows[0];
       if (!old) throw new AppError(404, "找不到群組");
+      if (old.platform === "line" && b.name.length > 100)
+        throw new AppError(400, "群組名稱超過長度限制，請縮短至 100 字元內。");
       if (b.enabled && old.left_at)
         throw new AppError(409, "機器人已離開這個群組，重新邀請加入後才能啟用");
       const mode = b.trigger_mode ?? old.trigger_mode;
