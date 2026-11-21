@@ -34,6 +34,13 @@ export const endedStatuses: TaskStatus[] = [
 ];
 /** `/api/state` 一次最多完整載入的未結束任務數；超過的筆數記在 `StateTotals.unfinishedOmitted`。 */
 export const UNFINISHED_LIMIT = 1000;
+export type EndTaskSelection = Pick<Task, "id" | "version"> & {
+  status: (typeof taskGroups.attention)[number];
+};
+export interface EndTasksResult {
+  ended: number;
+  skipped: number;
+}
 /** `/api/state` 的 totals：資料庫裡的實際數量，不受看板載入範圍影響。 */
 export interface StateTotals {
   tasks: number;

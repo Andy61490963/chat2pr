@@ -3,7 +3,7 @@ import {
   projectLabels,
 } from "../../shared/status-glossary.js";
 import { taskListTitle } from "../../shared/task-title.js";
-import { useState } from "react";
+import { useId, useRef, useState } from "react";
 import {
   Activity,
   AlertCircle,
@@ -26,8 +26,13 @@ import {
   Settings2,
   FileSearch,
 } from "lucide-react";
-import type { Project, Task } from "../../shared/types.js";
-import { statusLabels } from "../../shared/types.js";
+import {
+  statusLabels,
+  taskGroups,
+  type EndTaskSelection,
+  type Project,
+  type Task,
+} from "../../shared/types.js";
 import {
   failureBrief,
   fixPageLabels,
@@ -38,7 +43,16 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Checkbox, Label } from "@/components/ui/form-controls";
+import { Checkbox, Label, Textarea } from "@/components/ui/form-controls";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
 import { ConfirmButton } from "./confirm";
 import {
@@ -120,6 +134,7 @@ export function InboxView({
   showTasks,
   open,
   act,
+  endTasks,
   more,
 }: {
   state: State;
@@ -131,8 +146,48 @@ export function InboxView({
   /** amend 為 true 時打開任務詳情並直接展開補充需求編輯。 */
   open: (id: string, amend?: boolean) => unknown;
   act: Act;
+  endTasks: (
+    tasks: EndTaskSelection[],
+    reason: string,
+    notify: boolean,
+  ) => Promise<boolean>;
   more: () => unknown;
 }) {
+  const [selected, setSelected] = useState(new Map<string, EndTaskSelection>());
+  const [confirmEnd, setConfirmEnd] = useState(false);
+  const [reason, setReason] = useState("");
+  const [notify, setNotify] = useState(true);
+  const reasonId = useId();
+  const decisionSection = useRef<HTMLElement>(null);
+  const endButton = useRef<HTMLButtonElement>(null);
+  const eligible = new Map<string, EndTaskSelection>();
+  for (const { id, status, version } of needs) {
+    const endableStatus = taskGroups.attention.find(
+      (allowed) => allowed === status,
+    );
+    if (endableStatus) eligible.set(id, { id, status: endableStatus, version });
+  }
+  const toggleTask = (id: string, checked: boolean) => {
+    const task = eligible.get(id);
+    setSelected((previous) => {
+      const next = new Map(previous);
+      if (checked && task) next.set(id, task);
+      else next.delete(id);
+      return next;
+    });
+  };
+  const submitEnd = async () => {
+    setConfirmEnd(false);
+    if (!(await endTasks([...selected.values()], reason.trim(), notify))) return;
+    if (
+      document.activeElement === endButton.current ||
+      document.activeElement === document.body
+    )
+      decisionSection.current?.focus();
+    setSelected(new Map());
+    setReason("");
+    setNotify(true);
+  };
   const setup = setupSteps(state);
   const left = setup.filter((s) => !s.done);
   // 清單用已載入的任務（未結束的伺服器一律載入）；摘要的數字用伺服器的實際數量。
@@ -182,7 +237,12 @@ export function InboxView({
           </CardContent>
         </Card>
       )}
-      <section aria-labelledby="inbox-todo">
+      <section
+        ref={decisionSection}
+        tabIndex={-1}
+        aria-labelledby="inbox-todo"
+        className={batchFocus}
+      >
         <TaskSectionTitle
           id="inbox-todo"
           count={needCount}
@@ -190,6 +250,45 @@ export function InboxView({
         >
           {notificationLabels.action}
         </TaskSectionTitle>
+        {admin && (eligible.size > 0 || selected.size > 0) && (
+          <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+            <Button
+              type="button"
+              variant="ghost"
+              className={batchControl}
+              aria-disabled={busy || eligible.size === 0}
+              onClick={() => {
+                if (!busy && eligible.size) setSelected(eligible);
+              }}
+            >
+              全選本頁
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              className={batchControl}
+              aria-disabled={busy || selected.size === 0}
+              onClick={() => {
+                if (!busy && selected.size) setSelected(new Map());
+              }}
+            >
+              清除選取
+            </Button>
+            {selected.size > 0 && (
+              <Button
+                ref={endButton}
+                type="button"
+                className={batchControl}
+                aria-disabled={busy}
+                onClick={() => {
+                  if (!busy) setConfirmEnd(true);
+                }}
+              >
+                結束選取的 {selected.size} 張任務
+              </Button>
+            )}
+          </div>
+        )}
         {needs.length ? (
           <div className="work-ledger divide-y">
             {needs.map((t) => (
@@ -201,6 +300,20 @@ export function InboxView({
                 open={open}
                 act={act}
                 go={admin ? go : undefined}
+                selection={
+                  admin && eligible.has(t.id) ? (
+                    <label className="grid size-11 shrink-0 cursor-pointer place-items-center rounded-md">
+                      <input
+                        type="checkbox"
+                        className={batchCheckbox}
+                        checked={selected.has(t.id)}
+                        disabled={busy}
+                        onChange={(event) => toggleTask(t.id, event.target.checked)}
+                      />
+                      <span className="sr-only">選取「{taskListTitle(t)}」</span>
+                    </label>
+                  ) : undefined
+                }
               />
             ))}
           </div>
@@ -210,6 +323,73 @@ export function InboxView({
               有需求需要你決定時，你會在這裡看到它，也會收到私訊。
             </Empty>
           </Card>
+        )}
+        {admin && (
+          <Dialog open={confirmEnd} onOpenChange={setConfirmEnd}>
+            <DialogContent
+              showCloseButton={false}
+              className="max-h-[calc(100dvh-2rem)] overflow-y-auto motion-reduce:animate-none"
+              onCloseAutoFocus={(event) => {
+                if (
+                  !endButton.current &&
+                  document.activeElement === document.body
+                ) {
+                  event.preventDefault();
+                  decisionSection.current?.focus();
+                }
+              }}
+            >
+              <DialogHeader className="text-left">
+                <DialogTitle>結束 {selected.size} 張任務？</DialogTitle>
+                <DialogDescription>
+                  你結束的任務不會派工，之後可在任務詳情重新開啟。
+                  {!notify && "你這次不會通知群組。"}
+                </DialogDescription>
+              </DialogHeader>
+              <div className="grid gap-2">
+                <Label htmlFor={reasonId}>結束原因（選填，僅記在任務活動）</Label>
+                <Textarea
+                  id={reasonId}
+                  value={reason}
+                  maxLength={500}
+                  onChange={(event) => setReason(event.target.value)}
+                  className={cn(
+                    batchFocus,
+                    "border-muted-foreground motion-reduce:transition-none",
+                  )}
+                />
+              </div>
+              <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm">
+                <input
+                  type="checkbox"
+                  className={batchCheckbox}
+                  checked={notify}
+                  onChange={(event) => setNotify(event.target.checked)}
+                />
+                依群組回覆設定通知
+              </label>
+              <DialogFooter>
+                <DialogClose asChild>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className={cn(batchControl, "border-muted-foreground")}
+                  >
+                    保留任務
+                  </Button>
+                </DialogClose>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  disabled={busy}
+                  className={batchControl}
+                  onClick={() => void submitEnd()}
+                >
+                  結束任務
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         )}
       </section>
       {/* 等待額度的工作會自動繼續，不需要決定；放在較低調的段落，只說明什麼時候恢復。 */}
@@ -326,6 +506,14 @@ export function InboxView({
     </div>
   );
 }
+
+const batchFocus =
+  "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground";
+const batchControl = cn(
+  batchFocus,
+  "h-auto min-h-11 max-w-full whitespace-normal motion-reduce:transition-none aria-disabled:opacity-50",
+);
+const batchCheckbox = cn(batchFocus, "size-5 shrink-0 accent-primary");
 
 function TaskSectionTitle({
   id,
@@ -583,6 +771,7 @@ function DecisionCard({
   open,
   act,
   go,
+  selection,
 }: {
   task: Task;
   state: State;
@@ -590,6 +779,7 @@ function DecisionCard({
   open: (id: string, amend?: boolean) => unknown;
   act: Act;
   go?: (v: View, projectId?: string | null) => void;
+  selection?: React.ReactNode;
 }) {
   const pick = t.status === "awaiting_approval" && !t.project_id;
   // 失敗說明拆成白話說明、建議與錯誤重點：建議固定排在最後，整段截兩行一定看不到。
@@ -611,26 +801,29 @@ function DecisionCard({
     <div className="py-4">
       <CardContent>
         <div className="grid items-start gap-3 md:grid-cols-[minmax(0,1fr)_minmax(11rem,30%)]">
-          <button
-            className="work-touch flex min-w-0 w-full flex-col gap-1 text-left"
-            onClick={() => open(t.id)}
-          >
-            <span className="text-lg font-semibold [overflow-wrap:anywhere]">
-              {taskListTitle(t)}
-            </span>
-            <TaskRowFields task={t} state={state} />
-            <span
-              className={cn(
-                "flex items-start gap-1.5 text-sm",
-                t.status === "failed" ? "text-danger" : "text-warn",
-              )}
+          <div className="flex min-w-0 items-start gap-1">
+            {selection}
+            <button
+              className="work-touch flex min-w-0 w-full flex-col gap-1 text-left"
+              onClick={() => open(t.id)}
             >
-              <AlertCircle className="mt-0.5 size-4 shrink-0" />
-              <span className="line-clamp-2 [overflow-wrap:anywhere]">
-                {reason}
+              <span className="text-lg font-semibold [overflow-wrap:anywhere]">
+                {taskListTitle(t)}
               </span>
-            </span>
-          </button>
+              <TaskRowFields task={t} state={state} />
+              <span
+                className={cn(
+                  "flex items-start gap-1.5 text-sm",
+                  t.status === "failed" ? "text-danger" : "text-warn",
+                )}
+              >
+                <AlertCircle className="mt-0.5 size-4 shrink-0" />
+                <span className="line-clamp-2 [overflow-wrap:anywhere]">
+                  {reason}
+                </span>
+              </span>
+            </button>
+          </div>
           <StationTrack task={t} />
         </div>
         {failure && (
