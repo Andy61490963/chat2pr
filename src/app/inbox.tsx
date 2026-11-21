@@ -2,6 +2,7 @@ import {
   notificationLabels,
   projectLabels,
 } from "../../shared/status-glossary.js";
+import { taskListTitle } from "../../shared/task-title.js";
 import { useState } from "react";
 import {
   Activity,
@@ -325,7 +326,9 @@ export function InboxView({
                       className="flex min-w-0 flex-1 flex-col text-left"
                       onClick={() => open(t.id)}
                     >
-                      <span className="truncate font-medium">{t.title}</span>
+                      <span className="truncate font-medium">
+                        {taskListTitle(t)}
+                      </span>
                       <span className="text-sm text-muted-foreground">
                         {projectName(state, t)}
                       </span>
@@ -725,7 +728,7 @@ function WaitingRow({
       >
         <StatusIcon status={t.status} />
         <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="truncate font-medium">{t.title}</span>
+          <span className="truncate font-medium">{taskListTitle(t)}</span>
           <span className="text-xs text-muted-foreground">
             {groupName(state, t)} · {projectName(state, t)} · 更新於{" "}
             {ago(t.updated_at)}
@@ -968,7 +971,7 @@ export function TaskRow({
     >
       <StatusIcon status={t.status} />
       <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate font-medium">{t.title}</span>
+        <span className="truncate font-medium">{taskListTitle(t)}</span>
         <span className="text-sm text-muted-foreground">
           {meta.join(" · ")}
         </span>

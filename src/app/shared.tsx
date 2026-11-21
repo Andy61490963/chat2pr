@@ -114,6 +114,7 @@ export type Detail = {
   };
   reportImages?: import("../../shared/query-report").ReportImage[];
   task: Task;
+  fullTitle?: string;
   contextEvidence: ContextEvidence[];
   images: {
     id: string;

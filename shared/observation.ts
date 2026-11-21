@@ -10,6 +10,7 @@ export interface RunEvent {
   exitCode?: number;
 }
 export interface RunView {
+  pr_summary?: string | null;
   query_sources?:
     | { name: string; repo: string; branch: string; commit: string | null }[]
     | null;

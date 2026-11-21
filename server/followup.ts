@@ -4,6 +4,7 @@ import { AppError, classifyRisk, queryRisk, redact } from "./policy.js";
 import { approvalNotice, saveProjectConfirmation } from "./project-routing.js";
 import { assertContextText } from "./project-context.js";
 import type { Task } from "../shared/types.js";
+import { shortFollowupTitle } from "../shared/task-title.js";
 
 /**
  * 對話串沒有使用者看得到的題數上限。內部只限制讀取深度，避免異常資料造成無窮迴圈；
@@ -211,7 +212,7 @@ async function createChangeFollowup(
       [
         parent.project_id,
         parent.group_id,
-        `追加：${text.replace(/\s+/g, " ").slice(0, 60)}`,
+        shortFollowupTitle("追加：", text),
         text,
         JSON.stringify([`完成追加：${text.slice(0, 500)}`]),
         JSON.stringify(risk ? [risk] : []),
@@ -290,7 +291,7 @@ export async function createFollowupInTransaction(
       [
         parent.project_id,
         parent.group_id,
-        `追問：${question.replace(/\s+/g, " ").slice(0, 60)}`,
+        shortFollowupTitle("追問：", question),
         question,
         JSON.stringify(
           options.acceptance ?? [`回答追問：${question.slice(0, 500)}`],
