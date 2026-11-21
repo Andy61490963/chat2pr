@@ -3,6 +3,7 @@ import {
   containerCondition,
   diskAttentionCount,
   readSystemTab,
+  serviceKey,
 } from "../shared/system-tabs.js";
 import { workerImageStatus } from "../shared/status-glossary.js";
 
@@ -63,5 +64,38 @@ describe("容器與磁碟待處理數量", () => {
       diskAttentionCount({ ...healthy, diskLevel: null, diskPaused: true }),
     ).toBe(1);
     expect(diskAttentionCount({ ...healthy, diskLevel: "unknown" })).toBe(0);
+  });
+});
+
+describe("服務名稱與平常停止的服務", () => {
+  it("認得帶前綴或編號的容器名稱", () => {
+    expect(serviceKey("33273886db7e_line-agentflow-egress")).toBe("egress");
+    expect(serviceKey("line-agentflow-egress-ai-1")).toBe("egress-ai");
+    expect(serviceKey("line-agentflow-db-test-1")).toBe("db-test");
+    expect(serviceKey("示範容器")).toBe("示範容器");
+  });
+
+  it("測試資料庫停止是常態，不計入待處理；其他服務停止仍計入", () => {
+    const idle = containerCondition({
+      name: "line-agentflow-db-test-1",
+      state: "exited",
+      status: "Exited (0) 20 minutes ago",
+    });
+    expect(idle).toBe("idle");
+    const stopped = containerCondition({
+      name: "line-agentflow-db-1",
+      state: "exited",
+      status: "Exited (1)",
+    });
+    expect(stopped).toBe("stopped");
+    expect(
+      diskAttentionCount({
+        probeFailed: false,
+        services: [idle, stopped],
+        images: [],
+        diskLevel: "ok",
+        diskPaused: false,
+      }),
+    ).toBe(1);
   });
 });

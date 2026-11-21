@@ -381,7 +381,8 @@ export function startDiscord(
       recordHealth(
         db,
         "discord",
-        state === "connected",
+        // Discord 是選用功能：沒設定不算異常，冒煙測試與系統檢查才不會誤報。
+        state === "connected" || state === "unconfigured",
         discordServiceText[state],
       ).catch(() => {
         console.warn("無法保存 Discord 連線狀態，請確認資料庫連線。");

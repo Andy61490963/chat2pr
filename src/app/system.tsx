@@ -36,6 +36,7 @@ import {
 } from "../../shared/status-glossary.js";
 import {
   containerCondition,
+  serviceKey,
   diskAttentionCount,
   readSystemTab,
   systemTabs,
@@ -82,7 +83,7 @@ type DockerLists = {
   images: WorkerImage[];
   volumes: Volumes;
 };
-type Tone = "good" | "warn" | "danger";
+type Tone = "good" | "warn" | "danger" | "idle";
 const runnerTone = {
   ok: "good",
   docker: "warn",
@@ -96,6 +97,7 @@ const runnerAdvice = {
 };
 const containerTone = {
   running: "good",
+  idle: "idle",
   unhealthy: "danger",
   stopped: "danger",
 } as const;
@@ -375,11 +377,7 @@ function ContainerCard({
               {services.map(({ service, condition }) => (
                 <ServiceRow
                   key={service.name}
-                  name={
-                    serviceNames[
-                      service.name.replace(/^line-agentflow-|-\d+$/g, "")
-                    ] ?? "其他服務"
-                  }
+                  name={serviceNames[serviceKey(service.name)] ?? service.name}
                   role={service.role}
                   tone={containerTone[condition]}
                   detail={systemStatusLabels.container[condition]}
@@ -387,7 +385,10 @@ function ContainerCard({
               ))}
             </ul>
             {!stale &&
-              services.some(({ condition }) => condition !== "running") && (
+              services.some(
+                ({ condition }) =>
+                  condition !== "running" && condition !== "idle",
+              ) && (
                 <p className="text-xs text-danger">
                   有服務暫時無法使用，可能是容器已停止或健康檢查未通過。請在主機確認
                   Docker 中的服務狀態，再按「重新整理」。
@@ -526,11 +527,13 @@ function ServiceRow({
         aria-hidden
         className={cn(
           "size-2 shrink-0 rounded-full",
-          tone === "good"
-            ? "bg-good"
-            : tone === "warn"
-              ? "bg-warn"
-              : "bg-danger",
+          tone === "idle"
+            ? "bg-border"
+            : tone === "good"
+              ? "bg-good"
+              : tone === "warn"
+                ? "bg-warn"
+                : "bg-danger",
         )}
       />
       <span className="flex min-w-0 flex-1 flex-col">
@@ -542,7 +545,7 @@ function ServiceRow({
       <span
         className={cn(
           "max-w-[40%] shrink-0 text-right text-xs",
-          tone === "good"
+          tone === "good" || tone === "idle"
             ? "text-muted-foreground"
             : tone === "warn"
               ? "text-warn"
