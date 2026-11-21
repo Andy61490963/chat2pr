@@ -11,14 +11,12 @@ export function TaskClarification({
   editable,
   busy,
   act,
-  amend,
   answer,
 }: {
   task: Task;
   editable: boolean;
   busy: boolean;
   act: Act;
-  amend: () => void;
   /** 直接回答補問；系統把回答併進需求。成功才回傳 true，失敗時保留輸入。 */
   answer: (task: Task, text: string) => Promise<boolean>;
 }) {
@@ -99,15 +97,6 @@ export function TaskClarification({
                 >
                   送出回答
                 </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={busy}
-                  onClick={amend}
-                >
-                  修改這一題
-                </Button>
               </div>
             </form>
           )}
@@ -171,7 +160,7 @@ export function TaskClarification({
                           draft.value.trim() === assumption
                         }
                       >
-                        {createsFollowup ? "接著問" : "修改這一題"}
+                        {createsFollowup ? "依新假設追問" : "儲存假設"}
                       </Button>
                       <Button
                         type="button"
@@ -194,7 +183,7 @@ export function TaskClarification({
                         variant="outline"
                         size="sm"
                         disabled={busy || !!draft}
-                        aria-label={`${createsFollowup ? "接著問" : "修改這一題"}（第 ${index + 1} 項假設）`}
+                        aria-label={`修改第 ${index + 1} 項假設`}
                         onClick={() =>
                           setEditing({
                             index,
@@ -203,7 +192,7 @@ export function TaskClarification({
                           })
                         }
                       >
-                        {createsFollowup ? "接著問" : "修改這一題"}
+                        修改假設
                       </Button>
                     )}
                   </div>

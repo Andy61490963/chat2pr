@@ -1916,11 +1916,23 @@ ${querySummary(answer)}`,
               prText,
               assertCurrent,
             );
-      const completed = await this.db.query(
-        "UPDATE tasks SET status='ready',pr_number=$2,pr_url=$3,last_error=NULL,updated_at=now() WHERE id=$1 AND version=$4 AND status='reviewing' RETURNING id",
-        [task.id, pr.number, pr.html_url, task.version],
-      );
-      if (!completed.length) {
+      const completed = await this.db.transaction(async (c) => {
+        const updated = await c.query(
+          "UPDATE tasks SET status='ready',pr_number=$2,pr_url=$3,last_error=NULL,updated_at=now() WHERE id=$1 AND version=$4 AND status='reviewing' RETURNING id",
+          [task.id, pr.number, pr.html_url, task.version],
+        );
+        if (!updated.rowCount) return false;
+        await c.query("UPDATE runs SET result=$2 WHERE id=$1", [
+          runId,
+          JSON.stringify({
+            prUrl: pr.html_url,
+            report,
+            prSummary: clip(codexSummary, 4000),
+          }),
+        ]);
+        return true;
+      });
+      if (!completed) {
         await this.db.audit(
           task.id,
           "publish_race",
@@ -1941,10 +1953,6 @@ ${querySummary(answer)}`,
           ? `已追加到 PR #${pr.number}：${pr.html_url}`
           : `PR 已建立：${pr.html_url}`,
       );
-      await this.db.query("UPDATE runs SET result=$2 WHERE id=$1", [
-        runId,
-        JSON.stringify({ prUrl: pr.html_url, report }),
-      ]);
       await this.line.notify(
         task.id,
         "ready",

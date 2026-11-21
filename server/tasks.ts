@@ -1,5 +1,6 @@
 import { createFollowupInTransaction, threadOf } from "./followup.js";
 import { withAssumptions } from "../shared/clarification.js";
+import { fullTaskTitle } from "../shared/task-title.js";
 import { referencedSources } from "./retrieval.js";
 import { taskImageEvidence } from "./image-context.js";
 import { readReportImages } from "./query-report.js";
@@ -400,7 +401,7 @@ export class Tasks {
       id,
     ]);
     if (!task) throw new AppError(404, "找不到任務");
-    const [rawSources, history, runs] = await Promise.all([
+    const [rawSources, history, runs, fullTitle] = await Promise.all([
       this.db.query<{
         user_id: string | null;
         sender: string | null;
@@ -417,9 +418,10 @@ export class Tasks {
         [id],
       ),
       this.db.query(
-        "SELECT r.id,result->'querySources' AS query_sources,version,status,outcome,observed,model,started_at,completed_at,heartbeat_at,deadline,install_report,COALESCE((SELECT jsonb_agg(jsonb_build_object('phase',e.phase,'threadId',e.thread_id) ORDER BY e.id) FROM run_events e WHERE e.run_id=r.id AND e.kind='thread'),'[]') AS threads FROM runs r WHERE task_id=$1 ORDER BY started_at DESC LIMIT 50",
-        [id],
+        "SELECT r.id,result->'querySources' AS query_sources,CASE WHEN result->>'prUrl'=$2 AND version=$3 THEN result->>'prSummary' END AS pr_summary,version,status,outcome,observed,model,started_at,completed_at,heartbeat_at,deadline,install_report,COALESCE((SELECT jsonb_agg(jsonb_build_object('phase',e.phase,'threadId',e.thread_id) ORDER BY e.id) FROM run_events e WHERE e.run_id=r.id AND e.kind='thread'),'[]') AS threads FROM runs r WHERE task_id=$1 ORDER BY started_at DESC LIMIT 50",
+        [id, task.pr_url, task.version],
       ),
+      this.fullTitle(task),
     ]);
     // 來源訊息顯示是誰說的；LINE 使用者 ID 只在伺服器端查名稱，不回傳給瀏覽器。
     const names = await memberNames(
@@ -433,6 +435,7 @@ export class Tasks {
     }));
     return {
       task,
+      fullTitle,
       projectReview: await this.db.one(
         `SELECT g.binding_version,p.config_version,p.name AS project_name,p.repo,p.base_branch,g.name AS group_name,task_project_confirmed(t.id) AS confirmed,
          (SELECT row_to_json(a) FROM task_project_confirmations a WHERE a.task_id=t.id AND a.version=t.version) AS confirmation
@@ -451,6 +454,20 @@ export class Tasks {
       queue: task.status === "queued" ? await taskQueue(this.db, id) : null,
       groupDeliveries: await this.groupDeliveries(id),
     };
+  }
+  private async fullTitle(task: Task) {
+    const title = fullTaskTitle(task.title, task.summary);
+    if (
+      title !== task.title ||
+      task.version === 1 ||
+      !/^(追問：|追加：)/.test(title)
+    )
+      return title;
+    const original = await this.db.one<{ summary: string }>(
+      "SELECT summary FROM task_versions WHERE task_id=$1 AND version=1",
+      [task.id],
+    );
+    return original ? fullTaskTitle(title, original.summary) : title;
   }
   /**
    * 這個任務送到群組的訊息與送達狀態。推播額度用完時群組可能什麼都沒收到，

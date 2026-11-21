@@ -514,10 +514,16 @@ test("登記 SSH 主機：密碼只送出不顯示，測試登入顯示結果", 
   await expect(section.getByRole("status")).toHaveText("登入成功");
 });
 
-test("你能在任務詳情追查查詢版本，閱讀答案時只看到報告", async ({ page }) => {
+test("你能在手機首屏看到查詢重點，並從底部修改這一題", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
   const version = "a".repeat(40);
+  const summary = "請確認範例服務的整理流程是否正常。".repeat(5);
+  const shortTitle = `追問：${summary.slice(0, 60)}`;
   const completed = {
     ...task,
+    title: shortTitle,
+    summary,
+    acceptance: [`回答追問：${summary}`],
     status: "answered" as const,
     answer: "## 先看重點\n範例結論。",
     base_sha: version,
@@ -528,6 +534,18 @@ test("你能在任務詳情追查查詢版本，閱讀答案時只看到報告",
       [`/api/tasks/${task.id}`]: {
         ...detail,
         task: completed,
+        thread: {
+          before: [{ ...task, id: "previous-demo", title: "確認範例服務" }],
+          after: [],
+        },
+        groupDeliveries: [
+          {
+            id: "delivery-demo",
+            kind: "group_answered",
+            text: "範例結論。",
+            delivery: { status: "pending", reason: "quota" },
+          },
+        ],
         runs: [
           {
             id: "run-demo",
@@ -547,13 +565,85 @@ test("你能在任務詳情追查查詢版本，閱讀答案時只看到報告",
       },
     },
   });
-  await page.goto(`/tasks?task=${task.id}`);
+  await page.goto("/tasks");
+  await page
+    .getByRole("button", { name: new RegExp(`${shortTitle}…`) })
+    .click();
   const dialog = page.getByRole("dialog");
-  await expect(dialog.getByText("範例結論。")).toBeVisible();
+  await expect(
+    dialog.getByRole("heading", { name: "先看重點" }),
+  ).toBeInViewport({ ratio: 1 });
+  await expect(dialog.getByText("範例結論。", { exact: true })).toBeInViewport({
+    ratio: 1,
+  });
+  await expect(
+    dialog.getByRole("heading", { name: "驗收條件", exact: true }),
+  ).toHaveCount(0);
+  const amend = dialog.getByRole("button", { name: "修改這一題", exact: true });
+  await expect(dialog.getByText("修改這一題", { exact: true })).toHaveCount(1);
+  await expect(amend).toBeInViewport({ ratio: 1 });
+  await amend.click();
+  await expect(dialog.getByLabel("需求說明")).toBeFocused();
+  await expect(dialog.getByLabel("驗收條件（每行一項）")).toHaveValue(
+    `回答追問：${summary}`,
+  );
+  await dialog.getByRole("button", { name: "收合修改表單" }).click();
+  await expect(dialog.getByLabel("需求說明")).toBeHidden();
+  await dialog.getByText("查看完整標題").click();
+  await expect(
+    dialog.getByText(`追問：${summary}`, { exact: true }),
+  ).toBeVisible();
   await dialog.getByText("查詢時的專案、分支與版本").click();
   await expect(dialog.getByText(version, { exact: true })).toBeVisible();
   await expect(dialog.getByText(/範例來源（demo\/source）/)).toBeVisible();
 });
+
+for (const status of ["ready", "merged"] as const) {
+  test(`你能先看到 PR 連結與摘要（${status === "ready" ? "待合併" : "已合併"}）`, async ({
+    page,
+  }) => {
+    const completed: Task = {
+      ...task,
+      mode: "change",
+      status,
+      pr_number: 12,
+      pr_url: "https://demo.invalid/pull/12",
+    };
+    await mockDashboard(page, {
+      state: { tasks: [completed] },
+      routes: {
+        [`/api/tasks/${task.id}`]: {
+          ...detail,
+          task: completed,
+          runs: [
+            {
+              id: "run-demo",
+              version: completed.version,
+              pr_summary: "已更新範例頁面。",
+            },
+          ],
+        },
+      },
+    });
+    await page.goto(`/tasks?task=${task.id}`);
+    const dialog = page.getByRole("dialog");
+    const result = dialog.getByRole("heading", { name: "修改結果" });
+    await expect(result).toBeInViewport({ ratio: 1 });
+    await expect(dialog.getByText("已更新範例頁面。")).toBeInViewport({
+      ratio: 1,
+    });
+    await expect(dialog.getByRole("link", { name: /PR #12/ })).toHaveAttribute(
+      "href",
+      completed.pr_url!,
+    );
+    await expect(
+      result.locator("xpath=following::section[@aria-label='處理專案']"),
+    ).toHaveCount(1);
+    await expect(
+      dialog.getByRole("heading", { name: "驗收條件", exact: true }),
+    ).toBeVisible();
+  });
+}
 
 test("你能在已回覆的修改任務查看無需修改的原因", async ({ page }) => {
   const conclusion = "已經符合需求，沒有需要修改的地方。";

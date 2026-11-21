@@ -1,4 +1,5 @@
 import { splitQueryAnswer } from "../../shared/query-answer.js";
+import { fullTaskTitle, taskListTitle } from "../../shared/task-title.js";
 import { useEffect, useState } from "react";
 import { TaskContextEvidence } from "./context-evidence";
 import { RunObserver } from "./run-observer";
@@ -185,6 +186,9 @@ export function TaskDrawer({
   relink: (t: Detail["task"], parentId: string | null) => unknown;
 }) {
   const t = detail.task;
+  const title = detail.fullTitle ?? fullTaskTitle(t.title, t.summary);
+  const hasPrResult = ["ready", "merged", "closed"].includes(t.status);
+  const prSummary = detail.runs.find((run) => run.pr_summary)?.pr_summary;
   const report =
     t.mode === "query"
       ? splitQueryAnswer(t.answer ?? "")
@@ -202,6 +206,17 @@ export function TaskDrawer({
   // 已回覆的任務可以補充需求後重新處理。
   const canAmend = editable || t.status === "answered";
   const saved = { summary: t.summary, acceptance: t.acceptance.join("\n") };
+  const visibleAcceptance =
+    t.mode === "query"
+      ? t.acceptance.filter((item) => {
+          const text = item.trim().replace(/^回答(?:追問)?[：:]?\s*/, "");
+          return (
+            item.trim() !== t.summary.trim() &&
+            text !== t.summary.trim() &&
+            item !== `回答追問：${t.summary.slice(0, 500)}`
+          );
+        })
+      : t.acceptance;
   const [summary, setSummary] = useState(saved.summary);
   const [acceptance, setAcceptance] = useState(saved.acceptance);
   // 草稿是從哪個版本開始寫的；任務在背景更新時用來判斷要不要保留草稿。
@@ -325,21 +340,70 @@ export function TaskDrawer({
   const openAmend = () => {
     setAmendOpen(true);
     requestAnimationFrame(() =>
-      document
-        .getElementById("amend-summary")
-        ?.scrollIntoView({ behavior: "smooth", block: "center" }),
+      document.getElementById("amend-summary")?.focus(),
     );
   };
+  const amendButton = canAmend && (
+    <Button
+      variant={
+        amendFirst || (deciding && t.missing.length > 0 && !options)
+          ? "default"
+          : "outline"
+      }
+      aria-expanded={amendOpen}
+      aria-controls="amend-task"
+      onClick={() => (amendOpen ? setAmendOpen(false) : openAmend())}
+    >
+      {amendOpen ? "收合修改表單" : "修改這一題"}
+      {amendDirty && <span className="text-xs">（尚未儲存）</span>}
+    </Button>
+  );
   // 從收件匣「縮小需求範圍」打開：直接展開補充需求編輯（只在剛打開時做一次）。
   useEffect(() => {
     if (!startAmend) return;
     amendStarted?.();
     if (canAmend) openAmend();
   }, []);
+  const resultReport = report.body && (
+    <section className="flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-xs font-medium text-muted-foreground">
+          {t.mode === "query" ? "調查結果" : "修改結果"}
+        </h3>
+        <Button
+          variant="ghost"
+          size="xs"
+          onClick={() =>
+            void navigator.clipboard
+              ?.writeText(report.body)
+              .then(() => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+              })
+              .catch(() => {})
+          }
+        >
+          {copied ? (
+            <>
+              <Check /> 已複製
+            </>
+          ) : (
+            "複製完整報告"
+          )}
+        </Button>
+      </div>
+      <QueryReport
+        key={t.id + ":" + t.version}
+        answer={report.body}
+        taskId={t.id}
+        images={detail.reportImages}
+      />
+    </section>
+  );
   return (
     <Sheet open onOpenChange={(o) => !o && close()}>
       <SheetContent className="sm:max-w-2xl">
-        <SheetHeader className="gap-2">
+        <SheetHeader className="shrink-0 gap-2">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
             <StatusBadge status={t.status} />
             <Badge variant={t.mode === "query" ? "info" : "secondary"}>
@@ -364,9 +428,11 @@ export function TaskDrawer({
               </span>
             </SheetDescription>
           </div>
-          <SheetTitle className="text-lg leading-snug">{t.title}</SheetTitle>
+          <SheetTitle className="text-lg leading-snug [overflow-wrap:anywhere]">
+            {taskListTitle(t, title)}
+          </SheetTitle>
 
-          {(t.issue_url || t.pr_url) && (
+          {(t.issue_url || (!hasPrResult && t.pr_url)) && (
             <div className="flex flex-wrap gap-2">
               {t.issue_url && (
                 <Button variant="outline" size="xs" asChild>
@@ -375,7 +441,7 @@ export function TaskDrawer({
                   </a>
                 </Button>
               )}
-              {t.pr_url && (
+              {!hasPrResult && t.pr_url && (
                 <Button variant="outline" size="xs" asChild>
                   <a href={t.pr_url} target="_blank" rel="noreferrer">
                     PR #{t.pr_number} <ExternalLink />
@@ -396,7 +462,41 @@ export function TaskDrawer({
             />
           )}
         </SheetHeader>
-        <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-5">
+        <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-5">
+          {hasPrResult && (
+            <section className="flex flex-col gap-2">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-xs font-medium text-muted-foreground">
+                  修改結果
+                </h3>
+                {t.pr_url && (
+                  <Button variant="outline" size="xs" asChild>
+                    <a href={t.pr_url} target="_blank" rel="noreferrer">
+                      開啟 PR #{t.pr_number} <ExternalLink />
+                    </a>
+                  </Button>
+                )}
+              </div>
+              {prSummary ? (
+                <QueryReport answer={prSummary} taskId={t.id} />
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  {t.status === "ready"
+                    ? "你可以到 GitHub 檢視並合併這個 PR。"
+                    : t.status === "merged"
+                      ? "你可以到 GitHub 查看已合併的變更。"
+                      : "你可以到 GitHub 查看已關閉的 PR。"}
+                </p>
+              )}
+            </section>
+          )}
+          {t.status === "answered" && resultReport}
+          {title !== t.title && (
+            <details className="text-sm [overflow-wrap:anywhere]">
+              <summary className="cursor-pointer">查看完整標題</summary>
+              <p className="mt-2">{title}</p>
+            </details>
+          )}
           {!!(thread?.before.length || thread?.after.length) && (
             <section
               aria-label="對話串"
@@ -673,42 +773,7 @@ export function TaskDrawer({
               ...(t.status === "failed" ? ["group_failed"] : []),
             ]}
           />
-          {report.body && (
-            <section className="flex flex-col gap-2">
-              <div className="flex items-center justify-between gap-2">
-                <h3 className="text-xs font-medium text-muted-foreground">
-                  {t.mode === "query" ? "調查結果" : "修改結果"}
-                </h3>
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  onClick={() =>
-                    void navigator.clipboard
-                      ?.writeText(report.body)
-                      .then(() => {
-                        setCopied(true);
-                        setTimeout(() => setCopied(false), 2000);
-                      })
-                      .catch(() => {})
-                  }
-                >
-                  {copied ? (
-                    <>
-                      <Check /> 已複製
-                    </>
-                  ) : (
-                    "複製完整報告"
-                  )}
-                </Button>
-              </div>
-              <QueryReport
-                key={t.id + ":" + t.version}
-                answer={report.body}
-                taskId={t.id}
-                images={detail.reportImages}
-              />
-            </section>
-          )}
+          {t.status !== "answered" && resultReport}
           {canFollowup && (
             <section
               aria-label={adding ? "再改一點" : "接著問"}
@@ -792,18 +857,21 @@ export function TaskDrawer({
           )}
           <section className="flex flex-col gap-2">
             <h3 className="text-xs font-medium text-muted-foreground">需求</h3>
-            <p className="text-sm leading-relaxed whitespace-pre-wrap">
+            <p className="text-sm leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
               {t.summary}
             </p>
           </section>
-          {t.acceptance.length > 0 && (
+          {visibleAcceptance.length > 0 && (
             <section className="flex flex-col gap-2">
               <h3 className="text-xs font-medium text-muted-foreground">
                 驗收條件
               </h3>
               <ul className="flex flex-col gap-1.5">
-                {t.acceptance.map((a, i) => (
-                  <li key={i} className="flex gap-2 text-sm">
+                {visibleAcceptance.map((a, i) => (
+                  <li
+                    key={i}
+                    className="flex gap-2 text-sm [overflow-wrap:anywhere]"
+                  >
                     <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
                     {a}
                   </li>
@@ -823,7 +891,6 @@ export function TaskDrawer({
             editable={canAmend}
             busy={busy}
             act={act}
-            amend={openAmend}
             answer={answer}
           />
           {options && (
@@ -910,21 +977,16 @@ export function TaskDrawer({
             </section>
           )}
           {canAmend && (
-            <details
+            <section
+              id="amend-task"
               className="rounded-lg border"
-              open={amendOpen}
-              onToggle={(e) => setAmendOpen(e.currentTarget.open)}
+              hidden={!amendOpen}
             >
-              <summary className="cursor-pointer px-4 py-3 text-sm font-medium">
-                修改這一題
-                {amendDirty && (
-                  <span className="ml-2 text-xs font-normal text-warn">
-                    尚未儲存
-                  </span>
-                )}
-              </summary>
+              <h3 className="px-4 pt-4 text-sm font-medium">
+                編輯需求與驗收條件
+              </h3>
               <form
-                className="flex flex-col gap-3 border-t px-4 py-4"
+                className="flex flex-col gap-3 px-4 py-4"
                 onSubmit={(e) => {
                   e.preventDefault();
                   void act(
@@ -993,7 +1055,7 @@ export function TaskDrawer({
                   )}
                 </div>
               </form>
-            </details>
+            </section>
           )}
           <Tabs value={tab} onValueChange={setTab} className="gap-4">
             <TabsList aria-label="任務紀錄" className="w-full">
@@ -1116,7 +1178,7 @@ export function TaskDrawer({
           ["failed", "budget_wait", "queued", "running", "reviewing"].includes(
             t.status,
           )) && (
-          <SheetFooter className="items-center">
+          <SheetFooter className="shrink-0 items-center">
             {options && (
               <Button
                 disabled={busy || sensitive || pick === null || !canConfirm}
@@ -1157,21 +1219,13 @@ export function TaskDrawer({
                     : "確認專案與分支並核准修改"}
               </Button>
             )}
-            {deciding && t.missing.length > 0 && (
-              <Button
-                variant={options ? "ghost" : "default"}
-                onClick={openAmend}
-              >
-                修改這一題
-              </Button>
-            )}
             {/* 失敗時主按鈕依原因：先修設定的前往頁面、逾時先修改這一題；這兩種重試降為次要。 */}
             {fixTarget && (
               <Button onClick={() => go(fixTarget, t.project_id)}>
                 {fixPageLabels[fixTarget]}
               </Button>
             )}
-            {amendFirst && <Button onClick={openAmend}>修改這一題</Button>}
+            {amendButton}
             {t.status === "failed" && (
               <Button
                 variant={fix.kind === "retry" ? "default" : "outline"}
@@ -1202,7 +1256,7 @@ export function TaskDrawer({
         )}
         {/* 已結束或等合併的任務：說明現在能做什麼，不再是一片空白。 */}
         {["rejected", "cancelled"].includes(t.status) && (
-          <SheetFooter className="items-center">
+          <SheetFooter className="shrink-0 items-center">
             <span className="flex-1 text-sm text-muted-foreground">
               重新開啟後回到待審核，確認專案並核准才會派工。
             </span>
@@ -1216,32 +1270,14 @@ export function TaskDrawer({
             </Button>
           </SheetFooter>
         )}
-        {["ready", "merged", "closed", "answered"].includes(t.status) && (
-          <SheetFooter className="items-center">
+        {t.status === "answered" && (
+          <SheetFooter className="shrink-0 items-center justify-between">
             <span className="flex-1 text-sm text-muted-foreground">
-              {t.status === "ready"
-                ? "PR 已建立，請到 GitHub 檢視與合併；合併或關閉後這裡會自動更新。要再調整，用上方的「再改一點」，會接在同一個 PR 上。"
-                : t.status === "merged"
-                  ? "PR 已合併，任務完成。要再調整，用上方的「再改一點」。"
-                  : t.status === "closed"
-                    ? "PR 沒有合併就關閉了（儲存庫被移除時也會這樣）。要重做，用上方的「再改一點」另開 PR。"
-                    : t.mode === "query"
-                      ? "查詢已回覆。要接著問，請用上方的「接著問」；想換個問法整個重查，才用「修改這一題」，原回答會被取代。"
-                      : "你可以用「修改這一題」補充需求後重新送審。"}
+              {t.mode === "query"
+                ? "你修改後重新查詢，會取代目前的回答。"
+                : "你可以補充需求後重新送審。"}
             </span>
-            {t.status === "answered" ? (
-              <Button variant="outline" onClick={openAmend}>
-                修改這一題
-              </Button>
-            ) : (
-              t.pr_url && (
-                <Button variant="outline" asChild>
-                  <a href={t.pr_url} target="_blank" rel="noreferrer">
-                    開啟 PR #{t.pr_number} <ExternalLink />
-                  </a>
-                </Button>
-              )
-            )}
+            {amendButton}
           </SheetFooter>
         )}
       </SheetContent>
