@@ -9,6 +9,7 @@ import {
 import { defaultDiskSettings } from "../shared/docker-disk";
 import type { ChatPage } from "../shared/chat";
 import { discordServiceText } from "../shared/status-glossary";
+import type { ActivityEvent } from "../shared/activity-groups";
 
 const timestamp = "2026-01-01T00:00:00Z";
 
@@ -232,6 +233,74 @@ export const defaultState: State = {
     github: "https://demo.invalid/github",
   },
 };
+
+export const activityTask: Task = {
+  ...task,
+  title: "重新確認示範機台是否連得上",
+  mode: "query",
+  status: "answered",
+};
+
+const activityTaskFields = {
+  task_id: activityTask.id,
+  task_title: activityTask.title,
+  task_mode: activityTask.mode,
+};
+export const unchangedCleanup =
+  "Docker 定期清理：刪除 0 個舊映像標籤；0 個懸空映像；建置快取 0.0 GB；映像共釋放 0.0 GB";
+export const changedCleanup = unchangedCleanup.replace("刪除 0", "刪除 1");
+export const repeatedActivity = "管理者 小林 更新示範專案的設定";
+export const recentActivity: ActivityEvent[] = [
+  {
+    ...activityTaskFields,
+    id: 6,
+    kind: "answered",
+    detail: `查詢已回覆：${activityTask.title}`,
+    created_at: "2026-01-10T08:30:00Z",
+  },
+  {
+    id: 5,
+    task_id: null,
+    kind: "settings",
+    detail: repeatedActivity,
+    created_at: "2026-01-10T08:25:00Z",
+  },
+  {
+    id: 4,
+    task_id: null,
+    kind: "docker_cleanup",
+    detail: changedCleanup,
+    created_at: "2026-01-10T08:24:00Z",
+  },
+  {
+    id: 3,
+    task_id: null,
+    kind: "docker_cleanup",
+    detail: unchangedCleanup,
+    created_at: "2026-01-10T08:23:00Z",
+  },
+  {
+    ...activityTaskFields,
+    id: 2,
+    kind: "attempt",
+    detail: "開始調查",
+    created_at: "2026-01-10T08:20:00Z",
+  },
+  {
+    id: 1,
+    task_id: null,
+    kind: "settings",
+    detail: repeatedActivity,
+    created_at: "2026-01-10T08:15:00Z",
+  },
+  {
+    ...activityTaskFields,
+    id: 0,
+    kind: "triage",
+    detail: "需求明確且通過風險規則，已自動排程",
+    created_at: "2026-01-10T08:10:00Z",
+  },
+];
 
 export async function mockDashboard(
   page: Page,

@@ -508,14 +508,16 @@ test("收件匣只在開啟系統紀錄時顯示技術細節", async ({ page }) 
         id,
         kind,
         detail,
-        task_id: task.id,
-        task_title: task.title,
-        task_mode: "query",
+        task_id: kind === "settings" ? null : task.id,
+        task_title: kind === "settings" ? null : task.title,
+        task_mode: kind === "settings" ? null : "query",
         created_at: "2026-01-10T08:00:00Z",
       })),
     },
   });
   await page.goto("/");
+  const activity = page.getByRole("region", { name: "最近動態" });
+  await activity.getByRole("button", { name: /^展開步驟/ }).click();
   await expect(page.getByText("開始調查", { exact: true })).toBeVisible();
   await expect(page.getByText("開始程式修改", { exact: true })).toHaveCount(0);
   await expect(page.getByText("管理者恢復派工", { exact: true })).toBeVisible();
