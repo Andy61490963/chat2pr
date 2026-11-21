@@ -608,8 +608,8 @@ export function TaskDrawer({
           >
             <p className="font-semibold">處理專案</p>
             <p className="mt-1 break-words">
-              聊天室：{review?.group_name ?? groupName(state, t)}・
-              {t.mode === "query" ? "查詢" : "修改程式"}
+              來自「{review?.group_name ?? groupName(state, t)}」的
+              {t.mode === "query" ? "查詢" : "修改需求"}
             </p>
             <p
               ref={projectHeading}
