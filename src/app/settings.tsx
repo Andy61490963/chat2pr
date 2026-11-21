@@ -986,14 +986,13 @@ export function SettingsView({
 }) {
   const s = state.settings;
   const discord = state.health.find((entry) => entry.name === "discord");
-  const discordStatus = discord?.ok
-    ? "connected"
-    : discord
-      ? ((
-          Object.keys(discordServiceText) as (keyof typeof discordServiceText)[]
-        ).find((key) => discord.detail === discordServiceText[key]) ??
-        "disconnected")
-      : "unconfigured";
+  // 依說明文字判斷狀態：「尚未設定」記為正常（選用功能），不能只看 ok。
+  const discordStatus = discord
+    ? ((
+        Object.keys(discordServiceText) as (keyof typeof discordServiceText)[]
+      ).find((key) => discord.detail === discordServiceText[key]) ??
+      (discord.ok ? "connected" : "disconnected"))
+    : "unconfigured";
   // 私訊與群組分開計數（群組依人數計入額度）；過期的重送時略過。
   const failures: NotificationFailures = (
     state as State & { notificationFailures?: NotificationFailures }

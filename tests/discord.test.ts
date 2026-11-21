@@ -533,7 +533,8 @@ it("未設定權杖時不建立 Gateway，LINE 仍可建立群組並收訊", asy
   expect(
     await db.one("SELECT ok,detail FROM service_health WHERE name='discord'"),
   ).toEqual({
-    ok: false,
+    // 選用功能：沒設定記為正常，冒煙測試不會列為異常；設定頁仍依說明顯示「尚未設定」。
+    ok: true,
     detail: discordServiceText.unconfigured,
   });
   await new Line(db).ingest({

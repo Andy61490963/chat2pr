@@ -13,7 +13,7 @@ export const discordServiceLabels = {
 } as const;
 export const discordServiceText = {
   configError:
-    "無法讀取 Discord 機密設定，可能遺失加密金鑰。請在主機還原設定檔與金鑰，或停用後重新填寫設定，再重新啟動服務。",
+    "無法讀取 Discord 設定。請在主機開啟本機設定頁重新填寫機器人權杖，再重新啟動服務。",
   unconfigured:
     "尚未填寫機器人權杖，無法接收 Discord 訊息。請在主機開啟本機設定頁填寫設定。",
   connecting: "正在建立 Discord 連線，請稍候。",
@@ -215,6 +215,7 @@ export const systemStatusLabels = {
   container: {
     running: "運轉中",
     stopped: "未運轉",
+    idle: "平常停止，跑測試時才啟動",
     unhealthy: "健康檢查未通過",
   },
   disk: {
