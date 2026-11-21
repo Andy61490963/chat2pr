@@ -662,6 +662,8 @@ CREATE TABLE IF NOT EXISTS project_schema_snapshots (
 ALTER TABLE service_health ADD COLUMN IF NOT EXISTS notified_ok boolean;
 -- 最近一次真實讀數（非 silent 寫入）的結果。confirm 的「連續兩次」比對它，不比對會被 silent 覆寫成正常的 ok。
 ALTER TABLE service_health ADD COLUMN IF NOT EXISTS reading_ok boolean;
+-- HTTPS 入口中斷的起點，讓短暫中斷的判斷能跨越程序重啟。
+ALTER TABLE service_health ADD COLUMN IF NOT EXISTS outage_started_at timestamptz;
 -- 機器人送出的 LINE 訊息 ID：群組成員用「回覆」引用機器人的回答時，據此判斷是在接續哪一題。
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS sent_message_id text;
 CREATE INDEX IF NOT EXISTS notifications_sent_message ON notifications(sent_message_id) WHERE sent_message_id IS NOT NULL;

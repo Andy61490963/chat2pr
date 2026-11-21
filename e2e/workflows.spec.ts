@@ -1,4 +1,6 @@
 import { expect, test } from "@playwright/test";
+import AxeBuilder from "@axe-core/playwright";
+import type { Alert } from "../src/app/alerts";
 import type { Detail } from "../src/app/shared";
 import type { Task } from "../shared/types";
 import {
@@ -100,6 +102,7 @@ test("通知鈴鐺可用鍵盤開關選單、移動焦點並前往對應頁面",
     id: "notice-project",
     task_id: null,
     kind: "repo_found",
+    disposition: "result",
     title: "範例專案已恢復",
     text: "可以繼續處理需求",
     created_at: "2026-01-01T08:00:00Z",
@@ -142,6 +145,88 @@ test("通知鈴鐺可用鍵盤開關選單、移動焦點並前往對應頁面",
   ).toBeVisible();
   await expect(menu).toBeHidden();
 });
+
+for (const width of [1280, 375]) {
+  test(`通知與收件匣的待處理數一致（${width}px）`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 });
+    const approval: Alert = {
+      id: "demo-approval",
+      task_id: task.id,
+      kind: "approval",
+      disposition: "inbox",
+      title: task.title,
+      text: "請確認範例任務。",
+      created_at: "2026-01-01T08:00:00Z",
+    };
+    const result: Alert = {
+      id: "demo-recovery",
+      task_id: null,
+      kind: "service_up",
+      disposition: "result",
+      title: null,
+      text: "範例服務曾中斷約 2 分鐘，已恢復。",
+      created_at: "2026-01-01T09:00:00Z",
+    };
+    let completed = false;
+    await mockDashboard(page);
+    // 看板請求狀態時會帶分頁參數，依路徑比對才能套用這組通知資料。
+    await page.route(
+      (url) => url.pathname === "/api/state",
+      (route) =>
+        route.fulfill({
+          json: {
+            ...defaultState,
+            tasks: [completed ? { ...task, status: "rejected" } : task],
+            alerts: [
+              result,
+              completed ? { ...approval, disposition: "resolved" } : approval,
+            ],
+            alertsSeenAt: completed ? "2026-01-02T00:00:00Z" : null,
+          },
+        }),
+    );
+    await page.goto("/");
+    const bell = page.getByRole("button", { name: /^通知(?:，|$)/ });
+    await expect(bell).toHaveAccessibleName("通知，2 則未讀");
+    await expect(
+      page.getByRole("button", { name: /^需要你處理 1/ }),
+    ).toBeVisible();
+    await bell.click();
+    const menu = page.getByRole("menu");
+    const notices = menu.getByRole("menuitem").filter({ hasText: /範例/ });
+    await expect(notices.first()).toContainText("請確認範例任務。");
+    await expect(notices.last()).toContainText(
+      "範例服務曾中斷約 2 分鐘，已恢復。",
+    );
+    const bounds = await menu.boundingBox();
+    expect(bounds!.x).toBeGreaterThanOrEqual(0);
+    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width);
+    const { violations } = await new AxeBuilder({ page }).analyze();
+    expect(
+      violations.filter(
+        ({ impact }) => impact === "serious" || impact === "critical",
+      ),
+    ).toEqual([]);
+    await page.keyboard.press("Escape");
+    await expect(menu).toBeHidden();
+    await expect(bell).toBeFocused();
+    await expect(bell).toHaveAccessibleName("通知，1 則未讀");
+    await expect(
+      page.getByRole("button", { name: /^需要你處理 1/ }),
+    ).toBeVisible();
+
+    completed = true;
+    await page.getByRole("button", { name: "重新整理" }).click();
+    await expect(
+      page.getByRole("button", { name: /^需要你處理 0/ }),
+    ).toBeVisible();
+    await expect(bell).toHaveAccessibleName("通知");
+    await bell.click();
+    await expect(
+      menu.getByRole("menuitem", { name: /請確認範例任務/ }),
+    ).toBeVisible();
+  });
+}
 
 test("取消所有專案開放網路（不建議）的確認對話框後不送出設定", async ({
   page,
@@ -544,6 +629,7 @@ test("專案補問通知直接開啟環境驗證，方向鍵可切換其他分�
           task_id: null,
           project_id: "project-demo",
           kind: "project_input",
+          disposition: "action",
           title: null,
           text: "請補充範例資訊",
           created_at: "2026-01-01T08:00:00Z",

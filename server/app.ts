@@ -1,4 +1,4 @@
-import { notificationProject } from "./notification-project.js";
+import { dashboardAlerts } from "./dashboard-alerts.js";
 import { createFollowup, relinkTask } from "./followup.js";
 import { probeSystem } from "./system-status.js";
 import { answerFromDashboard } from "./answers.js";
@@ -528,18 +528,7 @@ export async function buildApp(
              AND (updated_at AT TIME ZONE 'Asia/Taipei')::date>(now() AT TIME ZONE 'Asia/Taipei')::date-7) AS merged_week`,
         [admin],
       ),
-      // 私訊原文只給管理者；成員可依類別與任務標題前往處理。群組原文的期限與聊天室一致。
-      db.query(
-        `SELECT n.id,n.task_id,n.kind,n.created_at,t.title,
-           CASE WHEN $1::boolean THEN ${notificationProject} END AS project_id,
-           CASE WHEN n.group_id IS NOT NULL AND n.created_at<=message_retention_cutoff() THEN '原文已到期'
-                WHEN n.group_id IS NOT NULL OR $1::boolean THEN n.text
-                WHEN n.task_id IS NOT NULL THEN '請到任務詳情查看。'
-                ELSE '管理者私訊' END AS text
-         FROM notifications n LEFT JOIN tasks t ON t.id=n.task_id
-         ORDER BY n.created_at DESC,n.id DESC LIMIT 30`,
-        [admin],
-      ),
+      dashboardAlerts(db, admin),
       db.one<{ seen_at: string }>(
         "SELECT seen_at FROM alert_seen WHERE user_id=$1",
         [user.user_id],
@@ -611,6 +600,7 @@ export async function buildApp(
               id: LINE_QUOTA,
               task_id: null,
               kind: LINE_QUOTA,
+              disposition: "resolved",
               text: quotaBellNotice,
               created_at: quota.checked_at,
               title: null,

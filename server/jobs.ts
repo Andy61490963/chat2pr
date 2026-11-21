@@ -353,7 +353,7 @@ export async function startJobs(
       } catch {
         // 讀不到狀態檔：隧道尚未啟動，或檔案正在改寫。
       }
-      // 每分鐘檢查一次，連續兩次異常才通知管理者，避免瞬斷洗版。
+      // 每分鐘檢查一次，確認的中斷持續滿五分鐘才發異常通知。
       await recordHealth(db, "tunnel", tunnel.ok, tunnel.detail, {
         confirm: true,
       });

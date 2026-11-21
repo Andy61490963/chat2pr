@@ -191,15 +191,38 @@ describe("服務狀態通知", () => {
     expect(await db.query("SELECT 1 FROM notifications")).toHaveLength(0);
   });
 
-  it("需要確認的項目轉異常與恢復都要連續兩次才通知，瞬斷與瞬間恢復都不通知", async () => {
-    const tunnel = (ok: boolean) =>
-      recordHealth(db, "tunnel", ok, ok ? "正常" : "無法連線", {
-        confirm: true,
-      });
+  const tunnel = (ok: boolean) =>
+    recordHealth(db, "tunnel", ok, ok ? "正常" : "無法連線", {
+      confirm: true,
+    });
+  const ageOutage = (minutes: number) =>
+    db.query(
+      "UPDATE service_health SET outage_started_at=now()-($1::int * interval '1 minute') WHERE name='tunnel'",
+      [minutes],
+    );
+
+  it("入口短暫中斷只通知恢復，單次異常讀數不通報", async () => {
     await tunnel(true);
     await tunnel(false);
     await tunnel(true);
+    await tunnel(true);
     expect(await db.query("SELECT 1 FROM notifications")).toHaveLength(0);
+    await tunnel(false);
+    await tunnel(false);
+    await ageOutage(2);
+    await tunnel(true);
+    expect(await db.query("SELECT 1 FROM notifications")).toHaveLength(0);
+    await tunnel(true);
+    expect(await db.query("SELECT kind,text FROM notifications")).toEqual([
+      { kind: "service_up", text: "HTTPS 入口曾中斷約 2 分鐘，已恢復。" },
+    ]);
+  });
+
+  it("入口持續異常達五分鐘就通報，單次正常讀數不算恢復", async () => {
+    await tunnel(true);
+    await tunnel(false);
+    await tunnel(false);
+    await ageOutage(5);
     await tunnel(false);
     await tunnel(false);
     expect(await notices("service_down")).toHaveLength(1);
@@ -210,6 +233,51 @@ describe("服務狀態通知", () => {
     await tunnel(true);
     expect(await notices("service_up")).toHaveLength(1);
     expect(await notices("service_down")).toHaveLength(1);
+  });
+});
+
+it("待確認的任務結束、PR 合併、專案補問回答後，原通知視為已讀", async () => {
+  const projectId = await fixture();
+  const pending = await task("awaiting_approval", "pending-alert");
+  const ready = await task("ready", "ready-alert");
+  const question = "00000000-0000-4000-8000-000000000141";
+  await db.query(
+    "UPDATE projects SET setup_input=jsonb_build_object('id',$2::text) WHERE id=$1",
+    [projectId, question],
+  );
+  await db.query(
+    `INSERT INTO notifications(task_id,kind,dedupe_key,text,created_at) VALUES
+       ($1,'approval','approval:'||$1::uuid||':1','請確認任務',now()-interval '2 days'),
+       ($1,'group_received','group:received:'||$1::uuid,'已收到需求',now()-interval '1 day'),
+       ($2,'ready','ready:'||$2::uuid||':1','請合併 PR',now()),
+       (NULL,'project_input',$3,'請回答專案補問',now()),
+       (NULL,'service_up','demo-service-result','範例服務已恢復',now())`,
+    [pending.id, ready.id, `project-input:${projectId}:${question}`],
+  );
+  const dispositions = async () =>
+    Object.fromEntries(
+      (await state()).alerts.map((n: { kind: string; disposition: string }) => [
+        n.kind,
+        n.disposition,
+      ]),
+    );
+  expect(await dispositions()).toEqual({
+    approval: "inbox",
+    group_received: "resolved",
+    ready: "action",
+    project_input: "action",
+    service_up: "result",
+  });
+  expect((await act(pending.id, "reject", 1)).statusCode).toBe(200);
+  await db.query("UPDATE tasks SET status='merged' WHERE id=$1", [ready.id]);
+  await db.query("UPDATE projects SET setup_input=NULL WHERE id=$1", [
+    projectId,
+  ]);
+  expect(await dispositions()).toMatchObject({
+    approval: "resolved",
+    ready: "resolved",
+    project_input: "resolved",
+    service_up: "result",
   });
 });
 
