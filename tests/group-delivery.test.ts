@@ -18,6 +18,7 @@ import {
   quotaShortForGroup,
 } from "../shared/line-quota.js";
 import * as server from "../server/group-replies.js";
+import { discordDeliveryNotes } from "../shared/status-glossary.js";
 
 const sentAt = "2026-11-18T01:00:00.000Z";
 const state = (row: Partial<Parameters<typeof deliveryState>[0]> = {}) =>
@@ -29,14 +30,23 @@ const state = (row: Partial<Parameters<typeof deliveryState>[0]> = {}) =>
   });
 
 describe("群組訊息送達狀態", () => {
-  it("Discord 待送通知顯示尚未支援，沿用看板的未送出標籤", () => {
+  it("Discord 待送通知不受 LINE 額度影響，限流和權限錯誤提供處理說明", () => {
     const delivery = deliveryState(
       { sent_at: null, attempts: 0, last_error: null },
       { platform: "discord", quotaBlocked: true },
     );
-    expect(deliveryLabel(delivery)).toBe("未送出");
-    expect(deliveryNotice(delivery)).toContain("目前尚未支援 Discord 通知");
-    expect(deliveryNotice(delivery)).toContain("請在看板查看或手動轉達");
+    expect(deliveryLabel(delivery)).toBe("等待送出");
+    const rate = deliveryState(
+      { sent_at: null, attempts: 0, last_error: discordDeliveryNotes.rate },
+      { platform: "discord", quotaBlocked: true },
+    );
+    expect(rate).toEqual({ status: "pending", reason: "rate", note: discordDeliveryNotes.rate });
+    const denied = deliveryState(
+      { sent_at: null, attempts: 3, last_error: discordDeliveryNotes.permission },
+      { platform: "discord" },
+    );
+    expect(deliveryLabel(denied)).toBe("送不出去");
+    expect(deliveryNotice(denied)).toContain("請管理者檢查權限後再試");
   });
   it("已送出：sent_at 有值且沒有錯誤", () => {
     expect(

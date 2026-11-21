@@ -1,5 +1,4 @@
 import {
-  groupDeliveryLabels,
   groupLabels,
   groupPlatformLabels,
   groupStatus,
@@ -538,7 +537,7 @@ function GroupCard({
         <p className="text-xs leading-relaxed text-muted-foreground">
           {triggerMode === "command"
             ? g.platform === "discord"
-              ? "用 /任務 開頭，或提及機器人並寫下需求。"
+              ? "用 /任務、提及機器人，或引用機器人的回覆。"
               : "你可以用 /任務 或引用機器人的回答提出需求。"
             : "你在群組提出明確需求時，AI 會自動辨識並略過同事分工與未定案的討論。"}
         </p>
@@ -554,45 +553,47 @@ function GroupCard({
           </div>
         </details>
       </div>
-      {g.platform === "discord" ? (
-        <p className="text-sm text-muted-foreground">
-          {groupDeliveryLabels.unsupportedPlatform}
+      <div className="grid gap-2">
+        <p role="status" className="text-sm font-medium">
+          目前：{groupReplyStatus(g, state.settings, state.health).text}
+          {!g.left_at && state.settings.group_replies === false && (
+            <Button size="sm" variant="link" className="min-h-11" onClick={openSettings}>
+              前往設定
+            </Button>
+          )}
         </p>
-      ) : (
-        <div className="grid gap-2">
-          <p role="status" className="text-sm font-medium">
-            目前：{groupReplyStatus(g, state.settings, state.health).text}
-            {!g.left_at && state.settings.group_replies === false && (
-              <Button size="sm" variant="link" onClick={openSettings}>
-                前往設定
-              </Button>
-            )}
-          </p>
-          <label className="text-sm font-medium" htmlFor={`reply-${g.id}`}>
-            在群組回覆
-          </label>
-          <Select
-            value={replyMode}
-            onValueChange={(v) =>
-              setReplyMode(v as NonNullable<Group["reply_mode"]>)
-            }
-          >
-            <SelectTrigger id={`reply-${g.id}`} className="w-full sm:max-w-sm">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="results">只回覆結果</SelectItem>
-              <SelectItem value="all">收到需求時也回覆</SelectItem>
-              <SelectItem value="off">不在群組回覆</SelectItem>
-            </SelectContent>
-          </Select>
+        <label className="text-sm font-medium" htmlFor={`reply-${g.id}`}>
+          在群組回覆
+        </label>
+        <Select
+          value={replyMode}
+          onValueChange={(v) =>
+            setReplyMode(v as NonNullable<Group["reply_mode"]>)
+          }
+        >
+          <SelectTrigger id={`reply-${g.id}`} className="min-h-11 w-full sm:max-w-sm">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem className="min-h-11" value="results">只回覆結果</SelectItem>
+            <SelectItem className="min-h-11" value="all">收到需求時也回覆</SelectItem>
+            <SelectItem className="min-h-11" value="off">不在群組回覆</SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground">
+          {replyMode === "off"
+            ? "你儲存後，機器人會停止在這個群組回覆。"
+            : replyMode === "all"
+              ? g.platform === "discord"
+                ? "收到需求時會在原訊息加上反應，補問與結果會回到頻道。"
+                : "你儲存後，群組會收到需求等待確認的通知與處理結果。"
+              : "你儲存後，群組會收到查詢答案與處理結果。"}
+        </p>
+        {g.platform === "discord" ? (
           <p className="text-xs text-muted-foreground">
-            {replyMode === "off"
-              ? "你儲存後，機器人會停止在這個群組回覆。"
-              : replyMode === "all"
-                ? "你儲存後，群組會收到需求等待確認的通知與處理結果。"
-                : "你儲存後，群組會收到查詢答案與處理結果。"}
+            使用 /進度 查看任務與未送達的回覆。
           </p>
+        ) : (
           <details className="text-xs text-muted-foreground">
             <summary className="cursor-pointer">推播額度與 /進度</summary>
             <p>
@@ -601,8 +602,8 @@ function GroupCard({
               /進度 補看結果。
             </p>
           </details>
-        </div>
-      )}
+        )}
+      </div>
       {g.triage_error && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">
           <AlertCircle className="size-4" />

@@ -506,8 +506,7 @@ function Timeline({
 }
 
 /**
- * 機器人送到群組的訊息：用品牌色底與成員訊息區分，並標出送達狀態。
- * 沒送到的提供「複製文字」，讓管理者手動貼到 LINE；原文到期後只顯示「原文已到期」。
+ * 群組通知顯示送達狀態與原因。原文仍可查看時，管理者可複製到原聊天平台轉達。
  */
 function BotItem({ b, open }: { b: BotMessage; open: (id: string) => void }) {
   const d = b.delivery;
@@ -546,7 +545,7 @@ function BotItem({ b, open }: { b: BotMessage; open: (id: string) => void }) {
         {b.task_id && b.task_title && (
           <div className="mt-2">
             <button
-              className="flex max-w-full items-center gap-2 rounded-lg border bg-card py-1.5 pr-3 pl-2.5 text-left text-sm transition-colors hover:border-brand/40"
+              className="flex min-h-11 max-w-full items-center gap-2 rounded-lg border bg-card py-1.5 pr-3 pl-2.5 text-left text-sm transition-colors hover:border-brand/40"
               onClick={() => open(b.task_id!)}
             >
               <span className="min-w-0 truncate font-medium">

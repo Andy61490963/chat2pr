@@ -173,6 +173,7 @@ test("設定分區可用鍵盤跳轉，使用摩擦可在系統頁查看", async
   const sections = page.getByRole("navigation", { name: "設定分區" });
   for (const [name, id] of [
     ["AI 與額度", "settings-ai"],
+    ["管理者通知", "settings-notifications"],
     ["LINE", "settings-line"],
     ["服務連線", "settings-services"],
     ["資料與外觀", "settings-data"],

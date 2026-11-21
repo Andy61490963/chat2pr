@@ -1,7 +1,7 @@
 /**
- * 群組訊息（notifications.group_id 有值的那幾列）送到 LINE 群組了沒有。
+ * 群組訊息（notifications.group_id 有值的那幾列）送到群組了沒有。
  * 聊天室與任務詳情共用：伺服器用 deliveryState 把 sent_at、attempts、last_error 整理成固定的狀態與白話原因，
- * 瀏覽器只拿到整理後的結果，看不到原始 last_error 與 LINE 的訊息 ID。
+ * 瀏覽器只拿到整理後的結果，原始錯誤與平台識別碼留在伺服器。
  *
  * last_error 的固定文字由這些地方寫入，改字時要同步這裡的對照（見 docs/conventions.md 第 3 節）：
  * - server/line.ts 的 flushNotifications：額度用完（quotaExhaustedDetail）、限流、群組回覆總開關關閉、其他狀態碼。
@@ -14,7 +14,7 @@ import {
   quotaExhaustedDetail,
   quotaShortPrefix,
 } from "./line-quota.js";
-import { groupDeliveryLabels, linePushServiceLabels } from "./status-glossary.js";
+import { discordDeliveryNotes, linePushServiceLabels } from "./status-glossary.js";
 import type { ChatPlatformId } from "./types.js";
 
 /** 與 server/group-replies.ts 的同名常數相同；tests/group-delivery.test.ts 會核對。 */
@@ -73,7 +73,6 @@ export type DeliveryReason =
   | "expired"
   | "superseded"
   | "reply_failed"
-  | "unsupported_platform"
   | "error";
 export interface Delivery {
   status: DeliveryStatus;
@@ -85,7 +84,7 @@ export interface Delivery {
 
 export interface DeliveryRow {
   sent_at: string | Date | null;
-  /** LINE 是否已回傳訊息 ID；只用來判斷，不回傳給瀏覽器。 */
+  /** 平台是否已回傳訊息識別碼；只用來判斷送達狀態。 */
   has_message_id?: boolean;
   attempts: number;
   last_error: string | null;
@@ -100,7 +99,6 @@ const reasonNotes: Record<DeliveryReason, string> = {
   expired: expiredNote,
   superseded: supersededNote,
   reply_failed: "以 /進度 補送沒有成功，下次再試",
-  unsupported_platform: groupDeliveryLabels.unsupportedPlatform,
   error: "LINE 沒有收下這則訊息",
 };
 
@@ -112,7 +110,7 @@ const isLineConnectionError = (raw: string) =>
  * 把 last_error 的固定文字對到原因；認不得的一律當成一般錯誤，只留狀態碼。
  * flushNotifications 寫入的是 redact(String(e))，前面會帶「Error: 」，比對前先去掉。
  */
-function reasonOf(raw: string): { reason: DeliveryReason; note: string } {
+function reasonOf(raw: string, platform?: ChatPlatformId): { reason: DeliveryReason; note: string } {
   const error = withoutErrorPrefix(raw);
   const pick = (reason: DeliveryReason, note = reasonNotes[reason]) => ({
     reason,
@@ -123,6 +121,11 @@ function reasonOf(raw: string): { reason: DeliveryReason; note: string } {
   if (error === supersededNote) return pick("superseded");
   // 補送中（claimingNote）已在 deliveryState 先處理；其餘以 /進度 開頭的都是補送失敗（含 replyGaveUpNote）。
   if (error.startsWith("以 /進度")) return pick("reply_failed");
+  if (platform === "discord") {
+    if (error === discordDeliveryNotes.rate) return pick("rate", error);
+    const note = Object.values(discordDeliveryNotes).find((value) => value === error);
+    return pick("error", note ?? discordDeliveryNotes.unavailable);
+  }
   if (error.startsWith(rateLimitedPrefix)) return pick("rate");
   if (
     error.startsWith(quotaShortPrefix) ||
@@ -149,12 +152,6 @@ export function deliveryState(
   row: DeliveryRow,
   context: { quotaBlocked?: boolean; platform?: ChatPlatformId } = {},
 ): Delivery {
-  if (context.platform === "discord" && !row.sent_at)
-    return {
-      status: "skipped",
-      reason: "unsupported_platform",
-      note: reasonNotes.unsupported_platform,
-    };
   const error = row.last_error?.trim() || null;
   if (error === claimingNote)
     // 補送成功會清掉 last_error；萬一寫回 ID 後還留著這句，仍算已送出。
@@ -163,19 +160,19 @@ export function deliveryState(
       : { status: "claiming", reason: null, note: "正在以 /進度 回覆補送" };
   if (row.sent_at) {
     if (!error) return { status: "sent", reason: null, note: "已送到群組" };
-    return { status: "skipped", ...reasonOf(error) };
+    return { status: "skipped", ...reasonOf(error, context.platform) };
   }
   if (
-    context.quotaBlocked &&
+    context.platform !== "discord" && context.quotaBlocked &&
     row.attempts < maxPushAttempts &&
     !(error && /多次/.test(error))
   )
     return { status: "pending", reason: "quota", note: reasonNotes.quota };
   if (!error)
     return row.attempts >= maxPushAttempts
-      ? { status: "failed", reason: "error", note: reasonNotes.error }
+      ? { status: "failed", reason: "error", note: context.platform === "discord" ? discordDeliveryNotes.unavailable : reasonNotes.error }
       : { status: "pending", reason: null, note: "排隊等待送出" };
-  const r = reasonOf(error);
+  const r = reasonOf(error, context.platform);
   if (r.reason === "reply_failed" && /多次/.test(error))
     return {
       status: "failed",

@@ -1,7 +1,9 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import {
+  defaultState,
   discordHealth,
+  emitDashboardEvent,
   exhaustedPushHealth,
   group,
   mockDashboard,
@@ -87,6 +89,39 @@ for (const viewport of [
         "#settings-services",
         "設定頁 Discord 連線",
       );
+    });
+
+    test("管理者可用鍵盤切換通知平台，查看 Discord 配對狀態與配對指示", async ({
+      page,
+    }, info) => {
+      const settings = { ...defaultState.settings, admin_line_id: "已綁定" };
+      await mockDashboard(page, { state: { settings }, pairingCode: "0123456789abcdef" });
+      await page.route("**/api/settings/admin-notifications", async (route) => {
+        expect(route.request().method()).toBe("PUT");
+        expect(route.request().postDataJSON()).toEqual({ admin_notify_platform: "discord" });
+        settings.admin_notify_platform = "discord";
+        await route.fulfill({ json: { ok: true } });
+      });
+      await page.goto("/settings");
+      const region = page.getByRole("region", { name: "管理者通知", exact: true });
+      await expect(region.getByRole("status")).toContainText("LINE 私訊");
+      await expect(region.getByRole("status")).toContainText("已配對");
+      const select = region.getByRole("combobox", { name: "管理者通知送到" });
+      await select.focus();
+      await page.keyboard.press("ArrowDown");
+      await expect(select).toHaveValue("discord");
+      await region.getByRole("button", { name: "儲存通知設定" }).press("Enter");
+      await expect(region.getByRole("status")).toContainText("Discord 私訊");
+      await expect(region.getByRole("status")).toContainText("尚未配對");
+      const pairing = region.getByRole("button", { name: "產生配對碼" });
+      expect((await pairing.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+      await pairing.press("Enter");
+      await expect(region.getByText("配對 0123456789abcdef")).toBeVisible();
+      await expect(region.getByText(/在 10 分鐘內私訊 Discord 機器人/)).toBeVisible();
+      settings.admin_discord_id = "已綁定";
+      await emitDashboardEvent(page, "update");
+      await expect(region.getByRole("status")).toContainText("已配對");
+      await verifyLayout(page, info, "section[aria-labelledby='settings-notifications']", "設定頁管理者通知與配對");
     });
 
     test("推播額度用完時，推播列省去重複警示與舊時間", async ({

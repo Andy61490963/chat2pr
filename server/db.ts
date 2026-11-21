@@ -62,6 +62,7 @@ export class Database {
         auto_memory: stored.auto_memory ?? true,
         code_downloads: stored.code_downloads ?? true,
         group_replies: stored.group_replies ?? true,
+        admin_notify_platform: stored.admin_notify_platform ?? "line",
         line_private_mode:
           stored.line_private_mode ?? linePrivateDefaults.line_private_mode,
         line_group_reserve_percent:

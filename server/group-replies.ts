@@ -63,13 +63,14 @@ export async function notifyGroupDirect(
   kind: string,
   key: string,
   text: string,
+  sourceMessageId?: string,
 ) {
   await c.query(
-    `INSERT INTO notifications(task_id,kind,dedupe_key,text,group_id)
-     SELECT $2,$3,$4,$5,g.id FROM groups g
+    `INSERT INTO notifications(task_id,kind,dedupe_key,text,group_id,source_message_id)
+     SELECT $2,$3,$4,$5,g.id,$6 FROM groups g
      WHERE g.id=$1 AND g.left_at IS NULL AND ${groupRepliesOn} AND g.reply_mode IN ('results','all')
      ON CONFLICT DO NOTHING`,
-    [groupId, taskId, `group_${kind}`, `group:${key}`, groupText(text)],
+    [groupId, taskId, `group_${kind}`, `group:${key}`, groupText(text), sourceMessageId ?? null],
   );
 }
 
@@ -233,7 +234,7 @@ export async function reclaimStaleClaims(c: Queryable) {
   await c.query(
     `UPDATE notifications u SET sent_at=NULL,last_error=$2
      FROM (SELECT n.id FROM notifications n JOIN groups g ON g.id=n.group_id
-       WHERE g.platform='line' AND n.last_error=$1 AND n.sent_message_id IS NULL AND n.sent_at<now()-$3::interval
+       WHERE n.last_error=$1 AND n.sent_message_id IS NULL AND n.sent_at<now()-$3::interval
        FOR UPDATE OF n SKIP LOCKED) s
      WHERE u.id=s.id`,
     [claimingNote, replyFailedNote, claimTimeout],
@@ -266,14 +267,16 @@ const newer = (a: string, b: string) =>
   `(${a}.kind<>'group_received',${a}.created_at,${a}.id)>(${b}.kind<>'group_received',${b}.created_at,${b}.id)`;
 const newestOfTask = `NOT EXISTS(SELECT 1 FROM notifications m WHERE m.task_id=n.task_id AND ${retrievable("m")} AND ${newer("m", "n")})`;
 const pendingFrom = `FROM notifications n JOIN tasks t ON t.id=n.task_id JOIN groups g ON g.id=n.group_id
-  WHERE g.platform='line' AND ${retrievable("n")} AND ${newestOfTask}`;
+  WHERE g.platform=$2 AND ${retrievable("n")} AND ${newestOfTask}
+  AND (g.platform<>'discord' OR (n.kind<>'group_received' AND
+    (n.discord_retry_at IS NULL OR n.discord_retry_at<=now())))`;
 
 /** 本群組可用 /進度 取回的通知數，以及其中是否有推播失敗過的。 */
 export async function pendingGroupReplies(c: DbClient, groupId: string) {
   const r = (
     await c.query<{ count: string; failed: boolean | null }>(
       `SELECT count(*) AS count,bool_or(n.last_error IS NOT NULL) AS failed ${pendingFrom}`,
-      [groupId],
+      [groupId, "line"],
     )
   ).rows[0];
   return { count: Number(r?.count ?? 0), failed: r?.failed === true };
@@ -290,12 +293,13 @@ export async function claimPendingGroupReplies(
   c: DbClient,
   groupId: string,
   limit: number,
+  platform: "line" | "discord" = "line",
 ) {
   const rows = (
     await c.query<ClaimedReply & { kind: string }>(
       `SELECT n.id,n.kind,n.text,n.quick_replies ${pendingFrom}
        ORDER BY n.created_at,n.id FOR UPDATE OF n SKIP LOCKED`,
-      [groupId],
+      [groupId, platform],
     )
   ).rows;
   const picked = rows.slice(0, limit);
@@ -307,16 +311,7 @@ export async function claimPendingGroupReplies(
       [ids, claimingNote],
     );
     claim = { ids, claimedAt: stamped.rows[0].claimed_at };
-    // 直接在 SQL 裡和佔住的列比時間：JS Date 只到毫秒，傳回資料庫比較會漏掉同一毫秒內較舊的列；
-    // 同一交易排入（created_at 相同）的「收到」也一併標成已被取代。
-    await c.query(
-      `UPDATE notifications u SET sent_at=now(),last_error=$3
-       FROM (SELECT o.id FROM notifications o JOIN notifications p ON p.task_id=o.task_id AND p.id=ANY($2::uuid[])
-         WHERE o.group_id=$1 AND o.sent_at IS NULL AND o.kind<>'group_waiting' AND o.id<>p.id AND o.created_at<=p.created_at
-         FOR UPDATE OF o SKIP LOCKED) s
-       WHERE u.id=s.id`,
-      [groupId, picked.map((r) => r.id), supersededNote],
-    );
+    if (platform === "line") await supersedeOlderGroupReplies(c, groupId, ids);
   }
   return {
     replies: picked.map((r) =>
@@ -327,6 +322,24 @@ export async function claimPendingGroupReplies(
     remaining: rows.length - picked.length,
     claim,
   };
+}
+
+/** 依資料庫的時間精度略過已被取代的回覆。Discord 的收到反應仍由通知排程處理。 */
+export async function supersedeOlderGroupReplies(
+  c: DbClient,
+  groupId: string,
+  ids: string[],
+  platform: "line" | "discord" = "line",
+) {
+  await c.query(
+    `UPDATE notifications u SET sent_at=now(),last_error=$3
+       FROM (SELECT o.id FROM notifications o JOIN notifications p ON p.task_id=o.task_id AND p.id=ANY($2::uuid[])
+         WHERE o.group_id=$1 AND o.sent_at IS NULL AND o.kind<>'group_waiting' AND o.id<>p.id AND o.created_at<=p.created_at
+         AND ($4='line' OR o.kind<>'group_received')
+         FOR UPDATE OF o SKIP LOCKED) s
+       WHERE u.id=s.id`,
+    [groupId, ids, supersededNote, platform],
+  );
 }
 
 /** 本群組還沒結束或 7 天內有變動的任務，只讀 group_id 等於本群組的資料。 */

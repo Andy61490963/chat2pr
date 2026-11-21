@@ -256,6 +256,8 @@ export interface Settings {
   coding_model: string;
   retention_days: number;
   admin_line_id: string | null;
+  admin_notify_platform?: ChatPlatformId;
+  admin_discord_id?: string | null;
 }
 export interface Message {
   contextOrigin?: "direct" | "rag";

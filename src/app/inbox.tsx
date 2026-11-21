@@ -121,8 +121,9 @@ function setupSteps(state: State) {
       view: "groups" as View,
     },
     {
-      done: !!state.settings.admin_line_id,
-      label: "LINE 私訊通知已配對",
+      done: !!(state.settings.admin_notify_platform === "discord"
+        ? state.settings.admin_discord_id : state.settings.admin_line_id),
+      label: "管理者私訊通知已配對",
       hint: "在設定頁產生配對碼",
       view: "settings" as View,
     },

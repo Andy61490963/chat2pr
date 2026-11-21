@@ -24,8 +24,24 @@ export const discordServiceText = {
 
 export const messageEditLabel = "來源訊息已編輯";
 
-export const groupDeliveryLabels = {
-  unsupportedPlatform: "目前尚未支援 Discord 通知，請在看板查看或手動轉達。",
+export const adminNotificationLabels = {
+  destination: "管理者通知送到",
+  paired: "已配對",
+  unpaired: "尚未配對",
+} as const;
+
+export const discordDeliveryNotes = {
+  rate: "Discord 暫時限制送訊速度，系統會在解除限制後重試。",
+  token: "Discord 未授權送訊。請管理者確認機器人權杖後再試。",
+  permission: "Discord 拒絕送訊，機器人可能缺少頻道權限。請管理者檢查權限後再試。",
+  missing: "Discord 找不到頻道或原訊息。請管理者確認頻道仍可用，並視需要在看板查看後轉達。",
+  content: "Discord 拒收這則訊息。請管理者在看板查看內容並轉達。",
+  unavailable: "暫時無法送到 Discord，服務可能異常。請確認連線或在看板查看後轉達。",
+  origin: "找不到原訊息，無法加入收到反應。請在看板查看需求。",
+} as const;
+export const discordGroupReplyLabels = {
+  all: "收到需求時會在原訊息加上反應，補問與結果會回到頻道",
+  results: "補問與結果會回到頻道",
 } as const;
 export const statusLabels: Record<TaskStatus, string> = {
   awaiting_approval: "待審核",

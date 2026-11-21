@@ -155,6 +155,7 @@ export async function savePickList(
       "triage",
       `pick-list:${list.id}`,
       `收到 ${items.length} 項待辦，管理者挑選後才會開始處理。`,
+      rootId,
     );
 }
 

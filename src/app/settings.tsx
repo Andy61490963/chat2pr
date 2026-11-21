@@ -14,8 +14,10 @@ import {
   type LinePrivateMode,
 } from "../../shared/line-private.js";
 import {
+  adminNotificationLabels,
   discordServiceLabels,
   discordServiceText,
+  groupPlatformLabels,
   networkStatusLabels,
 } from "../../shared/status-glossary.js";
 import {
@@ -856,6 +858,7 @@ function ThemeCard() {
 
 const settingsSections = {
   "settings-ai": "AI 與額度",
+  "settings-notifications": "管理者通知",
   "settings-line": "LINE",
   "settings-services": "服務連線",
   "settings-data": "資料與外觀",
@@ -879,6 +882,90 @@ function SettingsSection({
         </div>
       </div>
     </section>
+  );
+}
+
+function AdminNotifications({
+  settings, busy, run, request,
+}: {
+  settings: State["settings"];
+  busy: boolean;
+  run: Run;
+  request: Request;
+}) {
+  const saved = settings.admin_notify_platform ?? "line";
+  const [platform, setPlatform] = useState(saved);
+  const [pairing, setPairing] = useState("");
+  const [copied, setCopied] = useState(false);
+  const dirty = platform !== saved;
+  useUnsaved("settings-notifications", dirty);
+  const paired = saved === "discord" ? settings.admin_discord_id : settings.admin_line_id;
+  return (
+    <Card>
+      <CardContent className="grid gap-4">
+        <form className="grid gap-2" onSubmit={(event) => {
+          event.preventDefault();
+          if (!dirty || busy) return;
+          void run(
+            () => request("/api/settings/admin-notifications", "PUT", { admin_notify_platform: platform }),
+            "已儲存管理者通知設定",
+          );
+        }}>
+          <label className="text-sm font-medium" htmlFor="admin-notification-platform">
+            {adminNotificationLabels.destination}
+          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              id="admin-notification-platform"
+              className="min-h-11 w-full rounded-md border border-muted-foreground bg-background px-3 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary sm:w-48"
+              value={platform}
+              onChange={(event) => setPlatform(event.target.value === "discord" ? "discord" : "line")}
+            >
+              <option value="line">{groupPlatformLabels.line}</option>
+              <option value="discord">{groupPlatformLabels.discord}</option>
+            </select>
+            <Button type="submit" className="min-h-11" disabled={!dirty || busy}>儲存通知設定</Button>
+          </div>
+        </form>
+        <p role="status" className="flex flex-wrap items-center gap-2 text-sm">
+          <span>{groupPlatformLabels[saved]} 私訊</span>
+          <Badge variant={paired ? "good" : "outline"}>
+            {paired ? adminNotificationLabels.paired : adminNotificationLabels.unpaired}
+          </Badge>
+        </p>
+        {!paired && (
+          <p className="text-sm text-muted-foreground">
+            請先配對以接收私訊。配對前可在看板鈴鐺查看通知。
+          </p>
+        )}
+        <div>
+          <Button variant="outline" className="min-h-11" disabled={busy || dirty}
+            onClick={() => void run(async () => {
+              setCopied(false);
+              setPairing((await request<{ code: string }>("/api/pairing", "POST")).code);
+            }, "配對碼 10 分鐘內有效")}
+          >
+            {paired ? "重新配對" : "產生配對碼"}
+          </Button>
+        </div>
+        {pairing && !dirty && (
+          <div className="rounded-lg bg-muted p-3 text-sm">
+            <p className="text-muted-foreground">
+              請在 10 分鐘內私訊 {groupPlatformLabels[saved]} 機器人以下文字。
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              <code className="break-all text-base font-semibold">配對 {pairing}</code>
+              <Button variant="ghost" className="min-h-11 min-w-11"
+                onClick={() => void navigator.clipboard?.writeText(`配對 ${pairing}`)
+                  .then(() => setCopied(true)).catch(() => {})}
+              >
+                {copied ? <><Check /> 已複製</> : <><Copy /> 複製</>}
+              </Button>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -907,8 +994,6 @@ export function SettingsView({
         ).find((key) => discord.detail === discordServiceText[key]) ??
         "disconnected")
       : "unconfigured";
-  const [pairing, setPairing] = useState("");
-  const [copied, setCopied] = useState(false);
   // 私訊與群組分開計數（群組依人數計入額度）；過期的重送時略過。
   const failures: NotificationFailures = (
     state as State & { notificationFailures?: NotificationFailures }
@@ -1044,6 +1129,9 @@ export function SettingsView({
           />
         )}
       </SettingsSection>
+      <SettingsSection id="settings-notifications">
+        <AdminNotifications key={s.admin_notify_platform ?? "line"} settings={s} busy={busy} run={run} request={request} />
+      </SettingsSection>
       <SettingsSection id="settings-line">
         <Card>
           <CardHeader>
@@ -1054,11 +1142,6 @@ export function SettingsView({
               {linePrivateDigestMinutes} 分鐘時合併送出，每則最多列 5
               件，完整通知在看板鈴鐺。
             </CardDescription>
-            {s.admin_line_id && (
-              <CardAction>
-                <Badge variant="good">已配對</Badge>
-              </CardAction>
-            )}
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
             {push.usage && (
@@ -1082,24 +1165,8 @@ export function SettingsView({
               run={run}
               request={request}
             />
-            <Separator />
-            <div className="flex flex-wrap gap-2">
-              <Button
-                variant="outline"
-                className="min-h-11"
-                disabled={busy}
-                onClick={() =>
-                  void run(async () => {
-                    setPairing(
-                      (await request<{ code: string }>("/api/pairing", "POST"))
-                        .code,
-                    );
-                  }, "配對碼 10 分鐘內有效")
-                }
-              >
-                {s.admin_line_id ? "重新配對" : "產生配對碼"}
-              </Button>
-              {s.admin_line_id && (
+            {s.admin_notify_platform !== "discord" && s.admin_line_id && (
+              <div>
                 <Button
                   variant="outline"
                   className="min-h-11"
@@ -1114,8 +1181,8 @@ export function SettingsView({
                 >
                   <Send /> 送一則測試通知
                 </Button>
-              )}
-            </div>
+              </div>
+            )}
             {push.failedText && (
               <div
                 role="status"
@@ -1139,40 +1206,6 @@ export function SettingsView({
                 >
                   重送 {push.failed} 則
                 </ConfirmButton>
-              </div>
-            )}
-            {pairing && (
-              <div className="rounded-lg bg-muted p-3 text-sm">
-                <p className="text-muted-foreground">在機器人的私訊傳送：</p>
-                <div className="flex flex-wrap items-center gap-2">
-                  <code className="text-base font-semibold">
-                    配對 {pairing}
-                  </code>
-                  <Button
-                    variant="ghost"
-                    size="xs"
-                    className="min-h-11 min-w-11"
-                    onClick={() =>
-                      void navigator.clipboard
-                        ?.writeText(`配對 ${pairing}`)
-                        .then(() => {
-                          setCopied(true);
-                          setTimeout(() => setCopied(false), 2000);
-                        })
-                        .catch(() => {})
-                    }
-                  >
-                    {copied ? (
-                      <>
-                        <Check /> 已複製
-                      </>
-                    ) : (
-                      <>
-                        <Copy /> 複製
-                      </>
-                    )}
-                  </Button>
-                </div>
               </div>
             )}
           </CardContent>

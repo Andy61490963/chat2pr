@@ -93,10 +93,10 @@ import "@fontsource-variable/inter";
   // ---------- 元件 ----------
   var C = {
     line: { x: 40, y: 110, w: 250, h: 430, title: "LINE 與 Discord", sub: "範例群組", tint: "var(--line)", soft: "var(--line-soft)", ic: "msg" },
-    admin: { x: 40, y: 600, w: 250, h: 250, title: "你（管理者）", sub: "看板・LINE 私訊", tint: "var(--brand)", soft: "var(--brand-soft)", ic: "dash" },
+    admin: { x: 40, y: 600, w: 250, h: 250, title: "你（管理者）", sub: "看板與聊天私訊", tint: "var(--brand)", soft: "var(--brand-soft)", ic: "dash" },
     tunnel: { x: 360, y: 150, w: 210, h: 104, title: entry[0], ts: 15.5, sub: entry[1], tint: "var(--cf)", soft: "var(--cf-soft)", ic: "cloud" },
     app: { x: 600, y: 110, w: 300, h: 336, title: "app 容器", port: ":4310", tint: "var(--brand)", soft: "var(--brand-soft)", ic: "server",
-      lines: ["LINE 驗簽與 Discord 收訊", "等群組安靜再判讀", "任務與看板 API", "佇列 pg-boss", "LINE 推播與 GitHub App"] },
+      lines: ["LINE 驗簽與 Discord Gateway", "等群組安靜再判讀", "任務與看板 API", "佇列 pg-boss", "群組回覆與管理者通知"] },
     db: { x: 600, y: 480, w: 140, h: 130, title: "PostgreSQL", sub: "訊息・任務", tint: "var(--db)", soft: "var(--db-soft)", ic: "db" },
     emb: { x: 760, y: 480, w: 140, h: 130, title: "embedder", sub: "本機向量模型", tint: "var(--db)", soft: "var(--db-soft)", ic: "scan" },
     runner: { x: 960, y: 110, w: 220, h: 90, title: "執行器", port: "主機 :4312", tint: "var(--brand)", soft: "var(--brand-soft)", ic: "cpu", row: true },
@@ -344,7 +344,7 @@ import "@fontsource-variable/inter";
       anim: function (tl) { showBubble(tl, "m1"); travel(tl, "line_tunnel", 1.1, "訊息"); travel(tl, "tunnel_app", 0.6, "訊息"); status(tl, "收到 Webhook"); } },
 
     { title: "驗證來源並保存群組訊息", where: "app 與 PostgreSQL", cam: "entry", focus: ["app", "db", "line"],
-      text: "app 驗證 LINE 簽章，也接收 Discord 長連線送來的事件。兩邊的群組訊息都存進 PostgreSQL，有圖片就在背景下載。符合即時回覆條件的 LINE 訊息會收到「收到」，不扣 LINE 推播額度。Discord 的進度與結果可在看板查看。",
+      text: "app 驗證 LINE 簽章，也接收 Discord 長連線送來的訊息和斜線指令。兩邊的群組訊息都存進 PostgreSQL，有圖片就在背景下載。LINE 可即時回覆「收到」。Discord 依頻道設定在原訊息加上 ✅。",
       chips: ["簽章錯誤回 401", "reply token 不算額度", "原文保留 30 天"],
       data: "<ok>✓ 簽章正確</ok>\n\n<k>messages 新增一列</k>\n  id          \"5129…\"\n  group_id    \"C1f3…\"\n  type        \"text\"\n  received_at 10:02:11\n\n<k>回覆（reply token）</k>\n<s>收到，我會把這則需求整理好交給管理者確認，</s>\n<s>處理完會在這裡回報。</s>",
       end: { bub: ["m1", "r1"], app: "已存檔・已回收到" },
@@ -382,8 +382,8 @@ import "@fontsource-variable/inter";
         status(tl, "判讀完成");
       } },
 
-    { title: { change: "修改一定先等你點頭", query: "明確的查詢可以自動開始" }, where: { change: "看板收件匣・LINE 私訊", query: "app" }, cam: { change: "approve", query: "core" }, focus: { change: ["app", "admin"], query: ["app"] },
-      text: { change: "修改程式一律要人確認。任務會進到看板收件匣「待審核」。額度足夠時會立即送出 LINE 私訊摘要，若上一則摘要送出未滿 10 分鐘，就等滿 10 分鐘再合併送出。打開任務詳情核對目標儲存庫、需求與假設，按「確認專案並核准修改」。就算群組只綁了一個專案，也不能省略這一步。",
+    { title: { change: "修改一定先等你點頭", query: "明確的查詢可以自動開始" }, where: { change: "看板收件匣與聊天私訊", query: "app" }, cam: { change: "approve", query: "core" }, focus: { change: ["app", "admin"], query: ["app"] },
+      text: { change: "修改程式一律要人確認。任務會進到看板收件匣「待審核」，並依設定透過已配對的 LINE 或 Discord 私訊通知你。LINE 依額度送摘要，Discord 逐則排送。打開任務詳情核對目標儲存庫、需求與假設，按「確認專案並核准修改」。",
               query: "這次查詢明確指名已綁定的專案，判讀完就直接排程。索取機密實際值的查詢仍須人工確認。當系統無法確認目標時，你可以在收件匣查看符合需求的未綁定專案，管理者可一鍵綁定並指定，再確認任務。" },
       chips: { change: ["待審核", "核准只適用這個版本", "不會自動部署"], query: ["自動排程", "唯讀執行", "回答會遮蔽機密"] },
       data: { change: "<k>任務 #128</k>  待審核\n  首頁訂購按鈕改綠色\n  example-org/ShopWeb ← main\n  我先這樣假設：沿用品牌綠\n\n<s>[ 確認專案並核准修改 ]</s>  ← 你按下\n<ok>✓ 已核准 v1</ok>",
@@ -466,8 +466,8 @@ import "@fontsource-variable/inter";
       anim: function (tl) { tl.fromTo(roBadge, { opacity: 0, y: -6 }, { opacity: 1, y: 0, duration: 0.3 }); phase(tl, 5, "run"); travel(tl, "slot_relay", 0.4, "審查", "var(--ai)"); travel(tl, "relay_gpt", 0.5, "審查", "var(--ai)"); travel(tl, "relay_gpt", 0.5, "通過", "var(--good)", true); travel(tl, "slot_relay", 0.4, "通過", "var(--good)", true); phase(tl, 5, "done"); tl.to(roBadge, { opacity: 0, duration: 0.3 }); } },
 
     { title: { change: "開 PR、回報群組", query: "把答案送回來" }, where: "app → GitHub・LINE", follow: true, focus: ["app", "gh", "line", "admin"],
-      text: { change: "app 用 GitHub App 建立分支、Issue 與 PR，再把結果送到群組和看板鈴鐺。系統優先把 LINE 推播額度留給群組，群組推播按人數計。額度用完時，成員可打 /進度 免費取回回覆。",
-              query: "報告存到任務、回覆到 GitHub Issue，並在群組貼出重點、在看板鈴鐺通知你。群組成員「回覆」答案打「詳細」，機器人會分段貼出全文，不建任務、不用額度。" },
+      text: { change: "app 用 GitHub App 建立分支、Issue 與 PR，再把結果送到群組和看板鈴鐺。LINE 群組推播按人數計入額度。Discord 引用原訊息回覆，若遇限流會延後重試。成員可用 /進度 取回有效的未送達回覆。",
+              query: "報告存到任務、回覆到 GitHub Issue，並在群組貼出重點、在看板鈴鐺通知你。成員可以引用群組答案問「詳細」，機器人會分段貼出全文。遇到補問時，可以直接回覆或按常見答案。" },
       chips: { change: ["GitHub App", "推播算額度", "/進度 免費取回"], query: ["GitHub Issue", "群組貼重點", "打「詳細」看全文"] },
       data: { change: "<k>GitHub</k>\n  分支  agentflow/128-order-button-green\n  <s>PR #42</s>  首頁訂購按鈕改綠色（Closes #41）\n\n<k>群組（推播，計入額度）</k>\n  「首頁訂購按鈕改綠色」已修改完成，\n  等管理者檢視後合併：…/pull/42\n\n<k>看板鈴鐺</k>\n  PR 已完成，請檢視後合併",
               query: "<k>GitHub</k>\n  <s>Issue #41</s>  回覆調查報告\n\n<k>群組（推播，計入額度）</k>\n  「訂購按鈕在哪」的查詢結果：…\n  （回覆這則打「詳細」看全文）\n\n<k>看板鈴鐺</k>\n  查詢已回覆：訂購按鈕在哪" },

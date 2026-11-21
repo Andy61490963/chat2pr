@@ -116,7 +116,7 @@ async function prepareDigest(db: Database, mode: LinePrivateMode) {
 export async function flushLinePrivate(db: Database, access: string) {
   const settings = await db.settings();
   const to = settings.admin_line_id;
-  if (!to) return;
+  if (!to || settings.admin_notify_platform === "discord") return;
   const reserve =
     settings.line_group_reserve_percent ??
     linePrivateDefaults.line_group_reserve_percent;

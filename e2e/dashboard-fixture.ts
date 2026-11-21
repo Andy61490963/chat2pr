@@ -335,6 +335,8 @@ export const defaultState: State = {
     coding_model: "demo",
     retention_days: 30,
     admin_line_id: null,
+    admin_notify_platform: "line",
+    admin_discord_id: null,
   },
   projects: [project],
   groups: [group],
@@ -430,6 +432,7 @@ export async function mockDashboard(
   options: {
     state?: Record<string, unknown>;
     routes?: Record<string, unknown>;
+    pairingCode?: string;
   } = {},
 ): Promise<void> {
   const routes: Record<string, unknown> = {
@@ -543,6 +546,9 @@ export async function mockDashboard(
     }
     if (request.method() === "POST" && pathname === "/api/alerts/seen") {
       return route.fulfill({ json: { ok: true } });
+    }
+    if (request.method() === "POST" && pathname === "/api/pairing" && options.pairingCode) {
+      return route.fulfill({ json: { code: options.pairingCode, expiresIn: 600 } });
     }
     return route.fulfill({
       status: 404,
