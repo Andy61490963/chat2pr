@@ -281,7 +281,7 @@ for (const width of [1280, 375]) {
     completed = true;
     await page.getByRole("button", { name: "重新整理" }).click();
     await expect(
-      page.getByRole("button", { name: /^需要你處理 0/ }),
+      page.getByRole("heading", { name: "都處理完了" }),
     ).toBeVisible();
     await expect(bell).toHaveAccessibleName("通知");
     await bell.click();

@@ -8,6 +8,8 @@ function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
   return <SheetPrimitive.Root data-slot="sheet" {...props} />;
 }
 
+const SheetTrigger = SheetPrimitive.Trigger;
+
 function SheetContent({
   className,
   children,
@@ -98,6 +100,7 @@ function SheetDescription({
 
 export {
   Sheet,
+  SheetTrigger,
   SheetContent,
   SheetHeader,
   SheetFooter,

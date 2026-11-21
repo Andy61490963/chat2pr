@@ -1,13 +1,21 @@
 import {
+  taskListEmptyLabels,
   taskListLabels,
   taskStatusFilterLabels,
 } from "../../shared/status-glossary.js";
 import {
+  countTaskFilterConditions,
   taskStatusFilterIds,
   taskStatusFilters,
 } from "../../shared/task-list.js";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Search } from "lucide-react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import { Search, SlidersHorizontal } from "lucide-react";
 import {
   endedStatuses,
   unfinishedStatuses,
@@ -31,6 +39,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 import { TaskRow } from "./inbox";
 import {
   type State,
@@ -42,7 +58,8 @@ import {
   writeQuery,
 } from "./shared";
 
-const tabs: { id: string; label: string; statuses: TaskStatus[] | null }[] = [
+type TaskTab = keyof Omit<typeof taskListEmptyLabels, "filtered">;
+const tabs: { id: TaskTab; label: string; statuses: TaskStatus[] | null }[] = [
   {
     id: "active",
     label: taskListLabels.active,
@@ -103,6 +120,14 @@ function readPreferences(state: State, storageKey: string) {
     by: pick("by", (value) => ["project", "group", "none"].includes(value)),
     q: params.get("q") ?? "",
   };
+}
+
+const desktopMedia = "(min-width: 48rem)";
+const isMobileWidth = () => !window.matchMedia(desktopMedia).matches;
+function subscribeToTaskLayout(onChange: () => void) {
+  const query = window.matchMedia(desktopMedia);
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
 }
 
 function TaskRows({
@@ -313,6 +338,7 @@ export function TasksView({
     readPreferences(state, storageKey),
   );
   const { filter, group, project, status, q: search } = preferences;
+  const mobile = useSyncExternalStore(subscribeToTaskLayout, isMobileWidth);
   const isHistory = filter === "all" || filter === "closed";
   const by = (preferences.by || (isHistory ? "none" : "project")) as By;
   const closedTab = useRef<HTMLButtonElement>(null);
@@ -379,12 +405,16 @@ export function TasksView({
   if (group !== "all") params.set("group", group);
   if (project !== "all") params.set("project", project);
   if (search) params.set("q", search);
-  const noActiveTasks =
-    filter === "active" && tabCount(unfinishedStatuses) === 0;
+  const currentTab = tabs.find((tab) => tab.id === filter) ?? tabs[0];
+  const emptyTab =
+    tabCount(currentTab.statuses) === 0 &&
+    !state.tasks.some(
+      (task) => currentTab.statuses?.includes(task.status) ?? true,
+    );
   const empty = (
     <Card>
-      {noActiveTasks ? (
-        <Empty title="目前沒有進行中或待處理的任務">
+      {emptyTab && !isHistory ? (
+        <Empty title={taskListEmptyLabels.active}>
           <span className="flex flex-col items-center gap-3">
             有新任務或進度變動時，你會在這裡看到。
             <Button
@@ -398,8 +428,8 @@ export function TasksView({
             </Button>
           </span>
         </Empty>
-      ) : narrowed ? (
-        <Empty title="沒有符合條件的任務">
+      ) : !emptyTab && narrowed ? (
+        <Empty title={taskListEmptyLabels.filtered}>
           <span className="flex flex-col items-center gap-3">
             你可以清除篩選，或換個字詞搜尋。
             <Button
@@ -420,7 +450,7 @@ export function TasksView({
           </span>
         </Empty>
       ) : (
-        <Empty title={filter === "all" ? "還沒有任務" : "目前沒有已結束的任務"}>
+        <Empty title={taskListEmptyLabels[currentTab.id]}>
           {filter === "all" ? (
             "你可以在已綁定專案的群組提出需求，整理完成後就會出現在這裡。"
           ) : (
@@ -439,11 +469,121 @@ export function TasksView({
       )}
     </Card>
   );
+  const filterCount = countTaskFilterConditions({
+    statuses: selectedStatuses,
+    group,
+    project,
+    by,
+    isHistory,
+  });
+  const statusControls = !isHistory && (
+    <fieldset className="min-w-0">
+      <legend className="mb-1 text-sm text-muted-foreground">
+        你可以勾選多個狀態，未勾選時會顯示這個分頁的所有任務。
+      </legend>
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,8rem),1fr))] gap-x-2 sm:flex sm:flex-wrap sm:gap-x-4">
+        {taskStatusFilterIds.map((id) => (
+          <label
+            key={id}
+            className="flex min-h-11 cursor-pointer items-center gap-2 rounded-md px-2 text-sm hover:bg-muted has-focus-visible:outline-2 has-focus-visible:outline-foreground"
+          >
+            <input
+              type="checkbox"
+              className="size-5 shrink-0 accent-primary"
+              checked={selectedStatuses.includes(id)}
+              onChange={(event) => {
+                const next = event.target.checked
+                  ? [...selectedStatuses, id]
+                  : selectedStatuses.filter((value) => value !== id);
+                change({ status: statusPreference(next) });
+              }}
+            />
+            <span>
+              {taskStatusFilterLabels[id]}{" "}
+              <span className="text-xs text-muted-foreground tabular-nums">
+                {tabCount(taskStatusFilters[id])}
+              </span>
+            </span>
+          </label>
+        ))}
+      </div>
+    </fieldset>
+  );
+  const selectContentProps = mobile
+    ? {
+        position: "popper" as const,
+        className:
+          "max-w-(--radix-select-content-available-width) [&_[role=option]]:min-h-11 [&_[role=option]]:break-all",
+      }
+    : {};
+  const selectControls = (
+    <>
+      <Select value={group} onValueChange={(group) => change({ group })}>
+        <SelectTrigger
+          className="w-40 max-w-full max-md:w-full"
+          aria-label="群組"
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent {...selectContentProps}>
+          <SelectItem value="all">所有群組</SelectItem>
+          {state.groups.map((g) => (
+            <SelectItem key={g.id} value={g.id}>
+              {g.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <Select value={project} onValueChange={(project) => change({ project })}>
+        <SelectTrigger
+          className="w-44 max-w-full max-md:w-full"
+          aria-label="專案"
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent {...selectContentProps}>
+          <SelectItem value="all">所有專案</SelectItem>
+          {state.projects.map((p) => (
+            <SelectItem key={p.id} value={p.id}>
+              {p.name}
+            </SelectItem>
+          ))}
+          <SelectItem value="none">未指定專案</SelectItem>
+        </SelectContent>
+      </Select>
+      <Select value={by} onValueChange={(by) => change({ by })}>
+        <SelectTrigger
+          className="w-36 max-w-full max-md:w-full"
+          aria-label="分組方式"
+        >
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent {...selectContentProps}>
+          <SelectItem value="project">依專案分組</SelectItem>
+          <SelectItem value="group">依群組分組</SelectItem>
+          <SelectItem value="none">不分組</SelectItem>
+        </SelectContent>
+      </Select>
+    </>
+  );
+  const searchControl = (
+    <div className="relative min-w-0 flex-1 md:basis-48">
+      <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
+      <Input
+        ref={searchField}
+        className="pl-9"
+        placeholder="搜尋任務"
+        aria-label="搜尋任務"
+        value={search}
+        onChange={(e) => change({ q: e.target.value })}
+      />
+    </div>
+  );
   return (
     <Tabs
       value={filter}
       onValueChange={(filter) => change({ filter })}
-      className="work-surface min-w-0 gap-6"
+      className="work-surface min-w-0 gap-4 md:gap-6"
     >
       <div className="flex flex-col gap-3">
         <TabsList
@@ -470,97 +610,50 @@ export function TasksView({
             </TabsTrigger>
           ))}
         </TabsList>
-        {!isHistory && (
-          <fieldset className="min-w-0">
-            <legend className="mb-1 text-sm text-muted-foreground">
-              你可以勾選多個狀態，未勾選時會顯示這個分頁的所有任務。
-            </legend>
-            <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,8rem),1fr))] gap-x-2 sm:flex sm:flex-wrap sm:gap-x-4">
-              {taskStatusFilterIds.map((id) => (
-                <label
-                  key={id}
-                  className="flex min-h-11 cursor-pointer items-center gap-2 rounded-md px-2 text-sm hover:bg-muted has-focus-visible:outline-2 has-focus-visible:outline-foreground"
-                >
-                  <input
-                    type="checkbox"
-                    className="size-5 shrink-0 accent-primary"
-                    checked={selectedStatuses.includes(id)}
-                    onChange={(event) => {
-                      const next = event.target.checked
-                        ? [...selectedStatuses, id]
-                        : selectedStatuses.filter((value) => value !== id);
-                      change({ status: statusPreference(next) });
-                    }}
-                  />
-                  <span>
-                    {taskStatusFilterLabels[id]}{" "}
-                    <span className="text-xs text-muted-foreground tabular-nums">
-                      {tabCount(taskStatusFilters[id])}
-                    </span>
-                  </span>
-                </label>
-              ))}
-            </div>
-          </fieldset>
+        {!emptyTab && (
+          <>
+            {!mobile && statusControls}
+            {!isHistory && omitted > 0 && (
+              <p role="status" className="text-sm text-warn">
+                你可以到「全部」查看這裡尚未載入的 {omitted} 筆較舊任務。
+              </p>
+            )}
+            {mobile ? (
+              <div className="flex min-w-0 items-center gap-2">
+                <Sheet>
+                  <SheetTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="shrink-0 border-muted-foreground focus-visible:outline-2 focus-visible:outline-foreground"
+                      aria-label={`篩選，已套用 ${filterCount} 個條件`}
+                    >
+                      <SlidersHorizontal />
+                      篩選{filterCount > 0 && `（${filterCount}）`}
+                    </Button>
+                  </SheetTrigger>
+                  <SheetContent side="bottom" className="max-h-[85dvh]">
+                    <SheetHeader>
+                      <SheetTitle>任務篩選</SheetTitle>
+                      <SheetDescription>
+                        選擇條件後，任務清單會立即更新。
+                      </SheetDescription>
+                    </SheetHeader>
+                    <div className="grid min-h-0 grid-cols-1 gap-3 overflow-y-auto px-4 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))]">
+                      {statusControls}
+                      {selectControls}
+                    </div>
+                  </SheetContent>
+                </Sheet>
+                {searchControl}
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {selectControls}
+                {searchControl}
+              </div>
+            )}
+          </>
         )}
-        {!isHistory && omitted > 0 && (
-          <p role="status" className="text-sm text-warn">
-            你可以到「全部」查看這裡尚未載入的 {omitted} 筆較舊任務。
-          </p>
-        )}
-        <div className="flex flex-wrap gap-2">
-          <Select value={group} onValueChange={(group) => change({ group })}>
-            <SelectTrigger className="w-40 max-w-full" aria-label="群組">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">所有群組</SelectItem>
-              {state.groups.map((g) => (
-                <SelectItem key={g.id} value={g.id}>
-                  {g.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select
-            value={project}
-            onValueChange={(project) => change({ project })}
-          >
-            <SelectTrigger className="w-44 max-w-full" aria-label="專案">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">所有專案</SelectItem>
-              {state.projects.map((p) => (
-                <SelectItem key={p.id} value={p.id}>
-                  {p.name}
-                </SelectItem>
-              ))}
-              <SelectItem value="none">未指定專案</SelectItem>
-            </SelectContent>
-          </Select>
-          <Select value={by} onValueChange={(by) => change({ by })}>
-            <SelectTrigger className="w-36 max-w-full" aria-label="分組方式">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="project">依專案分組</SelectItem>
-              <SelectItem value="group">依群組分組</SelectItem>
-              <SelectItem value="none">不分組</SelectItem>
-            </SelectContent>
-          </Select>
-          <div className="relative min-w-0 flex-1 basis-full md:basis-48">
-            <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              ref={searchField}
-              className="pl-9"
-              placeholder="搜尋任務"
-              aria-label="搜尋任務"
-              value={search}
-              onChange={(e) => change({ q: e.target.value })}
-            />
-          </div>
-        </div>
       </div>
       {tabs.map((f) => (
         <TabsContent
@@ -569,7 +662,9 @@ export function TasksView({
           className="data-[state=active]:flex flex-col gap-6"
         >
           {f.id === filter &&
-            (isHistory ? (
+            (emptyTab ? (
+              empty
+            ) : isHistory ? (
               <TaskHistory
                 key={`${historyRevision}:${params}`}
                 query={params.toString()}

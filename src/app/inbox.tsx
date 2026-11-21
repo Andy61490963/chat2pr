@@ -1,4 +1,5 @@
 import {
+  inboxStatusLabels,
   notificationLabels,
   projectLabels,
   taskStatusFilterLabels,
@@ -202,7 +203,17 @@ export function InboxView({
   const ready = state.tasks.filter((t) => readyStatuses.includes(t.status));
   const held = state.tasks.filter((t) => waitingStatuses.includes(t.status));
   const needCount = countOf(state, attention);
+  const movingCount = countOf(state, moving);
+  const readyCount = countOf(state, readyStatuses);
   const lists = admin ? (state.pickLists ?? []) : [];
+  const clear =
+    needCount === 0 &&
+    movingCount === 0 &&
+    readyCount === 0 &&
+    needs.length === 0 &&
+    working.length === 0 &&
+    ready.length === 0 &&
+    lists.length === 0;
   const week = Date.now() - 7 * 86400000;
   const mergedWeek =
     state.totals?.mergedWeek ??
@@ -210,7 +221,12 @@ export function InboxView({
       (t) => t.status === "merged" && new Date(t.updated_at).getTime() > week,
     ).length;
   return (
-    <div className="work-surface flex min-w-0 flex-col gap-7">
+    <div
+      className={cn(
+        "work-surface flex min-w-0 flex-col",
+        clear ? "gap-4" : "gap-7",
+      )}
+    >
       {left.length > 0 && (
         <Card className="gap-3">
           <CardContent>
@@ -251,14 +267,25 @@ export function InboxView({
         aria-labelledby="inbox-todo"
         className={batchFocus}
       >
-        <TaskSectionTitle
-          id="inbox-todo"
-          count={needCount}
-          open={() => showTasks("todo")}
-        >
-          {notificationLabels.action}
-        </TaskSectionTitle>
-        {admin && (eligible.size > 0 || selected.size > 0) && (
+        {clear ? (
+          <Card className="gap-1 px-5 py-4">
+            <h2 id="inbox-todo" className="font-semibold">
+              {inboxStatusLabels.clear}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              {inboxStatusLabels.clearDescription}
+            </p>
+          </Card>
+        ) : (
+          <TaskSectionTitle
+            id="inbox-todo"
+            count={needCount}
+            open={() => showTasks("todo")}
+          >
+            {notificationLabels.action}
+          </TaskSectionTitle>
+        )}
+        {!clear && admin && (eligible.size > 0 || selected.size > 0) && (
           <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
             <Button
               type="button"
@@ -351,14 +378,18 @@ export function InboxView({
               />
             ))}
           </div>
-        ) : lists.length === 0 ? (
+        ) : !clear && lists.length === 0 ? (
           <Card className="py-1">
-            <Empty compact icon={<CheckCircle2 />} title="都處理完了">
+            <Empty
+              compact
+              icon={<CheckCircle2 />}
+              title={inboxStatusLabels.clear}
+            >
               有需求需要你決定時，你會在這裡看到它，也會收到私訊。
             </Empty>
           </Card>
         ) : null}
-        {admin && (
+        {!clear && admin && (
           <Dialog open={confirmEnd} onOpenChange={setConfirmEnd}>
             <DialogContent
               showCloseButton={false}
@@ -465,66 +496,85 @@ export function InboxView({
           </div>
         </section>
       )}
-      <div className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
+      <div
+        className={cn(
+          "grid grid-cols-1",
+          clear
+            ? "gap-4"
+            : "gap-8 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]",
+        )}
+      >
         <div className="flex flex-col gap-8">
-          <section aria-labelledby="inbox-moving">
-            <TaskSectionTitle
-              id="inbox-moving"
-              count={countOf(state, moving)}
-              open={() => showTasks("moving")}
-            >
-              {taskStatusFilterLabels.moving}
-            </TaskSectionTitle>
-            <div className="work-ledger">
-              {working.length ? (
-                working.map((t) => (
-                  <TaskRow key={t.id} task={t} state={state} open={open} />
-                ))
-              ) : (
-                <Empty compact icon={<Loader2 />} title="目前沒有執行中的工作">
-                  你核准需求後，就能在這裡追蹤進度。
-                </Empty>
-              )}
-            </div>
-          </section>
-          <section aria-labelledby="inbox-ready">
-            <TaskSectionTitle
-              id="inbox-ready"
-              count={countOf(state, readyStatuses)}
-              open={() => showTasks("ready")}
-            >
-              {statusLabels.ready}
-            </TaskSectionTitle>
-            <div className="work-ledger">
-              {ready.length ? (
-                ready.map((t) => (
-                  <TaskRow
-                    key={t.id}
-                    task={t}
-                    state={state}
-                    open={open}
-                    trailing={
-                      t.pr_url && (
-                        <Button variant="outline" size="sm" asChild>
-                          <a href={t.pr_url} target="_blank" rel="noreferrer">
-                            PR #{t.pr_number} <ArrowUpRight />
-                          </a>
-                        </Button>
-                      )
-                    }
-                  />
-                ))
-              ) : (
-                <Empty
-                  compact
-                  icon={<GitPullRequest />}
-                  title="沒有等待合併的 PR"
+          {!clear && (
+            <>
+              <section aria-labelledby="inbox-moving">
+                <TaskSectionTitle
+                  id="inbox-moving"
+                  count={movingCount}
+                  open={() => showTasks("moving")}
                 >
-                  修改通過驗證並建立 PR 後，你就能在這裡開啟 PR。
-                </Empty>
-              )}
-            </div>
-          </section>
+                  {taskStatusFilterLabels.moving}
+                </TaskSectionTitle>
+                <div className="work-ledger">
+                  {working.length ? (
+                    working.map((t) => (
+                      <TaskRow key={t.id} task={t} state={state} open={open} />
+                    ))
+                  ) : (
+                    <Empty
+                      compact
+                      icon={<Loader2 />}
+                      title="目前沒有執行中的工作"
+                    >
+                      你核准需求後，就能在這裡追蹤進度。
+                    </Empty>
+                  )}
+                </div>
+              </section>
+              <section aria-labelledby="inbox-ready">
+                <TaskSectionTitle
+                  id="inbox-ready"
+                  count={readyCount}
+                  open={() => showTasks("ready")}
+                >
+                  {statusLabels.ready}
+                </TaskSectionTitle>
+                <div className="work-ledger">
+                  {ready.length ? (
+                    ready.map((t) => (
+                      <TaskRow
+                        key={t.id}
+                        task={t}
+                        state={state}
+                        open={open}
+                        trailing={
+                          t.pr_url && (
+                            <Button variant="outline" size="sm" asChild>
+                              <a
+                                href={t.pr_url}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                PR #{t.pr_number} <ArrowUpRight />
+                              </a>
+                            </Button>
+                          )
+                        }
+                      />
+                    ))
+                  ) : (
+                    <Empty
+                      compact
+                      icon={<GitPullRequest />}
+                      title="沒有等待合併的 PR"
+                    >
+                      修改通過驗證並建立 PR 後，你就能在這裡開啟 PR。
+                    </Empty>
+                  )}
+                </div>
+              </section>
+            </>
+          )}
           <div className="flex flex-wrap items-center gap-x-4 border-t pt-2 text-sm text-muted-foreground">
             <button
               type="button"
