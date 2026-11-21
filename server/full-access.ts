@@ -39,6 +39,7 @@ export async function fullAccessEnvironment(
 export function fullAccessNote(access: FullAccess) {
   const parts = [
     "這個專案開啟了完全存取：可直接連公司內網、Tailscale 與網際網路。",
+    "連不到內網位址時，先用 ping -c 1 -W 3 <主機> 與 nc -z -w 3 <主機> <埠> 檢查，並依結果在報告寫明：若出現網路或主機無法到達的錯誤，寫「這台伺服器到不了該位址（可能缺路由或 VPN）」；若主機有回應且目標連接埠拒絕連線，寫「主機有回應但服務沒開」；若僅有逾時或未收到回應，寫明各項檢查結果與 ICMP 或 TCP 可能被封鎖的情形。",
   ];
   parts.push(
     access.database

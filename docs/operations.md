@@ -158,7 +158,7 @@ LINE 官方帳號每月的推播則數有上限，群組推播依群組人數計
 
 Codex SDK 在上述隔離容器內使用 `danger-full-access`，避免 Docker 禁止建立巢狀命名空間而使檔案操作失敗；此設定不可直接用於主機執行。安全邊界仍由 Docker 的非 root、唯讀根目錄、移除權能、隔離網路、唯讀審查掛載及限權代理強制執行。
 
-目前工作映像包含 Node.js 24、.NET 8 SDK、Git、Python、編譯工具、Playwright Chromium，以及完全存取專案用的 OpenSSH 用戶端、`sshpass` 與 `agentflow-ssh`。測試需要 SQL Server 的專案自動改用 `line-agentflow-worker-mssql:local`；其他系統工具可由 AI 提出、經審查後裝成專案衍生映像（見[自動準備專案測試環境](agents/project-environment.md)）。自訂映像要以最新的 `worker/Dockerfile` 為基底，保留 `io.agentflow.worker=v1` 標記、不舊於程式要求的 `io.agentflow.worker-rev` 與 `/opt/agentflow` 工具，並重新驗證專案。私有套件需要另行設計限權下載方式，不能把主機或 GitHub 寫入金鑰傳入工作容器。
+目前工作映像包含 Node.js 24、.NET 8 SDK、Git、Python、編譯工具、Playwright Chromium、`ping`（`iputils-ping`）、`nc`（`netcat-openbsd`），以及完全存取專案用的 OpenSSH 用戶端、`sshpass` 與 `agentflow-ssh`。測試需要 SQL Server 的專案自動改用 `line-agentflow-worker-mssql:local`；其他系統工具可由 AI 提出、經審查後裝成專案衍生映像（見[自動準備專案測試環境](agents/project-environment.md)）。自訂映像要以最新的 `worker/Dockerfile` 為基底，保留 `io.agentflow.worker=v1` 標記、不舊於程式要求的 `io.agentflow.worker-rev` 與 `/opt/agentflow` 工具，並重新驗證專案。私有套件需要另行設計限權下載方式，不能把主機或 GitHub 寫入金鑰傳入工作容器。
 
 ## 備份及還原（進階）
 
