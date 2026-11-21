@@ -60,7 +60,7 @@ import {
   quotaBellNotice,
   quotaRetryBlocked,
 } from "../shared/line-quota.js";
-import { Tasks } from "./tasks.js";
+import { BatchEnd, Tasks } from "./tasks.js";
 import { Budget } from "./budget.js";
 import { ProjectSetup } from "./project-setup.js";
 import {
@@ -875,6 +875,10 @@ export async function buildApp(
       [user.user_id],
     );
     return { ok: true };
+  });
+  app.post("/api/tasks/batch-end", async (req) => {
+    const actor = await requireAdmin(db, req);
+    return tasks.batchEnd(BatchEnd.parse(req.body), actor.login);
   });
   app.post("/api/tasks/:id/actions", async (req) => {
     const actor = await requireUser(db, req);

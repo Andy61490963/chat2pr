@@ -11,14 +11,22 @@ import {
   requireProjectConfirmation,
   saveProjectConfirmation,
 } from "./project-routing.js";
-import { Database } from "./db.js";
+import { Database, type DbClient } from "./db.js";
 import { GitHub } from "./github.js";
 import { TargetBranch } from "./task-branch.js";
-import { AppError, assertTransition } from "./policy.js";
+import { AppError, assertTransition, containsCredential } from "./policy.js";
 import { assertContextText } from "./project-context.js";
 import { notifyGroup } from "./group-replies.js";
 import { taskQueue } from "./capacity.js";
-import type { Action, Project, Task } from "../shared/types.js";
+import {
+  taskGroups,
+  UNFINISHED_LIMIT,
+  type Action,
+  type EndTaskSelection,
+  type EndTasksResult,
+  type Project,
+  type Task,
+} from "../shared/types.js";
 import { deliveryState, type GroupDelivery } from "../shared/group-delivery.js";
 import { lineQuotaBlocked } from "./line-quota.js";
 export const Assignment = z.object({
@@ -33,6 +41,34 @@ const BindAssignment = z.object({
 export const Amendment = z.object({
   summary: z.string().min(5).max(15000),
   acceptance: z.array(z.string().min(1).max(1000)).min(1).max(30),
+});
+export const BatchEnd = z.object({
+  tasks: z
+    .array(
+      z.object({
+        id: z.string("請選擇任務").uuid("請選擇有效的任務").toLowerCase(),
+        version: z
+          .number("請重新選取任務")
+          .int("請重新選取任務")
+          .positive("請重新選取任務"),
+        status: z.enum(taskGroups.attention, "請選取待確認或失敗的任務"),
+      }),
+    )
+    .min(1, "請至少選取一張任務")
+    // 收件匣同時載入未結束任務與最近 250 筆任務，兩份清單在時間相同時可能各有不同任務。
+    .max(
+      UNFINISHED_LIMIT + 250,
+      `你一次最多可結束 ${UNFINISHED_LIMIT + 250} 張任務`,
+    )
+    .refine((tasks) => new Set(tasks.map(({ id }) => id)).size === tasks.length, {
+      message: "請移除重複選取的任務",
+    }),
+  reason: z
+    .string("請用文字填寫結束原因")
+    .trim()
+    .max(500, "結束原因最多 500 字")
+    .optional(),
+  notify: z.boolean("請選擇是否依群組設定通知").default(true),
 });
 // 時間軸寫明做了什麼，不只寫「操作」。
 export const actionLabels: Record<string, string> = {
@@ -51,6 +87,83 @@ export const actionLabels: Record<string, string> = {
 };
 export class Tasks {
   constructor(private db: Database) {}
+
+  private async endTask(
+    c: DbClient,
+    task: Task,
+    action: "reject" | "cancel",
+    actor: string,
+    notify = true,
+    reason?: string,
+  ) {
+    const { id, title, version, target_branch } = task;
+    const { rows } = await c.query<Task>(
+      "UPDATE tasks SET status=$2,updated_at=now() WHERE id=$1 RETURNING *",
+      [id, action === "reject" ? "rejected" : "cancelled"],
+    );
+    if (notify)
+      await notifyGroup(
+        c,
+        id,
+        "closed",
+        `closed:${id}:${version}`,
+        `「${title}」${action === "reject" ? "管理者決定不處理" : "已由管理者取消"}。`,
+      );
+    await this.db.audit(
+      id,
+      action,
+      `${actor} ${actionLabels[action]}（需求版本 ${version}；目標分支 ${target_branch ?? "待選擇"}）${reason ? `，原因：${reason}` : ""}`,
+      c,
+    );
+    return rows[0];
+  }
+
+  async batchEnd(
+    { tasks, reason, notify }: z.infer<typeof BatchEnd>,
+    actor: string,
+  ): Promise<EndTasksResult> {
+    if (reason && containsCredential(reason))
+      throw new AppError(
+        422,
+        "結束原因含有憑證，請移除密碼、金鑰或驗證碼後再送出",
+      );
+    const selections = new Map<string, EndTaskSelection>(
+      tasks.map((task) => [task.id, task]),
+    );
+    const ids = [...selections.keys()];
+    return this.db.transaction(async (c) => {
+      // 和單張操作一樣先鎖群組，再鎖任務。批次以固定順序鎖住重疊的任務。
+      await c.query(
+        "SELECT g.id FROM groups g WHERE EXISTS (SELECT 1 FROM tasks t WHERE t.group_id=g.id AND t.id=ANY($1::uuid[])) ORDER BY g.id FOR SHARE OF g",
+        [ids],
+      );
+      const { rows } = await c.query<Task>(
+        "SELECT * FROM tasks WHERE id=ANY($1::uuid[]) ORDER BY id FOR UPDATE",
+        [ids],
+      );
+      let ended = 0;
+      for (const task of rows) {
+        const expected = selections.get(task.id);
+        if (
+          !expected ||
+          task.status !== expected.status ||
+          task.version !== expected.version
+        )
+          continue;
+        await this.endTask(
+          c,
+          task,
+          expected.status === "awaiting_approval" ? "reject" : "cancel",
+          actor,
+          notify,
+          reason,
+        );
+        ended++;
+      }
+      return { ended, skipped: tasks.length - ended };
+    });
+  }
+
   /** 向 GitHub 確認要換的分支存在；回傳確認時看到的儲存庫與分支，交易內再核對一次。 */
   private async checkTarget(id: string, version: number, body: unknown) {
     const wanted = z.object({ target_branch: TargetBranch }).safeParse(body);
@@ -361,18 +474,8 @@ export class Tasks {
           "UPDATE tasks SET status='queued',last_error=NULL,retry_at=NULL,updated_at=now() WHERE id=$1",
           [id],
         );
-      } else {
-        await c.query(
-          "UPDATE tasks SET status=$2,updated_at=now() WHERE id=$1",
-          [id, action === "reject" ? "rejected" : "cancelled"],
-        );
-        await notifyGroup(
-          c,
-          id,
-          "closed",
-          `closed:${id}:${t.version}`,
-          `「${t.title}」${action === "reject" ? "管理者決定不處理" : "已由管理者取消"}。`,
-        );
+      } else if (action === "reject" || action === "cancel") {
+        return this.endTask(c, t, action, actor);
       }
       // 分支功能上線前就結束的任務沒有記錄目標分支。回到待審核時帶入專案預設分支並標成待確認，
       // 不會停在「尚未選擇」。待審核中分支消失的任務不在此列，仍要由人重新選。

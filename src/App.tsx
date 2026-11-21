@@ -36,7 +36,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Wordmark } from "@/components/brand";
-import type { Action, Project, Settings, Task } from "../shared/types.js";
+import type {
+  Action,
+  EndTasksResult,
+  Project,
+  Settings,
+  Task,
+} from "../shared/types.js";
 import { LINE_QUOTA } from "../shared/line-quota.js";
 import {
   reservedQuotaHold,
@@ -1130,6 +1136,18 @@ export function App() {
                 showTasks={showTasks}
                 open={showTask}
                 act={act}
+                endTasks={(tasks, reason, notify) =>
+                  run(
+                    () =>
+                      request<EndTasksResult>("/api/tasks/batch-end", "POST", {
+                        tasks,
+                        reason,
+                        notify,
+                      }),
+                    ({ ended, skipped }) =>
+                      `已結束 ${ended} 張任務，略過 ${skipped} 張狀態或需求已變更的任務。`,
+                  )
+                }
                 more={loadMoreActivity}
               />
             )}
