@@ -739,7 +739,7 @@ export class Line {
         messages: [
           {
             type: "text",
-            text: "這是 AgentFlow 的測試通知。收到這則訊息，代表 LINE 私訊通知運作正常。",
+            text: "你已收到 chat2pr 的測試通知，代表 LINE 私訊通知運作正常。",
           },
         ],
       }),

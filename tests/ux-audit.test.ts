@@ -540,7 +540,7 @@ describe("測試通知", () => {
     expect(url).toBe("https://api.line.me/v2/bot/message/push");
     const body = JSON.parse(String(init.body));
     expect(body.to).toBe("fictional-admin");
-    expect(body.messages[0].text).toContain("測試通知");
+    expect(body.messages[0].text).toContain("chat2pr 的測試通知");
   });
 
   it("LINE 拒收時回報可以照著處理的原因", async () => {

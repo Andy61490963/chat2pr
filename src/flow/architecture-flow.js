@@ -197,8 +197,8 @@ import "@fontsource-variable/inter";
       el("text", { x: x - 4, y: top + h - 3, "text-anchor": "end", style: "fill:var(--fg);opacity:.55;font:400 9.5px var(--font)" }, g, "已讀 4");
     } else {
       el("circle", { cx: 72, cy: top + 13, r: 12, fill: "var(--brand)" }, g);
-      el("text", { x: 72, y: top + 17, "text-anchor": "middle", style: "fill:var(--on-brand);font:700 10px var(--font)" }, g, "AF");
-      el("text", { x: 90, y: top + 9, style: "fill:var(--fg);opacity:.75;font:500 10.5px var(--font)" }, g, "AgentFlow");
+      icon("pr", 65, top + 6, 14, "var(--on-brand)", g);
+      el("text", { x: 90, y: top + 9, style: "fill:var(--fg);opacity:.75;font:500 10.5px var(--font)" }, g, "chat2pr");
       top += 14;
       el("rect", { x: 90, y: top, width: w, height: h, rx: 12, fill: "var(--chat-bot)" }, g);
       lines.forEach(function (t, i) { el("text", { x: 99, y: top + 19 + i * lh, style: "fill:var(--fg);font:400 12.5px var(--font)" }, g, t); });

@@ -249,7 +249,7 @@ export function AlertBell({
       if (known.current.has(a.id)) continue;
       known.current.add(a.id);
       if (a.disposition !== "resolved" && desktop && desktopEnabled()) {
-        const n = new Notification(`AgentFlow：${kindOf(a.kind).label}`, {
+        const n = new Notification(`chat2pr：${kindOf(a.kind).label}`, {
           body: a.title ? `${a.title}\n${a.text}` : a.text,
           tag: a.id,
         });
