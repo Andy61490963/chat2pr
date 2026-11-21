@@ -265,6 +265,7 @@ export interface Memory {
   created_at: string;
 }
 export interface TriageDecision {
+  relatedListItemId?: string | null;
   noTaskReason?:
     | keyof typeof import("./status-glossary.js").triageNoTaskLabels
     | null;

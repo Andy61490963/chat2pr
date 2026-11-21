@@ -8,6 +8,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from "@/components/ui/dialog";
 
 // 不能復原的動作（拒絕、取消、刪除、移除）先問一次，避免誤觸就直接生效。
@@ -16,6 +17,8 @@ export function ConfirmButton({
   description,
   confirm,
   onConfirm,
+  dialogActionClassName,
+  dismiss = "先不要",
   children,
   ...button
 }: Omit<ComponentProps<typeof Button>, "title" | "onClick"> & {
@@ -24,35 +27,40 @@ export function ConfirmButton({
   /** 確認按鈕上的字，寫出實際會做的事。 */
   confirm: string;
   onConfirm: () => unknown;
+  dialogActionClassName?: string;
+  dismiss?: string;
 }) {
   const [open, setOpen] = useState(false);
   return (
-    <>
-      <Button type="button" {...button} onClick={() => setOpen(true)}>
-        {children}
-      </Button>
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent showCloseButton={false} className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>{title}</DialogTitle>
-            <DialogDescription>{description}</DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button variant="outline">先不要</Button>
-            </DialogClose>
-            <Button
-              variant="destructive"
-              onClick={() => {
-                setOpen(false);
-                void onConfirm();
-              }}
-            >
-              {confirm}
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button type="button" {...button}>
+          {children}
+        </Button>
+      </DialogTrigger>
+      <DialogContent showCloseButton={false} className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button variant="outline" className={dialogActionClassName}>
+              {dismiss}
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
+          </DialogClose>
+          <Button
+            variant="destructive"
+            className={dialogActionClassName}
+            onClick={() => {
+              setOpen(false);
+              void onConfirm();
+            }}
+          >
+            {confirm}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

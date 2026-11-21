@@ -8,6 +8,7 @@ import { AppError, containsCredential, redact } from "./policy.js";
 import { fetchLine } from "./line-http.js";
 import { isProgressCommand, isTaskCommand } from "../shared/chat.js";
 import { notificationPath } from "../shared/notifications.js";
+import { revokePickSource } from "./pick-lists.js";
 import {
   commandAck,
   disabledAck,
@@ -269,6 +270,7 @@ export class Line {
             "INSERT INTO messages(id,group_id,type,revoked,processed) VALUES($1,$2,'unsend',true,true) ON CONFLICT(id) DO UPDATE SET text=NULL,image=NULL,image_mime=NULL,user_id=NULL,revoked=true,processed=true",
             [e.unsend.messageId, group],
           );
+          await revokePickSource(c, group, e.unsend.messageId);
           const affected = (
             await c.query(
               "SELECT * FROM tasks WHERE group_id=$1 AND $2=ANY(source_ids) FOR UPDATE",

@@ -74,7 +74,9 @@ it("到期原文與圖片清除；加密備份保留摘要而不納入來源或�
     const file = join(dir, "backups", await backup(db));
     expect((await readFile(file)).toString()).not.toContain("保留的驗收摘要");
     const decoded = await decodeBackup(file);
-    expect(decoded.version).toBe(4);
+    expect(decoded.version).toBe(5);
+    // 第 5 版納入待挑選清單。
+    expect(decoded.tables.pick_lists).toEqual([]);
     expect(decoded.tables.tasks[0].question).toEqual(question);
     expect(decoded.tables.tasks[0].assumptions).toEqual(["保留原有欄位順序"]);
     expect(decoded.tables.tasks[0].summary).toBe("保留的驗收摘要");

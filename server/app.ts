@@ -1,4 +1,5 @@
 import { dashboardAlerts } from "./dashboard-alerts.js";
+import { pickLists, registerPickLists } from "./pick-lists.js";
 import { createFollowup, relinkTask } from "./followup.js";
 import { probeSystem } from "./system-status.js";
 import { answerFromDashboard } from "./answers.js";
@@ -210,6 +211,7 @@ export async function buildApp(
   // 不會落到 Fastify 預設的 { error: "Bad Request" }（看板只會顯示英文狀態名稱）。
   app.setErrorHandler(replyError);
   registerChat(app, db);
+  registerPickLists(app, db);
   registerProjectContext(app, db, enqueueValidation);
   const askConnection = (prompt: string, schema: Record<string, unknown>) =>
     new ProjectSetup(
@@ -516,6 +518,7 @@ export async function buildApp(
       rag,
       failures,
       validations,
+      pendingLists,
     ] = await Promise.all([
       diskPaused(db),
       // 看板的分頁數字與統計卡用資料庫的實際數量，不受清單載入範圍影響。
@@ -583,6 +586,7 @@ export async function buildApp(
            LEFT JOIN tasks t ON t.id=n.task_id WHERE n.sent_at IS NULL) x`,
       ),
       validationProgress?.() ?? [],
+      admin ? pickLists(db) : [],
     ]);
     const progressByProject = new Map(
       validations.map((entry) => [entry.id, entry]),
@@ -634,6 +638,7 @@ export async function buildApp(
       }),
       groups,
       tasks,
+      pickLists: pendingLists,
       rag,
       usage: { ...usage, runs_today: runsToday.count },
       diskDispatchPaused,

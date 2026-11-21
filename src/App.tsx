@@ -342,7 +342,9 @@ export function App() {
   }, [user, refresh]);
   // 分頁標題跟著頁面與任務走，多開分頁時分得出來；有待處理的事會顯示數量
   // （伺服器的實際數量，等待額度會自動繼續、不算在內）。
-  const waiting = state ? countOf(state, attention) : 0;
+  const waiting = state
+    ? countOf(state, attention) + (state.pickLists?.length ?? 0)
+    : 0;
   const pageLabel = views.find((v) => v.id === view)?.label;
   const taskTitle = selected?.task.title;
   useEffect(() => {
@@ -1146,6 +1148,23 @@ export function App() {
                       }),
                     ({ ended, skipped }) =>
                       `已結束 ${ended} 張任務，略過 ${skipped} 張狀態或需求已變更的任務。`,
+                  )
+                }
+                resolvePickList={(list, itemIds) =>
+                  run(
+                    () =>
+                      request<{ created: number }>(
+                        `/api/pick-lists/${list.id}/resolve`,
+                        "POST",
+                        {
+                          version: list.version,
+                          itemIds,
+                        },
+                      ),
+                    ({ created }) =>
+                      created
+                        ? `已建立 ${created} 張待確認任務`
+                        : "已選擇全部不做，清單已結束",
                   )
                 }
                 more={loadMoreActivity}

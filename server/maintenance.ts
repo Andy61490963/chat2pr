@@ -15,6 +15,7 @@ export const backupTables = [
   "projects",
   "groups",
   "group_projects",
+  "pick_lists",
   "group_memories",
   "project_knowledge",
   "tasks",
@@ -104,7 +105,7 @@ export async function backup(db: Database) {
       iv,
     );
   const encrypted = Buffer.concat([
-    cipher.update(JSON.stringify({ version: 4, tables: snapshot }), "utf8"),
+    cipher.update(JSON.stringify({ version: 5, tables: snapshot }), "utf8"),
     cipher.final(),
   ]);
   const name = `agentflow-${new Date().toISOString().slice(0, 10)}.afbackup`;
