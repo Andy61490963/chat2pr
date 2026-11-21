@@ -1,4 +1,9 @@
-import { groupLabels, groupStatus } from "../../shared/status-glossary.js";
+import {
+  groupDeliveryLabels,
+  groupLabels,
+  groupPlatformLabels,
+  groupStatus,
+} from "../../shared/status-glossary.js";
 import { groupReplyStatus } from "../../shared/group-reply-status.js";
 import { useEffect, useState } from "react";
 import {
@@ -232,27 +237,55 @@ export function GroupsView({
   openSettings: () => void;
 }) {
   const [openId, setOpenId] = useState<string | null>(null);
+  const [platform, setPlatform] = useState<Group["platform"] | "all">("all");
   const guard = useGuard();
   const open = state.groups.find((g) => g.id === openId);
   if (!state.groups.length)
     return (
       <Card>
         <Empty icon={<MessageSquare />} title="還沒有群組">
-          在 LINE Developers
-          開啟「允許加入群組」，把機器人加進群組並傳一則訊息。
+          把機器人加入 LINE 群組或 Discord
+          伺服器，再在群組或文字頻道傳一則訊息。
         </Empty>
       </Card>
     );
   // 機器人已離開的群組留著查紀錄，但排到最後、不算進統計。
-  const present = state.groups.filter((g) => !g.left_at);
-  const gone = state.groups.length - present.length;
-  const groups = [...present, ...state.groups.filter((g) => g.left_at)];
+  const matches = state.groups.filter(
+    (g) => platform === "all" || g.platform === platform,
+  );
+  const present = matches.filter((g) => !g.left_at);
+  const gone = matches.length - present.length;
+  const groups = [...present, ...matches.filter((g) => g.left_at)];
   const states = present.map((g) => groupStatus(g, usable(g, state)));
   const stuck = states.filter((status) => status === "unbound").length;
   const halted = states.filter((status) => status === "stopped").length;
   return (
     <div className="flex flex-col gap-4">
-      <p className="text-sm text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-3">
+        <label htmlFor="group-platform" className="text-sm font-medium">
+          聊天平台
+        </label>
+        <Select
+          value={platform}
+          onValueChange={(value) => setPlatform(value as typeof platform)}
+        >
+          <SelectTrigger id="group-platform" className="min-h-11 w-40">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem className="min-h-11" value="all">
+              全部平台
+            </SelectItem>
+            <SelectItem className="min-h-11" value="line">
+              {groupPlatformLabels.line}
+            </SelectItem>
+            <SelectItem className="min-h-11" value="discord">
+              {groupPlatformLabels.discord}
+            </SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <p role="status" className="text-sm text-muted-foreground">
         共 {present.length} 個群組，
         {
           present.filter((g) => groupStatus(g, usable(g, state)) === "ready")
@@ -263,74 +296,87 @@ export function GroupsView({
         {halted > 0 && `，${halted} 個${groupLabels.stopped}`}
         {gone > 0 && `；另有 ${gone} 個${groupLabels.left}`}
       </p>
-      <div className="@container">
-        <div className="@3xl:rounded-xl @3xl:border @3xl:bg-card @3xl:text-card-foreground">
-          <div
-            aria-hidden="true"
-            className="hidden grid-cols-[minmax(0,1.6fr)_8rem_minmax(0,2fr)_5rem_7rem] gap-4 border-b px-5 py-2.5 text-xs text-muted-foreground @3xl:grid"
-          >
-            <span>群組</span>
-            <span>觸發方式</span>
-            <span>可修改的專案</span>
-            <span>記憶</span>
-            <span className="text-right">狀態</span>
-          </div>
-          <ul role="list" className="grid gap-3 @3xl:block @3xl:divide-y">
-            {groups.map((g) => {
-              const projects = state.projects.filter((p) =>
-                g.project_ids.includes(p.id),
-              );
-              const memories = state.memories.filter(
-                (m) => m.group_id === g.id,
-              ).length;
-              return (
-                <li
-                  key={g.id}
-                  className="rounded-xl border bg-card text-card-foreground @3xl:rounded-none @3xl:border-0"
-                >
-                  <button
-                    className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-2 rounded-[inherit] px-5 py-3 text-left transition-colors hover:bg-muted/40 @3xl:grid-cols-[minmax(0,1.6fr)_8rem_minmax(0,2fr)_5rem_7rem] @3xl:items-center"
-                    onClick={() => setOpenId(g.id)}
+      {groups.length === 0 ? (
+        <Empty icon={<MessageSquare />} title="這個平台還沒有群組">
+          把機器人加入群組或伺服器，並傳一則訊息。
+        </Empty>
+      ) : (
+        <div className="@container">
+          <div className="@3xl:rounded-xl @3xl:border @3xl:bg-card @3xl:text-card-foreground">
+            <div
+              aria-hidden="true"
+              className="hidden grid-cols-[minmax(0,1.6fr)_8rem_minmax(0,2fr)_5rem_7rem] gap-4 border-b px-5 py-2.5 text-xs text-muted-foreground @3xl:grid"
+            >
+              <span>群組</span>
+              <span>觸發方式</span>
+              <span>可修改的專案</span>
+              <span>記憶</span>
+              <span className="text-right">狀態</span>
+            </div>
+            <ul role="list" className="grid gap-3 @3xl:block @3xl:divide-y">
+              {groups.map((g) => {
+                const projects = state.projects.filter((p) =>
+                  g.project_ids.includes(p.id),
+                );
+                const memories = state.memories.filter(
+                  (m) => m.group_id === g.id,
+                ).length;
+                return (
+                  <li
+                    key={g.id}
+                    className="rounded-xl border bg-card text-card-foreground @3xl:rounded-none @3xl:border-0"
                   >
-                    <span className="min-w-0 font-medium [overflow-wrap:anywhere]">
-                      {g.name}
-                    </span>
-                    <span className="col-span-2 text-sm @3xl:col-auto">
-                      <span className="mr-2 text-xs text-muted-foreground @3xl:sr-only">
-                        觸發方式
-                      </span>
-                      {g.trigger_mode === "auto"
-                        ? "自動辨識"
-                        : "指令與引用追問"}
-                    </span>
-                    <span
-                      className={cn(
-                        "col-span-2 text-sm [overflow-wrap:anywhere] @3xl:col-auto",
-                        !projects.length && "text-warn",
-                      )}
+                    <button
+                      className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-2 rounded-[inherit] px-5 py-3 text-left transition-colors hover:bg-muted/40 @3xl:grid-cols-[minmax(0,1.6fr)_8rem_minmax(0,2fr)_5rem_7rem] @3xl:items-center"
+                      onClick={() => setOpenId(g.id)}
                     >
-                      <span className="mr-2 text-xs text-muted-foreground @3xl:sr-only">
-                        可修改的專案
+                      <span className="flex min-w-0 flex-wrap items-center gap-2 font-medium">
+                        <span className="[overflow-wrap:anywhere]">
+                          {g.name}
+                        </span>
+                        <Badge variant="secondary">
+                          {groupPlatformLabels[g.platform]}
+                        </Badge>
                       </span>
-                      <span>
-                        {projects.map((p) => p.name).join("、") || "尚未綁定"}
+                      <span className="col-span-2 text-sm @3xl:col-auto">
+                        <span className="mr-2 text-xs text-muted-foreground @3xl:sr-only">
+                          觸發方式
+                        </span>
+                        {g.trigger_mode === "auto"
+                          ? "自動辨識"
+                          : g.platform === "discord"
+                            ? "指令或提及機器人"
+                            : "指令與引用追問"}
                       </span>
-                    </span>
-                    <span className="col-span-2 text-sm text-muted-foreground tabular-nums @3xl:col-auto">
-                      <span className="mr-2 text-xs @3xl:sr-only">記憶</span>
-                      {memories} 筆
-                    </span>
-                    <span className="col-start-2 row-start-1 flex justify-end @3xl:col-auto @3xl:row-auto">
-                      <span className="sr-only">狀態</span>
-                      <GroupStatusBadge group={g} state={state} />
-                    </span>
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+                      <span
+                        className={cn(
+                          "col-span-2 text-sm [overflow-wrap:anywhere] @3xl:col-auto",
+                          !projects.length && "text-warn",
+                        )}
+                      >
+                        <span className="mr-2 text-xs text-muted-foreground @3xl:sr-only">
+                          可修改的專案
+                        </span>
+                        <span>
+                          {projects.map((p) => p.name).join("、") || "尚未綁定"}
+                        </span>
+                      </span>
+                      <span className="col-span-2 text-sm text-muted-foreground tabular-nums @3xl:col-auto">
+                        <span className="mr-2 text-xs @3xl:sr-only">記憶</span>
+                        {memories} 筆
+                      </span>
+                      <span className="col-start-2 row-start-1 flex justify-end @3xl:col-auto @3xl:row-auto">
+                        <span className="sr-only">狀態</span>
+                        <GroupStatusBadge group={g} state={state} />
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
         </div>
-      </div>
+      )}
       {open && (
         <Sheet
           open
@@ -340,11 +386,15 @@ export function GroupsView({
         >
           <SheetContent className="sm:max-w-xl">
             <SheetHeader>
-              <SheetTitle className="text-lg">{open.name}</SheetTitle>
+              <SheetTitle className="text-lg [overflow-wrap:anywhere]">
+                {open.name}
+              </SheetTitle>
               <SheetDescription>
-                {room(open)
-                  ? "多人聊天室在 LINE 沒有名稱，可以在下方自己取名"
-                  : "名稱與 LINE 群組同步"}
+                {open.platform === "discord"
+                  ? groupPlatformLabels.discord
+                  : room(open)
+                    ? "多人聊天室在 LINE 沒有名稱，可以在下方自己取名"
+                    : "名稱與 LINE 群組同步"}
               </SheetDescription>
             </SheetHeader>
             <div className="flex-1 overflow-y-auto p-5">
@@ -479,68 +529,80 @@ function GroupCard({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="command">指令與引用追問</SelectItem>
+            <SelectItem value="command">
+              {g.platform === "discord" ? "指令或提及機器人" : "指令與引用追問"}
+            </SelectItem>
             <SelectItem value="auto">自動辨識</SelectItem>
           </SelectContent>
         </Select>
         <p className="text-xs leading-relaxed text-muted-foreground">
           {triggerMode === "command"
-            ? "你可以用 /任務 或引用機器人的回答提出需求。"
+            ? g.platform === "discord"
+              ? "用 /任務 開頭，或提及機器人並寫下需求。"
+              : "你可以用 /任務 或引用機器人的回答提出需求。"
             : "你在群組提出明確需求時，AI 會自動辨識並略過同事分工與未定案的討論。"}
         </p>
         <details className="text-xs text-muted-foreground">
           <summary className="cursor-pointer">說明</summary>
           <div className="mt-1">
             {triggerMode === "command"
-              ? "一般聊天只保存、不辨識。請以 /任務 開頭提出新需求；引用機器人的任務回答可直接追問。附圖時，先傳圖片，再引用該圖片輸入 /任務 與說明。"
+              ? g.platform === "discord"
+                ? "一般聊天只供檢視。提出需求時，可以在同一則訊息附圖，或引用先前的圖片。"
+                : "一般聊天只保存、不辨識。請以 /任務 開頭提出新需求；引用機器人的任務回答可直接追問。附圖時，先傳圖片，再引用該圖片輸入 /任務 與說明。"
               : "AI 會辨識新訊息並略過閒聊；修改先確認專案，明確且有依據的查詢可自動執行。不希望自動辨識時請選指令模式。"}{" "}
             切換只套用到之後的新訊息。
           </div>
         </details>
       </div>
-      <div className="grid gap-2">
-        <p role="status" className="text-sm font-medium">
-          目前：{groupReplyStatus(g, state.settings, state.health).text}
-          {!g.left_at && state.settings.group_replies === false && (
-            <Button size="sm" variant="link" onClick={openSettings}>
-              前往設定
-            </Button>
-          )}
+      {g.platform === "discord" ? (
+        <p className="text-sm text-muted-foreground">
+          {groupDeliveryLabels.unsupportedPlatform}
         </p>
-        <label className="text-sm font-medium" htmlFor={`reply-${g.id}`}>
-          在群組回覆
-        </label>
-        <Select
-          value={replyMode}
-          onValueChange={(v) =>
-            setReplyMode(v as NonNullable<Group["reply_mode"]>)
-          }
-        >
-          <SelectTrigger id={`reply-${g.id}`} className="w-full sm:max-w-sm">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="results">只回覆結果</SelectItem>
-            <SelectItem value="all">收到需求時也回覆</SelectItem>
-            <SelectItem value="off">不在群組回覆</SelectItem>
-          </SelectContent>
-        </Select>
-        <p className="text-xs text-muted-foreground">
-          {replyMode === "off"
-            ? "你儲存後，機器人會停止在這個群組回覆。"
-            : replyMode === "all"
-              ? "你儲存後，群組會收到需求等待確認的通知與處理結果。"
-              : "你儲存後，群組會收到查詢答案與處理結果。"}
-        </p>
-        <details className="text-xs text-muted-foreground">
-          <summary className="cursor-pointer">推播額度與 /進度</summary>
-          <p>
-            你用 /任務
-            提出需求時的即時回覆不扣推播額度，後續推播依群組人數計費；額度用完可打
-            /進度 補看結果。
+      ) : (
+        <div className="grid gap-2">
+          <p role="status" className="text-sm font-medium">
+            目前：{groupReplyStatus(g, state.settings, state.health).text}
+            {!g.left_at && state.settings.group_replies === false && (
+              <Button size="sm" variant="link" onClick={openSettings}>
+                前往設定
+              </Button>
+            )}
           </p>
-        </details>
-      </div>
+          <label className="text-sm font-medium" htmlFor={`reply-${g.id}`}>
+            在群組回覆
+          </label>
+          <Select
+            value={replyMode}
+            onValueChange={(v) =>
+              setReplyMode(v as NonNullable<Group["reply_mode"]>)
+            }
+          >
+            <SelectTrigger id={`reply-${g.id}`} className="w-full sm:max-w-sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="results">只回覆結果</SelectItem>
+              <SelectItem value="all">收到需求時也回覆</SelectItem>
+              <SelectItem value="off">不在群組回覆</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            {replyMode === "off"
+              ? "你儲存後，機器人會停止在這個群組回覆。"
+              : replyMode === "all"
+                ? "你儲存後，群組會收到需求等待確認的通知與處理結果。"
+                : "你儲存後，群組會收到查詢答案與處理結果。"}
+          </p>
+          <details className="text-xs text-muted-foreground">
+            <summary className="cursor-pointer">推播額度與 /進度</summary>
+            <p>
+              你用 /任務
+              提出需求時的即時回覆不扣推播額度，後續推播依群組人數計費；額度用完可打
+              /進度 補看結果。
+            </p>
+          </details>
+        </div>
+      )}
       {g.triage_error && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">
           <AlertCircle className="size-4" />

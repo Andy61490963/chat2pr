@@ -8,6 +8,7 @@ import {
 } from "../shared/check-environment";
 import { defaultDiskSettings } from "../shared/docker-disk";
 import type { ChatPage } from "../shared/chat";
+import { discordServiceText } from "../shared/status-glossary";
 
 const timestamp = "2026-01-01T00:00:00Z";
 
@@ -48,8 +49,18 @@ export const discordGroup: Group = {
   ...group,
   id: "discord:100000000000000001",
   platform: "discord",
-  name: "範例頻道",
+  name: "範例伺服器／#需求",
+  reply_mode: "off",
 };
+
+export const discordHealth: State["health"] = [
+  {
+    name: "discord",
+    ok: true,
+    detail: discordServiceText.connected,
+    checked_at: timestamp,
+  },
+];
 
 export const statusProjects: Project[] = [
   { ...project, name: "示範專案", image: "line-agentflow-worker:demo-old" },
@@ -252,6 +263,7 @@ export async function mockDashboard(
       bot_messages: [],
       next: null,
     },
+    [`/api/groups/${encodeURIComponent(discordGroup.id)}/messages`]: statusChat,
     [`/api/projects/${project.id}/ssh-hosts`]: [],
     [`/api/projects/${project.id}/database`]: {
       connection: null,

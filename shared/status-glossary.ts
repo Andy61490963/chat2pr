@@ -1,5 +1,29 @@
 import type { TaskStatus, Project, Group } from "./types.js";
 
+export const groupPlatformLabels = {
+  line: "LINE",
+  discord: "Discord",
+} as const;
+export const discordServiceLabels = {
+  unconfigured: "尚未設定",
+  configError: "設定無法讀取",
+  connecting: "連線中",
+  connected: "已連線",
+  disconnected: "連線中斷",
+} as const;
+export const discordServiceText = {
+  configError:
+    "無法讀取 Discord 機密設定，可能遺失加密金鑰。請在主機還原設定檔與金鑰，或停用後重新填寫設定，再重新啟動服務。",
+  unconfigured:
+    "尚未填寫機器人權杖，無法接收 Discord 訊息。請在主機開啟本機設定頁填寫設定。",
+  connecting: "正在建立 Discord 連線，請稍候。",
+  connected: "已連線，可以接收 Discord 頻道訊息。",
+  disconnected:
+    "暫時收不到 Discord 訊息，可能是網路中斷、權杖失效或讀取訊息內容權限未開啟。系統會重試，請確認網路及機器人設定。",
+} as const;
+
+export const messageEditLabel = "來源訊息已編輯";
+
 export const groupDeliveryLabels = {
   unsupportedPlatform: "目前尚未支援 Discord 通知，請在看板查看或手動轉達。",
 } as const;

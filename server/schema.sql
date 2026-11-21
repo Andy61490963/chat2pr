@@ -49,6 +49,13 @@ CREATE TABLE IF NOT EXISTS messages (
  image bytea, image_mime text, quoted_id text, received_at timestamptz NOT NULL DEFAULT now(), revoked boolean NOT NULL DEFAULT false,
  processed boolean NOT NULL DEFAULT false, batch_id uuid
 );
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_name text;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS image_source_url text;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS content_revision integer NOT NULL DEFAULT 0;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS needs_source_review boolean NOT NULL DEFAULT false;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS discord_message_id text;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS discord_edited_at timestamptz;
+CREATE INDEX IF NOT EXISTS messages_discord_source ON messages(discord_message_id) WHERE discord_message_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS messages_pending ON messages(group_id,received_at) WHERE processed=false;
 -- 第一次升級改用明確指令，舊訊息只供檢視，不追溯派工；重跑遷移不改管理者選擇。
 DO $$ BEGIN

@@ -84,6 +84,8 @@
 
 設定頁「服務連線」以 `line_quota` 的封鎖狀態及已保存的額度錯誤判斷要顯示的推播說明。舊資料的「LINE 通知失敗（429）」也指向額度列。現行的「LINE 推播太頻繁」要保留獨立提示，因為短時間限流可稍後再試，與每月額度耗盡的處理方式不同。調整對照時同步更新 `tests/dashboard-status.test.ts`。
 
+聊天平台新增原文或圖片來源欄位時，同步檢查聊天室查詢、撤回及 `server/maintenance.ts` 的清理。允許編輯時，還要同步檢查判讀結算與背景圖片寫回的來源版本，避免舊內容在新版本上生效。
+
 ## 4. 測試
 
 瀏覽器驗收（`npm run test:e2e`）跑在 Vite 開發伺服器上，沒有正式伺服器的安全標頭（CSP、`frame-ancestors`、X-Frame-Options）。牽涉這些標頭的行為（例如同源 iframe 嵌入）要另外用 `buildApp` 的整合測試檢查；系統頁的架構動畫就曾在 e2e 通過、正式環境卻被 `frame-ancestors 'none'` 擋下。

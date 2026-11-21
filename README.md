@@ -46,6 +46,7 @@ flowchart LR
     PKG[npm・NuGet・PyPI]
   end
   L -- Webhook --> T --> APP
+  D[Discord 文字頻道] ---|Gateway 長連線| APP
   APP --> DB
   APP --> EMB
   APP -- 執行器金鑰 --> R --> J
@@ -60,7 +61,7 @@ flowchart LR
 
 | 步驟                      | 發生在哪裡                                   | 做什麼                                                                                                             |
 | ------------------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| 1. 收到訊息               | LINE → Cloudflare Tunnel → app               | LINE 以 Webhook（HTTPS POST）把群組訊息送進來。                                                                    |
+| 1. 收到訊息               | LINE Webhook、Discord Gateway               | LINE 透過公開入口送出群組訊息；Discord 由 app 對外連線，接收文字頻道訊息。                                                                    |
 | 2. 驗簽、存檔、回「收到」 | app、PostgreSQL                              | 驗證 `X-Line-Signature`，錯了回 401；訊息存進資料庫，圖片背景下載。用 reply token 回「收到」，不算 LINE 推播額度。 |
 | 3. 等群組安靜             | app                                          | 安靜 60 秒（最多累積 5 分鐘；引用機器人回答的追問只等 5 秒），把碎片訊息合在一起。                                 |
 | 4. 找回上下文             | app、embedder、PostgreSQL                    | 本機向量模型檢索近期對話、群組記憶、過去同專案的任務，資料不送到外部。                                             |
@@ -144,6 +145,15 @@ Start-ScheduledTask -TaskName 'LINE-AgentFlow'
 ```
 
 接著設定 LINE Webhook 與 GitHub App 安裝，用看板收件匣的「開始使用」清單完成驗收。新實例預設**全域暫停**，驗收完成前不會自動派工。
+
+### 從 Discord 頻道收需求
+
+1. 從 [Discord 開發者入口](https://discord.com/developers/applications) 建立應用程式，複製一般資訊中的應用程式 ID。到機器人頁產生權杖，並開啟「讀取訊息內容」（Message Content Intent）。
+2. 在主機執行 `npm run setup`，把兩項資料填入本機設定頁的「Discord 機器人」，儲存後重新啟動 app。
+3. 在應用程式的「安裝」頁設定伺服器安裝與機器人權限，取得安裝連結並邀請機器人。權限與操作詳見 [Discord 連線](docs/operations.md#discord-連線)。
+4. 在文字頻道送一則訊息。到看板「群組」篩選 Discord，選擇該頻道、綁定專案並啟用。
+
+Discord 使用 app 主動建立的對外長連線。LINE 可同時收訊並維持原本的 Webhook。
 
 ### 部署流程
 

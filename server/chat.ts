@@ -131,14 +131,14 @@ export function registerChat(app: FastifyInstance, db: Database) {
         coalesce(CASE WHEN q.id IS NOT NULL THEN left(coalesce(nullif(q.text,''),
           CASE q.type WHEN 'image' THEN '圖片' WHEN 'sticker' THEN '貼圖' ELSE '附件' END),200) END,
           left(bn.text,200)) AS quoted_text,
-        CASE WHEN q.user_id IS NOT NULL THEN '成員 '||left(md5(q.group_id||':'||q.user_id),6)
+        CASE WHEN q.user_id IS NOT NULL THEN coalesce(q.sender_name,'成員 '||left(md5(q.group_id||':'||q.user_id),6))
           WHEN q.id IS NULL AND bn.text IS NOT NULL THEN '機器人' END AS quoted_sender,
         CASE WHEN q.id IS NULL THEN bn.id END AS quoted_bot_id,
         q.user_id AS quoted_user_id,
         m.received_at<=message_retention_cutoff() AS expired,
         CASE WHEN NOT m.revoked AND m.received_at>message_retention_cutoff() THEN m.text END AS text,
         CASE WHEN NOT m.revoked AND m.received_at>message_retention_cutoff() AND m.user_id IS NOT NULL
-          THEN '成員 '||left(md5(m.group_id||':'||m.user_id),6) END AS sender,
+          THEN coalesce(m.sender_name,'成員 '||left(md5(m.group_id||':'||m.user_id),6)) END AS sender,
         CASE WHEN NOT m.revoked AND m.received_at>message_retention_cutoff() THEN m.user_id END AS user_id,
         CASE WHEN NOT m.revoked AND m.received_at>message_retention_cutoff() THEN m.quoted_id END AS quoted_id,
         (NOT m.revoked AND m.received_at>message_retention_cutoff() AND m.image IS NOT NULL) AS has_image,

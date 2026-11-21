@@ -1,6 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import {
+  discordHealth,
   exhaustedPushHealth,
   group,
   mockDashboard,
@@ -63,6 +64,29 @@ for (const viewport of [
       await expect(unused).toHaveClass(/\bbg-secondary\b/);
       await expect(images.getByText(/下方「Docker 磁碟」/)).toBeVisible();
       await verifyLayout(page, info, "#worker-images", "系統頁工作映像");
+    });
+
+    test("服務連線顯示 Discord 狀態，可用鍵盤開啟邀請說明", async ({
+      page,
+    }, info) => {
+      await mockDashboard(page, { state: { health: discordHealth } });
+      await page.goto("/settings");
+      const services = page.getByRole("region", { name: "服務連線" });
+      await expect(services.getByText("已連線", { exact: true })).toBeVisible();
+      const invite = services.getByText("邀請機器人到伺服器", { exact: true });
+      await invite.focus();
+      await invite.press("Enter");
+      await expect(
+        services.getByText(
+          /讀取訊息歷史、傳送訊息、加入反應、嵌入連結與附加檔案/,
+        ),
+      ).toBeVisible();
+      await verifyLayout(
+        page,
+        info,
+        "#settings-services",
+        "設定頁 Discord 連線",
+      );
     });
 
     test("推播額度用完時，推播列省去重複警示與舊時間", async ({

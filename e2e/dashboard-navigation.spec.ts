@@ -10,16 +10,45 @@ import {
 
 const managementPages = ["群組", "專案", "定期檢查", "系統", "成員", "設定"];
 
-test("手機群組頁可同時載入 LINE 群組與 Discord 頻道", async ({ page }) => {
+test("手機群組頁顯示平台標籤，可以用鍵盤篩選 LINE 與 Discord", async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await mockDashboard(page, { state: { groups: [group, discordGroup] } });
   await page.goto("/groups");
-  for (const name of [group.name, discordGroup.name])
-    await expect(page.getByText(name, { exact: true })).toBeVisible();
+  const line = page.getByRole("button", { name: new RegExp(group.name) });
+  const discord = page.getByRole("button", {
+    name: new RegExp(discordGroup.name),
+  });
+  await expect(line.getByText("LINE", { exact: true })).toBeVisible();
+  await expect(discord.getByText("Discord", { exact: true })).toBeVisible();
+  const platform = page.getByRole("combobox", { name: "聊天平台" });
+  expect((await platform.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  await platform.focus();
+  await platform.press("Enter");
+  await page
+    .getByRole("option", { name: "Discord", exact: true })
+    .press("Enter");
+  await expect(discord).toBeVisible();
+  await expect(line).toHaveCount(0);
+  await platform.press("Enter");
+  await page.getByRole("option", { name: "LINE", exact: true }).press("Enter");
+  await expect(line).toBeVisible();
+  await expect(discord).toHaveCount(0);
   await page.evaluate(() => document.fonts.ready);
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth),
   ).toBeLessThanOrEqual(375);
+});
+
+test("聊天室可以查看 Discord 頻道與發言者", async ({ page }) => {
+  await mockDashboard(page, { state: { groups: [group, discordGroup] } });
+  await page.goto(`/chat?group=${encodeURIComponent(discordGroup.id)}`);
+  await expect(
+    page.getByRole("combobox", { name: "選擇聊天室" }),
+  ).toContainText(discordGroup.name);
+  await expect(page.getByText("小林", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("請確認示範服務是否正常。")).toBeVisible();
 });
 
 test("375px 底部只顯示四格，並可用鍵盤從「更多」前往群組", async ({
