@@ -39,6 +39,11 @@ import {
 import { Wordmark } from "@/components/brand";
 import type { Action, Project, Settings, Task } from "../shared/types.js";
 import { quotaBlocked } from "../shared/line-quota.js";
+import {
+  reservedQuotaHold,
+  subscriptionGateName,
+  subscriptionQuotaHold,
+} from "../shared/subscription-quota.js";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -627,14 +632,25 @@ export function App() {
   );
   const visible = views.filter((v) => admin || v.section === "工作區");
   const current = visible.find((v) => v.id === view) ?? visible[0];
-  // 訂閱模式以帳號的派工許可為準，避免單一模型的額度用完就誤報整體暫停。
   const hostHold = state?.diskDispatchPaused
     ? "Docker 磁碟空間嚴重不足"
     : memoryHold(state);
-  const subscriptionHold =
-    subscription && typeof account === "object" && account?.allowed === false
-      ? "Codex 訂閱額度已達上限"
-      : null;
+  const reserve = state?.settings.codex_reserve_percent ?? 0;
+  const accountSnapshot = typeof account === "object" ? account : null;
+  const quotaCheck = state?.health.find((h) => h.name === subscriptionGateName);
+  const subscriptionHold = !subscription
+    ? null
+    : reserve > 0 &&
+        quotaCheck &&
+        (!accountSnapshot ||
+          Date.parse(quotaCheck.checked_at) >=
+            Date.parse(accountSnapshot.checkedAt))
+      ? quotaCheck.ok
+        ? null
+        : quotaCheck.detail
+      : accountSnapshot && (reserve > 0 || accountSnapshot.allowed === false)
+        ? subscriptionQuotaHold(accountSnapshot, reserve)
+        : null;
   const hold = state?.settings.paused ? null : (hostHold ?? subscriptionHold);
   const holdView = hostHold ? "system" : "settings";
   const live = state && !state.settings.paused && !hold;
@@ -947,7 +963,9 @@ export function App() {
             <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
               {hostHold
                 ? `資源不足，派工自動暫停（${hostHold}） → 資源恢復後會自動繼續。`
-                : `${hold} → 額度恢復後會自動繼續。`}
+                : hold.startsWith(reservedQuotaHold)
+                  ? hold
+                  : `${hold}，額度恢復後會自動繼續。`}
             </span>
             {admin && view !== holdView && (
               <Button variant="outline" size="xs" onClick={() => go(holdView)}>

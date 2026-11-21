@@ -1,4 +1,9 @@
-import { projectLabels, projectStatus } from "../../shared/status-glossary.js";
+import {
+  projectLabels,
+  projectQuotaWaitPrefix,
+  projectStatus,
+  statusLabels,
+} from "../../shared/status-glossary.js";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   ArrowUpRight,
@@ -207,7 +212,10 @@ export function ProjectsView({
                           "text-danger",
                       )}
                     >
-                      {p.setup_mode === "auto" ? (
+                      {!p.validation_progress &&
+                      p.setup_status?.startsWith(projectQuotaWaitPrefix) ? (
+                        statusLabels.budget_wait
+                      ) : p.setup_mode === "auto" ? (
                         (!p.validation_progress && p.setup_status) ||
                         "AI 自動設定"
                       ) : validationFailed(p) ? (

@@ -1,5 +1,6 @@
 import type { Settings } from "./types.js";
 import { containsCredential } from "./credentials.js";
+import { reserveLabel } from "./subscription-quota.js";
 
 /**
  * 工作流程設定（`PUT /api/settings`）的中文差異，看板確認對話框與稽核共用。
@@ -49,6 +50,11 @@ const fields = {
       v === "api" ? "OpenAI API" : v === "subscription" ? "ChatGPT 訂閱" : "",
   },
   daily_runs: { label: "每日最多執行次數" },
+  codex_reserve_percent: {
+    label: reserveLabel,
+    fallback: 0,
+    value: (v) => `${String(v)}%`,
+  },
   codex_model: {
     label: "Codex 模型",
     fallback: null,

@@ -8,6 +8,8 @@ export type ValidationJob = {
   id: string;
   version?: number;
   progress?: string;
+  /** 上一輪因 Codex 額度受阻：這一輪先確認額度再開始。 */
+  resumeQuota?: boolean;
 };
 
 const queued = "你的專案正在排隊等待執行器。";
@@ -104,15 +106,21 @@ export class ValidationQueue {
         [job.id, job.retryCount, message],
       );
     };
+    let quotaWait: string | undefined;
     try {
-      const result = await execution.validate(project, report);
+      const result = await execution.validate(
+        project,
+        report,
+        job.data.resumeQuota === true,
+      );
       if (result.ok || result.waiting) return;
+      if (typeof result.quota === "string") quotaWait = result.quota;
     } catch (error) {
       // 驗證已寫下原因，只有暫時性問題需要 pg-boss 退避重試。
       if (isTransientValidationFailure(error)) throw error;
       return;
     }
-    // 等舊執行釋放鎖不消耗重試次數；在同一交易交接，避免重複請求看到空檔。
+    // 等舊執行釋放鎖或等 Codex 額度都不消耗重試次數；在同一交易交接，避免重複請求看到空檔。
     await this.db.transaction(async (c) => {
       const active = await c.query(
         "SELECT 1 FROM pgboss.job WHERE name='validate' AND id=$1 AND retry_count=$2 AND state='active' FOR UPDATE",
@@ -125,9 +133,15 @@ export class ValidationQueue {
         {
           id: project.id,
           version: project.config_version,
-          progress: waitingForLock,
+          progress: quotaWait ?? waitingForLock,
+          ...(quotaWait ? { resumeQuota: true } : {}),
         },
-        { ...db, startAfter: 30, retryLimit: job.retryLimit - job.retryCount },
+        {
+          ...db,
+          // 額度通常要等到視窗重置，60 秒重查一次就夠；等鎖則 30 秒。
+          startAfter: quotaWait ? 60 : 30,
+          retryLimit: job.retryLimit - job.retryCount,
+        },
       );
       if (!next) throw new AppError(503, "未能重新排入環境驗證");
       await this.boss.complete("validate", job, null, db);

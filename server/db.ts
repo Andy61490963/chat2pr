@@ -62,6 +62,7 @@ export class Database {
         code_downloads: stored.code_downloads ?? true,
         group_replies: stored.group_replies ?? true,
         container_network: stored.container_network ?? "isolated",
+        codex_reserve_percent: stored.codex_reserve_percent ?? 0,
       },
     };
   }

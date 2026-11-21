@@ -1,3 +1,5 @@
+import { reservedQuotaHold } from "./subscription-quota.js";
+
 /**
  * 看板拆解任務失敗說明（`tasks.last_error`）用的純函式。
  *
@@ -154,6 +156,8 @@ export function waitHint(
   if (lastError?.includes("今日執行次數"))
     return "今日執行次數已用完：臺北時間午夜後，或管理者提高每日次數後自動繼續。";
   if (aiMode === "api") return "API 模式預估額度不足：臺北時間隔日自動繼續。";
+  if (lastError?.replace(/^Error: /, "").startsWith(reservedQuotaHold))
+    return null;
   // 訂閱額度查不到（網路或登入問題）時伺服器也會保留工作，這時不是額度用完。
   if (lastError?.includes("無法確認"))
     return "暫時無法確認 Codex 訂閱額度：系統會定期重新檢查，確認可用後自動繼續。";

@@ -425,6 +425,12 @@ export async function startJobs(
              RETURNING id,group_id`,
             [error.message, snapshot.revision],
           );
+          await db.query(
+            `UPDATE tasks SET last_error=$1,updated_at=now() WHERE status='budget_wait'
+             AND last_error IS DISTINCT FROM $1 AND COALESCE(last_error,'') NOT LIKE '%今日執行次數%'
+             AND EXISTS(SELECT 1 FROM settings WHERE id=1 AND revision=$2 AND value->>'ai_mode'<>'api' AND NOT (value->>'paused')::boolean)`,
+            [error.message, snapshot.revision],
+          );
           const told = new Set<string>();
           for (const t of held)
             if (!told.has(t.group_id)) {

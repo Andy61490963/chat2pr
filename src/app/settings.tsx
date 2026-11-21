@@ -5,6 +5,10 @@ import { Check, Copy, RefreshCw, Send } from "lucide-react";
 import type { NotificationFailures, Settings } from "../../shared/types.js";
 import { LINE_QUOTA, linePushPanel } from "../../shared/line-quota.js";
 import {
+  maxCodexReserve,
+  reserveLabel,
+} from "../../shared/subscription-quota.js";
+import {
   riskyChanges,
   settingsDiff,
   type SettingsChange,
@@ -161,10 +165,28 @@ const services = [
 function QuotaCard({
   account,
   reload,
+  reserve,
+  busy,
+  run,
+  request,
 }: {
   account: Account | null | string;
   reload: () => unknown;
+  reserve: number;
+  busy: boolean;
+  run: Run;
+  request: Request;
 }) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const value = draft ?? String(reserve);
+  const percent = Number(value);
+  const dirty = value !== String(reserve);
+  useUnsaved("codex-reserve", dirty);
+  const valid =
+    value !== "" &&
+    Number.isInteger(percent) &&
+    percent >= 0 &&
+    percent <= maxCodexReserve;
   return (
     <Card>
       <CardHeader>
@@ -179,6 +201,47 @@ function QuotaCard({
         </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-5">
+        <form
+          className="flex flex-wrap items-end gap-3"
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!valid || !dirty || busy) return;
+            void run(
+              () =>
+                request("/api/settings/codex-reserve", "PUT", {
+                  codex_reserve_percent: percent,
+                }),
+              "你已儲存個人保留比例",
+            ).then((saved) => {
+              if (saved) setDraft(null);
+            });
+          }}
+        >
+          <div className="flex flex-col gap-2">
+            <Label htmlFor="codex-reserve">{reserveLabel}（%）</Label>
+            <Input
+              id="codex-reserve"
+              type="number"
+              min={0}
+              max={maxCodexReserve}
+              step={1}
+              required
+              disabled={busy}
+              value={value}
+              aria-describedby="codex-reserve-hint"
+              onChange={(e) => setDraft(e.target.value)}
+            />
+          </div>
+          <Button type="submit" disabled={busy || !dirty || !valid}>
+            儲存保留比例
+          </Button>
+          <p
+            id="codex-reserve-hint"
+            className="w-full text-sm text-muted-foreground"
+          >
+            你可以保留 0–90% 的額度，填 0 代表不保留。
+          </p>
+        </form>
         {account === null ? (
           <p className="text-sm text-muted-foreground">讀取中…</p>
         ) : typeof account === "string" ? (
@@ -789,7 +852,14 @@ export function SettingsView({
     <div className="grid items-start gap-4 lg:grid-cols-2">
       <div className="flex flex-col gap-4">
         {s.ai_mode === "subscription" && (
-          <QuotaCard account={account} reload={reload} />
+          <QuotaCard
+            account={account}
+            reload={reload}
+            reserve={s.codex_reserve_percent ?? 0}
+            busy={busy}
+            run={run}
+            request={request}
+          />
         )}
         <Card>
           <CardHeader>

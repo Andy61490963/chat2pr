@@ -405,9 +405,9 @@ import "@fontsource-variable/inter";
       } },
 
     { title: "排進佇列，交給執行器", where: "pg-boss → 執行器 → 工作容器", cam: "ai", focus: ["app", "runner"],
-      text: "任務進入持久化佇列（pg-boss）。輪到它時（同時執行預設 2 件），app 用執行器金鑰呼叫主機上的執行器，由執行器建立工作容器：非 root、根目錄唯讀、沒有 Docker socket、限制 CPU 與記憶體，每件最長 30 分鐘。",
+      text: "任務進入持久化佇列（pg-boss）。如果你設定了 Codex 個人保留比例，任一額度視窗用到 chat2pr 的上限時，判讀、開發、驗證與查詢都會等待，額度恢復後自動繼續。輪到任務時（同時執行預設 2 件），執行器建立非 root、根目錄唯讀且沒有 Docker socket 的工作容器，限制 CPU 與記憶體，每件最長 30 分鐘。",
       chips: ["同時 2 件", "最長 30 分鐘", "非 root・唯讀"],
-      data: "<k>建立工作容器</k>\n  User            非 root\n  ReadonlyRootfs  true\n  CapDrop         ALL\n  Docker socket   <no>不掛載</no>\n  Memory          2 GiB\n  PidsLimit       512\n  期限            30 分鐘",
+      data: "<k>訂閱額度檢查</k>\n  你保留 60% 時，任一視窗用到 40% 就等待額度\n\n<k>建立工作容器</k>\n  User            非 root\n  ReadonlyRootfs  true\n  CapDrop         ALL\n  Docker socket   <no>不掛載</no>\n  Memory          2 GiB\n  PidsLimit       512\n  期限            30 分鐘",
       end: { slot: true, app: "執行中" },
       anim: function (tl) { touch("slot"); travel(tl, "app_runner", 0.6, "任務 #128"); travel(tl, "runner_slot", 0.5, "任務 #128"); tl.fromTo(slot, { opacity: 0, scale: 0.96, svgOrigin: "1175 240" }, { opacity: 1, scale: 1, svgOrigin: "1175 240", duration: 0.5, ease: "back.out(1.6)" }); status(tl, "執行中"); } },
 
