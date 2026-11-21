@@ -177,6 +177,29 @@ test("外觀選項可用方向鍵選取，重新載入後保留深色偏好", as
 for (const theme of ["light", "dark"] as const) {
   test.describe(theme === "light" ? "淺色可及性" : "深色可及性", () => {
     test.use({ colorScheme: theme });
+    test("手機任務篩選面板", async ({ page }) => {
+      await page.setViewportSize({ width: 375, height: 812 });
+      await page.emulateMedia({ reducedMotion: "reduce" });
+      await mockDashboard(page);
+      await page.goto("/tasks");
+      await page.getByRole("button", { name: /^篩選，已套用/ }).press("Enter");
+      const panel = page.getByRole("dialog", { name: "任務篩選" });
+      await expect(
+        panel.getByRole("combobox", { name: "分組方式" }),
+      ).toBeVisible();
+      const close = panel.getByRole("button", { name: "關閉" });
+      const box = (await close.boundingBox())!;
+      expect(box.width).toBeGreaterThanOrEqual(44);
+      expect(box.height).toBeGreaterThanOrEqual(44);
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth),
+      ).toBe(375);
+      await page.evaluate(() => document.fonts.ready);
+      const { violations } = await new AxeBuilder({ page })
+        .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+        .analyze();
+      expect(violations).toEqual([]);
+    });
     for (const screen of [...screens, ...narrowScreens]) {
       test(screen.name, async ({ page }) => {
         const width = screen.width;

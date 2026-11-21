@@ -30,6 +30,18 @@ export const taskListLabels = {
   ended: "已結束",
 } as const;
 
+export const taskListEmptyLabels = {
+  active: "目前沒有進行中或待處理的任務",
+  closed: "目前沒有已結束的任務",
+  all: "還沒有任務",
+  filtered: "沒有符合條件的任務",
+} as const;
+
+export const inboxStatusLabels = {
+  clear: "都處理完了",
+  clearDescription: "目前沒有需要你處理、執行中或待合併的工作。",
+} as const;
+
 export const taskEndLabels = {
   reject: { badge: "已拒絕", event: "拒絕" },
   cancel: { badge: "已取消", event: "取消" },

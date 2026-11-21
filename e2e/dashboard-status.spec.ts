@@ -88,7 +88,9 @@ for (const viewport of [
       await expect(
         quota.getByText("本月推播額度已用完", { exact: false }).first(),
       ).toBeVisible();
-      await expect(quota.getByText("需處理", { exact: true })).toBeVisible();
+      await expect(
+        quota.getByText("需處理", { exact: true }).first(),
+      ).toBeVisible();
       await verifyLayout(page, info, "#settings-services", "設定頁服務連線");
     });
 
