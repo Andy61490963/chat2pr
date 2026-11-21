@@ -14,6 +14,7 @@ import {
   quotaExhaustedDetail,
   quotaShortPrefix,
 } from "./line-quota.js";
+import { linePushServiceLabels } from "./status-glossary.js";
 
 /** 與 server/group-replies.ts 的同名常數相同；tests/group-delivery.test.ts 會核對。 */
 export const claimingNote = "以 /進度 回覆補送中";
@@ -25,6 +26,38 @@ export const supersededNote = "已有較新的回覆，未補送";
 export const repliesOffNote = "群組回覆已關閉，未送出";
 /** server/line.ts 一般 429（短時間限流）錯誤訊息的開頭。 */
 export const rateLimitedPrefix = "LINE 推播太頻繁";
+
+/** 設定頁顯示最近一次推播的原因與處理方式，只顯示整理過的說明。 */
+export function linePushService(
+  health: { ok: boolean; detail?: string } | undefined,
+  blocked: boolean,
+) {
+  const raw = health?.ok === false ? (health.detail ?? "").trim() : "";
+  const error = withoutErrorPrefix(raw);
+  // 舊紀錄以通用 429 表示額度用完，目前的短時間限流有專用文字。
+  if (
+    blocked ||
+    error.startsWith(quotaExhaustedDetail) ||
+    error === "LINE 通知失敗（429）"
+  ) {
+    return { quota: true, detail: linePushServiceLabels.quota };
+  }
+  if (health?.ok !== false) return { quota: false, detail: health?.detail };
+
+  const code = Number(error.match(/（(\d{3})）/)?.[1]);
+  let detail = "上次推播失敗，原因未能確認。請檢查 LINE 連線後再試。";
+  if (code === 401 || code === 403)
+    detail = "上次推播失敗，LINE 未授權推播。請確認 LINE 權杖與權限後再試。";
+  else if (error.startsWith(rateLimitedPrefix))
+    detail = "上次推播因短時間內送出太多通知而受限，請稍後再試。";
+  else if (isLineConnectionError(raw))
+    detail = "上次推播未收到 LINE 回應，請確認網路連線後再試。";
+  else if (code >= 500 && code < 600)
+    detail = "上次推播因 LINE 服務暫時異常而失敗，請稍後再試。";
+  else if (code >= 400 && code < 500)
+    detail = "LINE 拒絕上次推播，請確認通知內容與推播對象後再試。";
+  return { quota: false, detail };
+}
 
 /** 推播最多試幾次（server/line.ts 的 attempts<3）。 */
 export const maxPushAttempts = 3;
@@ -68,12 +101,16 @@ const reasonNotes: Record<DeliveryReason, string> = {
   error: "LINE 沒有收下這則訊息",
 };
 
+const withoutErrorPrefix = (raw: string) => raw.replace(/^[A-Za-z]*Error:\s*/, "");
+const isLineConnectionError = (raw: string) =>
+  /^(Timeout|Abort)Error:|timeout|fetch failed|ECONN|ENOTFOUND|ETIMEDOUT/i.test(raw);
+
 /**
  * 把 last_error 的固定文字對到原因；認不得的一律當成一般錯誤，只留狀態碼。
  * flushNotifications 寫入的是 redact(String(e))，前面會帶「Error: 」，比對前先去掉。
  */
 function reasonOf(raw: string): { reason: DeliveryReason; note: string } {
-  const error = raw.replace(/^[A-Za-z]*Error:\s*/, "");
+  const error = withoutErrorPrefix(raw);
   const pick = (reason: DeliveryReason, note = reasonNotes[reason]) => ({
     reason,
     note,
@@ -95,12 +132,7 @@ function reasonOf(raw: string): { reason: DeliveryReason; note: string } {
   const code = error.match(/（(\d{3})）/)?.[1];
   if (code) return pick("error", `LINE 回應錯誤（${code}）`);
   // 逾時或連線失敗（fetch 的 TimeoutError、ECONNREFUSED 等）：LINE 沒有回應，不是拒收。
-  if (
-    /^(Timeout|Abort)Error:|timeout|fetch failed|ECONN|ENOTFOUND|ETIMEDOUT/i.test(
-      raw,
-    )
-  )
-    return pick("error", "連不上 LINE");
+  if (isLineConnectionError(raw)) return pick("error", "連不上 LINE");
   return pick("error");
 }
 

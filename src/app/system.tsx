@@ -14,6 +14,10 @@ import { type Request, type State, ago, date, message } from "./shared";
 import { CapacityCard } from "./capacity";
 import { DockerDiskCard } from "./docker-disk";
 import { entryText, type EntryKind } from "../../shared/entry.js";
+import {
+  workerImageLabels,
+  workerImageStatus,
+} from "../../shared/status-glossary.js";
 import { EgressCard } from "./egress";
 import { CheckEnvironmentCard } from "./check-environments";
 import { FrictionCard } from "./friction";
@@ -110,6 +114,16 @@ export function SystemView({
       : null;
   // 這次沒拿到清單（執行器或 Docker 沒回應、或看板讀取失敗）：沿用上一次的清單並標示時間。
   const stale = !!error || (!!status && !status.services);
+  const images = (lists?.images ?? []).map((image) => {
+    const usedBy = state.projects
+      .filter((project) => project.image === image.tag)
+      .map((project) => project.name);
+    return {
+      image,
+      usedBy,
+      status: workerImageStatus(image.current, usedBy.length > 0),
+    };
+  });
   return (
     <div className="flex flex-col gap-6">
       <CapacityCard request={request} />
@@ -127,6 +141,7 @@ export function SystemView({
           <Button
             variant="outline"
             size="sm"
+            className="min-h-11"
             disabled={loading}
             onClick={() => void load()}
           >
@@ -211,38 +226,60 @@ export function SystemView({
                 )}
               </section>
               <section className="grid grid-cols-1 gap-4 md:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-                <div className="flex flex-col gap-2">
-                  <h3 className="text-xs font-medium text-muted-foreground">
+                <section
+                  id="worker-images"
+                  aria-labelledby="worker-images-title"
+                  className="flex min-w-0 flex-col gap-2"
+                >
+                  <h3
+                    id="worker-images-title"
+                    className="text-xs font-medium text-muted-foreground"
+                  >
                     工作映像（需要版本 {status?.requiredWorkerRev} 以後）
                   </h3>
                   <ul className="divide-y rounded-lg border">
-                    {lists.images.map((i) => {
-                      const used = state.projects
-                        .filter((p) => p.image === i.tag)
-                        .map((p) => p.name);
-                      return (
-                        <li
-                          key={i.tag}
-                          className="flex items-center gap-3 px-3 py-2.5 text-sm"
-                        >
-                          <span className="flex min-w-0 flex-1 flex-col">
-                            <code className="truncate text-xs">{i.tag}</code>
-                            <span className="truncate text-xs text-muted-foreground">
-                              {used.length
-                                ? `使用中：${used.join("、")}`
-                                : "沒有專案使用"}{" "}
-                              · {(i.sizeMb / 1024).toFixed(1)} GB · 建立於{" "}
-                              {date(i.created)}
+                    {images.map(({ image, usedBy, status: imageStatus }) => (
+                      <li
+                        key={image.tag}
+                        className="flex flex-wrap items-start gap-x-3 gap-y-2 px-3 py-2.5 text-sm"
+                      >
+                        <span className="flex min-w-0 flex-[1_1_12rem] flex-col gap-1">
+                          <code className="text-xs [overflow-wrap:anywhere]">
+                            {image.tag}
+                          </code>
+                          {usedBy.length > 0 && (
+                            <span className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                              使用中：{usedBy.join("、")}
                             </span>
+                          )}
+                          <span className="flex flex-wrap gap-x-3 text-xs text-muted-foreground">
+                            <span>{(image.sizeMb / 1024).toFixed(1)} GB</span>
+                            <span>建立於 {date(image.created)}</span>
                           </span>
-                          <Badge variant={i.current ? "good" : "warn"}>
-                            {i.current ? `版本 ${i.rev}` : "過舊，需重建"}
-                          </Badge>
-                        </li>
-                      );
-                    })}
+                        </span>
+                        <Badge
+                          variant={
+                            imageStatus === "current"
+                              ? "good"
+                              : imageStatus === "outdated"
+                                ? "warn"
+                                : "secondary"
+                          }
+                          className="max-w-full whitespace-normal"
+                        >
+                          {imageStatus === "current"
+                            ? workerImageLabels.current(image.rev)
+                            : workerImageLabels[imageStatus]}
+                        </Badge>
+                      </li>
+                    ))}
                   </ul>
-                </div>
+                  {images.some(({ status }) => status === "unused") && (
+                    <p className="text-xs text-muted-foreground">
+                      可在下方「Docker 磁碟」查看並清理符合清理規則的映像。
+                    </p>
+                  )}
+                </section>
                 <div className="flex flex-col gap-2">
                   <h3 className="text-xs font-medium text-muted-foreground">
                     磁碟上的工作資料

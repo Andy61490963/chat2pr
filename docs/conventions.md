@@ -81,6 +81,8 @@
 
 服務異常通知使用 `shared/service-health-text.ts` 的固定說明。新增錯誤對照時，在 `tests/health.test.ts` 補上探測原文及對應說明，避免把讀數裡的技術字串帶進鈴鐺或 LINE 私訊。恢復通知的去重鍵使用服務名稱與中斷起點，重試同一段中斷時沿用原鍵。
 
+設定頁「服務連線」以 `line_quota` 的封鎖狀態及已保存的額度錯誤判斷要顯示的推播說明。舊資料的「LINE 通知失敗（429）」也指向額度列。現行的「LINE 推播太頻繁」要保留獨立提示，因為短時間限流可稍後再試，與每月額度耗盡的處理方式不同。調整對照時同步更新 `tests/dashboard-status.test.ts`。
+
 ## 4. 測試
 
 瀏覽器驗收（`npm run test:e2e`）跑在 Vite 開發伺服器上，沒有正式伺服器的安全標頭（CSP、`frame-ancestors`、X-Frame-Options）。牽涉這些標頭的行為（例如同源 iframe 嵌入）要另外用 `buildApp` 的整合測試檢查；系統頁的架構動畫就曾在 e2e 通過、正式環境卻被 `frame-ancestors 'none'` 擋下。

@@ -2,6 +2,7 @@ import { groupReplyStatus } from "../../shared/group-reply-status.js";
 import { useEffect, useRef, useState } from "react";
 import { Check, Copy, RefreshCw, Send } from "lucide-react";
 import type { NotificationFailures, Settings } from "../../shared/types.js";
+import { linePushService } from "../../shared/group-delivery.js";
 import { LINE_QUOTA, linePushPanel } from "../../shared/line-quota.js";
 import {
   lineGroupReserveLabel,
@@ -327,10 +328,11 @@ function LinePushForm({
       onSubmit={(event) => {
         event.preventDefault();
         void run(
-          () => request("/api/settings/line-push", "PUT", {
-            line_private_mode: mode,
-            line_group_reserve_percent: Number(reserve),
-          }),
+          () =>
+            request("/api/settings/line-push", "PUT", {
+              line_private_mode: mode,
+              line_group_reserve_percent: Number(reserve),
+            }),
           "已儲存 LINE 推播設定",
         );
       }}
@@ -346,11 +348,14 @@ function LinePushForm({
             aria-describedby="line-private-hint"
           >
             {linePrivateModes.map((option) => (
-              <option key={option} value={option}>{linePrivateModeLabels[option]}</option>
+              <option key={option} value={option}>
+                {linePrivateModeLabels[option]}
+              </option>
             ))}
           </select>
           <p id="line-private-hint" className="text-sm text-muted-foreground">
-            你預設只會收到待確認、需要處理的失敗、補問，以及持續 {lineServiceOutageMinutes} 分鐘的服務異常。
+            你預設只會收到待確認、需要處理的失敗、補問，以及持續{" "}
+            {lineServiceOutageMinutes} 分鐘的服務異常。
           </p>
         </div>
         <div className="flex min-w-0 flex-col gap-2">
@@ -367,12 +372,19 @@ function LinePushForm({
             onChange={(event) => setReserve(event.target.value)}
             aria-describedby="line-group-reserve-hint"
           />
-          <p id="line-group-reserve-hint" className="text-sm text-muted-foreground">
+          <p
+            id="line-group-reserve-hint"
+            className="text-sm text-muted-foreground"
+          >
             你可以填 0 到 100，額度只剩你保留的比例時請到看板鈴鐺查看通知。
           </p>
         </div>
       </div>
-      <Button type="submit" className="min-h-11 self-start" disabled={busy || !dirty}>
+      <Button
+        type="submit"
+        className="min-h-11 self-start"
+        disabled={busy || !dirty}
+      >
         儲存 LINE 推播設定
       </Button>
     </form>
@@ -893,7 +905,9 @@ export function SettingsView({
     stale: 0,
   };
   const mode = s.line_private_mode ?? linePrivateDefaults.line_private_mode;
-  const reserve = s.line_group_reserve_percent ?? linePrivateDefaults.line_group_reserve_percent;
+  const reserve =
+    s.line_group_reserve_percent ??
+    linePrivateDefaults.line_group_reserve_percent;
   const push = linePushPanel(state.health, failures, reserve);
   const [allServicesOpen, setAllServicesOpen] = useState(false);
   const serviceRows = services
@@ -917,7 +931,13 @@ export function SettingsView({
         !onUse &&
         !!h?.ok &&
         Date.now() - new Date(h.checked_at).getTime() > 86400000;
-      const action = !disabled && (stale || (h ? !h.ok : !onUse));
+      const pushService =
+        i.key === "notifications"
+          ? linePushService(h, push.blocked)
+          : undefined;
+      const quota = pushService?.quota;
+      const detail = pushService ? pushService.detail : h?.detail;
+      const action = !disabled && !quota && (stale || (h ? !h.ok : !onUse));
       return {
         action,
         row: (
@@ -928,16 +948,16 @@ export function SettingsView({
             <span
               className={cn(
                 "size-2 shrink-0 rounded-full bg-border",
-                h?.ok && !stale && "bg-good",
+                !quota && h?.ok && !stale && "bg-good",
                 stale && "bg-warn",
-                h && !h.ok && "bg-danger",
+                !quota && h && !h.ok && "bg-danger",
               )}
             />
             <span className="flex min-w-0 flex-1 flex-col">
               <span className="text-sm font-medium">{i.name}</span>
-              <span className="text-xs break-all text-muted-foreground">
-                {h?.detail ?? i.hint}
-                {h && (
+              <span className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                {detail ?? i.hint}
+                {h && !quota && (
                   <span className={cn("block", stale && "text-warn")}>
                     {onUse ? "最近一次" : "最後確認"} {ago(h.checked_at)}
                     {stale && "，每小時會自動確認；可按「檢查連線」立即更新"}
@@ -945,24 +965,26 @@ export function SettingsView({
                 )}
               </span>
             </span>
-            <Badge
-              variant={
-                h ? (stale ? "warn" : h.ok ? "good" : "danger") : "secondary"
-              }
-            >
-              {disabled
-                ? "未啟用"
-                : h
-                  ? stale
-                    ? "待確認"
-                    : h.ok
-                      ? "正常"
-                      : "需處理"
-                  : // 使用時才更新的項目沒有紀錄，代表還沒用到，不是漏了檢查。
-                    onUse
-                    ? "尚無紀錄"
-                    : "未檢查"}
-            </Badge>
+            {!quota && (
+              <Badge
+                variant={
+                  h ? (stale ? "warn" : h.ok ? "good" : "danger") : "secondary"
+                }
+              >
+                {disabled
+                  ? "未啟用"
+                  : h
+                    ? stale
+                      ? "待確認"
+                      : h.ok
+                        ? "正常"
+                        : "需處理"
+                    : // 使用時才更新的項目沒有紀錄，代表還沒用到，不是漏了檢查。
+                      onUse
+                      ? "尚無紀錄"
+                      : "未檢查"}
+              </Badge>
+            )}
           </li>
         ),
       };
@@ -1014,7 +1036,10 @@ export function SettingsView({
           <CardHeader>
             <CardTitle>LINE 推播（群組回覆與私訊）</CardTitle>
             <CardDescription>
-              過去 {linePrivateDigestMinutes} 分鐘未送出摘要時，新通知會立即送出。接下來累積的通知會在上一則送出滿 {linePrivateDigestMinutes} 分鐘時合併送出，每則最多列 5 件，完整通知在看板鈴鐺。
+              過去 {linePrivateDigestMinutes}{" "}
+              分鐘未送出摘要時，新通知會立即送出。接下來累積的通知會在上一則送出滿{" "}
+              {linePrivateDigestMinutes} 分鐘時合併送出，每則最多列 5
+              件，完整通知在看板鈴鐺。
             </CardDescription>
             {s.admin_line_id && (
               <CardAction>
@@ -1148,6 +1173,7 @@ export function SettingsView({
               <Button
                 variant="outline"
                 size="sm"
+                className="min-h-11"
                 disabled={busy}
                 onClick={() =>
                   void run(
@@ -1174,7 +1200,9 @@ export function SettingsView({
               className="mt-3 text-sm"
               onToggle={(e) => setAllServicesOpen(e.currentTarget.open)}
             >
-              <summary className="cursor-pointer">全部服務</summary>
+              <summary className="min-h-11 cursor-pointer py-3">
+                全部服務
+              </summary>
               <ul>{serviceRows.map((entry) => entry.row)}</ul>
             </details>
             <details className="mt-3 text-sm">
