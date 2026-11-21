@@ -17,6 +17,21 @@ export interface SshTestResult {
   detail: string;
 }
 
+/** 一次整理回傳的暫存草稿，供管理者核對後逐台登記。 */
+export interface SshExtractDraft {
+  name: string | null;
+  host: string | null;
+  port: number;
+  username: string | null;
+  password: string | null;
+  privateKey: string | null;
+  passphrase: string | null;
+  note: string | null;
+  probe: { reachable: boolean; detail: string } | null;
+}
+
+export const maxSshDescriptionLength = 8000;
+
 /** 名稱給 Codex 在容器裡用（agentflow-ssh <名稱> <命令>），限英數與 . _ -。 */
 export const sshHostNamePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/;
 export const maxSshHosts = 20;

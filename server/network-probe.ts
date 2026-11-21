@@ -1,5 +1,8 @@
 import { connect } from "node:net";
 import { z } from "zod";
+import type { RunnerCall } from "./checks.js";
+
+export const maxProbeTargets = 10;
 
 /** 從主機實測 TCP 連線；只回報連得到與否，不送任何資料。 */
 export const ProbeTargets = z
@@ -13,13 +16,22 @@ export const ProbeTargets = z
       port: z.number().int().min(1).max(65535),
     }),
   )
-  .max(10);
+  .max(maxProbeTargets);
 
 export interface ProbeResult {
   host: string;
   port: number;
   reachable: boolean;
   detail: string;
+}
+
+export async function measureTargets(
+  call: RunnerCall,
+  targets: z.infer<typeof ProbeTargets>,
+): Promise<ProbeResult[]> {
+  return targets.length
+    ? call<ProbeResult[]>("network/probe", { targets }, 30000).catch(() => [])
+    : [];
 }
 
 const reasons: Record<string, string> = {

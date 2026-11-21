@@ -325,7 +325,7 @@ ${parsed.explanation}`
     name: string,
     what: string,
   ) {
-    return this.ask(prompt, schema, name, undefined, what);
+    return this.ask(prompt, schema, name, undefined, what, true);
   }
 
   private async ask(
@@ -334,6 +334,7 @@ ${parsed.explanation}`
     name: string,
     reservation: string | undefined,
     what: string,
+    sensitive = false,
   ): Promise<unknown> {
     const s = await this.db.settings();
     if (s.ai_mode !== "api") {
@@ -343,6 +344,7 @@ ${parsed.explanation}`
         {
           image: "line-agentflow-worker:local",
           timeoutMs: 180000,
+          ...(sensitive ? { sensitive: true } : {}),
           job: {
             mode: "subscription",
             kind: "triage",
@@ -362,6 +364,7 @@ ${parsed.explanation}`
           )
         )
           await this.gate.exhausted();
+        if (sensitive) throw new Error(`AI ${what}失敗`);
         throw new Error(`AI ${what}失敗：${redact(result.stderr).slice(-800)}`);
       }
       return JSON.parse(JSON.parse(result.stdout).final) as unknown;

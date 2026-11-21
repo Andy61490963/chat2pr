@@ -253,7 +253,10 @@ test("用白話描述資料庫連線，AI 整理後填進欄位並列出連不�
   await describe.fill(
     "MES 測試庫在 100.64.0.10，帳號 mes_reader 密碼 fictional-pass",
   );
-  await page.getByRole("button", { name: "交給 AI 整理" }).click();
+  await page
+    .getByRole("region", { name: "資料庫連線" })
+    .getByRole("button", { name: "交給 AI 整理" })
+    .click();
   await expect(page.getByLabel("主機", { exact: true })).toHaveValue(
     "100.64.0.10",
   );
@@ -269,6 +272,103 @@ test("用白話描述資料庫連線，AI 整理後填進欄位並列出連不�
   // 原文清掉，也不會自動儲存。
   await expect(describe).toHaveValue("");
   expect(writes).toHaveLength(0);
+});
+
+test("你可以用白話整理多台 SSH 主機，再逐台核對草稿並儲存", async ({
+  page,
+}) => {
+  await mockDashboard(page);
+  const base = "**/api/projects/project-demo/ssh-hosts";
+  const description =
+    "測試台 lab-a.example.test 帳號 reader 密碼 fictional-ssh-pass，日誌在 C:/logs；測試台 lab-b.example.test 埠 2222 帳號 observer";
+  const writes: unknown[] = [];
+  const first = {
+    name: "lab-a",
+    host: "lab-a.example.test",
+    port: 22,
+    username: "reader",
+    note: "日誌在 C:/logs",
+    password: "fictional-ssh-pass",
+    privateKey: null,
+    passphrase: null,
+  };
+  const second = {
+    name: "lab-b",
+    host: "lab-b.example.test",
+    port: 2222,
+    username: "observer",
+    note: null,
+    password: null,
+    privateKey: null,
+    passphrase: null,
+  };
+  await page.route(`${base}/extract`, (route) => {
+    expect(route.request().method()).toBe("POST");
+    expect(route.request().postDataJSON()).toEqual({ text: description });
+    return route.fulfill({
+      json: {
+        hosts: [
+          { ...first, probe: { reachable: true, detail: "連得到" } },
+          { ...second, probe: { reachable: false, detail: "連接埠拒絕連線" } },
+        ],
+      },
+    });
+  });
+  await page.route(base, (route) => {
+    if (route.request().method() === "GET") return route.fulfill({ json: [] });
+    expect(route.request().method()).toBe("POST");
+    writes.push(route.request().postDataJSON());
+    return route.fulfill({
+      json: [
+        {
+          id: "fictional-ssh-host",
+          name: first.name,
+          host: first.host,
+          port: first.port,
+          username: first.username,
+          note: first.note,
+          auth: "password",
+          hostKey: null,
+          updatedAt: "2026-11-20T00:00:00.000Z",
+        },
+      ],
+    });
+  });
+
+  await page.goto("/projects");
+  await page.getByText("測試專案", { exact: true }).first().click();
+  await page.getByRole("tab", { name: "連線與權限" }).click();
+  const section = page.getByRole("region", { name: "SSH 主機" });
+  const input = section.getByLabel("用白話描述主機");
+  await input.fill(description);
+  await section.getByRole("button", { name: "交給 AI 整理" }).click();
+  const drafts = section.getByRole("list", { name: "SSH 主機草稿" });
+  const firstDraft = drafts.getByRole("listitem").filter({ hasText: "lab-a" });
+  const secondDraft = drafts.getByRole("listitem").filter({ hasText: "lab-b" });
+  await expect(firstDraft).toContainText("lab-a.example.test:22");
+  await expect(firstDraft).toContainText("你可以從伺服器連到這個連接埠");
+  await expect(secondDraft).toContainText("lab-b.example.test:2222");
+  await expect(secondDraft).toContainText("連接埠拒絕連線");
+  await expect(input).toHaveValue("");
+  expect(writes).toHaveLength(0);
+
+  await firstDraft.getByRole("button", { name: "核對草稿" }).click();
+  await expect(section.getByLabel("登入密碼")).toHaveValue(first.password);
+  await section.getByLabel(/用途說明/).fill("查看測試日誌");
+  expect(writes).toHaveLength(0);
+  await section.getByRole("button", { name: "確認並儲存" }).click();
+  await expect(firstDraft).toHaveCount(0);
+  await expect(secondDraft).toBeVisible();
+  expect(writes).toEqual([
+    {
+      name: first.name,
+      host: first.host,
+      port: first.port,
+      username: first.username,
+      note: "查看測試日誌",
+      password: first.password,
+    },
+  ]);
 });
 
 test("登記 SSH 主機：密碼只送出不顯示，測試登入顯示結果", async ({ page }) => {

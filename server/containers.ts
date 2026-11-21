@@ -424,6 +424,8 @@ export class Containers {
     observe?: (event: Partial<RunEvent> & { kind: string }) => void,
     options?: {
       output?: "collect";
+      /** 連線資料整理的輸出可能含有憑證，只交給即時附接的讀取端。 */
+      sensitive?: boolean;
       extraNetworks?: string[];
       nugetFeed?: boolean;
       /** 收集差異時排除的建置產物規則（已套用專案增減）。 */
@@ -512,6 +514,9 @@ export class Containers {
           Labels: this.labels(runId),
           HostConfig: {
             ...containerPolicy(volume, network, readonly),
+            ...(options?.sensitive
+              ? { LogConfig: { Type: "none", Config: {} } }
+              : {}),
             ...(nugetFeed ? { Mounts: [nugetFeed] } : {}),
             Binds: mount
               ? [

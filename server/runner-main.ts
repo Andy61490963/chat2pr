@@ -564,6 +564,7 @@ app.post("/ai", async (req) => {
       image: z.string().min(1).max(200),
       job: z.record(z.string(), z.unknown()),
       timeoutMs: z.number().int().min(1000).max(600000),
+      sensitive: z.boolean().optional(),
     })
     .parse(req.body);
   const runId = randomUUID();
@@ -583,6 +584,8 @@ app.post("/ai", async (req) => {
           remaining,
           false,
           false,
+          undefined,
+          { sensitive: b.sensitive },
         ),
     );
   } finally {
