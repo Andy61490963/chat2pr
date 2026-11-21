@@ -7,6 +7,11 @@ import { createPrivateKey, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { secrets, secretsPath, token } from "./config.js";
 import { tunnelProvider } from "./tunnel-provider.js";
+import {
+  discordTokenProblem,
+  normalizeDiscordApplicationId,
+  normalizeDiscordToken,
+} from "../shared/discord-setup.js";
 const secret = secrets();
 await mkdir(dirname(secretsPath), { recursive: true, mode: 0o700 });
 if (!secret.sessionSecret) secret.sessionSecret = token();
@@ -71,8 +76,15 @@ app.post("/api/save", async (req, reply) => {
       openaiKey: z.string().optional(),
       lineSecret: z.string().optional(),
       lineToken: z.string().optional(),
-      discordToken: z.string().max(512).optional(),
-      discordApplicationId: z.string().optional(),
+      discordToken: z
+        .string()
+        .max(512)
+        .transform(normalizeDiscordToken)
+        .optional(),
+      discordApplicationId: z
+        .string()
+        .transform(normalizeDiscordApplicationId)
+        .optional(),
       disableDiscord: z.literal("on").optional(),
       githubAppId: z.string().regex(/^\d*$/).optional(),
       githubPrivateKey: z.string().optional(),
@@ -113,16 +125,8 @@ app.post("/api/save", async (req, reply) => {
     return reply
       .code(400)
       .send({ error: "請擇一停用 Discord 或更新 Discord 設定。" });
-  if (
-    discordToken &&
-    !/^[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{20,}$/.test(
-      discordToken,
-    )
-  )
-    return reply.code(400).send({
-      error:
-        "無法儲存 Discord 權杖，格式不符。請從 Discord 開發者入口重新複製機器人權杖。",
-    });
+  const tokenProblem = discordToken ? discordTokenProblem(discordToken) : null;
+  if (tokenProblem) return reply.code(400).send({ error: tokenProblem });
   if (discordApplicationId && !/^\d{17,20}$/.test(discordApplicationId))
     return reply.code(400).send({
       error:
