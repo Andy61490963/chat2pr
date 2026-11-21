@@ -54,6 +54,7 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS image_source_url text;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS content_revision integer NOT NULL DEFAULT 0;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS needs_source_review boolean NOT NULL DEFAULT false;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS discord_message_id text;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS discord_reply_message_id text;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS discord_edited_at timestamptz;
 CREATE INDEX IF NOT EXISTS messages_discord_source ON messages(discord_message_id) WHERE discord_message_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS messages_pending ON messages(group_id,received_at) WHERE processed=false;
@@ -88,6 +89,7 @@ CREATE TABLE IF NOT EXISTS audit (id bigserial PRIMARY KEY, task_id uuid REFEREN
 CREATE TABLE IF NOT EXISTS sessions (id_hash text PRIMARY KEY, user_id text NOT NULL, csrf text NOT NULL, expires_at timestamptz NOT NULL);
 CREATE TABLE IF NOT EXISTS oauth_states (id_hash text PRIMARY KEY, expires_at timestamptz NOT NULL);
 CREATE TABLE IF NOT EXISTS pairing_codes (code_hash text PRIMARY KEY, expires_at timestamptz NOT NULL, consumed_at timestamptz);
+ALTER TABLE pairing_codes ADD COLUMN IF NOT EXISTS platform text NOT NULL DEFAULT 'line' CHECK(platform IN ('line','discord'));
 CREATE TABLE IF NOT EXISTS reservations (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), task_id uuid REFERENCES tasks(id), day text NOT NULL, amount numeric(12,6) NOT NULL,
  spent numeric(12,6) NOT NULL DEFAULT 0, released boolean NOT NULL DEFAULT false, created_at timestamptz NOT NULL DEFAULT now()
@@ -124,6 +126,8 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 -- 以 /進度 補送被 LINE 拒收（內容問題的 4xx）的次數；到 2 次就不再取回，避免整個群組的 /進度 一直失敗。
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS reply_failures integer NOT NULL DEFAULT 0;
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS discord_retry_at timestamptz;
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS source_message_id text;
 -- 私訊摘要先保存批次，再對 LINE 推播；重試同一批沿用同一個 LINE 重試鍵。
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_digest_id uuid;
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_outage_started_at timestamptz;

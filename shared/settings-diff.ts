@@ -1,6 +1,7 @@
 import type { Settings } from "./types.js";
 import { containsCredential } from "./credentials.js";
 import { reserveLabel } from "./subscription-quota.js";
+import { adminNotificationLabels, groupPlatformLabels } from "./status-glossary.js";
 import {
   lineGroupReserveLabel,
   linePrivateDefaults,
@@ -43,6 +44,11 @@ const fields = {
   auto_memory: { label: "自動歸納群組記憶", fallback: true, value: onOff },
   code_downloads: { label: "開發時允許下載套件", fallback: true, value: onOff },
   group_replies: { label: "在群組回覆", fallback: true, value: onOff },
+  admin_notify_platform: {
+    label: adminNotificationLabels.destination,
+    fallback: "line",
+    value: (v) => groupPlatformLabels[v === "discord" ? "discord" : "line"],
+  },
   line_private_mode: {
     label: "LINE 私訊範圍",
     fallback: linePrivateDefaults.line_private_mode,

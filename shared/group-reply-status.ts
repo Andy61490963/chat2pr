@@ -1,6 +1,6 @@
 import type { Group, Settings } from "./types.js";
-import { groupDeliveryLabels } from "./status-glossary.js";
 import { quotaBlocked } from "./line-quota.js";
+import { discordGroupReplyLabels } from "./status-glossary.js";
 
 /** 依已儲存的總開關、群組設定與推播狀態顯示結果。即時回覆不使用推播額度。 */
 export function groupReplyStatus(
@@ -9,14 +9,17 @@ export function groupReplyStatus(
   health: { name: string; ok: boolean }[] | undefined,
   now = new Date(),
 ) {
-  if (group.platform === "discord")
-    return { replies: false, text: groupDeliveryLabels.unsupportedPlatform };
   if (group.left_at)
     return { replies: false, text: "不會回覆，機器人已離開群組" };
   if (settings.group_replies === false)
     return { replies: false, text: "不會回覆，設定頁的總開關已關閉" };
   if (group.reply_mode === "off")
     return { replies: false, text: "不會回覆，這個群組設為不回覆" };
+  if (group.platform === "discord")
+    return {
+      replies: true,
+      text: discordGroupReplyLabels[group.reply_mode === "all" ? "all" : "results"],
+    };
   if (quotaBlocked(health)) {
     const month = Number(
       new Intl.DateTimeFormat("en-US", {

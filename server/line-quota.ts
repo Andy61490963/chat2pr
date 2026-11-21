@@ -33,17 +33,20 @@ export class LineQuotaExhausted extends Error {
 }
 
 // 測試私訊、通知排程與額度同步共用同一把鎖，避免同時計入同一份剩餘額度。
+export const linePushLockId = 73467;
+
 export async function withLinePushLock<T>(db: Database, run: () => Promise<T>) {
   const client = await db.pool.connect();
   try {
     const { rows: [{ locked }] } = await client.query<{ locked: boolean }>(
-      "SELECT pg_try_advisory_lock(73467) AS locked",
+      "SELECT pg_try_advisory_lock($1) AS locked",
+      [linePushLockId],
     );
     if (!locked) return;
     try {
       return await run();
     } finally {
-      await client.query("SELECT pg_advisory_unlock(73467)");
+      await client.query("SELECT pg_advisory_unlock($1)", [linePushLockId]);
     }
   } finally {
     client.release();
@@ -235,7 +238,8 @@ export const staleNotification = `COALESCE(CASE
 END,false)`;
 
 /** LINE 推播的對象：目前的管理者私訊，或已登記為 LINE 的群組。通知使用別名 n。 */
-export const lineNotificationTarget = `(n.group_id IS NULL OR EXISTS(
+export const lineNotificationTarget = `((n.group_id IS NULL AND COALESCE(
+  (SELECT value->>'admin_notify_platform' FROM settings WHERE id=1),'line')='line') OR EXISTS(
   SELECT 1 FROM groups g WHERE g.id=n.group_id AND g.platform='line'
 ))`;
 

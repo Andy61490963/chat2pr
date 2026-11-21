@@ -59,6 +59,7 @@ it("Gateway 只收文字頻道事件，保留暱稱、同頻道引用與圖片�
     expect(client.options.intents).toEqual([
       GatewayIntentBits.Guilds,
       GatewayIntentBits.GuildMessages,
+      GatewayIntentBits.DirectMessages,
       GatewayIntentBits.MessageContent,
     ]);
     const message = {

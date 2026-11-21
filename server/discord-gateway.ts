@@ -4,6 +4,10 @@ import {
   Events,
   GatewayDispatchEvents,
   GatewayIntentBits,
+  InteractionType,
+  ApplicationCommandType,
+  ApplicationCommandOptionType,
+  ComponentType,
   MessageType,
   Options,
   type GatewayDispatchPayload,
@@ -21,11 +25,28 @@ function imageUrls(
 function receive(
   client: Client,
   packet: GatewayDispatchPayload,
-  emit: (event: DiscordMessageEvent) => void,
+  callbacks: Parameters<DiscordGateway["start"]>[1],
 ) {
+  const emit = (event: DiscordMessageEvent) => void callbacks.event(event);
   switch (packet.t) {
     case GatewayDispatchEvents.MessageCreate: {
       const message = packet.d;
+      if (
+        !message.guild_id &&
+        client.user &&
+        message.author.id !== client.user.id &&
+        !message.author.bot &&
+        !message.webhook_id &&
+        message.type === MessageType.Default
+      ) {
+        void callbacks.privateMessage?.({
+          id: message.id,
+          channel: message.channel_id,
+          user: message.author.id,
+          text: message.content,
+        });
+        return;
+      }
       const channel = client.channels.cache.get(message.channel_id);
       if (
         !client.user ||
@@ -64,6 +85,65 @@ function receive(
             : undefined,
         botId: client.user.id,
       });
+      break;
+    }
+    case GatewayDispatchEvents.InteractionCreate: {
+      const interaction = packet.d;
+      const channel = client.channels.cache.get(interaction.channel?.id ?? "");
+      const user = interaction.member?.user;
+      if (
+        !client.user ||
+        !interaction.guild_id ||
+        !user ||
+        user.bot ||
+        !channel ||
+        (channel.type !== ChannelType.GuildText &&
+          channel.type !== ChannelType.GuildAnnouncement) ||
+        channel.guildId !== interaction.guild_id
+      )
+        return;
+      const common = {
+        id: interaction.id,
+        token: interaction.token,
+        applicationId: interaction.application_id,
+        channel: channel.id,
+        name: `${channel.guild.name}／#${channel.name}`,
+        botId: client.user.id,
+        member: {
+          id: user.id,
+          name: interaction.member?.nick ?? user.global_name ?? user.username,
+        },
+      };
+      if (
+        interaction.type === InteractionType.MessageComponent &&
+        interaction.data.component_type === ComponentType.Button &&
+        interaction.message?.channel_id === channel.id &&
+        interaction.message.author.id === client.user.id
+      ) {
+        void callbacks.interaction?.({
+          ...common,
+          kind: "answer",
+          data: interaction.data.custom_id,
+        });
+      }
+      if (
+        interaction.type === InteractionType.ApplicationCommand &&
+        interaction.data.type === ApplicationCommandType.ChatInput
+      ) {
+        if (interaction.data.name === "進度")
+          void callbacks.interaction?.({ ...common, kind: "progress" });
+        if (interaction.data.name === "任務") {
+          const input = interaction.data.options?.find(
+            (option) => option.name === "需求",
+          );
+          if (input?.type === ApplicationCommandOptionType.String)
+            void callbacks.interaction?.({
+              ...common,
+              kind: "task",
+              text: input.value,
+            });
+        }
+      }
       break;
     }
     case GatewayDispatchEvents.MessageUpdate: {
@@ -112,6 +192,7 @@ export function createDiscordGateway(): DiscordGateway {
           intents: [
             GatewayIntentBits.Guilds,
             GatewayIntentBits.GuildMessages,
+            GatewayIntentBits.DirectMessages,
             GatewayIntentBits.MessageContent,
           ],
         });
@@ -133,10 +214,7 @@ export function createDiscordGateway(): DiscordGateway {
           }, 30_000);
         };
         current.on(Events.Raw, (packet: GatewayDispatchPayload) => {
-          if (active())
-            receive(current, packet, (event) => {
-              void callbacks.event(event);
-            });
+          if (active()) receive(current, packet, callbacks);
         });
         current.on(Events.ClientReady, () => report("connected"));
         current.on(Events.ShardReady, () => report("connected"));

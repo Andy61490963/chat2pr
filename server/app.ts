@@ -54,6 +54,7 @@ import { Line } from "./line.js";
 import {
   expireStaleNotifications,
   lineNotificationTarget,
+  linePushLockId,
   lineQuotaBlocked,
   staleNotification,
 } from "./line-quota.js";
@@ -611,6 +612,7 @@ export async function buildApp(
       settings: {
         ...settings,
         admin_line_id: settings.admin_line_id ? "已綁定" : null,
+        admin_discord_id: settings.admin_discord_id ? "已綁定" : null,
       },
       alerts: quota
         ? [
@@ -1553,6 +1555,26 @@ export async function buildApp(
     });
     return { ok: true };
   });
+  app.put("/api/settings/admin-notifications", async (req) => {
+    const admin = await requireAdmin(db, req);
+    const changes = z.object({
+      admin_notify_platform: z.enum(["line", "discord"], "請選擇管理者通知的聊天平台"),
+    }).parse(req.body);
+    await db.transaction(async (c) => {
+      // 與 LINE 通知排程共用鎖，確保切換時上一個目的地的私訊已完成。
+      await c.query("SELECT pg_advisory_xact_lock($1)", [linePushLockId]);
+      const { rows: [{ value: before }] } = await c.query<{ value: Partial<Settings> }>(
+        "SELECT value FROM settings WHERE id=1 FOR UPDATE",
+      );
+      const diff = settingsDiff(before, changes);
+      if (!diff.length) return;
+      await c.query("UPDATE settings SET value=value || $1::jsonb WHERE id=1", [JSON.stringify(changes)]);
+      await c.query("DELETE FROM pairing_codes WHERE consumed_at IS NULL");
+      await db.audit(null, "settings",
+        `管理者 ${admin.login} 更新「${diff[0].label}」，由 ${diff[0].from} 改成 ${diff[0].to}`, c);
+    });
+    return { ok: true };
+  });
   app.post("/api/notifications/retry", async (req) => {
     const actor = await requireAdmin(db, req);
     // 額度用完時歸零只會讓通知再失敗 3 次，先說明原因。
@@ -1585,10 +1607,13 @@ export async function buildApp(
     await requireAdmin(db, req);
     const code = token().slice(0, 16);
     await db.transaction(async (c) => {
+      const { rows: [{ platform }] } = await c.query<{ platform: string }>(
+        "SELECT COALESCE(value->>'admin_notify_platform','line') AS platform FROM settings WHERE id=1 FOR UPDATE",
+      );
       await c.query("DELETE FROM pairing_codes");
       await c.query(
-        "INSERT INTO pairing_codes(code_hash,expires_at) VALUES($1,now()+interval '10 minutes')",
-        [hash(code)],
+        "INSERT INTO pairing_codes(code_hash,expires_at,platform) VALUES($1,now()+interval '10 minutes',$2)",
+        [hash(code), platform],
       );
     });
     return { code, expiresIn: 600 };

@@ -69,7 +69,7 @@ import {
 
 /**
  * 群組訊息沒送到時的提示：推播額度用完期間看板顯示「已回覆」，群組卻什麼都沒收到，
- * 管理者要看得出來，並能複製內容代為轉達。每種訊息只看最新一則；已送出、已被較新回覆取代的不顯示。
+ * 每種訊息顯示最新一則的送達狀態，並在尚未送達時提供原文供管理者轉達。
  */
 function GroupDeliveryNotes({
   deliveries,
@@ -80,9 +80,7 @@ function GroupDeliveryNotes({
 }) {
   const latest = kinds.flatMap((kind) => {
     const d = deliveries?.filter((x) => x.kind === kind).at(-1);
-    return d &&
-      (undelivered(d.delivery) ||
-        (d.delivery.status === "skipped" && d.delivery.reason !== "superseded"))
+    return d && d.delivery.reason !== "superseded"
       ? [d]
       : [];
   });
@@ -98,7 +96,9 @@ function GroupDeliveryNotes({
             aria-label="群組訊息送達狀態"
             className={cn(
               "flex gap-2 rounded-lg px-3 py-2.5 text-sm",
-              !pending
+              d.delivery.status === "sent"
+                ? "bg-good-soft text-good"
+                : !pending
                 ? "bg-muted text-muted-foreground"
                 : d.delivery.status === "failed"
                   ? "bg-danger-soft text-danger"
@@ -107,7 +107,9 @@ function GroupDeliveryNotes({
                     : "bg-info-soft text-info",
             )}
           >
-            {d.delivery.status === "failed" || d.delivery.reason ? (
+            {d.delivery.status === "sent" ? (
+              <CheckCircle2 aria-hidden className="mt-0.5 size-4 shrink-0" />
+            ) : d.delivery.status === "failed" || d.delivery.reason ? (
               <AlertCircle className="mt-0.5 size-4 shrink-0" />
             ) : (
               <Clock className="mt-0.5 size-4 shrink-0" />
@@ -820,6 +822,10 @@ export function TaskDrawer({
             kinds={[
               t.mode === "query" ? "group_answered" : "group_no_changes",
               ...(t.status === "failed" ? ["group_failed"] : []),
+              ...(t.status === "ready" ? ["group_ready"] : []),
+              ...(t.status === "merged" ? ["group_merged"] : []),
+              ...(t.status === "closed" ? ["group_closed"] : []),
+              ...(t.status === "awaiting_approval" ? ["group_received"] : []),
             ]}
           />
           {t.status !== "answered" && resultReport}

@@ -1267,6 +1267,7 @@ export class Triage {
             "triage",
             `triage:${kind}:${source.id}`,
             text,
+            source.id,
           );
       };
       for (const d of decisions) {

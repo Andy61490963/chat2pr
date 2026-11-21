@@ -20,6 +20,7 @@ export interface ChatPlatform {
     groupId: string,
     message: ChatReplyMessage,
     retryKey: string,
+    origin?: string,
   ): Promise<{
     messageId: string | null;
     /** 同一重試鍵先前已送達時為 false。 */

@@ -14,7 +14,7 @@ import { asksForSchedule, parseSchedule } from "../shared/checks.js";
 import { assertContextText } from "./project-context.js";
 
 /**
- * 補問在原地回答：在提出需求的群組發問，成員用 LINE「回覆」或在看板直接作答，
+ * 補問在原地回答：在提出需求的群組發問，成員用「回覆」或在看板直接作答，
  * 系統把回答併進需求成為新版本。查詢符合自動執行條件就直接繼續；修改照舊等管理者確認。
  */
 
@@ -23,7 +23,7 @@ const questionKey = (t: Pick<Task, "id" | "version">) =>
 
 /**
  * 常見答案按鈕的 postback data：`answer:<taskId>:<version>:<index>`。
- * 必須與 line.ts 群組 postback 分支的比對規則（answerPostback）一起改。
+ * LINE 回傳資料與 Discord 按鈕使用同一個格式與版本比對。
  */
 export const answerPostbackData = (
   t: Pick<Task, "id" | "version">,
@@ -61,7 +61,7 @@ export async function askInGroup(c: DbClient, t: Task) {
   const choices = buttons.length
     ? `\n常見答案：${buttons.map((b) => b.displayText).join("／")}`
     : "";
-  // 按鈕在群組有新訊息後就會消失，所以仍要說明可以用「回覆」作答。
+  // LINE 的按鈕可能被新訊息收起，兩個平台都提供直接回覆的作答方式。
   const how = buttons.length
     ? "點下方的常見答案，也可以直接「回覆」這則訊息回答。"
     : "直接「回覆」這則訊息回答就可以。";
@@ -88,6 +88,7 @@ export async function answerByPostback(
   groupId: string,
   data: string,
   eventId: string,
+  actor = "群組成員（LINE）",
 ) {
   const m = answerPostback.exec(data);
   if (!m) return null;
@@ -111,7 +112,7 @@ export async function answerByPostback(
     c,
     t,
     choice,
-    "群組成員（LINE）",
+    actor,
     false,
     `postback:${eventId}`,
   );

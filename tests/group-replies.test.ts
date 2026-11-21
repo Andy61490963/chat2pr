@@ -200,7 +200,7 @@ describe("群組通知依聊天平台分流", () => {
     )).toEqual([]);
   });
 
-  it("LINE 的過期處理與手動重送不變更 Discord 通知，聊天室顯示尚未支援", async () => {
+  it("LINE 的過期處理與手動重送不變更 Discord 通知，聊天室顯示送達失敗", async () => {
     await addDiscordGroup();
     const quotaNote = "推播額度剩 1 則，不足這個群組的人數，額度恢復後再送";
     await db.query(
@@ -219,8 +219,8 @@ describe("群組通知依聊天平台分流", () => {
     });
     expect(chat.statusCode).toBe(200);
     expect(chat.json().bot_messages[0].delivery).toMatchObject({
-      status: "skipped",
-      reason: "unsupported_platform",
+      status: "failed",
+      reason: "error",
     });
     vi.stubGlobal("fetch", vi.fn(async (url: string) => url.endsWith("/consumption")
       ? Response.json({ totalUsage: 0 })

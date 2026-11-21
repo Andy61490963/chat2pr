@@ -2,7 +2,9 @@ import { splitQueryAnswer } from "../shared/query-answer.js";
 import { z } from "zod";
 import { Database, type DbClient } from "./db.js";
 import { secrets } from "./config.js";
-import { hash } from "./auth.js";
+import { pairAdmin } from "./admin-pairing.js";
+import type { DiscordChatPlatform } from "./discord-platform.js";
+import { flushDiscordNotifications } from "./discord-notifications.js";
 import { AppError, containsCredential, redact } from "./policy.js";
 import { fetchLine } from "./line-http.js";
 import type { ChatReplyMessage, ChatReplyResult } from "./chat-platform.js";
@@ -115,7 +117,7 @@ interface Ack {
   claim?: GroupReplyClaim;
 }
 export class Line {
-  constructor(private db: Database) {}
+  constructor(private db: Database, private discord?: DiscordChatPlatform) {}
   async ingest(body: unknown) {
     const payload = LinePayload.parse(body);
     const adoptions: Array<{ task: string; version: number; index: number }> =
@@ -147,27 +149,8 @@ export class Line {
           return;
         }
         if (!group) {
-          if (e.message?.type === "text" && e.source?.userId) {
-            const m = /^配對\s+([a-f0-9]{16})$/i.exec(e.message.text ?? "");
-            if (m) {
-              const found = await c.query(
-                "UPDATE pairing_codes SET consumed_at=now() WHERE code_hash=$1 AND expires_at>now() AND consumed_at IS NULL RETURNING code_hash",
-                [hash(m[1])],
-              );
-              if (found.rowCount) {
-                await c.query(
-                  "UPDATE settings SET value=jsonb_set(value,'{admin_line_id}',to_jsonb($1::text)) WHERE id=1",
-                  [e.source.userId],
-                );
-                await this.db.audit(
-                  null,
-                  "pairing",
-                  "管理者 LINE 通知身分已綁定",
-                  c,
-                );
-              }
-            }
-          }
+          if (e.message?.type === "text" && e.source?.userId)
+            await pairAdmin(this.db, c, "line", e.source.userId, e.message.text ?? "");
           return;
         }
         if (e.type === "leave") {
@@ -691,13 +674,17 @@ export class Line {
   async flushNotifications() {
     // /進度 佔住後程序中止、停在「補送中」的通知放回待送。不需要權杖、額度用完時也要做：那時 /進度 是唯一的取回管道。
     await reclaimStaleClaims(this.db);
-    await withLinePushLock(this.db, async () => {
-      const access = secrets().lineToken;
-      if (!access) return;
-      // 目前只有 LINE 接上推播，其他平台的通知留待各自的傳送流程處理。
-      await this.flushGroupNotifications(access);
-      if (!(await lineQuotaBlocked(this.db))) await flushLinePrivate(this.db, access);
-    });
+    const results = await Promise.allSettled([
+      withLinePushLock(this.db, async () => {
+        const access = secrets().lineToken;
+        if (!access) return;
+        await this.flushGroupNotifications(access);
+        if (!(await lineQuotaBlocked(this.db))) await flushLinePrivate(this.db, access);
+      }),
+      this.discord && flushDiscordNotifications(this.db, this.discord),
+    ]);
+    if (results.some((result) => result.status === "rejected"))
+      throw new Error("部分聊天通知未能完成，請檢查資料庫與服務設定。");
   }
 
   private async flushGroupNotifications(access: string) {

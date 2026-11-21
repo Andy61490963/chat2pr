@@ -13,6 +13,7 @@ import { secretsPath } from "./config.js";
 import { Budget } from "./budget.js";
 import { GitHub } from "./github.js";
 import { Line } from "./line.js";
+import type { DiscordChatPlatform } from "./discord-platform.js";
 import { tellGroupWaiting } from "./group-replies.js";
 import { dueTriageGroups } from "./triage-window.js";
 import {
@@ -126,7 +127,7 @@ async function recoverRun(
 }
 export async function startJobs(
   db: Database,
-  adapters: { github?: GitHub; runner?: Runner; model?: Embedder } = {},
+  adapters: { github?: GitHub; runner?: Runner; model?: Embedder; discord?: DiscordChatPlatform } = {},
 ) {
   const previous = await db.one<{ checked_at: Date }>(
     "SELECT checked_at FROM service_health WHERE name='queue'",
@@ -174,7 +175,7 @@ export async function startJobs(
   ) => boss.work<T>(name, options, safeQueueHandler(handler));
   const budget = new Budget(db),
     github = adapters.github ?? new GitHub(),
-    line = new Line(db),
+    line = new Line(db, adapters.discord),
     runner = adapters.runner ?? new HttpRunner(),
     subscriptionGate = new SubscriptionGate(db, runner.account?.bind(runner)),
     retrieval = new Retrieval(db, adapters.model),
