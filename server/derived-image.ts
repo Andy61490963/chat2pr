@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import type Docker from "dockerode";
 import { AppError } from "./policy.js";
-import type { Containers } from "./containers.js";
+import { ContainerDeadline, type Containers } from "./containers.js";
+import { dockerDiskInventory } from "./docker-cleanup.js";
+import { protectedTags } from "../shared/docker-disk.js";
 import { installPrerequisites, planHash } from "./install-review.js";
 import {
   MAX_INSTALL_ITEMS,
@@ -26,6 +28,10 @@ export const INSTALL_CAPABILITIES = [
   "SETGID",
 ];
 export const DERIVED_LABEL = "io.agentflow.derived";
+const derivedInstanceLabel = "io.agentflow.derived-instance";
+const projectLabel = "io.agentflow.project";
+const packagesLabel = "io.agentflow.derived-packages";
+const baseLabel = "io.agentflow.base";
 const sha256 = (value: string) =>
   createHash("sha256").update(value).digest("hex");
 
@@ -57,7 +63,7 @@ export function derivedKey(
 /**
  * 衍生映像的套件識別：只看名稱、來源與版本，不看安裝指令的寫法。
  * 每次重新驗證 AI 都會重寫一次安裝計畫，指令的措辭（curl 參數、先後順序）幾乎每次不同；
- * 以整份指令為鍵時同一組套件會一直重建新映像（WeYuJetOpcUaLoader 一天內建了 8 個）。
+ * 以整份指令為鍵時，同一組套件會一直重建新映像。
  * 建置失敗不會留下映像，所以只有真正裝好的才會被重用。
  */
 export function packageIdentity(items: readonly InstallItem[]) {
@@ -148,9 +154,86 @@ export interface DerivedResult {
   planHash: string;
   exitCode: number;
   output: string;
+  cleanup?: {
+    removed: number;
+    estimatedBytes: number;
+    issues: string[];
+  };
 }
 
 const building = new Map<string, Promise<DerivedResult>>();
+
+/** 建好新映像後才清理，並把用量與失敗原因交回應用程式寫稽核。 */
+async function cleanupSuperseded(
+  c: Containers,
+  request: DerivedRequest,
+  target: { baseId: string; packages: string },
+  buildDeadline: ContainerDeadline,
+): Promise<DerivedResult["cleanup"]> {
+  const result = { removed: 0, estimatedBytes: 0, issues: [] as string[] };
+  let deadline: ContainerDeadline | undefined;
+  let failed = false;
+  try {
+    deadline = new ContainerDeadline(
+      Math.min(5000, buildDeadline.remaining()),
+      new AppError(408, "衍生映像清理逾時"),
+    );
+    const inventory = await deadline.run(() =>
+      dockerDiskInventory(c.docker, c.instance),
+    );
+    const used = new Set(
+      inventory.containers.map((container) => container.imageId),
+    );
+    const candidates = inventory.images.filter(
+      ({ id, labels, tags, containers }) =>
+        labels[DERIVED_LABEL] === "v1" &&
+        labels[derivedInstanceLabel] === c.instance &&
+        labels[projectLabel] === request.projectId &&
+        labels[packagesLabel] === target.packages &&
+        !!labels[baseLabel] &&
+        labels[baseLabel] !== target.baseId &&
+        id !== target.baseId &&
+        containers <= 0 &&
+        !used.has(id) &&
+        !tags.some((tag) =>
+          protectedTags.has(tag.slice(tag.lastIndexOf(":") + 1)),
+        ),
+    );
+    if (!candidates.length) return undefined;
+    // 部署可能在安裝期間換過基底標籤，舊基底的建置不能清掉新基底的成果。
+    if ((await deadline.run(() => c.ready(request.base))) !== target.baseId)
+      return undefined;
+    for (const image of candidates) {
+      buildDeadline.check();
+      // 依映像 ID 刪除，避免標籤移到別的映像。讓 Docker 再檢查容器引用，並保留父映像。
+      const changes: Docker.ImageRemoveInfo[] = await deadline.run(() =>
+        c.docker
+          .getImage(image.id)
+          .remove({ noprune: true })
+          .catch(() => []),
+      );
+      if (!changes.some(({ Deleted }) => Deleted === image.id)) {
+        failed = true;
+        continue;
+      }
+      result.removed++;
+      // Docker 的共用層可能仍被其他映像使用，只估算這個映像獨有的大小。
+      if (image.sharedSize >= 0)
+        result.estimatedBytes += Math.max(0, image.size - image.sharedSize);
+    }
+  } catch {
+    result.issues.push(
+      "舊衍生映像清理未完成，執行器未能確認映像狀態或刪除結果。可在系統頁的磁碟管理查看剩餘映像。",
+    );
+  } finally {
+    deadline?.close();
+  }
+  if (failed)
+    result.issues.push(
+      "部分舊衍生映像未能清除，Docker 未回報映像已刪除。可在系統頁的磁碟管理查看剩餘映像。",
+    );
+  return result.removed || result.issues.length ? result : undefined;
+}
 
 /** 已存在而且標籤對得上的衍生映像才重用；其他同名映像一律不碰。 */
 async function existing(c: Containers, tag: string, key: string) {
@@ -165,7 +248,7 @@ async function existing(c: Containers, tag: string, key: string) {
   const labels = info.Config?.Labels ?? {};
   if (
     labels[DERIVED_LABEL] !== "v1" ||
-    labels["io.agentflow.derived-instance"] !== c.instance ||
+    labels[derivedInstanceLabel] !== c.instance ||
     labels["io.agentflow.derived-key"] !== key
   )
     throw new AppError(409, `衍生映像 ${tag} 不屬於此執行環境`);
@@ -193,11 +276,12 @@ export async function derivedImage(
   }
   const baseId = await c.ready(request.base);
   const plan = planHash(request.items);
+  const packages = packageIdentity(request.items);
   const key = derivedKey(
     c.instance,
     request.projectId,
     request.branch,
-    packageIdentity(request.items),
+    packages,
     baseId,
   );
   const tag = `${derivedRepository(c.instance)}:${key}`;
@@ -214,9 +298,13 @@ export async function derivedImage(
   }
   // 同一個衍生映像同時被兩個任務要求時，只建一次。
   const pending = building.get(tag);
-  if (pending) return pending;
-  const job = build(c, request, { baseId, plan, key, tag }).finally(() =>
-    building.delete(tag),
+  if (pending) {
+    const result = await pending;
+    // 只有實際發起建置的請求會寫清理稽核。
+    return { ...result, cleanup: undefined };
+  }
+  const job = build(c, request, { baseId, plan, key, tag, packages }).finally(
+    () => building.delete(tag),
   );
   building.set(tag, job);
   return job;
@@ -225,7 +313,13 @@ export async function derivedImage(
 async function build(
   c: Containers,
   request: DerivedRequest,
-  target: { baseId: string; plan: string; key: string; tag: string },
+  target: {
+    baseId: string;
+    plan: string;
+    key: string;
+    tag: string;
+    packages: string;
+  },
 ): Promise<DerivedResult> {
   const deadline = c.begin(
     request.runId,
@@ -293,7 +387,7 @@ async function build(
       container.commit({
         repo: target.tag.slice(0, at),
         tag: target.tag.slice(at + 1),
-        comment: "agentflow derived image",
+        comment: "專案衍生映像",
         _body: {
           User: config.User || "1000:1000",
           Env: config.Env ?? [],
@@ -309,12 +403,13 @@ async function build(
             "io.agentflow.run": "",
             "io.agentflow.managed": "",
             "io.agentflow.instance": "",
-            "io.agentflow.derived-instance": c.instance,
+            [derivedInstanceLabel]: c.instance,
             [DERIVED_LABEL]: "v1",
             "io.agentflow.derived-key": target.key,
-            "io.agentflow.project": request.projectId,
+            [projectLabel]: request.projectId,
             "io.agentflow.plan": target.plan,
-            "io.agentflow.base": target.baseId,
+            [baseLabel]: target.baseId,
+            [packagesLabel]: target.packages,
           },
         },
       }),
@@ -335,12 +430,14 @@ async function build(
       throw new AppError(500, "衍生映像設定異常，已刪除，請回報");
     }
     await c.ready(target.tag);
+    const cleanup = await cleanupSuperseded(c, request, target, deadline);
     return {
       image: target.tag,
       reused: false,
       planHash: target.plan,
       exitCode: 0,
       output,
+      ...(cleanup ? { cleanup } : {}),
     };
   } catch (error) {
     failure = error;

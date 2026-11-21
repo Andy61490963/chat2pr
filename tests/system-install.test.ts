@@ -8,6 +8,7 @@ import { Tasks } from "../server/tasks.js";
 import { buildApp } from "../server/app.js";
 import { hash } from "../server/auth.js";
 import { subscriptionGateName } from "../server/subscription-gate.js";
+import type { DerivedResult } from "../server/derived-image.js";
 import type { Project, Task } from "../shared/types.js";
 import {
   DEFAULT_EGRESS_DOMAINS,
@@ -67,7 +68,7 @@ type Call = { path: string; body: Record<string, unknown> };
  */
 async function scenario(
   plan: InstallItem[],
-  options: { failBuild?: boolean } = {},
+  options: { failBuild?: boolean; cleanup?: DerivedResult["cleanup"] } = {},
 ) {
   const projectId = await fixture();
   await db.query(
@@ -175,6 +176,7 @@ async function scenario(
           planHash: "fictional-plan",
           exitCode: 0,
           output: reused ? "" : "AGENTFLOW_INSTALL 完成",
+          cleanup: reused ? undefined : options.cleanup,
         } as T;
       }
       if (path === "phase") {
@@ -229,6 +231,29 @@ const phaseImages = (calls: Call[]) =>
   calls
     .filter((c) => c.path === "phase")
     .map((c) => [c.body.phase, c.body.image]);
+
+it("清理結果寫成一筆系統紀錄，清理失敗與重用都不影響後續派工", async () => {
+  const issue =
+    "部分舊衍生映像未能清除，Docker 拒絕刪除。可在系統頁的磁碟管理查看剩餘映像。";
+  const s = await scenario([sqlcmd], {
+    cleanup: { removed: 2, estimatedBytes: 3 * 1024 ** 3, issues: [issue] },
+  });
+  await s.validate();
+  await s.run();
+  expect(
+    await db.query(
+      "SELECT task_id,detail FROM audit WHERE kind='derived_image_cleanup'",
+    ),
+  ).toEqual([
+    {
+      task_id: null,
+      detail: `已清除 2 個基底過舊的衍生映像，約釋放 3.0 GB。${issue}`,
+    },
+  ]);
+  expect(
+    await db.one("SELECT status FROM tasks WHERE id=$1", [s.task.id]),
+  ).toEqual({ status: "ready" });
+});
 
 it("審查放行的系統套件裝成衍生映像；被拒絕的照常列出，之後各階段都用衍生映像", async () => {
   const s = await scenario([sqlcmd, piped, secretReader, outside, unrelated]);

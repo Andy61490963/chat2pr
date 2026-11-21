@@ -6,6 +6,7 @@ import {
   INSTALL_CAPABILITIES,
   derivedImage,
   derivedRepository,
+  packageIdentity,
 } from "../server/derived-image.js";
 import {
   DEFAULT_EGRESS_DOMAINS,
@@ -121,6 +122,7 @@ describe("真實 Docker：專案衍生映像", () => {
         "io.agentflow.derived-instance": c.instance,
         "io.agentflow.project": project,
         "io.agentflow.base": base.Id,
+        "io.agentflow.derived-packages": packageIdentity([tool]),
         "io.agentflow.run": "",
         "io.agentflow.managed": "",
         "io.agentflow.instance": "",

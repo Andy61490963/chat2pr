@@ -32,6 +32,7 @@ const systemKinds = new Set([
   "check_host_unavailable",
   "check_system_issue",
   "defer",
+  "derived_image_cleanup",
   "install_image",
   "install_review",
   "install_retry",

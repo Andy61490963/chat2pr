@@ -387,6 +387,13 @@ const activityTaskFields = {
 export const unchangedCleanup =
   "Docker 定期清理：刪除 0 個舊映像標籤；0 個懸空映像；建置快取 0.0 GB；映像共釋放 0.0 GB";
 export const changedCleanup = unchangedCleanup.replace("刪除 0", "刪除 1");
+export const derivedImageCleanup: ActivityEvent = {
+  id: 7,
+  task_id: null,
+  kind: "derived_image_cleanup",
+  detail: "已清除 2 個基底過舊的衍生映像，約釋放 3.0 GB",
+  created_at: "2026-01-10T08:31:00Z",
+};
 export const repeatedActivity = "管理者 小林 更新示範專案的設定";
 export const recentActivity: ActivityEvent[] = [
   {

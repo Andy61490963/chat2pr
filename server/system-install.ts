@@ -1,18 +1,12 @@
 import type { Database } from "./db.js";
+import type { DerivedResult } from "./derived-image.js";
 import type { Runner } from "./execution.js";
 import type { Project } from "../shared/types.js";
 import type { SetupPlan } from "../shared/project-setup.js";
+import { gigabytes } from "./docker-cleanup.js";
 import { redact } from "./policy.js";
 import { approvedItems } from "./install-review.js";
 import { egressDomains, type InstallReport } from "../shared/install-plan.js";
-
-interface DerivedResult {
-  image: string | null;
-  reused: boolean;
-  planHash: string;
-  exitCode: number;
-  output: string;
-}
 
 /**
  * 依專案設定的安裝前審查結果準備專案衍生映像：放行的系統套件由執行器以 root 安裝，
@@ -64,7 +58,7 @@ export async function provideSystemInstall(
           error: `系統套件安裝失敗（退出碼 ${result.exitCode}）`,
         };
     if (result.image) {
-      // 最後使用時間給 Docker 磁碟管理判斷「多久沒用」；預設不自動刪。
+      // 最後使用時間給 Docker 磁碟管理判斷「多久沒用」。
       await db.query(
         `INSERT INTO derived_images(tag,project_id,branch,plan_hash,base_image,items,last_used_at)
          VALUES($1,$2,$3,$4,$5,$6,now())
@@ -78,6 +72,24 @@ export async function provideSystemInstall(
           JSON.stringify(items),
         ],
       );
+      const cleanup = result.cleanup;
+      if (cleanup) {
+        const details = [
+          ...(cleanup.removed
+            ? [
+                `已清除 ${cleanup.removed} 個基底過舊的衍生映像，約釋放 ${gigabytes(cleanup.estimatedBytes)}`,
+              ]
+            : []),
+          ...cleanup.issues,
+        ];
+        await db
+          .audit(null, "derived_image_cleanup", details.join("。"))
+          .catch(() =>
+            console.warn(
+              "舊衍生映像清理紀錄寫入失敗，請查看應用程式資料庫連線",
+            ),
+          );
+      }
     }
   }
   const { output: _output, ...saved } = report;
