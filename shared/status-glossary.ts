@@ -70,6 +70,16 @@ export const inboxStatusLabels = {
   clearDescription: "目前沒有需要你處理、執行中或待合併的工作。",
 } as const;
 
+export const activityStatusLabels = {
+  scheduled: "已自動排程",
+  investigationStarted: "開始調查",
+  investigationRunning: "調查中",
+  queryAnswered: "查詢已回覆",
+  answered: statusLabels.answered,
+  ready: statusLabels.ready,
+  failed: statusLabels.failed,
+} as const;
+
 export const taskEndLabels = {
   reject: { badge: "已拒絕", event: "拒絕" },
   cancel: { badge: "已取消", event: "取消" },

@@ -6,6 +6,13 @@ import {
 } from "../../shared/status-glossary.js";
 import type { TaskStatusFilter } from "../../shared/task-list.js";
 import { taskListTitle } from "../../shared/task-title.js";
+import {
+  activityDay,
+  activityDetail,
+  activityStatus,
+  groupActivity,
+  type ActivityGroup,
+} from "../../shared/activity-groups.js";
 import { useId, useRef, useState } from "react";
 import type { PickList } from "../../shared/pick-list.js";
 import { PickListForm } from "./pick-list";
@@ -62,13 +69,11 @@ import { cn } from "@/lib/utils";
 import { ConfirmButton } from "./confirm";
 import {
   type Act,
-  type Audit,
   type State,
   type View,
   ago,
   attention,
   Clamped,
-  collapseRepeats,
   countOf,
   Empty,
   groupName,
@@ -660,62 +665,121 @@ const activityKinds: Record<string, { icon: typeof Activity; tone: string }> = {
   backup: { icon: Archive, tone: "text-muted-foreground" },
   recovery: { icon: RotateCcw, tone: "text-muted-foreground" },
 };
-const systemActivity = new Set([
-  "ai_output_adjusted",
-  "api_error",
-  "api_stream_error",
-  "backup",
-  "build_output_excluded",
-  "check_environment",
-  "check_host_unavailable",
-  "check_system_issue",
-  "defer",
-  "docker_disk_auto",
-  "install_image",
-  "install_review",
-  "install_retry",
-  "install_skipped",
-  "proxy_rejected",
-  "query_note",
-  "rag",
-  "recovery",
-  "retrieval",
-  "started",
-  "triage_skipped",
-  "tunnel_brief_outage",
-]);
-const isSystemActivity = (a: Audit) =>
-  systemActivity.has(a.kind) ||
-  (a.kind === "memory" && /^(AI 自動記住|群組記住)：/.test(a.detail));
-const dayLabel = (v: string) => {
-  const d = new Date(v),
-    today = new Date();
-  const key = (x: Date) =>
-    x.toLocaleDateString("zh-TW", { timeZone: "Asia/Taipei" });
-  if (key(d) === key(today)) return "今天";
-  if (key(d) === key(new Date(today.getTime() - 86400000))) return "昨天";
-  return d.toLocaleDateString("zh-TW", {
+const activityClock = new Intl.DateTimeFormat("zh-TW", {
+  timeZone: "Asia/Taipei",
+  hour: "2-digit",
+  minute: "2-digit",
+  hourCycle: "h23",
+});
+
+function dayLabel(value: string) {
+  const day = activityDay(value);
+  const today = new Date();
+  if (day === activityDay(today)) return "今天";
+  if (day === activityDay(new Date(today.getTime() - 86400000))) return "昨天";
+  return new Date(value).toLocaleDateString("zh-TW", {
     timeZone: "Asia/Taipei",
     month: "numeric",
     day: "numeric",
     weekday: "short",
   });
-};
+}
 
-// 失敗的完整原因在「需要你處理」的卡片與任務詳情裡；動態只留一句，避免同一段文字重複出現。
-const brief = (a: Audit) => {
-  if (a.task_mode === "query") {
-    if (a.kind === "attempt" && a.detail === "開始程式修改") return "開始調查";
-    if (a.kind === "started") return a.detail.replace(/^開始開發/, "開始調查");
-  }
-  if (a.kind !== "verification" && a.kind !== "error") return a.detail;
-  if (a.detail.startsWith("驗證未通過，請修正："))
-    return "驗證未通過，交回修正";
-  const gaveUp = "一次自動修復後仍未通過驗證";
-  const at = a.detail.indexOf(gaveUp);
-  if (at >= 0) return a.detail.slice(0, at + gaveUp.length);
-  return a.detail.split("\n")[0];
-};
+function ActivityTime({ value }: { value: string }) {
+  return (
+    <time
+      dateTime={value}
+      className="text-xs tabular-nums text-muted-foreground"
+    >
+      {activityClock.format(new Date(value))}
+    </time>
+  );
+}
+
+function ActivityRow({
+  group,
+  open,
+}: {
+  group: ActivityGroup;
+  open: (id: string) => unknown;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const stepsId = useId();
+  const { latest, steps } = group;
+  const taskId = latest.task_id;
+  const title = latest.task_title ?? "查看任務";
+  const detail = activityDetail(latest);
+  const status = taskId ? activityStatus(latest) : detail;
+  const canExpand = !!taskId && (steps.length > 1 || status !== detail);
+  const times = steps.find(({ event }) => event === latest)?.times ?? 1;
+  return (
+    <div className="min-w-0 flex-1 pb-3 text-sm [overflow-wrap:anywhere]">
+      {taskId && (
+        <button
+          type="button"
+          className={cn(
+            "work-touch block max-w-full text-left font-medium hover:underline",
+            batchFocus,
+          )}
+          onClick={() => open(taskId)}
+        >
+          {title}
+        </button>
+      )}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        {!taskId && (
+          <span className="min-w-0 basis-full whitespace-pre-wrap">
+            <Linkified text={detail} />
+          </span>
+        )}
+        {taskId && <span>{status}</span>}
+        <ActivityTime value={latest.created_at} />
+        {times > 1 && (
+          <span className="text-xs text-muted-foreground">共 {times} 次</span>
+        )}
+        {canExpand && (
+          <button
+            type="button"
+            className={cn(
+              "work-touch text-xs underline underline-offset-4",
+              batchFocus,
+            )}
+            aria-label={`${expanded ? "收合步驟" : "展開步驟"}（${title}）`}
+            aria-expanded={expanded}
+            aria-controls={stepsId}
+            onClick={() => setExpanded((value) => !value)}
+          >
+            {expanded ? "收合步驟" : "展開步驟"}
+          </button>
+        )}
+      </div>
+      {canExpand && (
+        <div id={stepsId} hidden={!expanded}>
+          {expanded && (
+            <ol aria-label="任務步驟" className="space-y-2 border-l py-1 pl-3">
+              {steps.map(({ event, times }) => (
+                <li
+                  key={event.id}
+                  className="flex flex-wrap items-baseline gap-x-3 gap-y-1"
+                >
+                  <ActivityTime value={event.created_at} />
+                  <span className="min-w-0 whitespace-pre-wrap">
+                    <Linkified text={activityDetail(event)} />
+                  </span>
+                  {times > 1 && (
+                    <span className="text-xs text-muted-foreground">
+                      共 {times} 次
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ol>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ActivityFeed({
   state,
@@ -728,18 +792,16 @@ function ActivityFeed({
 }) {
   const [all, setAll] = useState(false);
   const [limit, setLimit] = useState(10);
-  const rows = collapseRepeats(
-    state.activity.filter((a) => all || !isSystemActivity(a)),
-  );
+  const rows = groupActivity(state.activity, all);
   const items = rows.slice(0, limit);
   return (
-    <section>
+    <section aria-label="最近動態" className="min-w-0">
       <SectionTitle
         action={
           <Button
             variant="ghost"
             size="xs"
-            className="text-muted-foreground"
+            className={cn("text-muted-foreground", batchFocus)}
             aria-controls="inbox-activity"
             aria-expanded={all}
             onClick={() => setAll(!all)}
@@ -754,27 +816,29 @@ function ActivityFeed({
         <CardContent id="inbox-activity">
           {items.length ? (
             <ol className="flex flex-col">
-              {items.map((a, i) => {
-                const k = activityKinds[a.kind] ?? {
+              {items.map((group, i) => {
+                const k = activityKinds[group.latest.kind] ?? {
                   icon: Activity,
                   tone: "text-muted-foreground",
                 };
                 const Icon = k.icon;
-                const day = dayLabel(a.created_at);
                 return (
-                  <li key={a.id} className="flex flex-col">
-                    {day !== (i > 0 && dayLabel(items[i - 1].created_at)) && (
+                  <li key={group.key} className="flex min-w-0 flex-col">
+                    {group.day !== items[i - 1]?.day && (
                       <span
                         className={cn(
                           "pb-2 text-xs font-medium text-muted-foreground",
                           i > 0 && "pt-2",
                         )}
                       >
-                        {day}
+                        {dayLabel(group.latest.created_at)}
                       </span>
                     )}
                     <div className="flex gap-3">
-                      <span className="flex flex-col items-center">
+                      <span
+                        aria-hidden="true"
+                        className="flex flex-col items-center"
+                      >
                         <span
                           className={cn(
                             "grid size-5 shrink-0 place-items-center [&_svg]:size-3.5",
@@ -787,40 +851,7 @@ function ActivityFeed({
                           <span className="w-px flex-1 bg-border" />
                         )}
                       </span>
-                      <span className="flex min-w-0 flex-1 flex-col pb-3 text-sm">
-                        {a.task_id && (
-                          <button
-                            className="work-touch text-left font-medium hover:underline [overflow-wrap:anywhere]"
-                            onClick={() => open(a.task_id!)}
-                          >
-                            {a.task_title ?? "查看任務"}
-                          </button>
-                        )}
-                        <span
-                          className={cn(
-                            "[overflow-wrap:anywhere]",
-                            a.kind === "triage_skipped"
-                              ? "whitespace-pre-wrap"
-                              : "line-clamp-2",
-                            (a.task_id || isSystemActivity(a)) &&
-                              "text-muted-foreground",
-                          )}
-                        >
-                          {a.kind === "triage_skipped" ? (
-                            a.detail
-                          ) : (
-                            <Linkified text={brief(a)} />
-                          )}
-                        </span>
-                        <span className="text-xs text-muted-foreground">
-                          {ago(a.created_at)}
-                        </span>
-                        {a.times > 1 && (
-                          <span className="text-xs text-muted-foreground">
-                            連續 {a.times} 次
-                          </span>
-                        )}
-                      </span>
+                      <ActivityRow group={group} open={open} />
                     </div>
                   </li>
                 );
