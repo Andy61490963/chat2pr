@@ -82,13 +82,17 @@ export function FrictionCard({
         <div className="flex flex-col gap-1">
           <h2 className="leading-none font-semibold">使用摩擦</h2>
           <CardDescription>
-            {data ? `近 ${data.days} 天建立的 ${data.tasks} 件任務` : "讀取中…"}
+            {data
+              ? `近 ${data.days} 天建立的 ${data.tasks} 件任務`
+              : error
+                ? "尚未取得統計"
+                : "讀取中…"}
           </CardDescription>
         </div>
         <div className="flex flex-wrap gap-2 text-sm">
           <select
             aria-label="期間"
-            className="rounded-md border bg-background px-2 py-1"
+            className="work-touch rounded-md border bg-background px-2 py-1"
             value={days}
             onChange={(e) => setDays(Number(e.target.value))}
           >
@@ -98,7 +102,7 @@ export function FrictionCard({
           </select>
           <select
             aria-label="群組"
-            className="min-w-0 max-w-full rounded-md border bg-background px-2 py-1"
+            className="work-touch min-w-0 max-w-full rounded-md border bg-background px-2 py-1"
             value={group}
             onChange={(e) => setGroup(e.target.value)}
           >
@@ -113,7 +117,10 @@ export function FrictionCard({
       </CardHeader>
       <CardContent>
         {error && (
-          <p className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">
+          <p
+            role="alert"
+            className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
+          >
             {error}
           </p>
         )}

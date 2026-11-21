@@ -57,7 +57,9 @@ export function CapacityCard({ request }: { request: Request }) {
   return (
     <Card>
       <CardHeader className="flex flex-col gap-1">
-        <CardTitle>同時執行</CardTitle>
+        <CardTitle role="heading" aria-level={2}>
+          同時執行
+        </CardTitle>
         <CardDescription>
           全系統最多同時執行幾個任務；同一專案的修改一次一個，查詢可以並行。每個工作容器仍有
           2 GB 記憶體、2 顆 CPU 的上限。
@@ -65,7 +67,10 @@ export function CapacityCard({ request }: { request: Request }) {
       </CardHeader>
       <CardContent className="flex flex-col gap-5">
         {error && (
-          <p className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">
+          <p
+            role="alert"
+            className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
+          >
             {error}
           </p>
         )}
@@ -159,8 +164,8 @@ export function CapacityCard({ request }: { request: Request }) {
                       <span className="flex min-w-0 flex-1 flex-col">
                         <span className="truncate">{r.title}</span>
                         <span className="truncate text-xs text-muted-foreground">
-                          {r.project ?? "未指定專案"} ·{" "}
-                          {phaseLabels[r.phase] ?? r.phase} ·{" "}
+                          {r.project ?? "未指定專案"}，
+                          {phaseLabels[r.phase] ?? "執行中"}，
                           {ago(r.started_at)}
                           開始
                         </span>
@@ -194,7 +199,7 @@ export function CapacityCard({ request }: { request: Request }) {
                       <span className="flex min-w-0 flex-1 flex-col">
                         <span className="truncate">{t.title}</span>
                         <span className="truncate text-xs text-muted-foreground">
-                          {t.project ?? "未指定專案"} · {ago(t.created_at)}
+                          {t.project ?? "未指定專案"}，{ago(t.created_at)}
                           提出
                         </span>
                         {/* 全系統暫停的處理方式已在上方橫幅說明，這裡只列個別任務要處理的事。 */}

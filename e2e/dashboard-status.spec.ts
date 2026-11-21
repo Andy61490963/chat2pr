@@ -48,7 +48,7 @@ for (const viewport of [
       page,
     }, info) => {
       await mockDashboard(page, { state: { projects: statusProjects } });
-      await page.goto("/system");
+      await page.goto("/system?tab=disk");
       const images = page.getByRole("region", { name: /^工作映像/ });
       await expect(
         images.getByText("版本 demo", { exact: true }),

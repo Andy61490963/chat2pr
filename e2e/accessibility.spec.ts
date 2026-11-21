@@ -114,7 +114,22 @@ const screens: {
   { name: "專案", path: "/projects", loaded: project.name },
   { name: "成員", path: "/members", loaded: member },
   { name: "定期檢查", path: "/checks", loaded: check.name },
-  { name: "系統", path: "/system", loaded: /^最後盤點 / },
+  { name: "系統的執行分頁", path: "/system", loaded: "每件任務要切到看板" },
+  {
+    name: "系統的容器與磁碟分頁",
+    path: "/system?tab=disk",
+    loaded: /^最後盤點 /,
+  },
+  {
+    name: "系統的網路分頁",
+    path: "/system?tab=network",
+    loaded: /^使用預設清單，共/,
+  },
+  {
+    name: "系統的架構分頁",
+    path: "/system?tab=architecture",
+    loaded: "工作容器各階段的權限",
+  },
   { name: "設定", path: "/settings", loaded: /^方案 demo/ },
   { name: "登入", path: "/", loaded: "使用 GitHub 登入", signedOut: true },
 ];
@@ -124,7 +139,7 @@ const narrowScreens = screens
       !width &&
       (signedOut ||
         ["/tasks", "/groups", "/projects", "/system", "/settings"].includes(
-          path,
+          path.split("?")[0],
         )),
   )
   .map((screen) => ({
@@ -252,16 +267,27 @@ for (const theme of ["light", "dark"] as const) {
             ),
           ).toBe(true);
         }
-        if (screen.path === "/system") {
-          await expect(page.getByText("每件任務要切到看板")).toBeVisible();
-        }
+        if (screen.path === "/system?tab=disk")
+          await expect(
+            page.getByRole("heading", { name: "提醒與清理規則" }),
+          ).toBeVisible();
+        if (screen.path === "/system?tab=network")
+          await expect(
+            page.getByRole("spinbutton", { name: "最多保留幾個" }),
+          ).toBeVisible();
+        if (screen.path === "/system?tab=architecture")
+          await expect(
+            page
+              .frameLocator('iframe[title^="系統架構動畫"]')
+              .getByRole("button", { name: "開始播放" }),
+          ).toBeVisible();
         expect(
           await page
             .locator("html")
             .evaluate((element) => element.classList.contains("dark")),
         ).toBe(theme === "dark");
         await page.evaluate(() => document.fonts.ready);
-        if (screen.path === "/system" && width) {
+        if (screen.path === "/system?tab=architecture" && width) {
           for (const name of ["工作容器各階段的權限", "資料存放位置"]) {
             const section = page.getByRole("region", { name, exact: true });
             await expect(section).toBeVisible();

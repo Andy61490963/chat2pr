@@ -4,10 +4,12 @@ import {
   diskRules,
   ruleLabels,
   type DiskItem,
+  type DiskLevel,
   type DiskReport,
   type DiskRule,
   type DiskSettings,
 } from "../../shared/docker-disk";
+import { systemStatusLabels } from "../../shared/status-glossary.js";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -37,11 +39,13 @@ const bytes = (n: number) =>
     : `${Math.round(n / 1024 ** 2)} MB`;
 
 const levels = {
-  ok: { label: "空間足夠", variant: "good" },
-  low: { label: "空間不足", variant: "warn" },
-  critical: { label: "嚴重不足", variant: "danger" },
-  unknown: { label: "讀不到可用空間", variant: "secondary" },
+  ok: "good",
+  low: "warn",
+  critical: "danger",
+  unknown: "secondary",
 } as const;
+const switchTouchArea =
+  "relative max-md:after:absolute max-md:after:top-1/2 max-md:after:left-1/2 max-md:after:size-11 max-md:after:-translate-1/2";
 
 const ruleHelp: Record<DiskRule, string> = {
   workspaces:
@@ -60,7 +64,15 @@ type CleanupResult = {
 };
 
 /** 系統頁：Docker 磁碟用量、空間提醒與清理規則。清理一律先列出項目，管理者確認後才刪。 */
-export function DockerDiskCard({ request }: { request: Request }) {
+export function DockerDiskCard({
+  request,
+  active,
+  onLevelChange,
+}: {
+  request: Request;
+  active: boolean;
+  onLevelChange: (level: DiskLevel) => void;
+}) {
   const [report, setReport] = useState<DiskReport | null>(null);
   const [draft, setDraft] = useState<DiskSettings | null>(null);
   // 已儲存的設定：判斷「儲存設定」能不能按，不靠盤點結果（盤點失敗時也要能改規則）。
@@ -73,6 +85,7 @@ export function DockerDiskCard({ request }: { request: Request }) {
   const [preview, setPreview] = useState<DiskItem[] | null>(null);
   const [chosen, setChosen] = useState<Set<DiskRule>>(new Set());
   const [cleaning, setCleaning] = useState(false);
+  const [cleanupError, setCleanupError] = useState("");
 
   const dirty = useMemo(
     () => !!saved && !!draft && JSON.stringify(saved) !== JSON.stringify(draft),
@@ -88,6 +101,7 @@ export function DockerDiskCard({ request }: { request: Request }) {
           `/api/system/disk${fresh ? "?fresh=1" : ""}`,
         );
         setReport(r);
+        onLevelChange(r.level);
         setReportError("");
         // 設定端點讀不到時的保底；已有草稿就不覆蓋管理者正在改的內容。
         setDraft((d) => d ?? r.settings);
@@ -100,7 +114,7 @@ export function DockerDiskCard({ request }: { request: Request }) {
         setLoading(false);
       }
     },
-    [request],
+    [request, onLevelChange],
   );
   // 規則存在資料庫，和 Docker 盤點分開讀：盤點失敗時規則區塊仍要出現。
   const loadSettings = useCallback(async () => {
@@ -117,6 +131,9 @@ export function DockerDiskCard({ request }: { request: Request }) {
     void loadSettings();
     void load();
   }, [load, loadSettings]);
+  useEffect(() => {
+    if (!active && preview) setPreview(null);
+  }, [active, preview]);
 
   const save = async () => {
     if (!draft) return;
@@ -143,6 +160,7 @@ export function DockerDiskCard({ request }: { request: Request }) {
   // 預覽前重新盤點，列出的就是這一刻會刪除的項目。
   const openPreview = async () => {
     setNotice("");
+    setCleanupError("");
     const r = await load(true);
     if (!r) return;
     setChosen(new Set(r.candidates.map((c) => c.rule!).filter(Boolean)));
@@ -156,6 +174,7 @@ export function DockerDiskCard({ request }: { request: Request }) {
       .map((c) => c.key);
     if (!keys.length) return;
     setCleaning(true);
+    setCleanupError("");
     try {
       const result = await request<CleanupResult>(
         "/api/system/disk/cleanup",
@@ -166,7 +185,7 @@ export function DockerDiskCard({ request }: { request: Request }) {
       setNotice(`清理完成：${result.summary}`);
       await load();
     } catch (e) {
-      setReportError(message(e));
+      setCleanupError(message(e));
     } finally {
       setCleaning(false);
     }
@@ -185,16 +204,23 @@ export function DockerDiskCard({ request }: { request: Request }) {
         : d,
     );
 
-  const level = report ? levels[report.level] : null;
   const anyRule = draft ? diskRules.some((r) => draft.rules[r].enabled) : false;
 
   return (
     <Card>
       <CardHeader className="flex flex-col items-start gap-3 sm:flex-row sm:justify-between">
         <div className="flex flex-col gap-1">
-          <CardTitle className="flex items-center gap-2">
+          <CardTitle
+            role="heading"
+            aria-level={2}
+            className="flex flex-wrap items-center gap-2"
+          >
             <HardDrive className="size-4" /> Docker 磁碟
-            {level && <Badge variant={level.variant}>{level.label}</Badge>}
+            {report && (
+              <Badge variant={levels[report.level]}>
+                {systemStatusLabels.disk[report.level]}
+              </Badge>
+            )}
           </CardTitle>
           <CardDescription>
             {report
@@ -228,11 +254,7 @@ export function DockerDiskCard({ request }: { request: Request }) {
             role="alert"
             className="flex flex-col gap-1 rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
           >
-            <p>{reportError}</p>
-            <p className="text-xs">
-              目前無法盤點
-              Docker；下方提醒與清理規則仍可調整，按「重新盤點」再試。
-            </p>
+            {reportError}
           </div>
         )}
         {settingsError && !draft && (
@@ -240,7 +262,7 @@ export function DockerDiskCard({ request }: { request: Request }) {
             role="alert"
             className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
           >
-            讀不到提醒與清理規則：{settingsError}
+            {settingsError}
           </p>
         )}
         {notice && (
@@ -254,11 +276,17 @@ export function DockerDiskCard({ request }: { request: Request }) {
             排隊中的任務會留在佇列，空間回升後自動執行；清理後按「重新盤點」確認。
           </p>
         )}
+        {report?.level === "low" && (
+          <p className="rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn">
+            Docker 可用空間低於 {report.settings.warn_percent}
+            %。請查看下方用量，並用「立即清理」確認可清理的項目。
+          </p>
+        )}
         {report?.level === "critical" && !report.paused && (
           <p className="rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn">
             可用空間低於 {report.settings.pause_percent}
             %。「空間不足時暫停派工」沒有開啟，
-            新工作仍會執行，可能因為磁碟滿而在安裝或建置時失敗。
+            新工作仍會執行，可能因為磁碟滿而在安裝或建置時失敗。請查看下方用量，並用「立即清理」確認可清理的項目。
           </p>
         )}
         {report && (
@@ -299,7 +327,8 @@ export function DockerDiskCard({ request }: { request: Request }) {
                 </ul>
               ) : (
                 <p className="text-sm text-muted-foreground">
-                  讀不到磁碟可用空間，暫時無法提醒。
+                  無法提醒磁碟空間不足，因為目前讀不到可用空間。請確認主機的
+                  Docker 磁碟可讀取，再按「重新盤點」。
                 </p>
               )}
             </section>
@@ -308,7 +337,7 @@ export function DockerDiskCard({ request }: { request: Request }) {
                 用量
               </h3>
               <div className="overflow-x-auto rounded-lg border">
-                <table className="w-full text-sm">
+                <table className="w-full text-sm max-sm:table-fixed max-sm:[&_th]:px-1 max-sm:[&_td]:px-1 max-sm:[&_td]:wrap-anywhere">
                   <thead className="text-xs text-muted-foreground">
                     <tr className="border-b">
                       <th className="px-3 py-2 text-left font-medium">類型</th>
@@ -355,7 +384,7 @@ export function DockerDiskCard({ request }: { request: Request }) {
                     key={o.owner}
                     className="rounded-md border px-2 py-1 text-xs tabular-nums"
                   >
-                    {o.label} · {o.count} 個 · {bytes(o.size)}
+                    {o.label}，{o.count} 個，共 {bytes(o.size)}
                   </li>
                 ))}
               </ul>
@@ -397,34 +426,41 @@ export function DockerDiskCard({ request }: { request: Request }) {
               />
               % 時私訊管理者
             </label>
-            <div className="flex flex-wrap items-center gap-2 text-sm">
-              <Switch
-                id="disk-pause"
-                checked={draft.pause_enabled}
-                onCheckedChange={(v) =>
-                  setDraft({ ...draft, pause_enabled: v })
-                }
-              />
-              <label htmlFor="disk-pause">低於</label>
-              <Input
-                aria-label="暫停派新工作的可用空間百分比"
-                type="number"
-                className="h-8 w-20"
-                min={0.5}
-                max={50}
-                step={0.5}
-                value={draft.pause_percent}
-                onChange={(e) =>
-                  setDraft({ ...draft, pause_percent: Number(e.target.value) })
-                }
-              />
-              <label htmlFor="disk-pause">
-                % 時暫停派新工作（關閉時只通知）
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+              <label className="work-touch flex items-center gap-2">
+                <Switch
+                  className={switchTouchArea}
+                  checked={draft.pause_enabled}
+                  onCheckedChange={(v) =>
+                    setDraft({ ...draft, pause_enabled: v })
+                  }
+                />
+                空間不足時暫停派工
               </label>
+              <div className="flex items-center gap-2">
+                <label htmlFor="disk-pause-percent">可用空間低於</label>
+                <Input
+                  id="disk-pause-percent"
+                  aria-label="可用空間低於多少百分比時暫停派工"
+                  type="number"
+                  className="h-8 w-20"
+                  min={0.5}
+                  max={50}
+                  step={0.5}
+                  value={draft.pause_percent}
+                  onChange={(e) =>
+                    setDraft({
+                      ...draft,
+                      pause_percent: Number(e.target.value),
+                    })
+                  }
+                />
+                %
+              </div>
             </div>
             <label className="flex items-start gap-2 text-sm">
               <Switch
-                className="mt-0.5"
+                className={cn("mt-0.5", switchTouchArea)}
                 checked={draft.daily_cleanup}
                 onCheckedChange={(v) =>
                   setDraft({ ...draft, daily_cleanup: v })
@@ -450,7 +486,7 @@ export function DockerDiskCard({ request }: { request: Request }) {
                   <li key={rule} className="flex items-start gap-2 text-sm">
                     <Switch
                       id={`disk-rule-${rule}`}
-                      className="mt-0.5"
+                      className={cn("mt-0.5", switchTouchArea)}
                       checked={r.enabled}
                       onCheckedChange={(v) => setRule(rule, { enabled: v })}
                     />
@@ -527,7 +563,7 @@ export function DockerDiskCard({ request }: { request: Request }) {
         )}
         {report && report.protected.length > 0 && (
           <details className="rounded-lg border px-3 py-2 text-sm">
-            <summary className="cursor-pointer">
+            <summary className="min-h-11 cursor-pointer content-center md:min-h-0">
               只列出、不會刪除的項目（{report.protected.length}）
             </summary>
             <ul className="mt-2 divide-y">
@@ -536,7 +572,7 @@ export function DockerDiskCard({ request }: { request: Request }) {
                   <span className="flex min-w-0 flex-1 flex-col">
                     <code className="truncate text-xs">{p.name}</code>
                     <span className="truncate text-xs text-muted-foreground">
-                      {p.protected} · {p.detail}
+                      {p.protected}，{p.detail}
                     </span>
                   </span>
                   <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
@@ -548,8 +584,14 @@ export function DockerDiskCard({ request }: { request: Request }) {
           </details>
         )}
       </CardContent>
-      <Dialog open={!!preview} onOpenChange={(o) => !o && setPreview(null)}>
-        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+      <Dialog
+        open={active && !!preview}
+        onOpenChange={(o) => !o && setPreview(null)}
+      >
+        <DialogContent
+          showCloseButton={false}
+          className="max-h-[85vh] overflow-y-auto sm:max-w-2xl"
+        >
           <DialogHeader>
             <DialogTitle>確認要清理的項目</DialogTitle>
             <DialogDescription>
@@ -567,7 +609,7 @@ export function DockerDiskCard({ request }: { request: Request }) {
               if (!group.length) return null;
               return (
                 <section key={rule} className="flex flex-col gap-1">
-                  <label className="flex items-center gap-2 text-sm font-medium">
+                  <label className="work-touch flex items-center gap-2 text-sm font-medium">
                     <Checkbox
                       checked={chosen.has(rule)}
                       onCheckedChange={(v) =>
@@ -599,6 +641,11 @@ export function DockerDiskCard({ request }: { request: Request }) {
                 </section>
               );
             })}
+          {cleanupError && (
+            <p role="alert" className="text-sm text-danger">
+              {cleanupError}
+            </p>
+          )}
           <DialogFooter>
             <DialogClose asChild>
               <Button variant="outline">先不要</Button>

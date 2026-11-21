@@ -42,7 +42,7 @@ test("新增專案可依 GitHub 儲存庫標籤找到並操作選單", async ({ 
 
 test("磁碟清理規則的開關與數值各有可辨識的名稱", async ({ page }) => {
   await mockDashboard(page);
-  await page.goto("/system");
+  await page.goto("/system?tab=disk");
   const rule = "已結束任務的工作區資料卷";
   await expect(
     page.getByRole("switch", { name: rule, exact: true }),

@@ -39,7 +39,7 @@ const pages = [
   { path: "/groups", title: "群組", content: group.name },
   { path: "/projects", title: "專案", content: project.name },
   { path: "/checks", title: "定期檢查", content: /^還沒有定期檢查/ },
-  { path: "/system", title: "系統", content: /^最後盤點 / },
+  { path: "/system", title: "系統", content: "每件任務要切到看板" },
   { path: "/settings", title: "設定", content: /^方案 demo/ },
 ];
 
@@ -632,7 +632,7 @@ for (const [entry, title, sub] of [
 ] as const)
   test(`系統架構動畫依入口設定顯示：${entry}`, async ({ page }) => {
     await mockDashboard(page, { routes: systemWithEntry(entry) });
-    await page.goto("/system");
+    await page.goto("/system?tab=architecture");
     const tunnel = flowFrame(page).locator("#n-tunnel");
     await expect(tunnel).toContainText(title);
     await expect(tunnel).toContainText(sub);
@@ -641,7 +641,7 @@ for (const [entry, title, sub] of [
 
 test("系統頁的架構動畫可以播放，並跟著看板外觀切換深色", async ({ page }) => {
   await mockDashboard(page, { routes: systemWithEntry("cloudflare") });
-  await page.goto("/system");
+  await page.goto("/system?tab=architecture");
   const frame = flowFrame(page);
   await expect(
     frame.locator("svg text").filter({ hasText: /^chat2pr$/ }).first(),
@@ -670,7 +670,7 @@ for (const [entry, title] of [
 ] as const)
   test(`系統頁的流程說明依入口設定顯示：${entry}`, async ({ page }) => {
     await mockDashboard(page, { routes: systemWithEntry(entry) });
-    await page.goto("/system");
+    await page.goto("/system?tab=architecture");
     await expect(page.getByText(`LINE 經${title}送 Webhook`)).toBeVisible();
     if (entry !== "ngrok")
       await expect(page.getByText(/ngrok 固定 HTTPS 入口/)).toHaveCount(0);

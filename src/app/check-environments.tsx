@@ -28,6 +28,7 @@ export function CheckEnvironmentCard({
     [idle, setIdle] = useState(""),
     [max, setMax] = useState(""),
     [note, setNote] = useState(""),
+    [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
   const load = useCallback(async () => {
     try {
@@ -35,8 +36,9 @@ export function CheckEnvironmentCard({
       setData(d);
       setIdle(String(d.idleMinutes));
       setMax(String(d.max));
+      setError("");
     } catch (e) {
-      setNote(message(e));
+      setError(message(e));
     }
   }, [request]);
   useEffect(() => {
@@ -44,6 +46,7 @@ export function CheckEnvironmentCard({
   }, [load]);
   const save = async () => {
     setBusy(true);
+    setNote("");
     try {
       await request("/api/settings/check-environments", "PUT", {
         idleMinutes: Number(idle),
@@ -52,7 +55,7 @@ export function CheckEnvironmentCard({
       setNote("已儲存，超過新設定的環境會立即清除");
       await load();
     } catch (e) {
-      setNote(message(e));
+      setError(message(e));
     } finally {
       setBusy(false);
     }
@@ -62,12 +65,22 @@ export function CheckEnvironmentCard({
   return (
     <Card>
       <CardHeader className="flex flex-col gap-1">
-        <CardTitle>定期檢查環境</CardTitle>
+        <CardTitle role="heading" aria-level={2}>
+          定期檢查環境
+        </CardTitle>
         <CardDescription>
           每個定期檢查在自己的檢查容器執行，網路只通到該檢查的目標。執行完先保留，下次直接重用；閒置超過設定時間，或檢查、資料庫連線變更時才清除。
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
+        {error && (
+          <p
+            role="alert"
+            className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
+          >
+            {error}
+          </p>
+        )}
         {note && (
           <p role="status" className="rounded-lg bg-muted px-3 py-2 text-sm">
             {note}

@@ -186,7 +186,7 @@ export function AlertBell({
   const taskAfterMenu = useRef<{ id: string; filter: TaskStatusFilter } | null>(
     null,
   );
-  // 跟任務有關的通知開任務；其餘帶去能處理它的頁面（專案、群組或設定）。
+  // 跟任務有關的通知開任務；其餘帶去能處理它的頁面。
   const follow = (a: Alert, fromMenu = false) => {
     const target = notificationTarget(a, !!openView);
     if ("note" in target) return;
@@ -198,7 +198,11 @@ export function AlertBell({
         taskAfterMenu.current = { id: target.task, filter };
       else void openTask(target.task, filter);
     } else {
-      void openView?.(target.view, a.project_id, projectNoticeTab(a.kind));
+      void openView?.(
+        target.view,
+        a.project_id,
+        target.view === "system" ? target.tab : projectNoticeTab(a.kind),
+      );
     }
   };
   // 推播額度用完的提示由伺服器依 service_health 附上，固定放在清單頂端，不算未讀、不跳桌面通知。
