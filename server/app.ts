@@ -160,6 +160,7 @@ export async function buildApp(
   embedder: Embedder = new HttpEmbedder(),
   githubUser?: Parameters<typeof registerMembers>[2],
   runner: Pick<Runner, "call"> = new HttpRunner(),
+  validationProgress?: import("./validation-queue.js").ValidationQueue["progress"],
 ) {
   const app = Fastify({
     logger: {
@@ -502,6 +503,7 @@ export async function buildApp(
       runsToday,
       rag,
       failures,
+      validations,
     ] = await Promise.all([
       diskPaused(db),
       // 看板的分頁數字與統計卡用資料庫的實際數量，不受清單載入範圍影響。
@@ -534,7 +536,7 @@ export async function buildApp(
         [user.user_id],
       ),
       db.settings(),
-      db.query(
+      db.query<Project>(
         "SELECT p.*,r.phase AS index_phase,r.chunks AS index_chunks,r.error AS index_error FROM projects p LEFT JOIN repo_indexes r ON r.project_id=p.id ORDER BY p.created_at",
       ),
       db.query(
@@ -579,7 +581,11 @@ export async function buildApp(
          FROM (SELECT n.group_id,n.attempts,${staleNotification} AS stale FROM notifications n
            LEFT JOIN tasks t ON t.id=n.task_id WHERE n.sent_at IS NULL) x`,
       ),
+      validationProgress?.() ?? [],
     ]);
+    const progressByProject = new Map(
+      validations.map((entry) => [entry.id, entry]),
+    );
     const s = secrets();
     // 推播額度用完時，鈴鐺清單頂端放一行提示；鈴鐺讀資料庫，不需要推播。
     const quota = (
@@ -618,7 +624,12 @@ export async function buildApp(
       } satisfies StateTotals,
       failedNotifications: (failures?.direct ?? 0) + (failures?.group ?? 0),
       notificationFailures: failures ?? { direct: 0, group: 0, stale: 0 },
-      projects,
+      projects: projects.map((project) => {
+        const validation = progressByProject.get(project.id);
+        return validation?.version === project.config_version
+          ? { ...project, validation_progress: validation.progress }
+          : project;
+      }),
       groups,
       tasks,
       rag,
@@ -651,13 +662,16 @@ export async function buildApp(
     reply.raw.write("event: connected\ndata: {}\n\n");
     let last = "";
     const timer = setInterval(() => {
-      void db
-        .one<{ stamp: string }>(
+      void Promise.all([
+        db.one<{ stamp: string }>(
           "SELECT concat((SELECT max(updated_at)::text FROM tasks),':',(SELECT max(id) FROM audit),':',(SELECT max(checked_at)::text FROM service_health),':',(SELECT max(id) FROM run_events),':',(SELECT max(heartbeat_at)::text FROM runs),':',(SELECT max(completed_at)::text FROM runs),':',(SELECT revision FROM chat_revision WHERE id=1)) AS stamp",
-        )
-        .then((r) => {
-          if (r.stamp !== last) {
-            last = r.stamp;
+        ),
+        validationProgress?.() ?? [],
+      ])
+        .then(([r, validations]) => {
+          const stamp = r.stamp + JSON.stringify(validations);
+          if (stamp !== last) {
+            last = stamp;
             reply.raw.write("event: update\ndata: {}\n\n");
           } else reply.raw.write(": heartbeat\n\n");
         })
@@ -1113,12 +1127,11 @@ export async function buildApp(
       } catch {
         // 查不到就照常驗證，由驗證結果說明原因。
       }
-    // 清掉上一次的錯誤，看板才不會在重新驗證期間顯示過期結果。
-    await db.query("UPDATE projects SET validation_error=NULL WHERE id=$1", [
-      id,
-    ]);
-    await enqueueValidation(id);
-    return reply.code(202).send({ ok: true, message: "環境驗證已排程" });
+    const queued = await enqueueValidation(id);
+    return reply.code(202).send({
+      ok: true,
+      message: queued === false ? "已在驗證中" : "你的專案已排入環境驗證。",
+    });
   });
   // 只有找不到儲存庫的專案可以刪除；歷史任務保留，只是不再掛在這個專案下。
   app.delete("/api/projects/:id", async (req) => {

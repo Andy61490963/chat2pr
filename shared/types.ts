@@ -81,6 +81,7 @@ export interface Project {
   full_access?: boolean;
   setup_plan?: import("./project-setup.js").SetupPlan | null;
   setup_status?: string | null;
+  validation_progress?: string;
   index_phase?: "queued" | "indexing" | "ready" | "failed" | "limited" | null;
   index_chunks?: number;
   index_error?: string | null;

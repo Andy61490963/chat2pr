@@ -4,6 +4,7 @@ import { diskPaused } from "./docker-disk.js";
 import type { RunEvent } from "../shared/observation.js";
 import { phaseLabels } from "../shared/observation.js";
 import { randomUUID } from "node:crypto";
+import { APIConnectionError } from "openai";
 import {
   approvalNotice,
   requireProjectConfirmation,
@@ -143,6 +144,23 @@ export class ValidationPhaseError extends Error {
     };
   }
 }
+
+export function isTransientValidationFailure(error: unknown) {
+  if (error instanceof ValidationPhaseError)
+    return error.notice().failure.category === "transient";
+  const message = error instanceof Error ? error.message : String(error);
+  const category = classifyFailure(message).category;
+  if (category !== "system") return category === "transient";
+  if (!(error instanceof Error)) return false;
+  if (
+    error instanceof APIConnectionError ||
+    ["TimeoutError", "AbortError"].includes(error.name)
+  )
+    return true;
+  if (error instanceof RunnerResponseError)
+    return [502, 503, 504].includes(error.statusCode);
+  return "status" in error && [502, 503, 504].includes(Number(error.status));
+}
 export interface PhaseResult {
   observations?: RunEvent[];
   exitCode: number;
@@ -172,6 +190,8 @@ export interface Runner {
     archive: ReadableStream<Uint8Array>,
   ): Promise<void>;
 }
+class RunnerResponseError extends AppError {}
+
 export class HttpRunner implements Runner {
   constructor(
     private runnerKey = () => secrets().runnerSecret ?? "",
@@ -261,7 +281,7 @@ export class HttpRunner implements Runner {
       throw new AppError(502, "執行器回應不是完整的 JSON");
     }
     if (r.status < 200 || r.status >= 300)
-      throw new AppError(
+      throw new RunnerResponseError(
         r.status,
         typeof data?.error === "string" ? data.error : "執行器連線失敗",
       );
@@ -476,17 +496,26 @@ export class Execution {
       project.image,
     );
   }
-  async validate(project: Project) {
+  async validate(
+    project: Project,
+    reportProgress?: (message: string) => Promise<void>,
+  ) {
     if (project.setup_input?.configVersion === project.config_version)
       return { ok: false, waiting: true };
     const runId = randomUUID();
     const lock = await this.db.pool.connect();
     const lockName = `validate:${project.id}`;
-    const acquired = (
-      await lock.query("SELECT pg_try_advisory_lock(hashtext($1)) AS locked", [
-        lockName,
-      ])
-    ).rows[0].locked;
+    let acquired: boolean;
+    try {
+      acquired = (
+        await lock.query("SELECT pg_try_advisory_lock(hashtext($1)) AS locked", [
+          lockName,
+        ])
+      ).rows[0].locked;
+    } catch (error) {
+      lock.release(true);
+      throw error;
+    }
     if (!acquired) {
       lock.release();
       return { ok: false };
@@ -505,16 +534,13 @@ export class Execution {
     };
     const progress = async (message: string) => {
       await current();
-      await this.db.query(
-        "UPDATE projects SET setup_status=$3 WHERE id=$1 AND config_version=$2",
-        [project.id, project.config_version, message],
-      );
+      await reportProgress?.(message);
     };
     let sha: string;
     try {
-      await current();
+      await progress("你的專案正在等待執行器。");
       if (project.setup_mode === "auto") {
-        await progress("AI 正在讀取專案設定");
+        await progress("你的專案正在由 AI 讀取環境設定。");
         const settings = await this.db.settings();
         if (settings.ai_mode === "api")
           setupReservation = await this.budget.reserve(
@@ -547,7 +573,7 @@ export class Execution {
         throw new Error(missingTestMessage(suggestStack(paths)));
       }
       sha ??= await this.github.base(project);
-      await progress("準備隔離環境");
+      await progress("你的專案正在等待執行器準備隔離環境。");
       if (this.runner.prepareSource) {
         const source = await this.github.sourceAccess(project, sha);
         await this.runner.prepareSource(runId, project.image, source);
@@ -579,7 +605,7 @@ export class Execution {
         let failed: PhaseResult | undefined;
         let failedPhase = "系統套件安裝";
         if (plan?.systemInstall) {
-          await progress("安裝審查放行的系統套件");
+          await progress("你的專案正在安裝審查放行的系統套件。");
           const system = await provideSystemInstall(this.db, this.runner, {
             runId,
             taskId: null,
@@ -593,11 +619,7 @@ export class Execution {
             failed = { exitCode: 1, stdout: "", stderr: system.output };
         }
         if (!failed) {
-          await progress(
-            attempt
-              ? `AI 已調整準備方式，正在重試（${attempt}/2）`
-              : "安裝相依套件",
-          );
+          await progress("你的專案正在安裝相依套件。");
           const install = scrubResult(
             await this.runner.call<PhaseResult>("phase", {
               runId,
@@ -622,8 +644,8 @@ export class Execution {
         if (!failed) {
           await progress(
             plan?.verification === "build"
-              ? "執行建置檢查（未執行自動測試）"
-              : "執行基底測試",
+              ? "你的專案正在執行建置檢查。"
+              : "你的專案正在執行基底測試。",
           );
           test = scrubResult(
             await this.runner.call<PhaseResult>("phase", {
@@ -652,18 +674,19 @@ export class Execution {
         }
         if (!failed) break;
         const output = `${failed.stdout}\n${failed.stderr}`;
-        if (!plan || attempt === 2)
-          throw new ValidationPhaseError(
-            failedPhase,
-            failedPhase === "測試" ? "test" : "install",
-            output,
-          );
+        const failure = new ValidationPhaseError(
+          failedPhase,
+          failedPhase === "測試" ? "test" : "install",
+          output,
+        );
+        if (!plan || attempt === 2 || isTransientValidationFailure(failure))
+          throw failure;
         if (deadline - Date.now() < 180000)
           throw new AppError(
             408,
             "本次驗證剩餘時間不足以再次調整，已停止並清理資源",
           );
-        await progress("AI 正在分析失敗原因並自行調整環境準備");
+        await progress(`你的專案正在進行第 ${attempt + 1} 次 AI 調整。`);
         ({ plan } = await new ProjectSetup(
           this.db,
           this.github,
@@ -740,9 +763,7 @@ export class Execution {
       const shown = redact(phaseFailure?.text ?? message);
       if (
         project.validated_at &&
-        ((phaseFailure?.failure ?? classifyFailure(message)).category ===
-          "transient" ||
-          subscriptionLimited(message))
+        (isTransientValidationFailure(e) || subscriptionLimited(message))
       ) {
         await this.db.query(
           "UPDATE projects SET setup_status=$2,validation_error=$3 WHERE id=$1 AND config_version=$4 AND validated_at IS NOT NULL",
@@ -767,9 +788,14 @@ export class Execution {
         try {
           if (setupReservation) await this.budget.release(setupReservation);
         } finally {
-          await lock.query("SELECT pg_advisory_unlock(hashtext($1))", [
-            lockName,
-          ]);
+          try {
+            await lock.query("SELECT pg_advisory_unlock(hashtext($1))", [
+              lockName,
+            ]);
+          } catch (error) {
+            lock.release(true);
+            throw error;
+          }
           lock.release();
         }
       }

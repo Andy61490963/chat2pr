@@ -14,10 +14,20 @@ import type { Project } from "../../shared/types.js";
 export function validationKind(
   p: Pick<
     Project,
-    "setup_input" | "repo_missing_at" | "validated_at" | "validation_error"
+    | "setup_input"
+    | "repo_missing_at"
+    | "validated_at"
+    | "validation_error"
+    | "validation_progress"
   >,
 ): "failed" | "transient" | "notice" | null {
-  if (p.setup_input || p.repo_missing_at || !p.validation_error) return null;
+  if (
+    p.setup_input ||
+    p.repo_missing_at ||
+    p.validation_progress ||
+    !p.validation_error
+  )
+    return null;
   if (isRepoNotice(p.validation_error)) return "notice";
   return p.validated_at ? "transient" : "failed";
 }

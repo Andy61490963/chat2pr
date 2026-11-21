@@ -169,6 +169,7 @@
 
 - **環境設定的檔案摘錄只保留原文行、不改寫，而且先掃描完整內容再摘錄**（`server/setup-excerpt.ts`）。系統以 `includes` 比對 AI 引用的 evidence，改寫過的摘要會讓正確的引用被拒絕；先摘錄再掃描則會漏掉省略段落裡的憑證。過大或略過的檔案一律記在 `omissions`，看板照實列出，不要為了「看起來完整」偷偷丟掉。
 - **重新驗證遇到暫時性問題不停用專案**（`Execution.validate` 的失敗分支）：已驗證通過的專案，失敗原因經 `classifyFailure` 判定為暫時性（AI 服務、訂閱讀取、網路、執行器逾時）時，沿用先前的設定、命令與啟用狀態，只記下原因。原因：部署後驗收時主機記憶體不足，Codex 讀不到訂閱額度十多分鐘，一次重新驗證就把能用的專案停用了。專案或設定本身的失敗（測試沒過、找不到測試命令）照舊停用。
+- **專案驗證進度以佇列狀態為準**（`server/validation-queue.ts`）：排程、去重與等鎖交接都以同版設定仍在排隊、重試或執行中的工作為準。進度隨工作保存，`projects.setup_status` 保存驗證結果或補問。原因：工作結束、過期或設定升版後，畫面才能移除「驗證中」，也能接受下一次驗證。
 - **專案腳本自己啟動 SQL Server 時，系統不接手**（`server/sqlserver-test.ts` 的 `selfManagedSqlServer`）：自動模式下，腳本（不含 CI 與文件）出現 `sqlservr` 或 `/opt/mssql/bin` 就不提供系統的 SQL Server，照專案腳本跑。原因：系統接手時提示 AI 不可自行啟動 sqlservr，AI 就不能用專案腳本，只好給不出測試命令（驗收時 DcMateH5Api 因此驗證失敗）。管理者選「一律提供」時仍提供。
 - **只能在特定外部環境跑的測試照 CI 排除**（`server/project-setup.ts` 的指示）：README、CI 或測試程式寫明只在某台伺服器或指定資料庫執行、要靠環境變數指定外部連線才啟用的測試，AI 不可自行設定那個環境變數或導向容器資料庫，改用 `verification=partial` 並寫出排除了哪些測試。原因：驗收時 AI 把只能對 MES_TEST 跑的測試導向容器內的空資料庫，造成假失敗並停用專案。
 - **LocalDB 導向：字串只有伺服器名稱時只換位址**（`worker/mssql/sqlserver.mjs` 的 `rewriteLocalDb`、`builderCredentials`）。原因：`SqlConnectionStringBuilder { DataSource = @"(localdb)\MSSQLLocalDB" }` 被換成整串連線字串後，DataSource 變成無效的伺服器名稱（SqlClient error 25），WeYuJetOpcUaLoader 因此驗證失敗。屬性寫的 `IntegratedSecurity = true` 一併改成 sa 帳號；物件初始設定式不能重複指定同一屬性，所以已有 `TrustServerCertificate` 就不再加。改了這兩個函式要重建 `line-agentflow-worker-mssql:local`。

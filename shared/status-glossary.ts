@@ -14,10 +14,11 @@ export const statusLabels: Record<TaskStatus, string> = {
   closed: "已關閉",
 };
 
-/** 專案依序顯示缺少儲存庫、等待回答、驗證失敗、尚未驗證、停用、未綁定或可派工。 */
+/** 專案優先顯示驗證進度與需要處理的狀態。 */
 export const projectLabels = {
   missing: "找不到儲存庫",
   question: "等你回答",
+  validating: "驗證中",
   failed: "驗證失敗",
   unverified: "需要驗證",
   disabled: "已驗證・未啟用",
@@ -36,11 +37,16 @@ export const groupLabels = {
 export function projectStatus(
   p: Pick<
     Project,
-    "repo_missing_at" | "setup_input" | "validated_at" | "enabled"
+    | "repo_missing_at"
+    | "setup_input"
+    | "validation_progress"
+    | "validated_at"
+    | "enabled"
   >,
   bound: boolean,
   validationFailed: boolean,
 ): keyof typeof projectLabels {
+  if (p.validation_progress) return "validating";
   if (p.repo_missing_at) return "missing";
   if (p.setup_input) return "question";
   if (validationFailed) return "failed";

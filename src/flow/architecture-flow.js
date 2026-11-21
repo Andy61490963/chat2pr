@@ -419,9 +419,9 @@ import "@fontsource-variable/inter";
       anim: function (tl) { phase(tl, 0, "run"); travel(tl, "gh_slot", 0.7, "原始碼", "var(--fg)"); phase(tl, 0, "done"); } },
 
     { title: "安裝相依套件", where: "工作容器 → egress → 套件來源", cam: "work", focus: ["egress", "pkg"],
-      text: "先以 root 安裝審查放行的系統套件，存成這個專案的衍生映像，之後直接重用；測試要用 SQL Server 時改用內含 SQL Server 的映像。接著以非 root 執行專案的安裝命令。所有下載都只能經 egress 白名單代理，其他網址一律擋下。",
+      text: "先以 root 安裝審查放行的系統套件，存成這個專案的衍生映像，之後直接重用；測試要用 SQL Server 時改用內含 SQL Server 的映像。接著以非 root 執行專案的安裝命令。所有下載都只能經 egress 白名單代理，其他網址一律擋下。你也可以在專案頁查看環境驗證的排隊、安裝、測試或 AI 調整進度。",
       chips: ["白名單代理", "衍生映像可重用", "非 root 安裝"],
-      data: "$ npm ci\n  CONNECT registry.npmjs.org:443   <ok>✓ 白名單內</ok>\n  CONNECT tracker.example.net:443  <no>✕ 拒絕</no>\n\nadded 812 packages in 21s",
+      data: "$ npm ci\n  CONNECT registry.npmjs.org:443   <ok>✓ 白名單內</ok>\n  CONNECT tracker.example.net:443  <no>✕ 拒絕</no>\n\n<k>專案看板</k>  驗證中\n你的專案正在安裝相依套件。",
       end: { ph: ["done", "done"] },
       anim: function (tl) {
         phase(tl, 1, "run"); travel(tl, "slot_egress", 0.4, "下載"); travel(tl, "egress_pkg", 0.7, "下載");

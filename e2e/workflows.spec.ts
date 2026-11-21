@@ -1,7 +1,13 @@
 import { expect, test } from "@playwright/test";
 import type { Detail } from "../src/app/shared";
 import type { Task } from "../shared/types";
-import { defaultState, detail, mockDashboard, task } from "./dashboard-fixture";
+import {
+  defaultState,
+  detail,
+  mockDashboard,
+  project,
+  task,
+} from "./dashboard-fixture";
 
 test("任務詳情顯示排隊原因與失敗後的處理建議", async ({ page }) => {
   const queued: Task = { ...task, title: "整理範例清單", status: "queued" };
@@ -384,6 +390,49 @@ test("你能在已回覆的修改任務查看無需修改的原因", async ({ pa
   await expect(dialog.getByText(conclusion)).toBeVisible();
   await expect(dialog.getByText(explanation)).toBeVisible();
   await expect(dialog.getByRole("link", { name: /開啟 PR/ })).toHaveCount(0);
+});
+
+for (const progress of [
+  "你的專案正在排隊等待執行器。",
+  "你的專案正在等待上一次驗證釋放執行環境。",
+  "你的專案正在安裝相依套件。",
+  "你的專案正在執行基底測試。",
+  "你的專案正在進行第 2 次 AI 調整。",
+]) {
+  test(`專案列表與詳情顯示驗證階段「${progress}」`, async ({ page }) => {
+    await mockDashboard(page, {
+      state: { projects: [{ ...project, validation_progress: progress }] },
+    });
+    await page.goto("/projects");
+    const row = page.getByRole("button", { name: /^測試專案/ });
+    await expect(row.getByText("驗證中", { exact: true })).toBeVisible();
+    await expect(row.getByText(progress, { exact: true })).toBeVisible();
+    await row.click();
+    const dialog = page.getByRole("dialog", { name: project.name });
+    await expect(dialog.getByText("驗證中", { exact: true })).toBeVisible();
+    const status = dialog.getByRole("status").filter({ hasText: progress });
+    await expect(status).toBeVisible();
+    await dialog.getByRole("tab", { name: "環境驗證" }).click();
+    await expect(status).toBeVisible();
+  });
+}
+
+test("再次按驗證時，看板顯示已在驗證中", async ({ page }) => {
+  await mockDashboard(page, {
+    state: {
+      projects: [
+        { ...project, validation_progress: "你的專案正在安裝相依套件。" },
+      ],
+    },
+  });
+  await page.route(`**/api/projects/${project.id}/validate`, (route) =>
+    route.fulfill({ status: 202, json: { ok: true, message: "已在驗證中" } }),
+  );
+  await page.goto("/projects");
+  await page.getByRole("button", { name: /^測試專案/ }).click();
+  const dialog = page.getByRole("dialog", { name: project.name });
+  await dialog.getByRole("button", { name: "驗證環境" }).click();
+  await expect(page.getByText("已在驗證中", { exact: true })).toBeVisible();
 });
 
 test("專案補問通知直接開啟環境驗證，方向鍵可切換其他分頁", async ({ page }) => {
