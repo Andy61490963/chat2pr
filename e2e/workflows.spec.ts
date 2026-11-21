@@ -146,6 +146,63 @@ test("通知鈴鐺可用鍵盤開關選單、移動焦點並前往對應頁面",
   await expect(menu).toBeHidden();
 });
 
+test("手機看板只在系統紀錄顯示入口短暫中斷，鈴鐺顯示完整異常說明", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 800 });
+  const outage = "HTTPS 入口中斷約 1 分鐘後恢復";
+  const explanation =
+    "服務異常：隔離執行器。系統連不上服務，服務可能還沒啟動。請確認服務已啟動，再到設定頁按「檢查連線」。";
+  await mockDashboard(page, {
+    state: {
+      tasks: [],
+      activity: [
+        {
+          id: 1,
+          task_id: null,
+          kind: "tunnel_brief_outage",
+          detail: outage,
+          created_at: "2026-01-01T08:00:00Z",
+        },
+      ],
+      alerts: [
+        {
+          id: "demo-service-down",
+          task_id: null,
+          kind: "service_down",
+          disposition: "action",
+          title: null,
+          text: explanation,
+          created_at: "2026-01-01T09:00:00Z",
+        },
+      ],
+    },
+  });
+  await page.goto("/");
+  const history = page.locator("#inbox-activity");
+  const toggle = page.getByRole("button", { name: "顯示系統紀錄" });
+  await expect(toggle).toBeVisible();
+  await expect(history.getByText(outage)).toHaveCount(0);
+  expect((await toggle.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+  await toggle.press("Enter");
+  await expect(history.getByText(outage)).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "隱藏系統紀錄" }),
+  ).toHaveAttribute("aria-expanded", "true");
+
+  const bell = page.getByRole("button", { name: "通知，1 則未讀" });
+  await expect(bell).toBeVisible();
+  await bell.press("Enter");
+  const menu = page.getByRole("menu");
+  const notice = menu.getByText(explanation, { exact: true });
+  await expect(notice).toBeVisible();
+  await expect(notice).toHaveCSS("-webkit-line-clamp", "none");
+  await expect(menu.getByText(outage)).toHaveCount(0);
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth),
+  ).toBeLessThanOrEqual(375);
+});
+
 for (const width of [1280, 375]) {
   test(`通知與收件匣的待處理數一致（${width}px）`, async ({ page }) => {
     await page.setViewportSize({ width, height: 800 });
