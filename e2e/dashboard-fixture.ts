@@ -333,9 +333,27 @@ export async function mockDashboard(
     ...options.routes,
   };
 
-  // 固定在已連線、沒有新事件的情境，避免假的串流結束後反覆重連、顯示離線橫幅。
-  await page.addInitScript({
-    content: "window.EventSource = class extends EventTarget { close() {} };",
+  // 測試自行發送串流事件，避免假的串流結束後反覆重連、顯示離線橫幅。
+  await page.addInitScript(() => {
+    Object.defineProperty(window, "EventSource", {
+      value: class extends EventTarget {
+        static CLOSED = 2;
+        readyState = 0;
+        private readonly relay = (event: Event) => {
+          const type = (event as CustomEvent<string>).detail;
+          this.readyState = type === "error" ? 0 : 1;
+          this.dispatchEvent(new Event(type));
+        };
+        constructor() {
+          super();
+          window.addEventListener("dashboard-event", this.relay);
+        }
+        close() {
+          window.removeEventListener("dashboard-event", this.relay);
+          this.readyState = 2;
+        }
+      },
+    });
   });
   await page.route("**/*", async (route) => {
     const request = route.request();
@@ -363,4 +381,13 @@ export async function mockDashboard(
       json: { error: `缺少測試回應：${request.method()} ${pathname}` },
     });
   });
+}
+
+export async function emitDashboardEvent(
+  page: Page,
+  type: "connected" | "error" | "update",
+) {
+  await page.evaluate((detail) => {
+    window.dispatchEvent(new CustomEvent("dashboard-event", { detail }));
+  }, type);
 }

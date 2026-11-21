@@ -675,19 +675,24 @@ export async function buildApp(
       "Cache-Control": "no-cache",
       "X-Accel-Buffering": "no",
     });
-    reply.raw.write("event: connected\ndata: {}\n\n");
-    let last = "";
-    const timer = setInterval(() => {
-      void Promise.all([
+    const stamp = () =>
+      Promise.all([
         db.one<{ stamp: string }>(
           "SELECT concat((SELECT max(updated_at)::text FROM tasks),':',(SELECT max(id) FROM audit),':',(SELECT max(checked_at)::text FROM service_health),':',(SELECT max(id) FROM run_events),':',(SELECT max(heartbeat_at)::text FROM runs),':',(SELECT max(completed_at)::text FROM runs),':',(SELECT revision FROM chat_revision WHERE id=1)) AS stamp",
         ),
         validationProgress?.() ?? [],
-      ])
-        .then(([r, validations]) => {
-          const stamp = r.stamp + JSON.stringify(validations);
-          if (stamp !== last) {
-            last = stamp;
+      ]).then(([r, validations]) => r.stamp + JSON.stringify(validations));
+    // 連線當下先記住版本：看板開啟時才讀過全部狀態，第一輪輪詢不必再叫它重讀（#168）。
+    // 讀不到就留空，第一輪照舊送 update。
+    let last = await stamp().catch(() => "");
+    // 等待期間瀏覽器已關掉連線時，close 事件已經過去，不能再開計時器。
+    if (reply.raw.destroyed) return;
+    reply.raw.write("event: connected\ndata: {}\n\n");
+    const timer = setInterval(() => {
+      void stamp()
+        .then((current) => {
+          if (current !== last) {
+            last = current;
             reply.raw.write("event: update\ndata: {}\n\n");
           } else reply.raw.write(": heartbeat\n\n");
         })

@@ -324,7 +324,7 @@ export function AlertBell({
           size="icon"
           aria-label={unread ? `通知，${unread} 則未讀` : "通知"}
           title="通知"
-          className="relative"
+          className="relative size-11 md:size-9"
         >
           {unread ? <BellRing /> : <Bell />}
           {unread > 0 && (

@@ -189,8 +189,6 @@ const viewFromPath = (path: string): View =>
   (Object.entries(viewPaths) as [View, string][]).find(
     ([, p]) => p === (path.replace(/\/+$/, "") || "/"),
   )?.[0] ?? "inbox";
-// 手機底部列放不下的頁面收進「更多」。
-const mobileMore: readonly View[] = ["checks", "system", "members"];
 const writeUrl = (view: View, task: string | null, push = true) => {
   // 同一頁開關任務詳情時保留篩選等參數；換頁就清掉。
   const q = new URLSearchParams(
@@ -297,17 +295,20 @@ export function App() {
         await request<State>(`/api/state?activity=${activityLimit.current}`),
       );
       setError("");
+      return true;
     } catch (e) {
       setError(message(e));
+      return false;
     }
   }, [request]);
   // 通道停了會回 502／530 的 HTML 頁：當成暫時連不上（configured=null），
   // 登入頁給「重新連線」，不要叫使用者去執行 npm run setup。
-  const connect = useCallback(async () => {
+  const connect = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
     const probe = await probeService<NonNullable<typeof user>>((url) =>
-      fetch(url, { credentials: "same-origin" }),
+      fetch(url, { credentials: "same-origin", signal }),
     );
+    if (signal?.aborted) return;
     if (probe.user) {
       signingOut.current = false;
       setUser(probe.user);
@@ -316,22 +317,34 @@ export function App() {
     setLoading(false);
   }, []);
   useEffect(() => {
-    void connect();
+    const controller = new AbortController();
+    void connect(controller.signal);
+    return () => controller.abort();
   }, [connect]);
   useEffect(() => {
     if (!user) return;
-    void refresh();
+    let initialReadAt: number | null | undefined;
+    void refresh().then((ok) => {
+      initialReadAt = ok ? performance.now() : null;
+    });
     const events = new EventSource("/api/events");
     events.addEventListener("update", () => void refresh());
     // 斷線幾秒內自己接回來就不打擾；持續接不上才提示畫面可能不是最新。
     let lost: ReturnType<typeof setTimeout> | undefined;
+    let needsCatchUp = false;
     events.addEventListener("connected", () => {
       clearTimeout(lost);
       lost = undefined;
       setOffline(false);
-      void refresh();
+      // 首次連線沿用正在讀取或五秒內取得的快照；重連則補讀斷線期間的變更。
+      const initialReadIsFresh =
+        initialReadAt === undefined ||
+        (initialReadAt !== null && performance.now() - initialReadAt < 5000);
+      if (needsCatchUp || !initialReadIsFresh) void refresh();
+      needsCatchUp = true;
     });
     events.addEventListener("error", () => {
+      needsCatchUp = true;
       lost ??= setTimeout(() => {
         setOffline(true);
         // 瀏覽器放棄重連時（例如登入過期）主動問一次，該登出就登出。
@@ -648,7 +661,7 @@ export function App() {
         }),
       state.settings.paused ? "已開始自動派工" : "已暫停派工，仍會接收訊息",
     );
-  // 一般成員只看得到工作區；管理區（群組、專案、系統、成員、設定）限管理者。
+  // 一般成員只看得到工作區。
   const admin = user.role !== "member";
   const goneProjects = (state?.projects ?? []).filter((p) => p.repo_missing_at);
   const lineQuota = state?.health.find((h) => h.name === LINE_QUOTA && !h.ok);
@@ -663,6 +676,8 @@ export function App() {
   );
   const visible = views.filter((v) => admin || v.section === "工作區");
   const current = visible.find((v) => v.id === view) ?? visible[0];
+  const morePages = visible.filter((v) => v.section === "管理");
+  const moreIsCurrent = current.section === "管理";
   const hostHold = state?.diskDispatchPaused
     ? "Docker 磁碟空間嚴重不足"
     : memoryHold(state);
@@ -768,7 +783,10 @@ export function App() {
         <div className="hidden items-center gap-2.5 px-2 md:flex">
           <Wordmark />
         </div>
-        <nav className="flex justify-around md:flex-col md:justify-start md:gap-0.5">
+        <nav
+          aria-label="看板導覽"
+          className="flex justify-around md:flex-col md:justify-start md:gap-0.5"
+        >
           {visible.map(({ id, label, icon: Icon, section }, i) => (
             <div key={id} className="contents">
               {section !== visible[i - 1]?.section && (
@@ -786,11 +804,10 @@ export function App() {
                 aria-current={current.id === id ? "page" : undefined}
                 onClick={() => go(id)}
                 className={cn(
-                  "relative flex flex-1 flex-col items-center gap-0.5 px-1 py-2 text-[11px] text-muted-foreground transition-colors md:flex-none md:flex-row md:gap-3 md:rounded-md md:px-3 md:py-1.5 md:text-sm hover:text-foreground md:hover:bg-sidebar-accent",
+                  "relative flex min-h-[44px] flex-1 flex-col items-center justify-center gap-0.5 px-1 py-2 text-[11px] text-muted-foreground transition-colors hover:text-foreground md:min-h-0 md:flex-none md:flex-row md:justify-start md:gap-3 md:rounded-md md:px-3 md:py-1.5 md:text-sm md:hover:bg-sidebar-accent",
                   current.id === id &&
-                    "font-medium text-brand-foreground md:bg-sidebar-accent md:text-foreground",
-                  // 手機底部列空間有限，系統與成員收進「更多」。
-                  mobileMore.includes(id) && "hidden md:flex",
+                    "bg-sidebar-accent font-medium text-foreground",
+                  section === "管理" && "hidden md:flex",
                 )}
               >
                 <Icon
@@ -809,14 +826,14 @@ export function App() {
               </button>
             </div>
           ))}
-          <DropdownMenu>
+          <DropdownMenu modal={false}>
             <DropdownMenuTrigger asChild>
               <button
-                aria-label="更多"
+                aria-current={moreIsCurrent ? "page" : undefined}
                 className={cn(
-                  "flex flex-1 flex-col items-center gap-0.5 px-1 py-2 text-[11px] text-muted-foreground transition-colors hover:text-foreground md:hidden",
-                  mobileMore.includes(current.id) &&
-                    "font-medium text-brand-foreground",
+                  "flex min-h-[44px] flex-1 flex-col items-center justify-center gap-0.5 px-1 py-2 text-[11px] text-muted-foreground transition-colors hover:text-foreground md:hidden",
+                  moreIsCurrent &&
+                    "bg-sidebar-accent font-medium text-foreground",
                 )}
               >
                 <Ellipsis className="size-5" />
@@ -834,27 +851,26 @@ export function App() {
                 <span className="min-w-0 truncate">{user.login}</span>
               </DropdownMenuLabel>
               {state && (
-                <DropdownMenuItem
-                  disabled={!admin}
-                  className="flex-col items-start gap-0.5 data-[disabled]:opacity-100"
-                  onSelect={() => goFromMenu("settings")}
-                >
+                <DropdownMenuLabel className="flex flex-col items-start gap-0.5 font-normal">
                   <QuotaLines
                     settings={state.settings}
                     usage={state.usage}
                     account={account}
                   />
-                </DropdownMenuItem>
+                </DropdownMenuLabel>
               )}
               <DropdownMenuSeparator />
-              {visible
-                .filter((v) => mobileMore.includes(v.id))
-                .map(({ id, label, icon: Icon }) => (
-                  <DropdownMenuItem key={id} onSelect={() => goFromMenu(id)}>
-                    <Icon /> {label}
-                  </DropdownMenuItem>
-                ))}
-              <DropdownMenuItem onSelect={logout}>
+              {morePages.map(({ id, label, icon: Icon }) => (
+                <DropdownMenuItem
+                  key={id}
+                  aria-current={current.id === id ? "page" : undefined}
+                  className="min-h-[44px] aria-[current=page]:font-semibold"
+                  onSelect={() => goFromMenu(id)}
+                >
+                  <Icon /> {label}
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuItem className="min-h-[44px]" onSelect={logout}>
                 <LogOut /> 登出
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -951,6 +967,8 @@ export function App() {
               <Button
                 variant="ghost"
                 size="icon"
+                // 手機觸控目標至少 44px；桌面維持原尺寸。
+                className="size-11 md:size-9"
                 aria-label="重新整理"
                 title="重新整理"
                 onClick={() => {
