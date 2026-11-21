@@ -1,4 +1,11 @@
-import { statusLabels, taskListLabels } from "../../shared/status-glossary.js";
+import {
+  taskListLabels,
+  taskStatusFilterLabels,
+} from "../../shared/status-glossary.js";
+import {
+  taskStatusFilterIds,
+  taskStatusFilters,
+} from "../../shared/task-list.js";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Search } from "lucide-react";
 import {
@@ -28,40 +35,43 @@ import { TaskRow } from "./inbox";
 import {
   type State,
   type Request,
-  attention,
   countOf,
   Empty,
   message,
-  moving,
-  ready,
   SectionTitle,
-  waiting,
   writeQuery,
 } from "./shared";
 
-const filters: { id: string; label: string; statuses: TaskStatus[] | null }[] =
-  [
-    {
-      id: "active",
-      label: taskListLabels.active,
-      statuses: unfinishedStatuses,
-    },
-    { id: "todo", label: "待處理", statuses: attention },
-    { id: "waiting", label: statusLabels.budget_wait, statuses: waiting },
-    { id: "moving", label: "進行中", statuses: moving },
-    { id: "ready", label: statusLabels.ready, statuses: ready },
-    { id: "closed", label: taskListLabels.ended, statuses: endedStatuses },
-    { id: "all", label: "全部", statuses: null },
-  ];
+const tabs: { id: string; label: string; statuses: TaskStatus[] | null }[] = [
+  {
+    id: "active",
+    label: taskListLabels.active,
+    statuses: unfinishedStatuses,
+  },
+  { id: "closed", label: taskListLabels.ended, statuses: endedStatuses },
+  { id: "all", label: "全部", statuses: null },
+];
 type By = "project" | "group" | "none";
 const defaults = {
   filter: "active",
+  status: "",
   group: "all",
   project: "all",
   by: "",
   q: "",
 };
-const preferenceKeys = ["filter", "group", "project", "by", "q"] as const;
+const preferenceKeys = [
+  "filter",
+  "status",
+  "group",
+  "project",
+  "by",
+  "q",
+] as const;
+
+function statusPreference(values: string[]) {
+  return taskStatusFilterIds.filter((id) => values.includes(id)).join(",");
+}
 
 function readPreferences(state: State, storageKey: string) {
   let params = new URLSearchParams(location.search);
@@ -79,8 +89,12 @@ function readPreferences(state: State, storageKey: string) {
     const value = params.get(key);
     return value && valid(value) ? value : defaults[key];
   };
+  // 舊連結與記憶設定可能以狀態當作分頁。
+  const filter = params.get("filter") ?? "";
+  const status = params.get("status") ?? filter;
   return {
-    filter: pick("filter", (value) => filters.some((f) => f.id === value)),
+    filter: pick("filter", (value) => tabs.some((tab) => tab.id === value)),
+    status: statusPreference(status.split(",")),
     group: pick("group", (value) => state.groups.some((g) => g.id === value)),
     project: pick(
       "project",
@@ -298,7 +312,7 @@ export function TasksView({
   const [preferences, setPreferences] = useState(() =>
     readPreferences(state, storageKey),
   );
-  const { filter, group, project, q: search } = preferences;
+  const { filter, group, project, status, q: search } = preferences;
   const isHistory = filter === "all" || filter === "closed";
   const by = (preferences.by || (isHistory ? "none" : "project")) as By;
   const closedTab = useRef<HTMLButtonElement>(null);
@@ -333,8 +347,17 @@ export function TasksView({
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
   }, [state, storageKey]);
-  const narrowed = group !== "all" || project !== "all" || search !== "";
-  const currentFilter = filters.find((f) => f.id === filter)!;
+  const selectedStatuses = status.split(",");
+  const visibleStatuses = status
+    ? taskStatusFilterIds
+        .filter((id) => selectedStatuses.includes(id))
+        .flatMap((id) => taskStatusFilters[id])
+    : unfinishedStatuses;
+  const narrowed =
+    (!isHistory && status !== "") ||
+    group !== "all" ||
+    project !== "all" ||
+    search !== "";
   // 分頁數字：全部用總筆數，其餘依伺服器的各狀態數量加總。
   const tabCount = (statuses: TaskStatus[] | null) =>
     statuses
@@ -345,7 +368,7 @@ export function TasksView({
     ? []
     : state.tasks.filter(
         (t) =>
-          currentFilter.statuses?.includes(t.status) &&
+          visibleStatuses.includes(t.status) &&
           (group === "all" || t.group_id === group) &&
           (project === "all" || (t.project_id ?? "none") === project) &&
           `${t.title} ${t.summary}`
@@ -383,7 +406,12 @@ export function TasksView({
               variant="outline"
               size="sm"
               onClick={() => {
-                change({ group: "all", project: "all", q: "" });
+                change({
+                  status: isHistory ? status : "",
+                  group: "all",
+                  project: "all",
+                  q: "",
+                });
                 searchField.current?.focus();
               }}
             >
@@ -392,13 +420,7 @@ export function TasksView({
           </span>
         </Empty>
       ) : (
-        <Empty
-          title={
-            filter === "all"
-              ? "還沒有任務"
-              : `目前沒有「${currentFilter.label}」的任務`
-          }
-        >
+        <Empty title={filter === "all" ? "還沒有任務" : "目前沒有已結束的任務"}>
           {filter === "all" ? (
             "你可以在已綁定專案的群組提出需求，整理完成後就會出現在這裡。"
           ) : (
@@ -425,10 +447,10 @@ export function TasksView({
     >
       <div className="flex flex-col gap-3">
         <TabsList
-          aria-label="任務狀態"
-          className="h-auto w-full flex-wrap justify-start"
+          aria-label="任務分頁"
+          className="grid h-auto w-full grid-cols-[minmax(0,1.6fr)_repeat(2,minmax(0,1fr))] items-stretch overflow-visible sm:flex sm:flex-wrap sm:justify-start"
         >
-          {filters.map((f) => (
+          {tabs.map((f) => (
             <TabsTrigger
               key={f.id}
               ref={
@@ -439,7 +461,7 @@ export function TasksView({
                     : undefined
               }
               value={f.id}
-              className="min-h-11 flex-none whitespace-normal"
+              className="h-auto min-h-11 flex-none flex-wrap gap-y-0 px-1 text-center whitespace-normal sm:px-2.5"
             >
               {f.label}
               <span className="text-xs text-muted-foreground">
@@ -448,6 +470,39 @@ export function TasksView({
             </TabsTrigger>
           ))}
         </TabsList>
+        {!isHistory && (
+          <fieldset className="min-w-0">
+            <legend className="mb-1 text-sm text-muted-foreground">
+              你可以勾選多個狀態，未勾選時會顯示這個分頁的所有任務。
+            </legend>
+            <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,8rem),1fr))] gap-x-2 sm:flex sm:flex-wrap sm:gap-x-4">
+              {taskStatusFilterIds.map((id) => (
+                <label
+                  key={id}
+                  className="flex min-h-11 cursor-pointer items-center gap-2 rounded-md px-2 text-sm hover:bg-muted has-focus-visible:outline-2 has-focus-visible:outline-foreground"
+                >
+                  <input
+                    type="checkbox"
+                    className="size-5 shrink-0 accent-primary"
+                    checked={selectedStatuses.includes(id)}
+                    onChange={(event) => {
+                      const next = event.target.checked
+                        ? [...selectedStatuses, id]
+                        : selectedStatuses.filter((value) => value !== id);
+                      change({ status: statusPreference(next) });
+                    }}
+                  />
+                  <span>
+                    {taskStatusFilterLabels[id]}{" "}
+                    <span className="text-xs text-muted-foreground tabular-nums">
+                      {tabCount(taskStatusFilters[id])}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+        )}
         {!isHistory && omitted > 0 && (
           <p role="status" className="text-sm text-warn">
             你可以到「全部」查看這裡尚未載入的 {omitted} 筆較舊任務。
@@ -455,7 +510,7 @@ export function TasksView({
         )}
         <div className="flex flex-wrap gap-2">
           <Select value={group} onValueChange={(group) => change({ group })}>
-            <SelectTrigger className="w-40" aria-label="群組">
+            <SelectTrigger className="w-40 max-w-full" aria-label="群組">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -471,7 +526,7 @@ export function TasksView({
             value={project}
             onValueChange={(project) => change({ project })}
           >
-            <SelectTrigger className="w-44" aria-label="專案">
+            <SelectTrigger className="w-44 max-w-full" aria-label="專案">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -485,7 +540,7 @@ export function TasksView({
             </SelectContent>
           </Select>
           <Select value={by} onValueChange={(by) => change({ by })}>
-            <SelectTrigger className="w-36" aria-label="分組方式">
+            <SelectTrigger className="w-36 max-w-full" aria-label="分組方式">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -494,7 +549,7 @@ export function TasksView({
               <SelectItem value="none">不分組</SelectItem>
             </SelectContent>
           </Select>
-          <div className="relative min-w-48 flex-1">
+          <div className="relative min-w-0 flex-1 basis-full md:basis-48">
             <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               ref={searchField}
@@ -507,7 +562,7 @@ export function TasksView({
           </div>
         </div>
       </div>
-      {filters.map((f) => (
+      {tabs.map((f) => (
         <TabsContent
           key={f.id}
           value={f.id}

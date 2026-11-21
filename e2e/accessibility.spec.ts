@@ -129,12 +129,14 @@ test("方向鍵切換任務狀態與詳情時，選取的分頁會標示對應�
   await page.goto("/tasks");
   await page.getByRole("tab", { name: /^進行中與待處理/ }).focus();
   await page.keyboard.press("ArrowRight");
-  const list = page.getByRole("tabpanel", { name: /^待處理/ });
-  await expect(list.getByText(task.title)).toBeVisible();
+  const ended = page.getByRole("tabpanel", { name: /^已結束/ });
+  await expect(ended.getByText("目前沒有已結束的任務")).toBeVisible();
   await expect(page.getByRole("tab", { selected: true })).toHaveAttribute(
     "aria-controls",
-    (await list.getAttribute("id"))!,
+    (await ended.getAttribute("id"))!,
   );
+  await page.keyboard.press("ArrowLeft");
+  const list = page.getByRole("tabpanel", { name: /^進行中與待處理/ });
   await list.getByRole("button", { name: new RegExp(task.title) }).click();
   const drawer = page.getByRole("dialog", { name: task.title });
   await drawer.getByRole("tab", { name: /^來源訊息/ }).focus();

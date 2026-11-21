@@ -1,3 +1,5 @@
+import { taskListQuery, type TaskStatusFilter } from "./task-list.js";
+
 export type NotificationView =
   "projects" | "groups" | "settings" | "checks" | "system";
 
@@ -34,13 +36,39 @@ export function notificationTarget(
 export function projectNoticeTab(kind: string) {
   return kind === "repo_missing" ? "overview" : "environment";
 }
+
+export function notificationTaskFilter(
+  kind: string,
+): TaskStatusFilter | undefined {
+  switch (kind) {
+    case "approval":
+    case "risk":
+    case "input_required":
+    case "group_received":
+    case "group_question":
+    case "failed":
+    case "group_failed":
+    case "interrupted":
+      return "todo";
+    case "ready":
+    case "group_ready":
+    case "ci":
+      return "ready";
+    case "budget":
+      return "waiting";
+  }
+}
+
 /** 管理者點 LINE 私訊後，沿用看板鈴鐺的目標。 */
 export function notificationPath(n: {
   kind: string;
   task_id: string | null;
   project_id?: string | null;
 }) {
-  if (n.task_id) return "tasks?task=" + encodeURIComponent(n.task_id);
+  if (n.task_id) {
+    const filter = notificationTaskFilter(n.kind);
+    return `tasks?${filter ? taskListQuery(filter, n.task_id) : new URLSearchParams({ task: n.task_id })}`;
+  }
   const view = notificationView(n.kind);
   if (view === "projects" && n.project_id)
     return (

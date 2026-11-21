@@ -44,6 +44,7 @@ import type {
   Task,
 } from "../shared/types.js";
 import { LINE_QUOTA } from "../shared/line-quota.js";
+import { taskListQuery, type TaskStatusFilter } from "../shared/task-list.js";
 import {
   reservedQuotaHold,
   subscriptionGateName,
@@ -235,6 +236,9 @@ export function App() {
       null,
     ),
     [selected, setSelected] = useState<Detail | null>(null),
+    [taskAfterNavigation, setTaskAfterNavigation] = useState<string | null>(
+      null,
+    ),
     [busy, setBusy] = useState(false),
     [project, setProject] = useState<Partial<Project> | null>(null),
     // 剛存好的專案 id；專案頁打開它的詳情後清掉。
@@ -429,6 +433,7 @@ export function App() {
         () => {
           setView(viewFromPath(destination.pathname));
           setSavedProject(linkedProject(destination));
+          setTaskAfterNavigation(null);
           const id = destination.searchParams.get("task");
           if (id) void openTask(id, false);
           else setSelected(null);
@@ -489,6 +494,12 @@ export function App() {
     if (visit) heading.current?.focus({ preventScroll: true });
   }, [visit]);
   useEffect(() => {
+    if (!taskAfterNavigation) return;
+    setTaskAfterNavigation(null);
+    // 先讓任務頁依網址套用篩選並取得焦點，再開啟詳情。
+    void openTask(taskAfterNavigation, false);
+  }, [taskAfterNavigation, openTask]);
+  useEffect(() => {
     if (!toast) return;
     const t = setTimeout(() => setToast(null), toast.error ? 12000 : 4500);
     return () => clearTimeout(t);
@@ -537,6 +548,7 @@ export function App() {
   const leave = (v: View) => {
     setView(v);
     setSelected(null);
+    setTaskAfterNavigation(null);
     // 從導覽進入一律是乾淨的頁面：不帶上一輪的篩選。
     if (viewPaths[v] !== location.pathname || location.search || location.hash)
       history.pushState(null, "", viewPaths[v]);
@@ -562,11 +574,16 @@ export function App() {
     e.preventDefault();
     heading.current?.focus({ preventScroll: true });
   };
-  // 收件匣統計卡直接開啟對應篩選的任務列表。
-  const showTasks = (filter: string) =>
+  // 收件匣與通知直接開啟對應篩選的任務清單。
+  const showTasks = (filter: TaskStatusFilter | "closed", taskId?: string) =>
     guard(() => {
       leave("tasks");
-      history.replaceState(null, "", `${viewPaths.tasks}?filter=${filter}`);
+      history.replaceState(
+        null,
+        "",
+        `${viewPaths.tasks}?${taskListQuery(filter, taskId)}`,
+      );
+      if (taskId) setTaskAfterNavigation(taskId);
     });
   // 收件匣「縮小需求範圍」：打開任務詳情後直接展開補充需求編輯。只對下一次開啟的那個任務有效。
   const amendNext = useRef<string | null>(null);
@@ -925,7 +942,9 @@ export function App() {
                 tasks={state.tasks}
                 seenAt={state.alertsSeenAt ?? null}
                 request={request}
-                open={showTask}
+                open={(id, filter) =>
+                  filter ? showTasks(filter, id) : showTask(id)
+                }
                 openView={admin ? goFromMenu : undefined}
                 onCloseAutoFocus={headingAfterMenu}
               />
