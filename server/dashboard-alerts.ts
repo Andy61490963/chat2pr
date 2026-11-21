@@ -26,6 +26,8 @@ export function dashboardAlerts(db: Database, admin: boolean) {
                'project-input:'||p.id||':'||(p.setup_input->>'id')),false)
            WHEN n.kind='repo_missing' AND p.id IS NOT NULL THEN p.repo_missing_at IS NOT NULL
            WHEN n.kind='group_new' AND g.id IS NOT NULL THEN NOT g.enabled AND g.left_at IS NULL
+             -- 已綁專案卻停用的群組是管理者刻意停用，不再算待設定的新群組。
+             AND NOT EXISTS(SELECT 1 FROM group_projects gp WHERE gp.group_id=g.id)
            WHEN n.kind='service_down' AND h.name IS NOT NULL THEN NOT coalesce(h.notified_ok,h.ok)
            WHEN n.kind IN ('group_waiting','budget','group_received') THEN false
          END AS action,
