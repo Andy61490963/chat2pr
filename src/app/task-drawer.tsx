@@ -1,6 +1,6 @@
 import { splitQueryAnswer } from "../../shared/query-answer.js";
 import { fullTaskTitle, taskListTitle } from "../../shared/task-title.js";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { TaskContextEvidence } from "./context-evidence";
 import { RunObserver } from "./run-observer";
 import { QueryReport } from "./query-report";
@@ -277,6 +277,7 @@ export function TaskDrawer({
   );
   const [copied, setCopied] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
+  const projectHeading = useRef<HTMLParagraphElement>(null);
   const [branchOpen, setBranchOpen] = useState(false);
   // 任務出了新版本：選項與指定專案重來；補充需求的草稿只有沒動過（或剛存成這一版）才跟著更新，
   // 寫到一半的內容不再被背景更新洗掉。
@@ -580,7 +581,11 @@ export function TaskDrawer({
               聊天室：{review?.group_name ?? groupName(state, t)}・
               {t.mode === "query" ? "查詢" : "修改程式"}
             </p>
-            <p className="mt-2 font-medium break-words">
+            <p
+              ref={projectHeading}
+              tabIndex={-1}
+              className="mt-2 font-medium break-words"
+            >
               {review?.project_name ?? "尚未指定專案"}
             </p>
             {review?.repo && (
@@ -663,7 +668,7 @@ export function TaskDrawer({
                   ? "待確認專案；綁定不代表這次需求一定屬於此專案"
                   : "保留當時的專案與執行紀錄"}
             </p>
-            {editable && (
+            {editable && t.project_id && (
               <Button
                 type="button"
                 variant="outline"
@@ -693,6 +698,17 @@ export function TaskDrawer({
                 detail={detail}
                 busy={busy}
                 act={act}
+              />
+            )}
+            {editable && (!t.project_id || assignOpen) && (
+              <AssignProject
+                task={t}
+                state={state}
+                busy={busy}
+                act={act}
+                go={admin ? go : undefined}
+                sources={detail.sources}
+                onBound={() => projectHeading.current?.focus()}
               />
             )}
           </section>
@@ -842,17 +858,6 @@ export function TaskDrawer({
               >
                 {t.mode === "query" ? "改為修改程式" : "改為查詢任務"}
               </Button>
-            </div>
-          )}
-          {editable && (!t.project_id || assignOpen) && (
-            <div className="rounded-lg border p-4">
-              <AssignProject
-                task={t}
-                state={state}
-                busy={busy}
-                act={act}
-                go={admin ? go : undefined}
-              />
             </div>
           )}
           <section className="flex flex-col gap-2">

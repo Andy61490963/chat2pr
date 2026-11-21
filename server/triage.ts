@@ -21,6 +21,7 @@ import {
   saveProjectConfirmation,
 } from "./project-routing.js";
 import type { RoutingSource } from "../shared/project-routing.js";
+import { suggestUnboundProjects } from "./project-suggestions.js";
 import { recordContextEvidence } from "./task-context.js";
 import { Retrieval, recordLookup, type Lookup } from "./retrieval.js";
 import OpenAI from "openai";
@@ -1079,7 +1080,7 @@ export class Triage {
     );
     const covered = new Set<string>();
     const bound = new Set(projects.map((p) => p.id));
-    // 僅在伺服器比對已登記專案名稱，避免指名未綁定專案卻被改派；不讀取其內容。
+    // 登記名稱用於辨識專案衝突；未綁定專案另由伺服器比對並提出建議。
     const knownProjects = await this.db.query<
       Pick<Project, "id" | "name" | "repo">
     >("SELECT id,name,repo FROM projects");
@@ -1418,9 +1419,25 @@ export class Triage {
             };
           }
         }
-        const selectedProject = projects.find(
-          (p) => p.id === (projectId ?? related?.project_id),
-        );
+        if (
+          routing.status !== "clear" &&
+          ["request", "clarification"].includes(d.kind)
+        ) {
+          const suggestions = await suggestUnboundProjects(
+            c,
+            group.id,
+            messages,
+            d.sourceIds,
+            knownProjects,
+          );
+          if (suggestions.length) {
+            routing.unboundSuggestions = suggestions;
+            projectId = null;
+          }
+        }
+        const selectedProject = routing.unboundSuggestions
+          ? undefined
+          : projects.find((p) => p.id === (projectId ?? related?.project_id));
         let branch = assessBranch(
           d,
           selectedProject,
@@ -1466,6 +1483,7 @@ export class Triage {
         const queryNotes = isQuery && !risk ? d.risks : [];
         if (
           related?.status === "awaiting_approval" &&
+          (!routing.unboundSuggestions || !related.project_id) &&
           ["request", "clarification"].includes(d.kind)
         ) {
           // 原需求尚未開始：補充併入同一張任務成為新版本，不另開任務造成重工。

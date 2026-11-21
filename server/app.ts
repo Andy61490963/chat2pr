@@ -825,6 +825,7 @@ export async function buildApp(
           "amend",
           "assumption",
           "assign",
+          "bind_assign",
           "adopt",
           "mode",
           "target",
@@ -834,7 +835,7 @@ export async function buildApp(
         mode: z.enum(["change", "query"]).optional(),
         summary: z.string().optional(),
         acceptance: z.array(z.string()).optional(),
-        project_id: z.string().uuid().optional(),
+        project_id: z.string("請選擇專案").uuid("請選擇有效的專案").optional(),
         binding_version: z.number().int().positive().optional(),
         config_version: z.number().int().positive().optional(),
         target_branch: z.string().max(200).optional(),
@@ -843,6 +844,8 @@ export async function buildApp(
         value: z.string().trim().min(1).max(500).optional(),
       })
       .parse(req.body);
+    if (b.action === "bind_assign" && actor.role !== "admin")
+      throw new AppError(403, "只有管理者可以綁定並指定專案，請聯絡管理者");
     return tasks.action(
       z
         .string()

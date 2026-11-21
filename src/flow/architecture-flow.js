@@ -381,7 +381,7 @@ import "@fontsource-variable/inter";
 
     { title: { change: "修改一定先等你點頭", query: "明確的查詢可以自動開始" }, where: { change: "看板收件匣・LINE 私訊", query: "app" }, cam: { change: "approve", query: "core" }, focus: { change: ["app", "admin"], query: ["app"] },
       text: { change: "修改程式一律要人確認。任務進到看板收件匣「待審核」，你也會收到 LINE 私訊。打開任務詳情核對目標儲存庫、需求與假設，按「確認專案並核准修改」。就算群組只綁了一個專案，也不能省略這一步。",
-              query: "查詢只讀程式、不改東西。這次明確指名唯一的專案，判讀完就直接排程，不用等你；沒指名專案、指名了沒綁定的專案，或要求交出機密實際值時，才會放進收件匣等你確認。" },
+              query: "這次查詢明確指名已綁定的專案，判讀完就直接排程。索取機密實際值的查詢仍須人工確認。當系統無法確認目標時，你可以在收件匣查看符合需求的未綁定專案，管理者可一鍵綁定並指定，再確認任務。" },
       chips: { change: ["待審核", "核准只適用這個版本", "不會自動部署"], query: ["自動排程", "唯讀執行", "回答會遮蔽機密"] },
       data: { change: "<k>任務 #128</k>  待審核\n  首頁訂購按鈕改綠色\n  example-org/ShopWeb ← main\n  我先這樣假設：沿用品牌綠\n\n<s>[ 確認專案並核准修改 ]</s>  ← 你按下\n<ok>✓ 已核准 v1</ok>",
               query: "<k>任務 #128</k>  查詢・自動排程\n  訂購按鈕在哪\n  example-org/ShopWeb ← main\n  依據：本次明確指名「ShopWeb」" },

@@ -51,6 +51,7 @@ export type Action =
   | "amend"
   | "assumption"
   | "assign"
+  | "bind_assign"
   | "adopt"
   | "mode"
   | "target"
