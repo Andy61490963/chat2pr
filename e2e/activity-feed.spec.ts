@@ -4,6 +4,7 @@ import {
   activityTask,
   changedCleanup,
   defaultState,
+  derivedImageCleanup,
   detail,
   mockDashboard,
   recentActivity,
@@ -17,7 +18,10 @@ for (const width of [1280, 375]) {
   }, testInfo) => {
     await page.setViewportSize({ width, height: 812 });
     await mockDashboard(page, {
-      state: { tasks: [activityTask], activity: recentActivity },
+      state: {
+        tasks: [activityTask],
+        activity: [derivedImageCleanup, ...recentActivity],
+      },
       routes: {
         [`/api/tasks/${activityTask.id}`]: { ...detail, task: activityTask },
       },
@@ -41,12 +45,21 @@ for (const width of [1280, 375]) {
     );
     const system = feed.getByRole("button", { name: "顯示系統紀錄" });
     const unchanged = feed.getByText(unchangedCleanup, { exact: true });
+    const derivedCleanup = feed.getByText(derivedImageCleanup.detail, {
+      exact: true,
+    });
     await expect(unchanged).toHaveCount(0);
+    await expect(derivedCleanup).toHaveCount(0);
     await system.press("Enter");
     await expect(unchanged).toBeVisible();
+    await expect(derivedCleanup).toBeVisible();
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth),
+    ).toBeLessThanOrEqual(width);
     await expect(feed.getByText(changedCleanup, { exact: true })).toBeVisible();
     await feed.getByRole("button", { name: "隱藏系統紀錄" }).press("Enter");
     await expect(unchanged).toHaveCount(0);
+    await expect(derivedCleanup).toHaveCount(0);
 
     const expand = feed.getByRole("button", { name: /^展開步驟/ });
     const steps = feed.getByRole("list", { name: "任務步驟" });
