@@ -14,7 +14,8 @@ import {
   quotaExhaustedDetail,
   quotaShortPrefix,
 } from "./line-quota.js";
-import { linePushServiceLabels } from "./status-glossary.js";
+import { groupDeliveryLabels, linePushServiceLabels } from "./status-glossary.js";
+import type { ChatPlatformId } from "./types.js";
 
 /** 與 server/group-replies.ts 的同名常數相同；tests/group-delivery.test.ts 會核對。 */
 export const claimingNote = "以 /進度 回覆補送中";
@@ -72,6 +73,7 @@ export type DeliveryReason =
   | "expired"
   | "superseded"
   | "reply_failed"
+  | "unsupported_platform"
   | "error";
 export interface Delivery {
   status: DeliveryStatus;
@@ -98,6 +100,7 @@ const reasonNotes: Record<DeliveryReason, string> = {
   expired: expiredNote,
   superseded: supersededNote,
   reply_failed: "以 /進度 補送沒有成功，下次再試",
+  unsupported_platform: groupDeliveryLabels.unsupportedPlatform,
   error: "LINE 沒有收下這則訊息",
 };
 
@@ -144,8 +147,14 @@ function reasonOf(raw: string): { reason: DeliveryReason; note: string } {
  */
 export function deliveryState(
   row: DeliveryRow,
-  context: { quotaBlocked?: boolean } = {},
+  context: { quotaBlocked?: boolean; platform?: ChatPlatformId } = {},
 ): Delivery {
+  if (context.platform === "discord" && !row.sent_at)
+    return {
+      status: "skipped",
+      reason: "unsupported_platform",
+      note: reasonNotes.unsupported_platform,
+    };
   const error = row.last_error?.trim() || null;
   if (error === claimingNote)
     // 補送成功會清掉 last_error；萬一寫回 ID 後還留著這句，仍算已送出。

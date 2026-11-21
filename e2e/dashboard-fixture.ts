@@ -30,6 +30,7 @@ export const project: Project = {
 
 export const group: Group = {
   id: "group-demo",
+  platform: "line",
   name: "測試群組",
   project_ids: [project.id],
   enabled: true,
@@ -41,6 +42,13 @@ export const group: Group = {
   triage_error: null,
   first_pending_at: null,
   last_pending_at: null,
+};
+
+export const discordGroup: Group = {
+  ...group,
+  id: "discord:100000000000000001",
+  platform: "discord",
+  name: "範例頻道",
 };
 
 export const statusProjects: Project[] = [

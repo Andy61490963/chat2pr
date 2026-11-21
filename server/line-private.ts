@@ -14,10 +14,10 @@ import {
   LineQuotaExhausted,
   lineQuotaUsage,
   markQuotaExhausted,
-  pushLineMessage,
   recordLinePush,
   saveQuotaUsage,
 } from "./line-quota.js";
+import { LineChatPlatform } from "./line-platform.js";
 import { redact } from "./policy.js";
 
 export const privateActionKinds = [
@@ -130,12 +130,7 @@ export async function flushLinePrivate(db: Database, access: string) {
   if (!digest) return;
 
   try {
-    await pushLineMessage(
-      access,
-      to,
-      { type: "text", text: digest.text },
-      digest.id,
-    );
+    await new LineChatPlatform(access).sendToAdmin(to, digest.text, digest.id);
     // 寫回中斷時保留已提交的批次，下一輪用同一重試鍵確認 LINE 已收下原摘要。
     await db.transaction(async (c) => {
       if (usage) await saveQuotaUsage(db, { ...usage, used: usage.used + 1 }, c);

@@ -162,7 +162,7 @@ export async function groupMemberCount(
   access: string,
 ) {
   const row = await db.one<{ member_count: number | null; fresh: boolean }>(
-    "SELECT member_count,COALESCE(member_count_at>now()-interval '24 hours',false) AS fresh FROM groups WHERE id=$1",
+    "SELECT member_count,COALESCE(member_count_at>now()-interval '24 hours',false) AS fresh FROM groups WHERE id=$1 AND platform='line'",
     [groupId],
   );
   if (!row) return null;
@@ -187,13 +187,13 @@ export async function groupMemberCount(
   }
   if (count === null) {
     await db.query(
-      "UPDATE groups SET member_count_at=now()-interval '23 hours' WHERE id=$1",
+      "UPDATE groups SET member_count_at=now()-interval '23 hours' WHERE id=$1 AND platform='line'",
       [groupId],
     );
     return row.member_count;
   }
   await db.query(
-    "UPDATE groups SET member_count=$2,member_count_at=now() WHERE id=$1",
+    "UPDATE groups SET member_count=$2,member_count_at=now() WHERE id=$1 AND platform='line'",
     [groupId, count],
   );
   return count;
@@ -210,7 +210,7 @@ export async function markGroupTooLarge(
   remaining: number,
 ) {
   await db.query(
-    "UPDATE groups SET member_count=GREATEST(COALESCE(member_count,0),$2),member_count_at=now() WHERE id=$1",
+    "UPDATE groups SET member_count=GREATEST(COALESCE(member_count,0),$2),member_count_at=now() WHERE id=$1 AND platform='line'",
     [groupId, remaining + 1],
   );
 }
@@ -234,6 +234,11 @@ export const staleNotification = `COALESCE(CASE
   ELSE n.created_at<now()-interval '24 hours'
 END,false)`;
 
+/** LINE 推播的對象：目前的管理者私訊，或已登記為 LINE 的群組。通知使用別名 n。 */
+export const lineNotificationTarget = `(n.group_id IS NULL OR EXISTS(
+  SELECT 1 FROM groups g WHERE g.id=n.group_id AND g.platform='line'
+))`;
+
 /**
  * 把過時的未送通知標成 sent_at=now()、last_error='已過期，未補送'（比照群組回覆關閉時的作法，
  * 看板仍查得到）。過期的管理者私訊不逐則補送，改排一則彙整。正在推送的列（被鎖住）略過。
@@ -243,7 +248,7 @@ export async function expireStaleNotifications(c: DbClient) {
     await c.query<{ group_id: string | null }>(
       `UPDATE notifications u SET sent_at=now(),last_error=$1
        FROM (SELECT n.id FROM notifications n LEFT JOIN tasks t ON t.id=n.task_id
-         WHERE n.sent_at IS NULL AND ${staleNotification} FOR UPDATE OF n SKIP LOCKED) s
+         WHERE n.sent_at IS NULL AND ${lineNotificationTarget} AND ${staleNotification} FOR UPDATE OF n SKIP LOCKED) s
        WHERE u.id=s.id RETURNING u.group_id`,
       [expiredNote],
     )
@@ -271,7 +276,7 @@ export async function expireQuotaHeld(c: DbClient, held: string[]) {
     `UPDATE notifications u SET sent_at=now(),last_error=$1
      FROM (SELECT n.id FROM notifications n LEFT JOIN tasks t ON t.id=n.task_id
        WHERE n.sent_at IS NULL AND n.group_id IS NOT NULL AND n.group_id<>ALL($2::text[])
-         AND n.last_error LIKE $3||'%' AND ${staleNotification}
+         AND ${lineNotificationTarget} AND n.last_error LIKE $3||'%' AND ${staleNotification}
        FOR UPDATE OF n SKIP LOCKED) s
      WHERE u.id=s.id`,
     [expiredNote, held, quotaShortPrefix],

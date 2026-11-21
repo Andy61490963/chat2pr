@@ -5,6 +5,8 @@ import { secrets } from "./config.js";
 import { hash } from "./auth.js";
 import { AppError, containsCredential, redact } from "./policy.js";
 import { fetchLine } from "./line-http.js";
+import type { ChatReplyMessage, ChatReplyResult } from "./chat-platform.js";
+import { LineChatPlatform, lineReplyLimit } from "./line-platform.js";
 import { isProgressCommand, isTaskCommand } from "../shared/chat.js";
 import { flushLinePrivate } from "./line-private.js";
 import {
@@ -57,7 +59,6 @@ import {
   lineQuotaUsage,
   markGroupTooLarge,
   markQuotaExhausted,
-  pushLineMessage,
   recordLinePush,
   saveQuotaUsage,
   withLinePushLock,
@@ -106,44 +107,12 @@ const Event = z
   })
   .passthrough();
 export const LinePayload = z.object({ events: z.array(Event).max(100) });
-/** reply token 一次最多送 5 則；同一個 token 只能用一次，所有內容要合併成一個陣列。 */
-const REPLY_LIMIT = 5;
-type ReplyMessage = string | { text: string; quick?: QuickReply[] | null };
 interface Ack {
   token: string;
-  messages: ReplyMessage[];
+  messages: ChatReplyMessage[];
   /** 第一則是進度摘要，其後每則訊息依序對應 claim.ids。 */
   claim?: GroupReplyClaim;
 }
-/** Line.reply 的結果：ids 為 null 表示沒送出；status 為 null 表示沒有權杖、逾時或連不上。 */
-interface ReplyResult {
-  ids: (string | null)[] | null;
-  status: number | null;
-  message?: unknown;
-}
-const lineText = (m: ReplyMessage) => {
-  const text = typeof m === "string" ? m : m.text;
-  const quick = typeof m === "string" ? null : m.quick;
-  return {
-    type: "text" as const,
-    text,
-    ...(quick?.length
-      ? {
-          quickReply: {
-            items: quick.slice(0, 13).map((q) => ({
-              type: "action",
-              action: {
-                type: "postback",
-                label: q.label,
-                data: q.data,
-                displayText: q.displayText,
-              },
-            })),
-          },
-        }
-      : {}),
-  };
-};
 export class Line {
   constructor(private db: Database) {}
   async ingest(body: unknown) {
@@ -203,7 +172,7 @@ export class Line {
         if (e.type === "leave") {
           // 機器人被移出群組：標記離開並通知管理者，不再只是默默停用。沒見過的群組不必建立。
           const left = await c.query(
-            "UPDATE groups SET enabled=false,left_at=now() WHERE id=$1 AND left_at IS NULL RETURNING name",
+            "UPDATE groups SET enabled=false,left_at=now() WHERE id=$1 AND platform='line' AND left_at IS NULL RETURNING name",
             [group],
           );
           if (left.rowCount)
@@ -222,7 +191,7 @@ export class Line {
         );
         // 還收得到這個群組的事件，代表機器人已經回來；維持停用，等管理者確認後再啟用。
         const back = await c.query(
-          "UPDATE groups SET left_at=NULL,announced_at=COALESCE(announced_at,now()) WHERE id=$1 AND left_at IS NOT NULL RETURNING name",
+          "UPDATE groups SET left_at=NULL,announced_at=COALESCE(announced_at,now()) WHERE id=$1 AND platform='line' AND left_at IS NOT NULL RETURNING name",
           [group],
         );
         if (back.rowCount)
@@ -236,10 +205,12 @@ export class Line {
         // 與群組設定使用同一把鎖，收訊不會跨過切換模式的邊界。
         const settings = (
           await c.query(
-            `SELECT enabled,left_at,trigger_mode,reply_mode,${groupRepliesOn} AS replies FROM groups WHERE id=$1 FOR UPDATE`,
+            `SELECT enabled,left_at,trigger_mode,reply_mode,${groupRepliesOn} AS replies FROM groups WHERE id=$1 AND platform='line' FOR UPDATE`,
             [group],
           )
         ).rows[0];
+        // 其他平台的群組留給各自的收訊入口，也不會領取 LINE 的 /進度 補送。
+        if (!settings) return;
         // 群組成員點了補問的常見答案按鈕：比照用「回覆」作答，只在任務仍在等這一版回答時收下。
         // 重複點擊由上方 events 去重與版本比對擋下（作答後版本 +1，舊按鈕不再符合）。
         if (e.type === "postback") {
@@ -335,8 +306,8 @@ export class Line {
             }
             const { tasks, total } = await progressTasks(c, group);
             const { replies, remaining, claim } =
-              await claimPendingGroupReplies(c, group, REPLY_LIMIT - 1);
-            const notes: ReplyMessage[] = replies.map((r, i) => ({
+              await claimPendingGroupReplies(c, group, lineReplyLimit - 1);
+            const notes: ChatReplyMessage[] = replies.map((r, i) => ({
               text:
                 remaining && i === replies.length - 1
                   ? `${r.text}\n\n${progressMoreNote(remaining)}`
@@ -455,7 +426,7 @@ export class Line {
                   token: e.replyToken!,
                   messages: lineChunks(
                     splitQueryAnswer(full.answer).body,
-                    REPLY_LIMIT,
+                    lineReplyLimit,
                   ),
                 });
               return;
@@ -665,7 +636,7 @@ export class Line {
   private async settleClaimed(
     c: DbClient,
     notices: string[],
-    result: ReplyResult,
+    result: ChatReplyResult,
   ) {
     const { ids } = result;
     if (!ids) {
@@ -695,36 +666,14 @@ export class Line {
    * 成功時 ids 依索引放 LINE 給每則訊息的 ID；沒送出時 ids 為 null，status 是 LINE 的狀態碼
    * （沒有權杖、逾時或連不上時為 null），message 是 LINE 回應的錯誤說明，讓呼叫端分辨是不是內容被拒收。
    */
-  private async reply(
+  private reply(
     token: string,
-    messages: ReplyMessage[],
-  ): Promise<ReplyResult> {
-    const access = secrets().lineToken;
-    if (!access) return { ids: null, status: null };
-    const sent = messages.slice(0, REPLY_LIMIT);
-    const response = await fetch("https://api.line.me/v2/bot/message/reply", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${access}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({ replyToken: token, messages: sent.map(lineText) }),
-      signal: AbortSignal.timeout(5000),
-    }).catch(() => null);
-    if (!response) return { ids: null, status: null };
-    const body = (await response.json().catch(() => null)) as {
-      sentMessages?: { id?: unknown }[];
-      message?: unknown;
-    } | null;
-    if (!response.ok)
-      return { ids: null, status: response.status, message: body?.message };
-    return {
-      ids: sent.map((_, i) => {
-        const id = body?.sentMessages?.[i]?.id;
-        return typeof id === "string" ? id : null;
-      }),
-      status: response.status,
-    };
+    messages: ChatReplyMessage[],
+  ): Promise<ChatReplyResult> {
+    return new LineChatPlatform(secrets().lineToken).replyToMessage(
+      { replyToken: token },
+      messages,
+    );
   }
   /** 立即送一則測試私訊，讓管理者確認配對與權杖都正常；不進通知佇列。 */
   async sendTest() {
@@ -792,6 +741,7 @@ export class Line {
     await withLinePushLock(this.db, async () => {
       const access = secrets().lineToken;
       if (!access) return;
+      // 目前只有 LINE 接上推播，其他平台的通知留待各自的傳送流程處理。
       await this.flushGroupNotifications(access);
       if (!(await lineQuotaBlocked(this.db))) await flushLinePrivate(this.db, access);
     });
@@ -802,11 +752,13 @@ export class Line {
     // 總開關關閉後，還沒送出的群組訊息不再送；之後重新開啟也不補發舊訊息。
     if (s.group_replies === false) {
       await this.db.query(
-        "UPDATE notifications SET sent_at=now(),last_error='群組回覆已關閉，未送出' WHERE group_id IS NOT NULL AND sent_at IS NULL",
+        `UPDATE notifications n SET sent_at=now(),last_error='群組回覆已關閉，未送出'
+         FROM groups g WHERE n.group_id=g.id AND g.platform='line' AND n.sent_at IS NULL`,
       );
       return;
     }
     if (await lineQuotaBlocked(this.db)) return;
+    const platform = new LineChatPlatform(access);
     // 剩餘額度（line_quota 說明裡的用量）與群組人數：群組推播依人數計費，剩下的則數不夠某群組時本輪略過那個群組，
     // 不加 attempts，小群組照送。用量未知（還沒查過）時由 LINE 的 429 判斷。
     let usage = await lineQuotaUsage(this.db);
@@ -834,7 +786,8 @@ export class Line {
       );
     if (Number.isFinite(quotaRemaining(usage) ?? Infinity)) {
       const groups = await this.db.query<{ group_id: string }>(
-        "SELECT DISTINCT group_id FROM notifications WHERE sent_at IS NULL AND attempts<3 AND group_id IS NOT NULL LIMIT 50",
+        `SELECT DISTINCT n.group_id FROM notifications n JOIN groups g ON g.id=n.group_id
+         WHERE n.sent_at IS NULL AND n.attempts<3 AND g.platform='line' LIMIT 50`,
       );
       for (const { group_id } of groups)
         members.set(
@@ -860,7 +813,9 @@ export class Line {
       };
       const notifications = (
         await c.query<Pending>(
-          "SELECT * FROM notifications WHERE sent_at IS NULL AND attempts<3 AND group_id IS NOT NULL AND group_id<>ALL($1::text[]) ORDER BY created_at LIMIT 10 FOR UPDATE SKIP LOCKED",
+          `SELECT n.* FROM notifications n JOIN groups g ON g.id=n.group_id
+           WHERE n.sent_at IS NULL AND n.attempts<3 AND g.platform='line' AND n.group_id<>ALL($1::text[])
+           ORDER BY n.created_at LIMIT 10 FOR UPDATE OF n SKIP LOCKED`,
           [[...short]],
         )
       ).rows;
@@ -877,32 +832,26 @@ export class Line {
         // 每則各自一個 savepoint：某則寫入失敗只退回那一則，不會讓整批已送出的紀錄一起被撤銷。
         await c.query("SAVEPOINT push");
         try {
-          const response = await pushLineMessage(
-            access,
+          const result = await platform.sendToGroup(
             n.group_id,
-            lineText({
+            {
               text: n.kind === "group_answered" ? splitQueryAnswer(n.text).body : n.text,
               quick: n.quick_replies,
-            }),
+            },
             n.id,
           );
-          // 記下 LINE 給這則訊息的 ID：之後有人「回覆」引用它，就知道是在接續哪個任務。
-          const sent = response.ok
-            ? ((await response.json().catch(() => null)) as {
-                sentMessages?: { id?: string }[];
-              } | null)
-            : null;
           // 群組依人數累加用量（未知時 1），送私訊前先寫回 line_quota。
-          if (usage && response.ok) {
+          if (usage && result.newlyAccepted) {
             usage = {
               ...usage,
               used: usage.used + pushCost(members.get(n.group_id)),
             };
             usageChanged = true;
           }
+          // 記下平台回傳的訊息 ID，讓群組成員可引用它接續任務。
           await c.query(
             "UPDATE notifications SET sent_at=now(),attempts=attempts+1,last_error=NULL,sent_message_id=$2 WHERE id=$1",
-            [n.id, sent?.sentMessages?.[0]?.id ?? null],
+            [n.id, result.messageId],
           );
           await recordLinePush(this.db);
           await c.query("RELEASE SAVEPOINT push");

@@ -9,6 +9,7 @@ import { splitQueryAnswer } from "../shared/query-answer.js";
  * 「/任務」訊息的立即回覆使用 reply token，不計入推播額度，off 以外都會回。
  */
 import type { DbClient } from "./db.js";
+import type { ChatButton as QuickReply } from "./chat-platform.js";
 import { redact } from "./policy.js";
 import type { TaskStatus } from "../shared/types.js";
 
@@ -191,11 +192,7 @@ export function progressSummary(
 export const progressMoreNote = (n: number) => `還有 ${n} 則，再輸入 /進度。`;
 
 /** 群組回覆的 LINE 快速回覆按鈕（notifications.quick_replies）。 */
-export interface QuickReply {
-  label: string;
-  data: string;
-  displayText: string;
-}
+export type { QuickReply };
 export interface ClaimedReply {
   id: string;
   text: string;
@@ -235,8 +232,9 @@ export function replyRejected(status: number | null, message?: unknown) {
 export async function reclaimStaleClaims(c: Queryable) {
   await c.query(
     `UPDATE notifications u SET sent_at=NULL,last_error=$2
-     FROM (SELECT id FROM notifications WHERE last_error=$1 AND sent_message_id IS NULL AND sent_at<now()-$3::interval
-       FOR UPDATE SKIP LOCKED) s
+     FROM (SELECT n.id FROM notifications n JOIN groups g ON g.id=n.group_id
+       WHERE g.platform='line' AND n.last_error=$1 AND n.sent_message_id IS NULL AND n.sent_at<now()-$3::interval
+       FOR UPDATE OF n SKIP LOCKED) s
      WHERE u.id=s.id`,
     [claimingNote, replyFailedNote, claimTimeout],
   );
@@ -267,7 +265,8 @@ const retrievable = (n: string) =>
 const newer = (a: string, b: string) =>
   `(${a}.kind<>'group_received',${a}.created_at,${a}.id)>(${b}.kind<>'group_received',${b}.created_at,${b}.id)`;
 const newestOfTask = `NOT EXISTS(SELECT 1 FROM notifications m WHERE m.task_id=n.task_id AND ${retrievable("m")} AND ${newer("m", "n")})`;
-const pendingFrom = `FROM notifications n JOIN tasks t ON t.id=n.task_id WHERE ${retrievable("n")} AND ${newestOfTask}`;
+const pendingFrom = `FROM notifications n JOIN tasks t ON t.id=n.task_id JOIN groups g ON g.id=n.group_id
+  WHERE g.platform='line' AND ${retrievable("n")} AND ${newestOfTask}`;
 
 /** 本群組可用 /進度 取回的通知數，以及其中是否有推播失敗過的。 */
 export async function pendingGroupReplies(c: DbClient, groupId: string) {

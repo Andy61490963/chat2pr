@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS groups (
  id text PRIMARY KEY, name text NOT NULL, project_id uuid REFERENCES projects(id), enabled boolean NOT NULL DEFAULT false,
  first_pending_at timestamptz, last_pending_at timestamptz, created_at timestamptz NOT NULL DEFAULT now()
 );
+-- 舊群組沿用 LINE。Discord 頻道與訊息識別碼加上 discord: 前綴。
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS platform text NOT NULL DEFAULT 'line' CHECK(platform IN ('line','discord'));
 CREATE TABLE IF NOT EXISTS events (id text PRIMARY KEY, provider text NOT NULL, received_at timestamptz NOT NULL DEFAULT now());
 CREATE TABLE IF NOT EXISTS messages (
  id text PRIMARY KEY, group_id text NOT NULL REFERENCES groups(id), user_id text, type text NOT NULL, text text,

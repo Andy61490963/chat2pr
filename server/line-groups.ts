@@ -10,7 +10,7 @@ export async function syncGroupNames(db: Database, only?: string[]) {
   const token = secrets().lineToken;
   if (!token) return;
   const groups = await db.query<{ id: string }>(
-    `SELECT id FROM groups WHERE id LIKE 'C%'
+    `SELECT id FROM groups WHERE platform='line' AND id LIKE 'C%'
        AND (name_synced_at IS NULL OR name_synced_at<now()-interval '1 hour')
        AND ($1::text[] IS NULL OR id=ANY($1))
      ORDER BY name_synced_at NULLS FIRST LIMIT 20`,
@@ -29,7 +29,7 @@ export async function syncGroupNames(db: Database, only?: string[]) {
       const summary = Summary.safeParse(await response.json());
       if (!summary.success) continue;
       await db.query(
-        "UPDATE groups SET name=$2,name_synced_at=now() WHERE id=$1",
+        "UPDATE groups SET name=$2,name_synced_at=now() WHERE id=$1 AND platform='line'",
         [id, summary.data.groupName],
       );
     } catch {
@@ -44,7 +44,7 @@ export async function announceNewGroups(db: Database) {
   await db.query(
     `WITH fresh AS (
        UPDATE groups SET announced_at=now()
-       WHERE announced_at IS NULL AND left_at IS NULL
+       WHERE platform='line' AND announced_at IS NULL AND left_at IS NULL
          AND (name_synced_at IS NOT NULL OR created_at<now()-interval '2 minutes')
        RETURNING id,name,enabled)
      INSERT INTO notifications(kind,dedupe_key,text)

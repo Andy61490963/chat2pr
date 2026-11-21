@@ -23,6 +23,7 @@ import {
   taskGroups,
   UNFINISHED_LIMIT,
   type Action,
+  type ChatPlatformId,
   type EndTaskSelection,
   type EndTasksResult,
   type Project,
@@ -641,20 +642,28 @@ export class Tasks {
       attempts: number;
       last_error: string | null;
       created_at: string;
+      platform: ChatPlatformId | null;
     }>(
       // 原文與聊天室同樣受保存期限限制：到期後只回狀態，不回文字，也就不能複製。
-      "SELECT id,kind,CASE WHEN created_at>message_retention_cutoff() THEN left(text,4500) END AS text,sent_at,sent_message_id IS NOT NULL AS has_message_id,attempts,last_error,created_at FROM notifications WHERE task_id=$1 AND group_id IS NOT NULL ORDER BY created_at,id",
+      `SELECT n.id,n.kind,CASE WHEN n.created_at>message_retention_cutoff() THEN left(n.text,4500) END AS text,
+         n.sent_at,n.sent_message_id IS NOT NULL AS has_message_id,n.attempts,n.last_error,n.created_at,g.platform
+       FROM notifications n LEFT JOIN groups g ON g.id=n.group_id
+       WHERE n.task_id=$1 AND n.group_id IS NOT NULL ORDER BY n.created_at,n.id`,
       [id],
     );
     if (!rows.length) return [];
     // 額度用完期間排入的通知 last_error 是空的，要靠推播暫停狀態才說得出「額度用完」。
-    const quotaBlocked = await lineQuotaBlocked(this.db);
+    const quotaBlocked =
+      rows.some((n) => n.platform === "line") && (await lineQuotaBlocked(this.db));
     return rows.map((n) => ({
       id: n.id,
       kind: n.kind,
       created_at: n.created_at,
       text: n.text,
-      delivery: deliveryState(n, { quotaBlocked }),
+      delivery: deliveryState(n, {
+        platform: n.platform ?? undefined,
+        quotaBlocked: n.platform === "line" && quotaBlocked,
+      }),
     }));
   }
   async runEvents(taskId: string, runId: string, before?: number) {
