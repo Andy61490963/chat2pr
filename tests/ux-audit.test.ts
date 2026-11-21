@@ -281,6 +281,28 @@ it("待確認的任務結束、PR 合併、專案補問回答後，原通知視�
   });
 });
 
+it("新群組通知只在群組還沒綁專案且未啟用時算待處理", async () => {
+  const projectId = await fixture();
+  await db.query(
+    "INSERT INTO groups(id,name,enabled,trigger_mode) VALUES('group-new','虛構新群組',false,'auto'),('group-off','虛構停用群組',false,'auto')",
+  );
+  await db.query(
+    "INSERT INTO group_projects(group_id,project_id) VALUES('group-off',$1)",
+    [projectId],
+  );
+  await db.query(
+    `INSERT INTO notifications(kind,dedupe_key,text) VALUES
+       ('group_new','group_new:group-new','請設定新群組'),
+       ('group_new','group_new:group-off','請設定新群組')`,
+  );
+  const alerts = (await state()).alerts.filter(
+    (n: { kind: string }) => n.kind === "group_new",
+  );
+  expect(
+    alerts.map((n: { disposition: string }) => n.disposition).sort(),
+  ).toEqual(["action", "resolved"]);
+});
+
 describe("重新開啟任務", () => {
   it("已拒絕與已取消的任務可重新開啟，回到待審核並成為新版本", async () => {
     await fixture();
