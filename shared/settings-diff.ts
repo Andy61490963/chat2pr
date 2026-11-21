@@ -1,4 +1,5 @@
 import type { Settings } from "./types.js";
+import { connectionSecretLabels, type ConnectionSecretField } from "./connection-secrets.js";
 import { containsCredential } from "./credentials.js";
 import { reserveLabel } from "./subscription-quota.js";
 import { adminNotificationLabels, groupPlatformLabels } from "./status-glossary.js";
@@ -189,4 +190,8 @@ export function egressResetRemovals(
   if (!defaults?.length) return null;
   const keep = new Set(defaults.map((d) => d.toLowerCase()));
   return domains.filter((d) => !keep.has(d.toLowerCase()));
+}
+/** 連線金鑰的確認、稽核與通知共用欄位名稱，差異不包含值。 */
+export function describeConnectionSecretChanges(fields: readonly ConnectionSecretField[]) {
+  return fields.map((field) => connectionSecretLabels[field]).join("、");
 }

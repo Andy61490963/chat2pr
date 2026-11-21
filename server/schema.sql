@@ -477,6 +477,9 @@ CREATE TABLE IF NOT EXISTS members (
  added_by text, created_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS login text;
+-- 舊工作階段沒有可確認的登入時間，更新連線金鑰前須重新登入。
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS created_at timestamptz;
+ALTER TABLE oauth_states ADD COLUMN IF NOT EXISTS return_to text;
 -- 看板通知鈴鐺：每位使用者看過通知的時間。
 CREATE TABLE IF NOT EXISTS alert_seen (user_id text PRIMARY KEY, seen_at timestamptz NOT NULL DEFAULT now());
 -- 舊時間軸紀錄改成易讀格式：去掉判讀附帶的上下文 JSON；「管理者 <ID> 操作需求版本 N」改寫成帳號名稱與實際動作。

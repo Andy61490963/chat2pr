@@ -4,6 +4,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { Database } from "./db.js";
 import { config, secrets, token } from "./config.js";
 import { AppError } from "./policy.js";
+import { secretReauthTarget } from "../shared/connection-secrets.js";
 export const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 export type Role = "admin" | "member";
 export interface UserSession {
@@ -11,6 +12,7 @@ export interface UserSession {
   csrf: string;
   login: string;
   role: Role;
+  recentlyAuthenticated: boolean;
 }
 /** 擁有者固定為管理者；其他人依成員名單決定角色，不在名單上即無權限。 */
 export async function roleOf(db: Database, userId: string) {
@@ -33,8 +35,10 @@ export async function requireUser(
 ): Promise<UserSession> {
   const cookie = req.cookies.af_session;
   if (!cookie) throw new AppError(401, "請先使用 GitHub 登入");
-  const row = await db.one<{ user_id: string; csrf: string; login: string | null }>(
-    "SELECT user_id,csrf,login FROM sessions WHERE id_hash=$1 AND expires_at>now()",
+  const row = await db.one<{ user_id: string; csrf: string; login: string | null; fresh: boolean }>(
+    `SELECT user_id,csrf,login,
+      COALESCE(created_at BETWEEN now()-interval '10 minutes' AND now(),false) AS fresh
+     FROM sessions WHERE id_hash=$1 AND expires_at>now()`,
     [hash(cookie)],
   );
   const role = row ? await roleOf(db, row.user_id) : undefined;
@@ -44,6 +48,7 @@ export async function requireUser(
     csrf: row.csrf,
     login: row.login ?? row.user_id,
     role,
+    recentlyAuthenticated: row.fresh,
   };
   if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
     if (req.headers["x-csrf-token"] !== session.csrf)
@@ -64,14 +69,19 @@ export async function registerAuth(app: FastifyInstance, db: Database) {
   app.get("/auth/github", async (req, reply) => {
     // 先回到固定回呼所屬的網域，避免從 localhost 建立的 cookie 無法送到公開回呼。
     const publicUrl = new URL(config().publicUrl);
+    const returnTo = (req.query as { returnTo?: string }).returnTo === secretReauthTarget
+      ? secretReauthTarget
+      : null;
+    const loginUrl = new URL("/auth/github", publicUrl);
+    if (returnTo) loginUrl.searchParams.set("returnTo", returnTo);
     if (req.headers.host !== publicUrl.host)
-      return reply.redirect(new URL("/auth/github", publicUrl).toString());
+      return reply.redirect(loginUrl.toString());
     const s = secrets();
     if (!s.githubClientId) throw new AppError(503, "請先於本機設定 GitHub App");
     const state = token();
     await db.query(
-      "INSERT INTO oauth_states VALUES($1,now()+interval '10 minutes')",
-      [hash(state)],
+      "INSERT INTO oauth_states(id_hash,expires_at,return_to) VALUES($1,now()+interval '10 minutes',$2)",
+      [hash(state), returnTo],
     );
     reply.setCookie("af_oauth", state, { ...opts(), maxAge: 600 });
     const u = new URL("https://github.com/login/oauth/authorize");
@@ -87,11 +97,11 @@ export async function registerAuth(app: FastifyInstance, db: Database) {
     const q = req.query as Record<string, string>;
     if (!q.state || !q.code || req.cookies.af_oauth !== q.state)
       throw new AppError(403, "登入驗證不符");
-    const state = await db.query(
-      "DELETE FROM oauth_states WHERE id_hash=$1 AND expires_at>now() RETURNING id_hash",
+    const state = await db.one<{ return_to: string | null }>(
+      "DELETE FROM oauth_states WHERE id_hash=$1 AND expires_at>now() RETURNING return_to",
       [hash(q.state)],
     );
-    if (!state.length) throw new AppError(403, "登入連結已失效");
+    if (!state) throw new AppError(403, "登入連結已失效");
     const s = secrets();
     const response = await fetch(
       "https://github.com/login/oauth/access_token",
@@ -130,13 +140,13 @@ export async function registerAuth(app: FastifyInstance, db: Database) {
     const session = token(),
       csrf = token();
     await db.query(
-      "INSERT INTO sessions(id_hash,user_id,csrf,expires_at,login) VALUES($1,$2,$3,now()+interval '12 hours',$4)",
+      "INSERT INTO sessions(id_hash,user_id,csrf,expires_at,login,created_at) VALUES($1,$2,$3,now()+interval '12 hours',$4,now())",
       [hash(session), String(user.id), csrf, user.login ?? String(user.id)],
     );
     reply
       .clearCookie("af_oauth", { path: "/" })
       .setCookie("af_session", session, { ...opts(), maxAge: 43200 });
-    return reply.redirect("/");
+    return reply.redirect(state.return_to === secretReauthTarget ? `/settings#${secretReauthTarget}` : "/");
   });
   app.get("/api/me", async (req) => {
     const s = await requireUser(db, req);

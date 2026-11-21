@@ -230,6 +230,7 @@ export function App() {
       csrf: string;
       login: string;
       role?: "admin" | "member";
+      owner?: boolean;
     } | null>(null),
     // null：連不上服務（通道或服務重啟中），false：服務在但還沒設定 GitHub App。
     [configured, setConfigured] = useState<boolean | null>(false),
@@ -1306,6 +1307,8 @@ export function App() {
                 request={request}
                 account={account}
                 reload={() => loadAccount(true)}
+                owner={user.owner === true}
+                refreshState={refresh}
               />
             )}
           </>

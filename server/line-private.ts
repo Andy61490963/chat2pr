@@ -21,6 +21,7 @@ import { LineChatPlatform } from "./line-platform.js";
 import { redact } from "./policy.js";
 
 export const privateActionKinds = [
+  "connection_secrets_updated",
   "approval",
   "risk",
   "input_required",

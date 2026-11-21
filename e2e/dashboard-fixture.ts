@@ -7,6 +7,12 @@ import {
   defaultCheckEnvironmentPolicy,
 } from "../shared/check-environment";
 import { defaultDiskSettings, type DiskReport } from "../shared/docker-disk";
+import {
+  connectionSecretFields,
+  parseConnectionSecrets,
+  secretReauthMessage,
+  type ConnectionSecretStatus,
+} from "../shared/connection-secrets";
 import type { ChatPage } from "../shared/chat";
 import { discordServiceText } from "../shared/status-glossary";
 import type { ActivityEvent } from "../shared/activity-groups";
@@ -315,6 +321,13 @@ export const detail: Detail = {
 };
 
 export const defaultState: State = {
+  connectionSecrets: {
+    lineSecret: { configured: true, updatedAt: null },
+    lineToken: { configured: true, updatedAt: timestamp },
+    discordToken: { configured: true, updatedAt: timestamp },
+    discordApplicationId: { configured: false, updatedAt: null },
+    openaiKey: { configured: false, updatedAt: null },
+  },
   settings: {
     rag_enabled: false,
     paused: false,
@@ -433,6 +446,7 @@ export async function mockDashboard(
     state?: Record<string, unknown>;
     routes?: Record<string, unknown>;
     pairingCode?: string;
+    reauthConnectionSecrets?: boolean;
   } = {},
 ): Promise<void> {
   const routes: Record<string, unknown> = {
@@ -534,6 +548,23 @@ export async function mockDashboard(
     if (!pathname.startsWith("/api/")) return route.continue();
     if (request.method() === "GET" && Object.hasOwn(routes, pathname)) {
       return route.fulfill({ json: routes[pathname] });
+    }
+    if (request.method() === "PUT" && pathname === "/api/secrets") {
+      if (!(routes["/api/me"] as { owner?: boolean }).owner)
+        return route.fulfill({ status: 403, json: { error: "連線金鑰只有擁有者能更新" } });
+      if (options.reauthConnectionSecrets)
+        return route.fulfill({ status: 409, json: { error: secretReauthMessage } });
+      const parsed = parseConnectionSecrets(request.postDataJSON());
+      if ("error" in parsed) return route.fulfill({ status: 400, json: parsed });
+      const state = routes["/api/state"] as State;
+      const connectionSecrets = { ...state.connectionSecrets } as ConnectionSecretStatus;
+      for (const field of connectionSecretFields) {
+        const value = parsed.patch[field];
+        if (value !== undefined)
+          connectionSecrets[field] = { configured: value !== null, updatedAt: new Date().toISOString() };
+      }
+      state.connectionSecrets = connectionSecrets;
+      return route.fulfill({ json: { connectionSecrets } });
     }
     // 任務頁「已結束／全部」分批讀取：預設用狀態快照裡的任務回應，個別測試可自行覆寫。
     if (request.method() === "GET" && pathname === "/api/tasks") {

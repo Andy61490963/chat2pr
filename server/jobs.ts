@@ -127,7 +127,7 @@ async function recoverRun(
 }
 export async function startJobs(
   db: Database,
-  adapters: { github?: GitHub; runner?: Runner; model?: Embedder; discord?: DiscordChatPlatform } = {},
+  adapters: { github?: GitHub; runner?: Runner; model?: Embedder; discord?: DiscordChatPlatform | (() => DiscordChatPlatform | undefined) } = {},
 ) {
   const previous = await db.one<{ checked_at: Date }>(
     "SELECT checked_at FROM service_health WHERE name='queue'",

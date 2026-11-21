@@ -106,7 +106,7 @@ describe("LINE 私訊摘要", () => {
   it("預設只允許需要動手的通知種類，服務異常另有中斷門檻", () => {
     expect(linePrivateDefaults.line_private_mode).toBe("action");
     expect(privateActionKinds).toEqual(
-      expect.arrayContaining(["approval", "failed", "project_input"]),
+      expect.arrayContaining(["approval", "failed", "project_input", "connection_secrets_updated"]),
     );
     for (const kind of ["answered", "ready", "service_down", "service_up"])
       expect(privateActionKinds).not.toContain(kind);

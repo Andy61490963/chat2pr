@@ -13,13 +13,19 @@ export const discordServiceLabels = {
 } as const;
 export const discordServiceText = {
   configError:
-    "無法讀取 Discord 設定。請在主機開啟本機設定頁重新填寫機器人權杖，再重新啟動服務。",
+    "無法讀取 Discord 設定。請擁有者檢查設定檔，或到看板的「連線金鑰」重新填寫機器人權杖。",
   unconfigured:
-    "尚未填寫機器人權杖，無法接收 Discord 訊息。請在主機開啟本機設定頁填寫設定。",
+    "尚未填寫機器人權杖，無法接收 Discord 訊息。請擁有者到「連線金鑰」填寫設定。",
   connecting: "正在建立 Discord 連線，請稍候。",
   connected: "已連線，可以接收 Discord 頻道訊息。",
   disconnected:
     "暫時收不到 Discord 訊息，可能是網路中斷、權杖失效或讀取訊息內容權限未開啟。系統會重試，請確認網路及機器人設定。",
+} as const;
+
+export const connectionSecretStatusLabels = {
+  configured: "已設定",
+  unconfigured: "未設定",
+  unknownUpdatedAt: "沒有更新紀錄",
 } as const;
 
 export const messageEditLabel = "來源訊息已編輯";

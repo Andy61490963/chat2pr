@@ -31,7 +31,7 @@ export async function fixture() {
 }
 export async function session() {
   await db.query(
-    "INSERT INTO sessions VALUES($1,'1000001','test-csrf',now()+interval '1 hour') ON CONFLICT(id_hash) DO UPDATE SET expires_at=EXCLUDED.expires_at",
+    "INSERT INTO sessions(id_hash,user_id,csrf,expires_at,created_at) VALUES($1,'1000001','test-csrf',now()+interval '1 hour',now()) ON CONFLICT(id_hash) DO UPDATE SET expires_at=EXCLUDED.expires_at",
     [hash("test-session")],
   );
   return {
