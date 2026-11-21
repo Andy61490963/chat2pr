@@ -565,7 +565,9 @@ export function StationTrack({
         <span className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">
           {ended ? (
             <>
-              {end?.actor && `${end.actor}於 `}
+              {end?.actor &&
+                // 英數字結尾的帳號和「於」之間留空格，避免黏在一起。
+                `${end.actor}${/[A-Za-z0-9]$/.test(end.actor) ? " " : ""}於 `}
               <time dateTime={endAt}>
                 {labelled ? date(endAt) : endDay.format(new Date(endAt))}
               </time>{" "}
