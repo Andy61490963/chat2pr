@@ -1,4 +1,5 @@
 import {
+  networkStatusLabels,
   projectLabels,
   projectStatus,
   projectVerificationLabels,
@@ -164,6 +165,11 @@ export function ProjectsView({
           <Plus /> 新增專案
         </Button>
       </div>
+      {state.settings.container_network === "open" && (
+        <p className="text-sm text-muted-foreground">
+          工作網路：{networkStatusLabels.open}。
+        </p>
+      )}
       {state.projects.length ? (
         <div className="@3xl:rounded-xl @3xl:border @3xl:bg-card @3xl:text-card-foreground">
           <div

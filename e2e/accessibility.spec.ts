@@ -97,7 +97,7 @@ const screens: {
   width?: number;
 }[] = [
   { name: "收件匣", path: "/", loaded: task.title },
-  { name: "手機收件匣", path: "/", loaded: skipped.detail, width: 375 },
+  { name: "手機收件匣", path: "/", loaded: task.title, width: 375 },
   { name: "任務清單", path: "/tasks", loaded: task.title },
   { name: "任務詳情", path: `/tasks?task=${task.id}`, loaded: question },
   { name: "聊天室", path: "/chat", loaded: message },
@@ -196,6 +196,8 @@ for (const theme of ["light", "dark"] as const) {
         ).toBeVisible();
         if (screen.path === "/" && screen.name !== "登入") {
           const reason = page.getByText(skipped.detail, { exact: true });
+          await expect(reason).toHaveCount(0);
+          await page.getByRole("button", { name: "顯示系統紀錄" }).click();
           await expect(reason).toBeVisible();
           expect(
             await reason.evaluate(

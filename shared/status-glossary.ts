@@ -44,6 +44,10 @@ export const notificationLabels = {
   action: "需要你處理",
 } as const;
 
+export const networkStatusLabels = {
+  open: "所有專案已開放網路",
+} as const;
+
 /** 專案優先顯示驗證進度與需要處理的狀態。 */
 export const projectLabels = {
   missing: "找不到儲存庫",

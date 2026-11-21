@@ -1,7 +1,6 @@
 import {
   notificationLabels,
   projectLabels,
-  taskStationStatusLabels,
 } from "../../shared/status-glossary.js";
 import { taskListTitle } from "../../shared/task-title.js";
 import { useState } from "react";
@@ -141,8 +140,6 @@ export function InboxView({
   const ready = state.tasks.filter((t) => readyStatuses.includes(t.status));
   const held = state.tasks.filter((t) => waitingStatuses.includes(t.status));
   const needCount = countOf(state, attention);
-  const heldCount = countOf(state, waitingStatuses);
-  const readyCount = countOf(state, readyStatuses);
   const week = Date.now() - 7 * 86400000;
   const mergedWeek =
     state.totals?.mergedWeek ??
@@ -151,43 +148,6 @@ export function InboxView({
     ).length;
   return (
     <div className="work-surface flex min-w-0 flex-col gap-7">
-      <nav
-        aria-label="任務摘要"
-        className="grid grid-cols-2 gap-x-4 border-b pb-2 md:flex md:flex-wrap"
-      >
-        {(
-          [
-            [
-              "todo",
-              notificationLabels.action,
-              needCount,
-              needCount ? "審核、補充或重試" : "目前沒有待決定的事",
-            ],
-            ["moving", "進行中", countOf(state, moving), "排程、開發與驗證"],
-            ["ready", statusLabels.ready, readyCount, "PR 已建立"],
-            ["closed", "近 7 天已合併", mergedWeek, undefined],
-          ] as const
-        ).map(([filter, label, count, hint]) => (
-          <Button
-            key={filter}
-            variant="ghost"
-            size="sm"
-            title={hint}
-            className="max-md:justify-start"
-            onClick={() => showTasks(filter)}
-          >
-            {label} <span className="tabular-nums">{count}</span>
-          </Button>
-        ))}
-        <span className="col-span-2 flex items-center px-3 text-xs text-muted-foreground max-md:mt-2">
-          累計 {state.totals?.tasks ?? state.tasks.length} 個需求
-        </span>
-        {needCount === 0 && heldCount > 0 && (
-          <span className="col-span-2 flex items-center px-3 text-xs text-muted-foreground max-md:mt-2">
-            另有 {heldCount} 件{statusLabels.budget_wait}，會自動繼續
-          </span>
-        )}
-      </nav>
       {left.length > 0 && (
         <Card className="gap-3">
           <CardContent>
@@ -222,10 +182,14 @@ export function InboxView({
           </CardContent>
         </Card>
       )}
-      <section>
-        <SectionTitle count={needs.length}>
-          {taskStationStatusLabels.decision}
-        </SectionTitle>
+      <section aria-labelledby="inbox-todo">
+        <TaskSectionTitle
+          id="inbox-todo"
+          count={needCount}
+          open={() => showTasks("todo")}
+        >
+          {notificationLabels.action}
+        </TaskSectionTitle>
         {needs.length ? (
           <div className="work-ledger divide-y">
             {needs.map((t) => (
@@ -258,7 +222,7 @@ export function InboxView({
             >
               {statusLabels.budget_wait}（會自動繼續）
             </h2>
-            <Badge variant="secondary">{held.length}</Badge>
+            <Badge variant="secondary">{countOf(state, waitingStatuses)}</Badge>
             {admin && (
               <Button
                 variant="link"
@@ -266,7 +230,7 @@ export function InboxView({
                 className="ml-auto h-auto p-0"
                 onClick={() => go("settings")}
               >
-                調整額度設定 <ChevronRight />
+                調整額度設定
               </Button>
             )}
           </div>
@@ -286,8 +250,14 @@ export function InboxView({
       )}
       <div className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
         <div className="flex flex-col gap-8">
-          <section>
-            <SectionTitle count={working.length}>進行中</SectionTitle>
+          <section aria-labelledby="inbox-moving">
+            <TaskSectionTitle
+              id="inbox-moving"
+              count={countOf(state, moving)}
+              open={() => showTasks("moving")}
+            >
+              進行中
+            </TaskSectionTitle>
             <div className="work-ledger">
               {working.length ? (
                 working.map((t) => (
@@ -300,10 +270,14 @@ export function InboxView({
               )}
             </div>
           </section>
-          <section>
-            <SectionTitle count={ready.length}>
+          <section aria-labelledby="inbox-ready">
+            <TaskSectionTitle
+              id="inbox-ready"
+              count={countOf(state, readyStatuses)}
+              open={() => showTasks("ready")}
+            >
               {statusLabels.ready}
-            </SectionTitle>
+            </TaskSectionTitle>
             <div className="work-ledger">
               {ready.length ? (
                 ready.map((t) => (
@@ -334,6 +308,18 @@ export function InboxView({
               )}
             </div>
           </section>
+          <div className="flex flex-wrap items-center gap-x-4 border-t pt-2 text-sm text-muted-foreground">
+            <button
+              type="button"
+              className="work-touch font-medium hover:underline"
+              onClick={() => showTasks("closed")}
+            >
+              近 7 天已合併 <span className="tabular-nums">{mergedWeek}</span>
+            </button>
+            <span className="tabular-nums">
+              累計 {state.totals?.tasks ?? state.tasks.length} 個需求
+            </span>
+          </div>
         </div>
         <ActivityFeed state={state} open={open} more={more} />
       </div>
@@ -341,11 +327,35 @@ export function InboxView({
   );
 }
 
-// 動態依種類給圖示與色調；系統維運紀錄（備份、復原）淡化顯示，避免蓋過任務動態。
-const activityKinds: Record<
-  string,
-  { icon: typeof Activity; tone: string; system?: boolean }
-> = {
+function TaskSectionTitle({
+  id,
+  count,
+  open,
+  children,
+}: {
+  id: string;
+  count: number;
+  open: () => void;
+  children: string;
+}) {
+  return (
+    <h2 id={id} className="mb-3 border-b text-lg font-semibold">
+      <button
+        type="button"
+        onClick={open}
+        className="work-touch inline-flex items-center gap-2 pb-2 text-left hover:underline"
+      >
+        {children}{" "}
+        <Badge variant="secondary" className="tabular-nums">
+          {count}
+        </Badge>
+      </button>
+    </h2>
+  );
+}
+
+// 動態依種類給圖示與色調；技術細節留在系統紀錄。
+const activityKinds: Record<string, { icon: typeof Activity; tone: string }> = {
   ready: { icon: GitPullRequest, tone: "text-good" },
   answered: { icon: MessageSquareText, tone: "text-good" },
   merged: { icon: GitMerge, tone: "text-good" },
@@ -360,9 +370,35 @@ const activityKinds: Record<
   error: { icon: CircleAlert, tone: "text-danger" },
   retry: { icon: RefreshCw, tone: "text-warn" },
   settings: { icon: Settings2, tone: "text-muted-foreground" },
-  backup: { icon: Archive, tone: "text-muted-foreground", system: true },
-  recovery: { icon: RotateCcw, tone: "text-muted-foreground", system: true },
+  backup: { icon: Archive, tone: "text-muted-foreground" },
+  recovery: { icon: RotateCcw, tone: "text-muted-foreground" },
 };
+const systemActivity = new Set([
+  "ai_output_adjusted",
+  "api_error",
+  "api_stream_error",
+  "backup",
+  "build_output_excluded",
+  "check_environment",
+  "check_host_unavailable",
+  "check_system_issue",
+  "defer",
+  "docker_disk_auto",
+  "install_image",
+  "install_review",
+  "install_retry",
+  "install_skipped",
+  "proxy_rejected",
+  "query_note",
+  "rag",
+  "recovery",
+  "retrieval",
+  "started",
+  "triage_skipped",
+]);
+const isSystemActivity = (a: Audit) =>
+  systemActivity.has(a.kind) ||
+  (a.kind === "memory" && /^(AI 自動記住|群組記住)：/.test(a.detail));
 const dayLabel = (v: string) => {
   const d = new Date(v),
     today = new Date();
@@ -380,6 +416,10 @@ const dayLabel = (v: string) => {
 
 // 失敗的完整原因在「需要你處理」的卡片與任務詳情裡；動態只留一句，避免同一段文字重複出現。
 const brief = (a: Audit) => {
+  if (a.task_mode === "query") {
+    if (a.kind === "attempt" && a.detail === "開始程式修改") return "開始調查";
+    if (a.kind === "started") return a.detail.replace(/^開始開發/, "開始調查");
+  }
   if (a.kind !== "verification" && a.kind !== "error") return a.detail;
   if (a.detail.startsWith("驗證未通過，請修正："))
     return "驗證未通過，交回修正";
@@ -401,7 +441,7 @@ function ActivityFeed({
   const [all, setAll] = useState(false);
   const [limit, setLimit] = useState(10);
   const rows = collapseRepeats(
-    state.activity.filter((a) => all || !activityKinds[a.kind]?.system),
+    state.activity.filter((a) => all || !isSystemActivity(a)),
   );
   const items = rows.slice(0, limit);
   return (
@@ -412,6 +452,8 @@ function ActivityFeed({
             variant="ghost"
             size="xs"
             className="text-muted-foreground"
+            aria-controls="inbox-activity"
+            aria-expanded={all}
             onClick={() => setAll(!all)}
           >
             {all ? "隱藏系統紀錄" : "顯示系統紀錄"}
@@ -421,7 +463,7 @@ function ActivityFeed({
         最近動態
       </SectionTitle>
       <Card className="py-4">
-        <CardContent>
+        <CardContent id="inbox-activity">
           {items.length ? (
             <ol className="flex flex-col">
               {items.map((a, i) => {
@@ -472,7 +514,8 @@ function ActivityFeed({
                             a.kind === "triage_skipped"
                               ? "whitespace-pre-wrap"
                               : "line-clamp-2",
-                            (a.task_id || k.system) && "text-muted-foreground",
+                            (a.task_id || isSystemActivity(a)) &&
+                              "text-muted-foreground",
                           )}
                         >
                           {a.kind === "triage_skipped" ? (
@@ -506,25 +549,26 @@ function ActivityFeed({
                   </Button>
                 </li>
               )}
-              {/* 已載入的都看完了，再往前的要向伺服器多要。 */}
-              {rows.length <= limit && (
-                <li>
-                  <LoadMore
-                    shown={state.activity.length}
-                    total={state.totals?.activity}
-                    unit="筆動態"
-                    more={async () => {
-                      await more();
-                      setLimit((n) => n + 20);
-                    }}
-                  />
-                </li>
-              )}
             </ol>
           ) : (
-            <Empty compact icon={<Activity />} title="還沒有動態">
-              你可以在群組提出需求，任務有進展時就會出現在這裡。
+            <Empty compact icon={<Activity />} title="這裡還沒有可顯示的動態">
+              {(state.totals?.activity ?? 0) > state.activity.length
+                ? "你可以載入更早的紀錄來查看任務進度。"
+                : !all && state.activity.length > 0
+                  ? "你目前只有系統紀錄，可以按「顯示系統紀錄」查看。"
+                  : "你可以在群組提出需求，任務有進展時就會出現在這裡。"}
             </Empty>
+          )}
+          {rows.length <= limit && (
+            <LoadMore
+              shown={state.activity.length}
+              total={state.totals?.activity}
+              unit="筆紀錄"
+              more={async () => {
+                await more();
+                setLimit((n) => n + 20);
+              }}
+            />
           )}
         </CardContent>
       </Card>

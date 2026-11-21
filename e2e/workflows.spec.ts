@@ -195,6 +195,12 @@ for (const width of [1280, 375]) {
     const menu = page.getByRole("menu");
     const notices = menu.getByRole("menuitem").filter({ hasText: /範例/ });
     await expect(notices.first()).toContainText("請確認範例任務。");
+    await expect(
+      notices.first().getByText("等你決定", { exact: true }),
+    ).toHaveCount(1);
+    await expect(
+      notices.first().getByText("需要你處理", { exact: true }),
+    ).toHaveCount(0);
     await expect(notices.last()).toContainText(
       "範例服務曾中斷約 2 分鐘，已恢復。",
     );

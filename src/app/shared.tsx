@@ -62,6 +62,7 @@ export type Health = {
   ok: boolean;
   detail: string;
   checked_at: string;
+  outage_started_at?: string | null;
 };
 export type Audit = {
   id: number;
@@ -71,6 +72,7 @@ export type Audit = {
   created_at: string;
   /** 看板動態才有：這筆紀錄所屬任務的名稱。 */
   task_title?: string | null;
+  task_mode?: Task["mode"] | null;
 };
 export type State = {
   settings: Settings;
@@ -472,9 +474,11 @@ function failedStation(error: Task["last_error"], query: boolean) {
 export function StationTrack({
   task,
   labelled = false,
+  statusLabel,
 }: {
   task: Pick<Task, "status" | "mode" | "last_error">;
   labelled?: boolean;
+  statusLabel?: string;
 }) {
   const { status } = task;
   const query = task.mode === "query";
@@ -511,7 +515,7 @@ export function StationTrack({
   return (
     <span className="station-track" data-tone={statusVariant[status]}>
       <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <StatusBadge status={status} label={label} />
+        <StatusBadge status={status} label={statusLabel ?? label} />
         <span className="text-xs text-muted-foreground">
           {at === undefined ? position : `${position}站`}
         </span>

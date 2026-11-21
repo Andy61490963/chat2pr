@@ -70,6 +70,7 @@ export async function markQuotaExhausted(
     kept
       ? `${quotaExhaustedDetail}（${quotaUsageText(kept)}）`
       : quotaExhaustedDetail,
+    { trackOutage: true },
   );
 }
 
@@ -280,5 +281,5 @@ export async function syncLineQuota(db: Database, access: string) {
   }
   if (await lineQuotaBlocked(db))
     await db.transaction((c) => expireStaleNotifications(c));
-  await recordHealth(db, LINE_QUOTA, true, text);
+  await recordHealth(db, LINE_QUOTA, true, text, { trackOutage: true });
 }

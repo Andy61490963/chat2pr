@@ -73,20 +73,25 @@ export function healthTransition(
 /**
  * 第一次觀察建立基準；confirm 以連續兩次真實讀數確認轉換。
  * silent 更新目前狀態與說明，保留真實讀數及通知基準。
+ * trackOutage 讓不發服務異常通知的項目也能保留同一次異常的開始時間。
  */
 export async function recordHealth(
   db: Database,
   name: string,
   ok: boolean,
   detail: string,
-  options: { confirm?: boolean; silent?: boolean } = {},
+  options: { confirm?: boolean; silent?: boolean; trackOutage?: boolean } = {},
 ) {
   if (options.silent || !Object.hasOwn(critical, name)) {
     await db.query(
-      `INSERT INTO service_health(name,ok,detail,reading_ok) VALUES($1,$2,$3,$4)
+      `INSERT INTO service_health(name,ok,detail,reading_ok,outage_started_at)
+       VALUES($1,$2,$3,$4,CASE WHEN $5 AND NOT $2 THEN now() END)
        ON CONFLICT(name) DO UPDATE SET ok=$2,detail=$3,checked_at=now(),
-       reading_ok=coalesce($4,service_health.reading_ok)`,
-      [name, ok, detail, options.silent ? null : ok],
+       reading_ok=coalesce($4,service_health.reading_ok),
+       outage_started_at=CASE WHEN NOT $5 THEN service_health.outage_started_at
+         WHEN $2 THEN NULL
+         ELSE coalesce(service_health.outage_started_at,now()) END`,
+      [name, ok, detail, options.silent ? null : ok, options.trackOutage ?? false],
     );
     return;
   }
