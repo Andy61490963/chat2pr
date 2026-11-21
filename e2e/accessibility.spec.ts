@@ -96,6 +96,7 @@ const screens: {
   loaded: string | RegExp;
   width?: number;
   signedOut?: boolean;
+  moreMenu?: boolean;
 }[] = [
   { name: "收件匣", path: "/", loaded: task.title },
   { name: "手機收件匣", path: "/", loaded: task.title, width: 375 },
@@ -103,6 +104,13 @@ const screens: {
   { name: "任務詳情", path: `/tasks?task=${task.id}`, loaded: question },
   { name: "聊天室", path: "/chat", loaded: message },
   { name: "群組", path: "/groups", loaded: group.name },
+  {
+    name: "手機群組頁的「更多」選單",
+    path: "/groups",
+    loaded: group.name,
+    width: 375,
+    moreMenu: true,
+  },
   { name: "專案", path: "/projects", loaded: project.name },
   { name: "成員", path: "/members", loaded: member },
   { name: "定期檢查", path: "/checks", loaded: check.name },
@@ -112,9 +120,12 @@ const screens: {
 ];
 const narrowScreens = screens
   .filter(
-    ({ path, signedOut }) =>
-      signedOut ||
-      ["/tasks", "/groups", "/projects", "/system", "/settings"].includes(path),
+    ({ path, signedOut, width }) =>
+      !width &&
+      (signedOut ||
+        ["/tasks", "/groups", "/projects", "/system", "/settings"].includes(
+          path,
+        )),
   )
   .map((screen) => ({
     ...screen,
@@ -201,7 +212,9 @@ for (const theme of ["light", "dark"] as const) {
         ).toBeVisible();
         if (screen.signedOut) {
           await expect(
-            page.getByText("chat2pr", { exact: true }).filter({ visible: true }),
+            page
+              .getByText("chat2pr", { exact: true })
+              .filter({ visible: true }),
           ).toBeVisible();
           await expect(page).toHaveTitle("chat2pr｜LINE 需求到 PR");
         }
@@ -240,6 +253,12 @@ for (const theme of ["light", "dark"] as const) {
               `${name}應完整顯示於手機寬度內`,
             ).toBe(false);
           }
+        }
+        if (screen.moreMenu) {
+          await page
+            .getByRole("button", { name: "更多", exact: true })
+            .press("Enter");
+          await expect(page.getByRole("menu", { name: "更多" })).toBeVisible();
         }
         const { violations } = await new AxeBuilder({ page }).analyze();
         const failures = violations
