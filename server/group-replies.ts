@@ -180,7 +180,7 @@ export function progressSummary(
 ) {
   const lines = tasks.map(
     (t) =>
-      `・${t.title}：${t.asking ? "等你們回答一個問題" : groupStatus[t.status]}`,
+      `- ${t.title}：${t.asking ? "等你們回答一個問題" : groupStatus[t.status]}`,
   );
   if (total > tasks.length) lines.push(`…另外還有 ${total - tasks.length} 件`);
   const head = tasks.length
@@ -199,7 +199,7 @@ export interface ClaimedReply {
   text: string;
   quick_replies: QuickReply[] | null;
 }
-/** 佔住要用 reply token 補送的通知時寫的說明；送出後清掉，失敗時改寫成 replyFailedNote。 */
+/** 佔住要補送的通知時寫的說明；送出後清掉，失敗時記下原因。 */
 export const claimingNote = "以 /進度 回覆補送中";
 export const replyFailedNote = "以 /進度 回覆補送失敗，下次再試";
 export const supersededNote = "已有較新的回覆，未補送";
@@ -213,6 +213,17 @@ export interface GroupReplyClaim {
   ids: string[];
   /** 保留 PostgreSQL 的微秒精度，用來核對目前仍是同一輪領取。 */
   claimedAt: string;
+}
+
+/** 核對領取時間，並鎖住此次仍持有的通知直到寫回結果。 */
+export async function lockGroupReplyClaim(c: DbClient, claim: GroupReplyClaim) {
+  const { rows } = await c.query<{ id: string; valid: boolean }>(
+    `SELECT id,sent_at>=clock_timestamp()-$4::interval AS valid FROM notifications
+     WHERE id=ANY($1::uuid[]) AND sent_at=$2::timestamptz AND last_error=$3 AND sent_message_id IS NULL
+     FOR UPDATE SKIP LOCKED`,
+    [claim.ids, claim.claimedAt, claimingNote, claimTimeout],
+  );
+  return rows;
 }
 
 /**
@@ -234,7 +245,8 @@ export async function reclaimStaleClaims(c: Queryable) {
   await c.query(
     `UPDATE notifications u SET sent_at=NULL,last_error=$2
      FROM (SELECT n.id FROM notifications n JOIN groups g ON g.id=n.group_id
-       WHERE n.last_error=$1 AND n.sent_message_id IS NULL AND n.sent_at<now()-$3::interval
+       WHERE g.platform IN ('line','discord') AND n.last_error=$1
+       AND n.sent_message_id IS NULL AND n.sent_at<now()-$3::interval
        FOR UPDATE OF n SKIP LOCKED) s
      WHERE u.id=s.id`,
     [claimingNote, replyFailedNote, claimTimeout],
@@ -251,8 +263,10 @@ export async function reclaimStaleClaims(c: Queryable) {
  * - 排除以 /進度 補送已被 LINE 拒收 REPLY_FAILURE_LIMIT 次的：reply token 一次只能用一次、整批一起成敗，
  *   一直取回同一則會讓這個群組的 /進度 永遠失敗。
  */
-const retrievable = (n: string) =>
-  `${n}.group_id=$1 AND t.group_id=$1 AND ${n}.sent_at IS NULL AND ${n}.created_at>now()-interval '7 days' AND ${n}.kind NOT IN ('group_waiting','group_triage')
+const retrievable = (n: string, includeDiscordClaims = false) =>
+  `${n}.group_id=$1 AND t.group_id=$1
+   AND (${n}.sent_at IS NULL${includeDiscordClaims ? ` OR ($2='discord' AND ${n}.last_error=$3 AND ${n}.sent_message_id IS NULL)` : ""})
+   AND ${n}.created_at>now()-interval '7 days' AND ${n}.kind NOT IN ('group_waiting','group_triage')
    AND ${n}.reply_failures<${REPLY_FAILURE_LIMIT}
    AND (${n}.kind<>'group_question' OR (t.status='awaiting_approval' AND t.question IS NOT NULL AND ${n}.dedupe_key='group:question:'||t.id||':'||t.version))
    AND (${n}.kind<>'group_received' OR t.status='awaiting_approval')
@@ -265,7 +279,8 @@ const retrievable = (n: string) =>
  */
 const newer = (a: string, b: string) =>
   `(${a}.kind<>'group_received',${a}.created_at,${a}.id)>(${b}.kind<>'group_received',${b}.created_at,${b}.id)`;
-const newestOfTask = `NOT EXISTS(SELECT 1 FROM notifications m WHERE m.task_id=n.task_id AND ${retrievable("m")} AND ${newer("m", "n")})`;
+// Discord 補送期間群組仍可執行 /進度，已佔住的新通知仍要擋住同任務的舊通知。
+const newestOfTask = `NOT EXISTS(SELECT 1 FROM notifications m WHERE m.task_id=n.task_id AND ${retrievable("m", true)} AND ${newer("m", "n")})`;
 const pendingFrom = `FROM notifications n JOIN tasks t ON t.id=n.task_id JOIN groups g ON g.id=n.group_id
   WHERE g.platform=$2 AND ${retrievable("n")} AND ${newestOfTask}
   AND (g.platform<>'discord' OR (n.kind<>'group_received' AND
@@ -276,16 +291,16 @@ export async function pendingGroupReplies(c: DbClient, groupId: string) {
   const r = (
     await c.query<{ count: string; failed: boolean | null }>(
       `SELECT count(*) AS count,bool_or(n.last_error IS NOT NULL) AS failed ${pendingFrom}`,
-      [groupId, "line"],
+      [groupId, "line", claimingNote],
     )
   ).rows[0];
   return { count: Number(r?.count ?? 0), failed: r?.failed === true };
 }
 
 /**
- * 在呼叫端的交易內佔住最舊的 limit 則可取回通知：先設 sent_at=now()，
+ * 在呼叫端的交易內佔住最舊的 limit 則可取回通知：先以目前的陳述式時間設定 sent_at，
  * flushNotifications 與另一個 /進度 都用 SKIP LOCKED，不會重複送。
- * 同一任務較舊的未送通知一併標成已被取代，下次不會再冒出來。
+ * 同一任務較舊的未送通知會標成已被取代，LINE 在領取時標記，Discord 在送達後標記。
  * 送出後由呼叫端寫回 sent_message_id；送不出去時把 sent_at 還原。
  * 程序在兩者之間中止時，佔住的列會停在 claimingNote，由 reclaimStaleClaims（每輪通知排程）在 2 分鐘後放回。
  */
@@ -299,7 +314,7 @@ export async function claimPendingGroupReplies(
     await c.query<ClaimedReply & { kind: string }>(
       `SELECT n.id,n.kind,n.text,n.quick_replies ${pendingFrom}
        ORDER BY n.created_at,n.id FOR UPDATE OF n SKIP LOCKED`,
-      [groupId, platform],
+      [groupId, platform, claimingNote],
     )
   ).rows;
   const picked = rows.slice(0, limit);

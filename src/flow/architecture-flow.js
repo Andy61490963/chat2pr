@@ -465,11 +465,11 @@ import "@fontsource-variable/inter";
       end: { ph: ["done", "done", "done", "done", "done", "done"] },
       anim: function (tl) { tl.fromTo(roBadge, { opacity: 0, y: -6 }, { opacity: 1, y: 0, duration: 0.3 }); phase(tl, 5, "run"); travel(tl, "slot_relay", 0.4, "審查", "var(--ai)"); travel(tl, "relay_gpt", 0.5, "審查", "var(--ai)"); travel(tl, "relay_gpt", 0.5, "通過", "var(--good)", true); travel(tl, "slot_relay", 0.4, "通過", "var(--good)", true); phase(tl, 5, "done"); tl.to(roBadge, { opacity: 0, duration: 0.3 }); } },
 
-    { title: { change: "開 PR、回報群組", query: "把答案送回來" }, where: "app → GitHub・LINE", follow: true, focus: ["app", "gh", "line", "admin"],
-      text: { change: "app 用 GitHub App 建立分支、Issue 與 PR，再把結果送到群組和看板鈴鐺。LINE 群組推播按人數計入額度。Discord 引用原訊息回覆，若遇限流會延後重試。成員可用 /進度 取回有效的未送達回覆。",
+    { title: { change: "開 PR、回報群組", query: "把答案送回來" }, where: "GitHub、LINE 和 Discord", follow: true, focus: ["app", "gh", "line", "admin"],
+      text: { change: "系統建立分支、Issue 與 PR，再把結果送到群組和看板鈴鐺。LINE 群組推播按人數計入額度。成員可用 /進度 取回未送達的回覆。Discord 補送時，頻道仍可接收新訊息。若 Discord 限制送訊速度，系統會延後補送。",
               query: "報告存到任務、回覆到 GitHub Issue，並在群組貼出重點、在看板鈴鐺通知你。成員可以引用群組答案問「詳細」，機器人會分段貼出全文。遇到補問時，可以直接回覆或按常見答案。" },
-      chips: { change: ["GitHub App", "推播算額度", "/進度 免費取回"], query: ["GitHub Issue", "群組貼重點", "打「詳細」看全文"] },
-      data: { change: "<k>GitHub</k>\n  分支  agentflow/128-order-button-green\n  <s>PR #42</s>  首頁訂購按鈕改綠色（Closes #41）\n\n<k>群組（推播，計入額度）</k>\n  「首頁訂購按鈕改綠色」已修改完成，\n  等管理者檢視後合併：…/pull/42\n\n<k>看板鈴鐺</k>\n  PR 已完成，請檢視後合併",
+      chips: { change: ["GitHub App", "LINE 推播計入額度", "/進度 取回回覆"], query: ["GitHub Issue", "群組貼重點", "打「詳細」看全文"] },
+      data: { change: "<k>GitHub</k>\n  分支  agentflow/128-order-button-green\n  <s>PR #42</s>  首頁訂購按鈕改綠色（Closes #41）\n\n<k>LINE 群組推播</k>\n  「首頁訂購按鈕改綠色」已修改完成，\n  等管理者檢視後合併：…/pull/42\n\n<k>Discord /進度</k>\n  補送期間可接收新訊息\n  遇到限流時延後補送\n\n<k>看板鈴鐺</k>\n  PR 已完成，請檢視後合併",
               query: "<k>GitHub</k>\n  <s>Issue #41</s>  回覆調查報告\n\n<k>群組（推播，計入額度）</k>\n  「訂購按鈕在哪」的查詢結果：…\n  （回覆這則打「詳細」看全文）\n\n<k>看板鈴鐺</k>\n  查詢已回覆：訂購按鈕在哪" },
       end: { slot: false, bub: ["m1", "r1", "m2", "f1"], pr: true, adm: { change: "pr", query: "answered" }, app: { change: "PR #42 等你合併", query: "已回覆" } },
       anim: function (tl, mode) {

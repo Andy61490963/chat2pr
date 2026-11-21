@@ -1,5 +1,5 @@
 import { Routes } from "discord.js";
-import type { Database } from "./db.js";
+import type { Database, DbClient } from "./db.js";
 import type { ChatReplyMessage } from "./chat-platform.js";
 import { discordId } from "./chat-platform.js";
 import {
@@ -11,7 +11,7 @@ import {
   type DiscordRest,
 } from "./discord-platform.js";
 import {
-  deferDiscordNotice,
+  deferDiscordNotices,
   discordDeliveryError,
 } from "./discord-notifications.js";
 import { ingestDiscord, type DiscordMessageEvent } from "./discord.js";
@@ -26,6 +26,7 @@ import {
   disabledAck,
   groupRepliesOn,
   lineChunks,
+  lockGroupReplyClaim,
   progressMoreNote,
   progressSummary,
   progressTasks,
@@ -108,12 +109,26 @@ type SendProgress = (
 const repliesOff =
   "這個頻道已關閉群組回覆，無法取回進度。請管理者到看板的群組頁開啟回覆。";
 
+async function restoreDiscordReplies(
+  c: DbClient,
+  ids: string[],
+  error: unknown,
+) {
+  const delay = discordRetryMs(error);
+  if (delay !== null) await deferDiscordNotices(c, ids, delay);
+  else
+    await c.query(
+      "UPDATE notifications SET sent_at=NULL,last_error=$2 WHERE id=ANY($1::uuid[])",
+      [ids, discordDeliveryError(error)],
+    );
+}
+
 async function replyWithProgress(
   db: Database,
   groupId: string,
   send: SendProgress,
 ) {
-  await db.transaction(async (c) => {
+  const { summary, pending } = await db.transaction(async (c) => {
     const group = (
       await c.query<{ enabled: boolean; replies: boolean }>(
         `SELECT enabled,reply_mode<>'off' AND ${groupRepliesOn} AS replies
@@ -121,19 +136,46 @@ async function replyWithProgress(
         [groupId],
       )
     ).rows[0];
-    if (!group?.enabled || !group.replies) {
-      await send(group?.enabled ? repliesOff : disabledAck);
-      return;
-    }
+    if (!group?.enabled || !group.replies)
+      return {
+        summary: group?.enabled ? repliesOff : disabledAck,
+        pending: undefined,
+      };
     const { tasks, total } = await progressTasks(c, groupId);
-    const { replies, remaining } = await claimPendingGroupReplies(
-      c,
-      groupId,
-      4,
-      "discord",
-    );
-    await send(progressSummary(tasks, total, replies.length));
-    for (const [index, notice] of replies.entries()) {
+    const pending = await claimPendingGroupReplies(c, groupId, 4, "discord");
+    return {
+      summary: progressSummary(tasks, total, pending.replies.length),
+      pending,
+    };
+  });
+  const claim = pending?.claim;
+
+  try {
+    await send(summary);
+  } catch (error) {
+    if (claim)
+      await db.transaction(async (c) => {
+        const rows = await lockGroupReplyClaim(c, claim);
+        if (rows.length)
+          await restoreDiscordReplies(
+            c,
+            rows.map((row) => row.id),
+            error,
+          );
+      });
+    throw error;
+  }
+  if (!pending || !claim) return;
+
+  const { replies, remaining } = pending;
+  for (const [index, notice] of replies.entries()) {
+    await db.transaction(async (c) => {
+      // 每則獨立送出並結算，只鎖通知列。回收與推播會略過正在送的通知。
+      const [row] = await lockGroupReplyClaim(c, {
+        ids: [notice.id],
+        claimedAt: claim.claimedAt,
+      });
+      if (!row?.valid) return;
       let id: string;
       try {
         id = await send(
@@ -147,22 +189,16 @@ async function replyWithProgress(
           notice.id,
         );
       } catch (error) {
-        const delay = discordRetryMs(error);
-        if (delay !== null) await deferDiscordNotice(c, notice.id, delay);
-        else
-          await c.query(
-            "UPDATE notifications SET sent_at=NULL,last_error=$2 WHERE id=$1",
-            [notice.id, discordDeliveryError(error)],
-          );
-        continue;
+        await restoreDiscordReplies(c, [notice.id], error);
+        return;
       }
       await c.query(
         "UPDATE notifications SET sent_message_id=$2,last_error=NULL,discord_retry_at=NULL WHERE id=$1",
         [notice.id, id],
       );
       await supersedeOlderGroupReplies(c, groupId, [notice.id], "discord");
-    }
-  });
+    });
+  }
 }
 
 type TextReply = NonNullable<Awaited<ReturnType<typeof ingestDiscord>>>;

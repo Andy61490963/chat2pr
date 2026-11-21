@@ -179,9 +179,9 @@ describe("/進度 的需求摘要", () => {
       3,
       2,
     );
-    expect(text).toContain("・調整按鈕顏色：等管理者確認");
-    expect(text).toContain("・匯出問題：等你們回答一個問題");
-    expect(text).toContain("・查訂單欄位：已回答");
+    expect(text).toContain("- 調整按鈕顏色：等管理者確認");
+    expect(text).toContain("- 匯出問題：等你們回答一個問題");
+    expect(text).toContain("- 查訂單欄位：已回答");
     expect(text).toContain("下面是先前沒送到的回覆。");
     expect(text).not.toContain("另外還有");
   });

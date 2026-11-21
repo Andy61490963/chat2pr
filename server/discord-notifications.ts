@@ -7,7 +7,7 @@ import {
   discordStatus,
   type DiscordChatPlatform,
 } from "./discord-platform.js";
-import type { QuickReply } from "./group-replies.js";
+import { claimingNote, type QuickReply } from "./group-replies.js";
 import { config } from "./config.js";
 
 export function discordDeliveryError(error: unknown) {
@@ -20,20 +20,22 @@ export function discordDeliveryError(error: unknown) {
       return discordDeliveryNotes.missing;
     case 400:
       return discordDeliveryNotes.content;
+    case 429:
+      return discordDeliveryNotes.rate;
     default:
       return discordDeliveryNotes.unavailable;
   }
 }
 
-export async function deferDiscordNotice(
+export async function deferDiscordNotices(
   c: DbClient,
-  id: string,
+  ids: string[],
   delay: number,
 ) {
   await c.query(
     `UPDATE notifications SET sent_at=NULL,discord_retry_at=clock_timestamp()+$2::double precision*interval '1 millisecond',
-       last_error=$3 WHERE id=$1`,
-    [id, delay, discordDeliveryNotes.rate],
+       last_error=$3 WHERE id=ANY($1::uuid[])`,
+    [ids, delay, discordDeliveryNotes.rate],
   );
 }
 
@@ -47,7 +49,7 @@ async function sendNotice(
     messageId = await send();
   } catch (error) {
     const delay = discordRetryMs(error);
-    if (delay !== null) await deferDiscordNotice(c, id, delay);
+    if (delay !== null) await deferDiscordNotices(c, [id], delay);
     else
       await c.query(
         "UPDATE notifications SET attempts=attempts+1,last_error=$2,discord_retry_at=NULL WHERE id=$1",
@@ -117,6 +119,7 @@ async function sendNextGroup(
       origin: string | null;
       quick_replies: QuickReply[] | null;
     }>(
+      // 等同一任務較新的補送結算後，再決定舊通知是否仍須推播。
       `SELECT n.id,n.group_id,n.kind,n.text,n.quick_replies,
          COALESCE(direct.discord_reply_message_id,direct.discord_message_id,source.message_id) AS origin
        FROM notifications n JOIN groups g ON g.id=n.group_id
@@ -131,9 +134,14 @@ async function sendNextGroup(
        ) source ON true
        WHERE g.platform='discord' AND g.reply_mode<>'off' AND g.left_at IS NULL AND ${due}
        AND n.id<>ALL($2::uuid[])
+       AND (n.kind IN ('group_received','group_waiting') OR NOT EXISTS (
+         SELECT 1 FROM notifications p WHERE p.task_id=n.task_id AND p.group_id=n.group_id
+           AND p.created_at>=n.created_at AND p.sent_at IS NOT NULL
+           AND p.sent_message_id IS NULL AND p.last_error=$3
+       ))
        AND COALESCE((SELECT (value->>'group_replies')::boolean FROM settings WHERE id=1),true)
        ORDER BY n.created_at,n.id LIMIT 1 FOR UPDATE OF g,n SKIP LOCKED`,
-      [maxPushAttempts, seen],
+      [maxPushAttempts, seen, claimingNote],
     );
     if (!n) return;
     if (n.kind === "group_received" && !n.origin) {

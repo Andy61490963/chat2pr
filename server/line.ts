@@ -30,8 +30,7 @@ import {
   groupRepliesOn,
   ackFor,
   claimPendingGroupReplies,
-  claimingNote,
-  claimTimeout,
+  lockGroupReplyClaim,
   pendingGroupReplies,
   progressMoreNote,
   progressSummary,
@@ -542,12 +541,7 @@ export class Line {
     const sent = await this.db.transaction(async (c) => {
       // 同一批 webhook 的回覆可能已排隊一段時間。先核對領取時間，再鎖住這批通知直到寫回；
       // 送出最多等 5 秒，其間回收與推播都能用 SKIP LOCKED 略過，避免舊回覆改到下一輪。
-      const { rows } = await c.query<{ id: string; valid: boolean }>(
-        `SELECT id,sent_at>=clock_timestamp()-$4::interval AS valid FROM notifications
-         WHERE id=ANY($1::uuid[]) AND sent_at=$2::timestamptz AND last_error=$3 AND sent_message_id IS NULL
-         FOR UPDATE SKIP LOCKED`,
-        [claim.ids, claim.claimedAt, claimingNote, claimTimeout],
-      );
+      const rows = await lockGroupReplyClaim(c, claim);
       if (rows.length !== claim.ids.length || rows.some((r) => !r.valid)) {
         // 摘要和通知共用一個 reply token。整批已變更時，只歸還此交易仍持有的列。
         if (rows.length)
@@ -675,7 +669,7 @@ export class Line {
     if (usage) await saveQuotaUsage(this.db, { ...usage, used: usage.used + 1 });
   }
   async flushNotifications() {
-    // /進度 佔住後程序中止、停在「補送中」的通知放回待送。不需要權杖、額度用完時也要做：那時 /進度 是唯一的取回管道。
+    // LINE 與 Discord 停在「補送中」且已逾時的通知都放回待送。LINE 額度用完時也要回收。
     await reclaimStaleClaims(this.db);
     const discord = typeof this.discord === "function" ? this.discord() : this.discord;
     const results = await Promise.allSettled([
