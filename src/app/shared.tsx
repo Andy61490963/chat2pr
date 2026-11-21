@@ -194,9 +194,9 @@ export type Request = <T>(
  * 送出並顯示結果。回傳 true 代表請求成功（之後的重新整理失敗也算成功，避免使用者重送）；
  * false 代表失敗並已顯示錯誤。表單只在 true 時清空輸入，失敗時保留原字。
  */
-export type Run = (
-  fn: () => Promise<unknown>,
-  message?: string,
+export type Run = <T>(
+  fn: () => Promise<T>,
+  message?: string | ((result: T) => string),
 ) => Promise<boolean>;
 export type Act = (
   t: Task,

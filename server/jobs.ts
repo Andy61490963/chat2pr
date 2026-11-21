@@ -2,8 +2,9 @@ import { HttpEmbedder, type Embedder } from "./embedder.js";
 import { checkIntegrations } from "./integrations.js";
 import { RepoIndexer, scheduleRepoIndex } from "./repo-index.js";
 import { Retrieval } from "./retrieval.js";
-import { PgBoss, type WorkHandler } from "pg-boss";
+import { PgBoss, type JobWithMetadata, type WorkHandler } from "pg-boss";
 import { safeQueueHandler } from "./queue-error.js";
+import { ValidationQueue, type ValidationJob } from "./validation-queue.js";
 import { Database } from "./db.js";
 import { config, secrets } from "./config.js";
 import { readFile } from "node:fs/promises";
@@ -224,19 +225,14 @@ export async function startJobs(
     // 實際同時執行數由派工時的資料庫計數控制（系統頁可調）；這裡只要不少於可設定的上限。
     { localConcurrency: MAX_RUNS_CAP },
   );
-  await work<{ id: string }>("validate", async (jobs) => {
-    for (const j of jobs) {
-      const p = await db.one<Project>("SELECT * FROM projects WHERE id=$1", [
-        j.data.id,
-      ]);
-      if (p) {
-        const result = await execution.validate(p);
-        if (!result.ok && !result.waiting)
-          // 舊版本還在清理時保留新版本請求；缺資料的等待狀態不重排。
-          await boss.send("validate", { id: p.id }, { startAfter: 30 });
-      }
-    }
-  });
+  const validationQueue = new ValidationQueue(db, boss);
+  await boss.work(
+    "validate",
+    { includeMetadata: true, pollingIntervalSeconds: 1 },
+    safeQueueHandler(async (jobs: JobWithMetadata<ValidationJob>[]) => {
+      for (const job of jobs) await validationQueue.work(job, execution);
+    }),
+  );
   await work<{ id: string }>("repo-discover", async (jobs) => {
     for (const job of jobs) {
       const project = await db.one<Project>(
@@ -522,17 +518,8 @@ export async function startJobs(
   await scheduleTriage();
   return {
     boss,
-    enqueueValidation: async (id: string) => {
-      const p = await db.one<Project>("SELECT * FROM projects WHERE id=$1", [
-        id,
-      ]);
-      if (!p) throw new Error("找不到專案");
-      return boss.send(
-        "validate",
-        { id },
-        { singletonKey: `${id}:${p.config_version}`, singletonSeconds: 60 },
-      );
-    },
+    enqueueValidation: validationQueue.enqueue,
+    validationProgress: validationQueue.progress,
     stop: async () => {
       clearInterval(timer);
       clearInterval(triageTimer);

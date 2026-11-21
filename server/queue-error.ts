@@ -1,7 +1,9 @@
-import type { WorkHandler } from "pg-boss";
+import type { Job } from "pg-boss";
 
 /** pg-boss 會序列化 Error 的自有欄位；不可把供應商 request/response 寫入資料庫。 */
-export function safeQueueHandler<T>(handler: WorkHandler<T>): WorkHandler<T> {
+export function safeQueueHandler<J extends Job<unknown>, T>(
+  handler: (jobs: J[]) => Promise<T>,
+): (jobs: J[]) => Promise<T> {
   return async (jobs) => {
     try {
       return await handler(jobs);

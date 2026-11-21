@@ -11,7 +11,14 @@ if (!/^\d+$/.test(config().adminId)) {
 const db = new Database(config().databaseUrl);
 await db.migrate();
 const jobs = await startJobs(db);
-const app = await buildApp(db, jobs.enqueueValidation);
+const app = await buildApp(
+  db,
+  jobs.enqueueValidation,
+  undefined,
+  undefined,
+  undefined,
+  jobs.validationProgress,
+);
 await app.listen({ port: config().port, host: config().host });
 console.log(`chat2pr 已啟動：http://${config().host}:${config().port}`);
 for (const signal of ["SIGINT", "SIGTERM"])

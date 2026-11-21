@@ -474,13 +474,15 @@ export function App() {
   const run: Run = async (fn, done = "已儲存") => {
     setBusy(true);
     try {
+      let toastText: string;
       try {
-        await fn();
+        const result = await fn();
+        toastText = typeof done === "function" ? done(result) : done;
       } catch (e) {
         setToast({ text: message(e), error: true });
         return false;
       }
-      setToast({ text: done });
+      setToast({ text: toastText });
       try {
         await refresh();
       } catch {

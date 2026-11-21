@@ -146,11 +146,11 @@ export function ProjectsView({
           {
             state.projects.filter(
               (p) =>
-                projectStatus(
-                  p,
-                  state.groups.some((g) => g.project_ids.includes(p.id)),
-                  validationFailed(p),
-                ) === "ready",
+                !p.repo_missing_at &&
+                !p.setup_input &&
+                p.validated_at &&
+                p.enabled &&
+                state.groups.some((g) => g.project_ids.includes(p.id)),
             ).length
           }{" "}
           個{projectLabels.ready}
@@ -187,6 +187,11 @@ export function ProjectsView({
                       <span className="truncate font-mono text-xs text-muted-foreground">
                         {p.repo}
                       </span>
+                      {p.validation_progress && (
+                        <span className="text-xs text-muted-foreground">
+                          {p.validation_progress}
+                        </span>
+                      )}
                     </span>
                     <span className="hidden truncate text-sm md:block">
                       {p.base_branch}
@@ -203,7 +208,8 @@ export function ProjectsView({
                       )}
                     >
                       {p.setup_mode === "auto" ? (
-                        p.setup_status || "AI 自動設定"
+                        (!p.validation_progress && p.setup_status) ||
+                        "AI 自動設定"
                       ) : validationFailed(p) ? (
                         <>
                           {projectLabels.failed}
@@ -267,6 +273,11 @@ export function ProjectsView({
                   {open.repo} <ArrowUpRight className="size-3" />
                 </a>
               </SheetDescription>
+              {open.validation_progress && (
+                <p role="status" className="text-sm text-muted-foreground">
+                  {open.validation_progress}
+                </p>
+              )}
             </SheetHeader>
             <Tabs
               value={tab}
@@ -404,11 +415,11 @@ export function ProjectsView({
                       onClick={() =>
                         void run(
                           () =>
-                            request(
+                            request<{ message: string }>(
                               `/api/projects/${open.id}/validate`,
                               "POST",
                             ),
-                          "已開始驗證環境，通過後會自動啟用派工",
+                          ({ message }) => message,
                         )
                       }
                     >
@@ -438,7 +449,7 @@ export function ProjectsView({
                   className="flex flex-col gap-5 p-5"
                 >
                   {" "}
-                  {open.setup_status && (
+                  {open.setup_status && !open.validation_progress && (
                     <p role="status" className="rounded bg-muted p-3 text-sm">
                       {open.setup_status}
                     </p>
@@ -523,20 +534,22 @@ export function ProjectsView({
                       </details>
                     </div>
                   )}
-                  {open.validation_error && !open.repo_missing_at && (
-                    <ValidationError
-                      text={open.validation_error}
-                      // 已驗證的專案重新驗證遇到暫時性問題時沿用先前的設定；儲存庫接回後的
-                      // 「請重新驗證」也只是提醒。這兩種都不算失敗。
-                      tone={
-                        isRepoNotice(open.validation_error)
-                          ? "notice"
-                          : open.validated_at
-                            ? "transient"
-                            : "failed"
-                      }
-                    />
-                  )}
+                  {open.validation_error &&
+                    !open.repo_missing_at &&
+                    !open.validation_progress && (
+                      <ValidationError
+                        text={open.validation_error}
+                        // 已驗證的專案重新驗證遇到暫時性問題時沿用先前的設定；儲存庫接回後的
+                        // 「請重新驗證」也只是提醒。這兩種都不算失敗。
+                        tone={
+                          isRepoNotice(open.validation_error)
+                            ? "notice"
+                            : open.validated_at
+                              ? "transient"
+                              : "failed"
+                        }
+                      />
+                    )}
                   <ProjectContextEditor
                     key={open.id}
                     project={open}
@@ -732,6 +745,7 @@ function ProjectBadge({
   const variant = {
     missing: "danger",
     question: "warn",
+    validating: "info",
     failed: "danger",
     unverified: "warn",
     disabled: "info",

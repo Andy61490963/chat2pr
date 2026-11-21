@@ -24,6 +24,13 @@ it("專案同時有多個條件時顯示下一步能處理的狀態", () => {
   );
   expect(projectStatus(p, false, false)).toBe("unbound");
   expect(projectStatus(p, true, false)).toBe("ready");
+  expect(
+    projectStatus(
+      { ...p, validation_progress: "你的專案正在等待執行器。" },
+      true,
+      false,
+    ),
+  ).toBe("validating");
 });
 it("群組狀態優先說明離開、停用與辨識異常", () => {
   const g = { enabled: true, triage_failures: 0, triage_error: null };
