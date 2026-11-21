@@ -146,10 +146,12 @@ Start-ScheduledTask -TaskName 'LINE-AgentFlow'
 
 接著設定 LINE Webhook 與 GitHub App 安裝，用看板收件匣的「開始使用」清單完成驗收。新實例預設**全域暫停**，驗收完成前不會自動派工。
 
+擁有者可在看板「設定」的「連線金鑰」更新 LINE Channel Secret、LINE Channel Access Token、Discord 機器人權杖與應用程式 ID、OpenAI API 金鑰。更新需在 GitHub 登入後十分鐘內操作。看板只顯示設定狀態和最後更新時間。GitHub App／OAuth、工作階段密鑰、公開網址與通道仍在本機設定頁維護。詳見[更新連線金鑰](docs/operations.md#更新連線金鑰)。
+
 ### 從 Discord 頻道收需求
 
 1. 從 [Discord 開發者入口](https://discord.com/developers/applications) 建立應用程式，複製一般資訊中的應用程式 ID。到機器人頁產生權杖，並開啟「讀取訊息內容」（Message Content Intent）。
-2. 在主機執行 `npm run setup`，把兩項資料填入本機設定頁的「Discord 機器人」，儲存後重新啟動 app。
+2. 由擁有者在看板「設定」的「連線金鑰」輸入兩項資料。也可在主機執行 `npm run setup`，從本機設定頁輸入。儲存後 app 會自動重連 Discord。
 3. 在應用程式的「安裝」頁設定伺服器安裝與機器人權限，取得安裝連結並邀請機器人。權限與操作詳見 [Discord 連線](docs/operations.md#discord-連線)。
 4. 在文字頻道送一則訊息。到看板「群組」篩選 Discord，選擇該頻道、綁定專案並啟用。依需要開啟群組回覆。
 5. 用 `/任務` 提出需求，或用 `/進度` 查看本頻道的任務與未送達的回覆。補問可以按常見答案，也可以直接回覆機器人的訊息。

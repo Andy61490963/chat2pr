@@ -117,7 +117,10 @@ interface Ack {
   claim?: GroupReplyClaim;
 }
 export class Line {
-  constructor(private db: Database, private discord?: DiscordChatPlatform) {}
+  constructor(
+    private db: Database,
+    private discord?: DiscordChatPlatform | (() => DiscordChatPlatform | undefined),
+  ) {}
   async ingest(body: unknown) {
     const payload = LinePayload.parse(body);
     const adoptions: Array<{ task: string; version: number; index: number }> =
@@ -674,6 +677,7 @@ export class Line {
   async flushNotifications() {
     // /進度 佔住後程序中止、停在「補送中」的通知放回待送。不需要權杖、額度用完時也要做：那時 /進度 是唯一的取回管道。
     await reclaimStaleClaims(this.db);
+    const discord = typeof this.discord === "function" ? this.discord() : this.discord;
     const results = await Promise.allSettled([
       withLinePushLock(this.db, async () => {
         const access = secrets().lineToken;
@@ -681,7 +685,7 @@ export class Line {
         await this.flushGroupNotifications(access);
         if (!(await lineQuotaBlocked(this.db))) await flushLinePrivate(this.db, access);
       }),
-      this.discord && flushDiscordNotifications(this.db, this.discord),
+      discord && flushDiscordNotifications(this.db, discord),
     ]);
     if (results.some((result) => result.status === "rejected"))
       throw new Error("部分聊天通知未能完成，請檢查資料庫與服務設定。");

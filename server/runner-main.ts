@@ -1,6 +1,8 @@
 import { ObservationBuffer } from "./observation.js";
+import { registerRunnerSecrets } from "./runner-secrets.js";
+import { registerRunnerAuth } from "./runner-auth.js";
 import Fastify from "fastify";
-import { randomUUID, timingSafeEqual } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { z } from "zod";
@@ -13,7 +15,6 @@ import { hostResources } from "./host-resources.js";
 import { SourceCache, SourceAccess } from "./source-cache.js";
 import { readCodexAccount, type CodexAccount } from "./codex-account.js";
 import {
-  secrets,
   validateRunnerEnvironment,
   subscriptionBrokerPort,
 } from "./config.js";
@@ -112,16 +113,7 @@ const aiNetwork = (job: AiJob | undefined) =>
   job?.mode === "subscription"
     ? "line-agentflow_subscription"
     : "line-agentflow_workers";
-app.addHook("onRequest", async (req) => {
-  const key = secrets().runnerSecret,
-    received = String(req.headers["x-runner-key"] ?? "");
-  if (
-    !key ||
-    received.length !== key.length ||
-    !timingSafeEqual(Buffer.from(key), Buffer.from(received))
-  )
-    throw new AppError(401, "執行器授權失敗");
-});
+registerRunnerAuth(app);
 app.addContentTypeParser("application/octet-stream", (_req, payload, done) =>
   done(null, payload),
 );
@@ -129,6 +121,7 @@ app.setErrorHandler((err, _req, reply) => {
   const e = err as Error & { statusCode?: number };
   reply.code(e.statusCode ?? 500).send({ error: e.message.slice(0, 2000) });
 });
+registerRunnerSecrets(app);
 app.get("/health", async () => {
   await containers.docker.ping();
   return { ok: true, instance: containers.instance, subscriptionBroker: "v1" };

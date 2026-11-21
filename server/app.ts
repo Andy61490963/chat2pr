@@ -36,6 +36,8 @@ import { Database } from "./db.js";
 import { config, secrets, secretsPath, token } from "./config.js";
 import { currentEntry } from "./tunnel-provider.js";
 import { registerAuth, requireAdmin, requireUser, hash } from "./auth.js";
+import { connectionSecretStatus } from "./connection-secrets-file.js";
+import { registerConnectionSecrets } from "./secrets-api.js";
 import { registerMembers } from "./members.js";
 import { registerCapacity } from "./capacity-api.js";
 import { checkIntegrations } from "./integrations.js";
@@ -180,6 +182,7 @@ export async function buildApp(
   githubUser?: Parameters<typeof registerMembers>[2],
   runner: Pick<Runner, "call"> = new HttpRunner(),
   validationProgress?: import("./validation-queue.js").ValidationQueue["progress"],
+  refreshDiscord?: () => void,
 ) {
   const app = Fastify({
     logger: {
@@ -188,6 +191,7 @@ export async function buildApp(
         "req.headers.authorization",
         "req.headers.cookie",
         "req.body",
+        "req.rawBody",
         "res.headers.set-cookie",
       ],
     },
@@ -280,7 +284,7 @@ export async function buildApp(
     "application/json",
     { parseAs: "buffer" },
     (req, body, done) => {
-      req.rawBody = body as Buffer;
+      if (req.url.startsWith("/webhooks/")) req.rawBody = body as Buffer;
       try {
         done(null, JSON.parse(body.toString()));
       } catch {
@@ -293,6 +297,7 @@ export async function buildApp(
     budget = new Budget(db),
     github = new GitHub();
   await registerAuth(app, db);
+  registerConnectionSecrets(app, db, runner, refreshDiscord);
   registerProxy(app, db, budget);
   app.get("/health", async () => {
     await db.query("SELECT 1");
@@ -500,8 +505,9 @@ export async function buildApp(
     await requestBackfill(db);
     return reply.code(202).send({ ok: true });
   });
-  app.get("/api/state", async (req) => {
+  app.get("/api/state", async (req, reply) => {
     const user = await requireUser(db, req);
+    reply.header("Cache-Control", "no-store");
     const admin = user.role === "admin";
     // 清單預設只給最近的資料；看板按「載入更多」時才放大。
     const limits = z
@@ -665,6 +671,7 @@ export async function buildApp(
         github: !!s.githubAppId && !!s.githubPrivateKey,
         publicUrl: config().publicUrl,
       },
+      ...(user.user_id === config().adminId ? { connectionSecrets: connectionSecretStatus(s) } : {}),
       webhooks: {
         line: `${config().publicUrl}/webhooks/line`,
         github: `${config().publicUrl}/webhooks/github`,

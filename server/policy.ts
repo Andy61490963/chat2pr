@@ -3,6 +3,8 @@ import { sensitiveRepoPath } from "./repository-safety.js";
 import { maskUnchangedLoginPresentation } from "./presentation-policy.js";
 import type { Action, TaskStatus } from "../shared/types.js";
 import { riskNotes } from "../shared/risk-notes.js";
+import { redact as redactCredentials } from "../shared/credentials.js";
+import { scrubConnectionSecrets } from "./secret-scrub.js";
 export class AppError extends Error {
   constructor(
     public statusCode: number,
@@ -127,4 +129,5 @@ export function assertTransition(status: TaskStatus, action: Action) {
   if (!allowed[action].includes(status))
     throw new AppError(409, "任務狀態已改變，請重新整理");
 }
-export { containsCredential, redact } from "../shared/credentials.js";
+export { containsCredential } from "../shared/credentials.js";
+export const redact = (text: string) => redactCredentials(scrubConnectionSecrets(text));

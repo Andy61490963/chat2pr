@@ -1,12 +1,14 @@
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { randomBytes } from "node:crypto";
+import type { ConnectionSecretField } from "../shared/connection-secrets.js";
 export interface Secrets {
   openaiKey?: string;
   lineSecret?: string;
   lineToken?: string;
   discordToken?: string;
   discordApplicationId?: string;
+  connectionSecretUpdatedAt?: Partial<Record<ConnectionSecretField, string>>;
   githubAppId?: string;
   githubPrivateKey?: string;
   githubClientId?: string;

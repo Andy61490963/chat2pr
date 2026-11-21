@@ -10,7 +10,10 @@ beforeEach(async () => {
   await reset();
   app = await buildApp(db);
 });
-afterEach(() => app.close());
+afterEach(async () => {
+  vi.unstubAllGlobals();
+  await app.close();
+});
 afterAll(() => db.close());
 
 it("從不同網域開啟登入時，先轉到固定回呼來源，尚不建立跨網域 cookie", async () => {
@@ -41,4 +44,26 @@ it("固定來源會建立短效 state cookie，並送往相同來源的 OAuth �
   expect(
     (await db.one<{ n: number }>("SELECT count(*)::int n FROM oauth_states")).n,
   ).toBe(1);
+});
+
+it.each([
+  ["settings-secrets", "/settings#settings-secrets"],
+  ["https://fictional.invalid/escaped", "/"],
+])("重新登入只允許回到預定的看板位置（%s）", async (target, expected) => {
+  vi.stubGlobal("fetch", vi.fn()
+    .mockResolvedValueOnce(Response.json({ access_token: "fictional-github-login-token" }))
+    .mockResolvedValueOnce(Response.json({ id: 1000001, login: "fictional-owner" })));
+  const start = await app.inject({
+    url: `/auth/github?returnTo=${encodeURIComponent(target)}`,
+    headers: { host: "localhost:4310" },
+  });
+  expect(start.statusCode).toBe(302);
+  const state = new URL(String(start.headers.location)).searchParams.get("state");
+  const callback = await app.inject({
+    url: `/auth/github/callback?state=${state}&code=fictional-code&returnTo=https://fictional.invalid`,
+    headers: { host: "localhost:4310", cookie: `af_oauth=${state}` },
+  });
+  expect(callback.statusCode).toBe(302);
+  expect(callback.headers.location).toBe(expected);
+  expect(await db.one("SELECT created_at IS NOT NULL AS dated FROM sessions")).toEqual({ dated: true });
 });

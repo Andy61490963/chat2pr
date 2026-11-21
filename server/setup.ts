@@ -7,17 +7,10 @@ import { createPrivateKey, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { secrets, secretsPath, token } from "./config.js";
 import { tunnelProvider } from "./tunnel-provider.js";
-import {
-  discordTokenProblem,
-  normalizeDiscordApplicationId,
-  normalizeDiscordToken,
-} from "../shared/discord-setup.js";
-const secret = secrets();
+import { parseConnectionSecrets } from "../shared/connection-secrets.js";
+import { applyConnectionSecrets, editSecrets } from "./connection-secrets-file.js";
+
 await mkdir(dirname(secretsPath), { recursive: true, mode: 0o700 });
-if (!secret.sessionSecret) secret.sessionSecret = token();
-if (!secret.runnerSecret) secret.runnerSecret = token();
-if (!secret.githubWebhookSecret) secret.githubWebhookSecret = token();
-await writeFile(secretsPath, JSON.stringify(secret, null, 2), { mode: 0o600 });
 if (process.platform === "win32") {
   const who = execFileSync("whoami", { encoding: "utf8" }).trim();
   execFileSync(
@@ -26,6 +19,13 @@ if (process.platform === "win32") {
     { stdio: "ignore" },
   );
 }
+editSecrets(secretsPath, (stored) => {
+  const save = !stored.sessionSecret || !stored.runnerSecret || !stored.githubWebhookSecret;
+  stored.sessionSecret ||= token();
+  stored.runnerSecret ||= token();
+  stored.githubWebhookSecret ||= token();
+  return { result: undefined, save };
+}, true);
 const setupToken = token();
 await writeFile(
   ".local/setup-url.txt",
@@ -33,6 +33,11 @@ await writeFile(
   { mode: 0o600 },
 );
 const app = Fastify({ logger: false, bodyLimit: 65536 });
+app.setErrorHandler((_err, _req, reply) =>
+  reply
+    .code(400)
+    .send({ error: "設定格式不正確，請檢查欄位；輸入內容不會寫入日誌" }),
+);
 app.addHook("onRequest", async (req, reply) => {
   reply
     .header("Cache-Control", "no-store")
@@ -73,18 +78,11 @@ app.get("/api/status", async () => {
 app.post("/api/save", async (req, reply) => {
   const b = z
     .object({
-      openaiKey: z.string().optional(),
-      lineSecret: z.string().optional(),
-      lineToken: z.string().optional(),
-      discordToken: z
-        .string()
-        .max(512)
-        .transform(normalizeDiscordToken)
-        .optional(),
-      discordApplicationId: z
-        .string()
-        .transform(normalizeDiscordApplicationId)
-        .optional(),
+      openaiKey: z.unknown().optional(),
+      lineSecret: z.unknown().optional(),
+      lineToken: z.unknown().optional(),
+      discordToken: z.unknown().optional(),
+      discordApplicationId: z.unknown().optional(),
       disableDiscord: z.literal("on").optional(),
       githubAppId: z.string().regex(/^\d*$/).optional(),
       githubPrivateKey: z.string().optional(),
@@ -119,44 +117,36 @@ app.post("/api/save", async (req, reply) => {
       return reply.code(400).send({ error: "GitHub 私鑰 PEM 格式不正確" });
     }
   }
-  const updated = { ...secrets() };
-  const { discordToken, discordApplicationId, disableDiscord, ...other } = b;
-  if (disableDiscord && (discordToken || discordApplicationId))
+  const { openaiKey, lineSecret, lineToken, discordToken, discordApplicationId, disableDiscord, ...other } = b;
+  const connectionFields = { openaiKey, lineSecret, lineToken, discordToken, discordApplicationId };
+  const parsed = parseConnectionSecrets(
+    Object.fromEntries(Object.entries(connectionFields).filter(([, value]) => value !== undefined)),
+  );
+  if ("error" in parsed) return reply.code(400).send(parsed);
+  if (disableDiscord && (parsed.patch.discordToken || parsed.patch.discordApplicationId))
     return reply
       .code(400)
       .send({ error: "請擇一停用 Discord 或更新 Discord 設定。" });
-  const tokenProblem = discordToken ? discordTokenProblem(discordToken) : null;
-  if (tokenProblem) return reply.code(400).send({ error: tokenProblem });
-  if (discordApplicationId && !/^\d{17,20}$/.test(discordApplicationId))
-    return reply.code(400).send({
-      error:
-        "無法儲存 Discord 應用程式 ID，格式不符。請從應用程式的一般資訊重新複製數字 ID。",
+  try {
+    editSecrets(secretsPath, (stored) => {
+      applyConnectionSecrets(stored, disableDiscord
+        ? { ...parsed.patch, discordToken: null, discordApplicationId: null }
+        : parsed.patch);
+      for (const [key, value] of Object.entries(other))
+        if (value)
+          Object.assign(stored, {
+            [key]: key === "publicUrl" ? value.replace(/\/$/, "") : value,
+          });
+      return { result: undefined, save: true };
     });
-  // 與 LINE 權杖相同：只存在本機設定檔，不回傳看板。
-  if (disableDiscord) {
-    delete updated.discordToken;
-    delete updated.discordApplicationId;
+  } catch {
+    return reply.code(503).send({ error: "設定未能寫入主機，請確認設定檔可存取後再試。" });
   }
-  if (discordToken) updated.discordToken = discordToken;
-  if (discordApplicationId) updated.discordApplicationId = discordApplicationId;
-  for (const [key, value] of Object.entries(other))
-    if (value)
-      Object.assign(updated, {
-        [key]: key === "publicUrl" ? value.replace(/\/$/, "") : value,
-      });
-  await writeFile(secretsPath, JSON.stringify(updated, null, 2), {
-    mode: 0o600,
-  });
   return { ok: true };
 });
 app.get("/api/webhook-secret", async () => ({
   value: secrets().githubWebhookSecret,
 }));
-app.setErrorHandler((_err, _req, reply) =>
-  reply
-    .code(400)
-    .send({ error: "設定格式不正確，請檢查欄位；輸入內容不會寫入日誌" }),
-);
 await app.listen({ port: 4311, host: "127.0.0.1" });
 console.log(
   "本機機密設定頁已啟動。專用開啟連結已存入 .local/setup-url.txt，連結僅在此程序有效。",

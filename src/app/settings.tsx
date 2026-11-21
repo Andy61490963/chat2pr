@@ -2,6 +2,7 @@ import { groupReplyStatus } from "../../shared/group-reply-status.js";
 import { useEffect, useRef, useState } from "react";
 import { Check, Copy, RefreshCw, Send } from "lucide-react";
 import type { NotificationFailures, Settings } from "../../shared/types.js";
+import { ConnectionSecrets } from "./connection-secrets";
 import { linePushService } from "../../shared/group-delivery.js";
 import { LINE_QUOTA, linePushPanel } from "../../shared/line-quota.js";
 import {
@@ -861,6 +862,7 @@ const settingsSections = {
   "settings-notifications": "管理者通知",
   "settings-line": "LINE",
   "settings-services": "服務連線",
+  "settings-secrets": "連線金鑰",
   "settings-data": "資料與外觀",
 } as const;
 
@@ -976,6 +978,8 @@ export function SettingsView({
   request,
   account,
   reload,
+  owner,
+  refreshState,
 }: {
   state: State;
   busy: boolean;
@@ -983,6 +987,8 @@ export function SettingsView({
   request: Request;
   account: Account | null | string;
   reload: () => unknown;
+  owner: boolean;
+  refreshState: () => Promise<boolean>;
 }) {
   const s = state.settings;
   const discord = state.health.find((entry) => entry.name === "discord");
@@ -1098,11 +1104,13 @@ export function SettingsView({
   return (
     <div className="flex flex-col gap-6">
       <nav aria-label="設定分區" className="flex flex-wrap gap-2">
-        {Object.entries(settingsSections).map(([id, label]) => (
-          <Button key={id} asChild variant="outline" className="min-h-11">
-            <a href={`#${id}`}>{label}</a>
-          </Button>
-        ))}
+        {Object.entries(settingsSections)
+          .filter(([id]) => owner || id !== "settings-secrets")
+          .map(([id, label]) => (
+            <Button key={id} asChild variant="outline" className="min-h-11">
+              <a href={`#${id}`}>{label}</a>
+            </Button>
+          ))}
       </nav>
       <SettingsSection id="settings-ai">
         <AiCard
@@ -1309,6 +1317,17 @@ export function SettingsView({
           </CardContent>
         </Card>
       </SettingsSection>
+      {owner ? (
+        <SettingsSection id="settings-secrets">
+          <ConnectionSecrets
+            status={state.connectionSecrets}
+            request={request}
+            refresh={refreshState}
+          />
+        </SettingsSection>
+      ) : (
+        <p className="text-sm">連線金鑰只有擁有者能更新</p>
+      )}
       <SettingsSection id="settings-data">
         <ThemeCard />
         <Card>

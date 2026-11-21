@@ -1,10 +1,9 @@
 import { Database } from "./db.js";
-import { config, secrets } from "./config.js";
+import { config } from "./config.js";
 import { buildApp } from "./app.js";
 import { startJobs } from "./jobs.js";
-import { startDiscord } from "./discord.js";
+import { discordConnection } from "./discord-connection.js";
 import { createDiscordGateway } from "./discord-gateway.js";
-import { DiscordChatPlatform, discordRest } from "./discord-platform.js";
 if (!/^\d+$/.test(config().adminId)) {
   console.error(
     "缺少擁有者：請在 .env 加上 ADMIN_GITHUB_ID=擁有者的 GitHub 數字 ID（查詢：gh api users/帳號 --jq .id），再重新啟動。",
@@ -13,9 +12,8 @@ if (!/^\d+$/.test(config().adminId)) {
 }
 const db = new Database(config().databaseUrl);
 await db.migrate();
-const { discordToken, discordApplicationId } = secrets();
-const discordPlatform = discordToken ? new DiscordChatPlatform(discordRest(discordToken)) : undefined;
-const jobs = await startJobs(db, { discord: discordPlatform });
+const discord = discordConnection(db, createDiscordGateway);
+const jobs = await startJobs(db, { discord: discord.platform });
 const app = await buildApp(
   db,
   jobs.enqueueValidation,
@@ -23,13 +21,17 @@ const app = await buildApp(
   undefined,
   undefined,
   jobs.validationProgress,
+  () => void discord.refresh(),
 );
 await app.listen({ port: config().port, host: config().host });
-const discord = startDiscord(db, discordToken, createDiscordGateway, discordPlatform, discordApplicationId);
+await discord.refresh();
+// 本機設定頁也能更新 Discord，容器若稍晚看到新檔，可在下一輪補套用。
+const discordRefresh = setInterval(() => void discord.refresh(), 5000);
 console.log(`chat2pr 已啟動：http://${config().host}:${config().port}`);
 for (const signal of ["SIGINT", "SIGTERM"])
   process.on(signal, () => {
     void (async () => {
+      clearInterval(discordRefresh);
       await discord.stop();
       await app.close();
       await jobs.stop();

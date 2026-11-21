@@ -82,6 +82,7 @@ export type Audit = {
   task_mode?: Task["mode"] | null;
 };
 export type State = {
+  connectionSecrets?: import("../../shared/connection-secrets.js").ConnectionSecretStatus;
   pickLists?: import("../../shared/pick-list.js").PickList[];
   settings: Settings;
   rag: {
