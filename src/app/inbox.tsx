@@ -339,7 +339,7 @@ function TaskSectionTitle({
   children: string;
 }) {
   return (
-    <h2 id={id} className="mb-3 border-b text-lg font-semibold">
+    <h2 id={id} className="text-lg font-semibold">
       <button
         type="button"
         onClick={open}

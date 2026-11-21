@@ -23,6 +23,15 @@ const previous: Task = {
   title: "整理範例班表",
   last_error: "執行中斷。",
 };
+const ready: Task = {
+  ...task,
+  id: "55555555-5555-4555-8555-555555555555",
+  title: "更新範例出貨報表",
+  mode: "change",
+  status: "ready",
+  pr_number: 12,
+  pr_url: "https://example.invalid/demo/report/pull/12",
+};
 
 for (const colorScheme of ["light", "dark"] as const) {
   for (const width of [1280, 375]) {
@@ -33,7 +42,7 @@ for (const colorScheme of ["light", "dark"] as const) {
       await page.setViewportSize({ width, height: 900 });
       await mockDashboard(page, {
         state: {
-          tasks: [task, investigation, blocked, previous],
+          tasks: [task, investigation, blocked, previous, ready],
           health: ["github", "line", "runner", "codex"].map((name) => ({
             name,
             ok: true,
@@ -77,13 +86,23 @@ for (const colorScheme of ["light", "dark"] as const) {
       for (const name of [
         "需要你處理 3",
         "進行中 1",
-        "待合併 0",
+        "待合併 1",
         "近 7 天已合併 0",
       ]) {
         await expect(
           page.getByRole("button", { name, exact: true }),
         ).toHaveCount(1);
         await expect(page.getByText(name, { exact: true })).toHaveCount(1);
+      }
+      for (const name of ["需要你處理 3", "進行中 1", "待合併 1"]) {
+        const section = page.getByRole("region", { name, exact: true });
+        const heading = section.getByRole("heading", { name, exact: true });
+        const ledger = section.locator(":scope > .work-ledger");
+        const firstRow = ledger.locator(":scope > :first-child");
+        await expect(firstRow).toBeVisible();
+        await expect(heading).toHaveCSS("border-bottom-width", "0px");
+        await expect(ledger).toHaveCSS("border-top-width", "1px");
+        await expect(firstRow).toHaveCSS("border-top-width", "0px");
       }
       await capture("收件匣");
 
