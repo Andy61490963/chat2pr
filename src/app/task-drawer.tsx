@@ -1,6 +1,7 @@
 import { splitQueryAnswer } from "../../shared/query-answer.js";
 import { fullTaskTitle, taskListTitle } from "../../shared/task-title.js";
-import { useEffect, useRef, useState } from "react";
+import { riskNotes } from "../../shared/risk-notes.js";
+import { useEffect, useId, useRef, useState } from "react";
 import { TaskContextEvidence } from "./context-evidence";
 import { RunObserver } from "./run-observer";
 import { QueryReport } from "./query-report";
@@ -186,8 +187,11 @@ export function TaskDrawer({
 }) {
   const t = detail.task;
   const title = detail.fullTitle ?? fullTaskTitle(t.title, t.summary);
-  const hasPrResult = ["ready", "merged", "closed"].includes(t.status);
   const prSummary = detail.runs.find((run) => run.pr_summary)?.pr_summary;
+  const hasPrResult =
+    t.status === "ready" ||
+    t.status === "merged" ||
+    (t.status === "closed" && Boolean(prSummary || t.pr_url));
   const report =
     t.mode === "query"
       ? splitQueryAnswer(t.answer ?? "")
@@ -195,7 +199,11 @@ export function TaskDrawer({
   const sources = detail.runs.find(
     (r) => r.version === t.version && r.query_sources,
   )?.query_sources;
-  const notes = [...t.risk_reasons, ...(t.question ? [] : t.missing)];
+  const notes = riskNotes([
+    ...t.risk_reasons,
+    ...(t.question ? [] : t.missing),
+  ]);
+  const reopenHintId = useId();
   const editable = [
     "awaiting_approval",
     "queued",
@@ -448,7 +456,32 @@ export function TaskDrawer({
               )}
             </div>
           )}
-          <StationTrack task={t} labelled />
+          <StationTrack
+            task={t}
+            labelled
+            endAction={
+              (t.status === "rejected" || t.status === "cancelled") && (
+                <>
+                  <Button
+                    className="work-touch shrink-0"
+                    aria-describedby={reopenHintId}
+                    disabled={busy}
+                    onClick={() =>
+                      void act(t, "reopen", {}, "已重新開啟，請確認後再核准")
+                    }
+                  >
+                    <RotateCcw /> 重新開啟
+                  </Button>
+                  <span
+                    id={reopenHintId}
+                    className="basis-full text-xs text-muted-foreground"
+                  >
+                    重新開啟後回到待審核，確認專案並核准才會派工。
+                  </span>
+                </>
+              )
+            }
+          />
           {live && (
             <RunProgressLine
               run={{
@@ -483,7 +516,7 @@ export function TaskDrawer({
                     ? "你可以到 GitHub 檢視並合併這個 PR。"
                     : t.status === "merged"
                       ? "你可以到 GitHub 查看已合併的變更。"
-                      : "你可以到 GitHub 查看已關閉的 PR。"}
+                      : "你可以到 GitHub 查看這個 PR。"}
                 </p>
               )}
             </section>
@@ -771,12 +804,15 @@ export function TaskDrawer({
           )}
           {notes.length > 0 && (
             <div className="flex gap-2 rounded-lg bg-warn-soft px-3 py-2.5 text-sm text-warn">
-              <AlertCircle className="mt-0.5 size-4 shrink-0" />
-              <div className="flex flex-col gap-0.5">
-                {notes.map((r, i) => (
-                  <p key={i}>{r}</p>
+              <AlertCircle aria-hidden className="mt-0.5 size-4 shrink-0" />
+              <ul
+                className="min-w-0 list-disc space-y-0.5 pl-4 [overflow-wrap:anywhere]"
+                aria-label="風險與待確認事項"
+              >
+                {notes.map((note) => (
+                  <li key={note}>{note}</li>
                 ))}
-              </div>
+              </ul>
             </div>
           )}
           <GroupDeliveryNotes
@@ -1254,22 +1290,6 @@ export function TaskDrawer({
                 調整額度設定
               </Button>
             )}
-          </SheetFooter>
-        )}
-        {/* 已結束或等合併的任務：說明現在能做什麼，不再是一片空白。 */}
-        {["rejected", "cancelled"].includes(t.status) && (
-          <SheetFooter className="shrink-0 items-center">
-            <span className="flex-1 text-sm text-muted-foreground">
-              重新開啟後回到待審核，確認專案並核准才會派工。
-            </span>
-            <Button
-              disabled={busy}
-              onClick={() =>
-                void act(t, "reopen", {}, "已重新開啟，請確認後再核准")
-              }
-            >
-              <RotateCcw /> 重新開啟
-            </Button>
           </SheetFooter>
         )}
         {t.status === "answered" && (

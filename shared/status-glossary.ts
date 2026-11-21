@@ -30,6 +30,18 @@ export const taskListLabels = {
   ended: "已結束",
 } as const;
 
+export const taskEndLabels = {
+  reject: { badge: "已拒絕", event: "拒絕" },
+  cancel: { badge: "已取消", event: "取消" },
+  closed: { badge: "PR 已關閉", event: "在 GitHub 關閉" },
+  unsend: { badge: "來源已撤回", event: "來源訊息被撤回" },
+  duplicate: { badge: "重複需求", event: "辨識為重複需求" },
+  other: { badge: taskListLabels.ended, event: "結束" },
+} as const;
+
+export const taskEndSystemActor = "系統";
+export const taskCompletionEvents = { merged: "合併", answered: "回覆" } as const;
+
 export const taskStatusFilterLabels = {
   todo: "待處理",
   waiting: statusLabels.budget_wait,

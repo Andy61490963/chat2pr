@@ -2,6 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { sensitiveRepoPath } from "./repository-safety.js";
 import { maskUnchangedLoginPresentation } from "./presentation-policy.js";
 import type { Action, TaskStatus } from "../shared/types.js";
+import { riskNotes } from "../shared/risk-notes.js";
 export class AppError extends Error {
   constructor(
     public statusCode: number,
@@ -33,13 +34,14 @@ export function classifyRisk(
   paths: string[] = [],
   sensitive: string[] = [],
 ): string | null {
-  if (reasons.length) return reasons.join("；");
+  const sensitiveRisk = "涉及敏感功能，必須人工審核";
+  if (reasons.length) return riskNotes(reasons).join("；") || sensitiveRisk;
   if (
     /(權限|認證|登入|付款|支付|刪除.{0,5}資料|刪資料|資料遷移|機密|部署|憑證|密碼|(?:身[分份]|角色).{0,4}(?:驗證|檢查)|authentication|authorization|payment|migration|secret|deploy|credential|drop\s+table|\b(?:cookies?|sessions?|csrf|jwt|oauth|password|permissions?|rbac|authn|authz)\b)/i.test(
       maskUnchangedLoginPresentation(text),
     )
   )
-    return "涉及敏感功能，必須人工審核";
+    return sensitiveRisk;
   if (paths.some((p) => sensitiveRepoPath(p, sensitive)))
     return "修改敏感路徑，必須人工審核";
   return null;

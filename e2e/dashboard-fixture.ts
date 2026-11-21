@@ -50,6 +50,7 @@ export const task: Task = {
   summary: "確認範例畫面可以正常開啟。",
   acceptance: ["能開啟範例畫面"],
   status: "awaiting_approval",
+  end_summary: null,
   mode: "query",
   version: 1,
   target_branch: "main",
@@ -71,6 +72,45 @@ export const task: Task = {
   answer: null,
   created_at: timestamp,
   updated_at: timestamp,
+};
+
+const endedAt = "2026-11-20T02:30:00.000Z";
+export const rejectedTask: Task = {
+  ...task,
+  id: "16400000-0000-4000-8000-000000000001",
+  title: "整理範例操作手冊",
+  status: "rejected",
+  updated_at: endedAt,
+  end_summary: { kind: "reject", actor: "小林", at: endedAt, reason: null, station: null },
+};
+export const cancelledTask: Task = {
+  ...task,
+  id: "16400000-0000-4000-8000-000000000002",
+  title: "調整範例設備報表",
+  mode: "change",
+  status: "cancelled",
+  updated_at: endedAt,
+  risk_reasons: [
+    "共用設備帳密需要人工審核。；設備主檔寫入需要人工審核。",
+    "共用設備帳密需要人工審核",
+  ],
+  end_summary: {
+    kind: "cancel",
+    actor: "小陳",
+    at: endedAt,
+    reason: "範例報表已由小林整理",
+    station: null,
+  },
+};
+export const closedPrTask: Task = {
+  ...task,
+  id: "16400000-0000-4000-8000-000000000003",
+  title: "更新範例出貨清單",
+  mode: "change",
+  status: "closed",
+  pr_number: 12,
+  updated_at: endedAt,
+  end_summary: { kind: "closed", actor: null, at: endedAt, reason: null, station: "pr" },
 };
 
 export const detail: Detail = {
