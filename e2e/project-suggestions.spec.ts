@@ -73,6 +73,7 @@ const source = {
   text: "請查範例倉庫的庫存。",
   sender: "範例成員",
   received_at: task.created_at,
+  availability: "readable" as const,
   revoked: false,
   has_image: false,
 };

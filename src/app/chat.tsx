@@ -20,6 +20,7 @@ import { statusLabels, type Group } from "../../shared/types.js";
 import {
   chatReplyHint,
   chatRoutingLabels,
+  unavailableMessageLabels,
 } from "../../shared/status-glossary.js";
 import { CopyButton } from "./copy-button";
 import { Button } from "@/components/ui/button";
@@ -369,7 +370,7 @@ function Timeline({
                       <time dateTime={m.received_at}>
                         {date(m.received_at)}
                       </time>
-                      {!m.revoked && !m.expired && (
+                      {m.availability === "readable" && (
                         <span>
                           {m.tasks.length
                             ? chatRoutingLabels.linked
@@ -380,9 +381,13 @@ function Timeline({
                       )}
                     </div>
                     <div className="w-fit max-w-full space-y-2 rounded-xl rounded-tl-sm border bg-muted/40 px-3.5 py-3 sm:max-w-[85%]">
-                      {m.revoked || m.expired ? (
+                      {m.availability !== "readable" ? (
                         <p className="text-sm text-muted-foreground">
-                          {m.revoked ? "此訊息已撤回" : "原文已到期"}
+                          {m.availability === "revoked"
+                            ? unavailableMessageLabels.revoked
+                            : unavailableMessageLabels.expired(
+                                state.settings.retention_days,
+                              )}
                         </p>
                       ) : (
                         <>

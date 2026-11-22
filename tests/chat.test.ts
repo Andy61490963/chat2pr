@@ -24,7 +24,7 @@ import { Budget } from "../server/budget.js";
 import { GitHub } from "../server/github.js";
 import { downloadPendingImages } from "../server/maintenance.js";
 import { notifyGroup } from "../server/group-replies.js";
-import type { TriageDecision } from "../shared/types.js";
+import type { SourceMessage, TriageDecision } from "../shared/types.js";
 import type { ChatPage } from "../shared/chat.js";
 
 let app: Awaited<ReturnType<typeof buildApp>>;
@@ -320,34 +320,65 @@ describe("聊天室與明確指令派工", () => {
     expect(t.source_ids).toEqual(["cross"]);
     expect((await page()).messages).toHaveLength(1);
   });
-  it("撤回與過期立即遮罩原文、圖片及發話者，即使尚未清理", async () => {
-    await receive("gone", "敏感原文", "image");
-    await receive("expired", "過期原文", "image");
-    await db.query("UPDATE messages SET image=$1,image_mime='image/png'", [
-      Buffer.from("image"),
-    ]);
-    await new Line(db).ingest({
-      events: [
-        {
-          webhookEventId: "unsend",
-          type: "unsend",
-          source: { type: "group", groupId: "group-a" },
-          unsend: { messageId: "gone" },
-        },
-      ],
-    });
+  it("任務來源與聊天室區分可讀、撤回和到期，並遮罩不可讀內容與使用者 ID", async () => {
+    // 模擬內容尚未清理，驗證查詢本身會遮罩原文、圖片及發言者。
     await db.query(
-      "UPDATE messages SET received_at=now()-interval '31 days' WHERE id='expired'",
+      `INSERT INTO messages(id,group_id,type,text,image,image_mime,user_id,received_at,revoked) VALUES
+        ('readable','group-a','image','範例原文',$1,'image/png','fictional-member-id',now(),false),
+        ('gone','group-a','image','撤回的範例原文',$1,'image/png','fictional-member-id',now(),true),
+        ('expired','group-a','image','到期的範例原文',$1,'image/png','fictional-member-id',message_retention_cutoff(),false),
+        ('both','group-a','image','到期且撤回的範例原文',$1,'image/png','fictional-member-id',message_retention_cutoff(),true)`,
+      [Buffer.from("demo-image")],
     );
-    for (const m of (await page()).messages) {
-      expect(m.text).toBeNull();
-      expect(m.sender).toBeNull();
-      expect(m.has_image).toBe(false);
-      expect(
-        (await app.inject({ url: `/api/messages/${m.id}/image`, headers }))
-          .statusCode,
-      ).toBe(404);
+    await db.query(
+      "INSERT INTO line_members(group_id,user_id,display_name) VALUES('group-a','fictional-member-id','小林')",
+    );
+    const task = await db.one<{ id: string }>(
+      `INSERT INTO tasks(project_id,group_id,title,summary,source_ids,dedupe_key)
+       VALUES($1,'group-a','整理範例畫面','整理畫面來源',ARRAY['readable','gone','expired','both'],'demo-source-availability') RETURNING id`,
+      [project],
+    );
+    const detail = await app.inject({ url: `/api/tasks/${task.id}`, headers });
+    const chat = await app.inject({ url: "/api/groups/group-a/messages", headers });
+    expect(detail.statusCode).toBe(200);
+    expect(chat.statusCode).toBe(200);
+    const { sources } = detail.json<{ sources: SourceMessage[] }>();
+    const { messages } = chat.json<ChatPage>();
+    for (const rows of [sources, messages]) {
+      expect(rows).toHaveLength(4);
+      expect(rows.find((m) => m.id === "readable")).toMatchObject({
+        availability: "readable",
+        text: "範例原文",
+        sender: "小林",
+        has_image: true,
+      });
+      for (const [id, availability] of [
+        ["gone", "revoked"],
+        ["expired", "expired"],
+        ["both", "revoked"],
+      ]) {
+        expect(rows.find((m) => m.id === id)).toMatchObject({
+          availability,
+          text: null,
+          sender: null,
+          has_image: false,
+        });
+      }
+      for (const m of rows) {
+        expect(m).not.toHaveProperty("user_id");
+        expect(m).not.toHaveProperty("quoted_user_id");
+        expect(m).not.toHaveProperty("image");
+      }
     }
+    expect(detail.body).not.toContain("fictional-member-id");
+    expect(chat.body).not.toContain("fictional-member-id");
+    for (const id of ["gone", "expired", "both"]) {
+      const image = await app.inject({ url: `/api/messages/${id}/image`, headers });
+      expect(image.statusCode).toBe(404);
+    }
+    const image = await app.inject({ url: "/api/messages/readable/image", headers });
+    expect(image.statusCode).toBe(200);
+    expect(image.body).toBe("demo-image");
   });
   it("發話者顯示 LINE 名稱並快取；不回傳使用者 ID，查不到時退回代號", async () => {
     await receive("named", "你好");
