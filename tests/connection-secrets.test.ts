@@ -122,8 +122,11 @@ it("擁有者可更新所有白名單欄位，回應與狀態只顯示是否設�
     ).toBeGreaterThan(0);
     expect(saved.body).not.toContain(value);
     expect(status.body).not.toContain(value);
+    // 應用程式 ID 是公開識別碼（也是機器人的使用者 ID），不遮蔽，否則「@機器人」會被遮掉。
     expect(scrubConnectionSecrets(`虛構紀錄 ${value}`)).toBe(
-      "虛構紀錄 [已遮蔽連線金鑰]",
+      field === "discordApplicationId"
+        ? `虛構紀錄 ${value}`
+        : "虛構紀錄 [已遮蔽連線金鑰]",
     );
   }
   const names =
