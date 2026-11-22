@@ -867,21 +867,24 @@ it("Discord 查詢回覆可在指令模式引用追問，送達失敗會出現�
   }
 });
 
-it("管理者切換到 Discord 後，以有效私訊代碼配對並送出通知，不呼叫 LINE", async () => {
+it("管理者須先以有效私訊代碼配對 Discord 才能切換並收到通知", async () => {
   const app = await buildApp(db);
   try {
     const { platform, rest } = fakeRest();
     const gateway = fakeGateway(platform);
     const headers = await session();
-    const switched = await app.inject({
-      method: "PUT",
-      url: "/api/settings/admin-notifications",
-      headers,
-      payload: { admin_notify_platform: "discord" },
-    });
-    expect(switched.statusCode).toBe(200);
-    const pair = () =>
-      app.inject({ method: "POST", url: "/api/pairing", headers });
+    const switchTo = (target: "line" | "discord") =>
+      app.inject({
+        method: "PUT",
+        url: "/api/settings/admin-notifications",
+        headers,
+        payload: { admin_notify_platform: target },
+      });
+    const pair = (target: "line" | "discord" = "discord") =>
+      app.inject({ method: "POST", url: "/api/pairing", headers, payload: { platform: target } });
+    const unpaired = await switchTo("discord");
+    expect(unpaired.statusCode).toBe(409);
+    expect(unpaired.json().error).toContain("Discord 尚未配對，請先完成配對再儲存");
     const receiver = {
       id: "100000000000000020",
       user: author.id,
@@ -895,6 +898,7 @@ it("管理者切換到 Discord 後，以有效私訊代碼配對並送出通知�
     expect((await db.settings()).admin_discord_id).toBeFalsy();
 
     const code = (await pair()).json().code;
+    expect((await switchTo("discord")).statusCode).toBe(409);
     const line = new Line(db, platform);
     await line.ingest({
       events: [
@@ -919,6 +923,15 @@ it("管理者切換到 Discord 後，以有效私訊代碼配對並送出通知�
       text: `配對 ${code}`,
     });
     expect((await db.settings()).admin_discord_id).toBe(discordId(author.id));
+    const before = await app.inject({ url: "/api/state", headers });
+    expect(before.json().settings).toMatchObject({
+      admin_notify_platform: "line",
+      admin_discord_id: "已綁定",
+    });
+    expect((await switchTo("discord")).statusCode).toBe(200);
+    const unpairedLine = await switchTo("line");
+    expect(unpairedLine.statusCode).toBe(409);
+    expect(unpairedLine.json().error).toContain("LINE 尚未配對，請先完成配對再儲存");
     const state = await app.inject({ url: "/api/state", headers });
     expect(state.json().settings).toMatchObject({
       admin_notify_platform: "discord",
@@ -932,9 +945,23 @@ it("管理者切換到 Discord 後，以有效私訊代碼配對並送出通知�
       detail: expect.stringContaining("由 LINE 改成 Discord"),
     });
 
-    await db.query(
-      `UPDATE settings SET value=value||'{"admin_line_id":"虛構 LINE 管理者"}' WHERE id=1`,
-    );
+    const lineCode = (await pair("line")).json().code;
+    await line.ingest({
+      events: [
+        {
+          type: "message",
+          webhookEventId: "示範LINE配對事件",
+          source: { type: "user", userId: "範例 LINE 使用者" },
+          message: { id: "示範LINE配對訊息", type: "text", text: `配對 ${lineCode}` },
+        },
+      ],
+    });
+    const bothPaired = await app.inject({ url: "/api/state", headers });
+    expect(bothPaired.json().settings).toMatchObject({
+      admin_notify_platform: "discord",
+      admin_line_id: "已綁定",
+      admin_discord_id: "已綁定",
+    });
     await db.query(`INSERT INTO notifications(kind,dedupe_key,text) VALUES
       ('approval','範例待確認','待確認示範專案'),('failed','範例失敗','示範專案處理失敗'),
       ('input_required','範例補問','請確認示範專案的補問')`);

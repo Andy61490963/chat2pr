@@ -58,12 +58,12 @@ export function MemoryOverview({
             </div>
           ))}
         </div>
-        <section className="flex flex-col gap-2">
+        <section aria-labelledby="recent-group-memory-title" className="flex flex-col gap-2">
           <div className="flex items-center justify-between">
-            <h3 className="text-xs font-medium text-muted-foreground">
+            <h3 id="recent-group-memory-title" className="text-xs font-medium text-muted-foreground">
               最近新增的群組記憶
             </h3>
-            <Button variant="link" size="sm" onClick={() => go("groups")}>
+            <Button variant="link" size="sm" className="min-h-11" onClick={() => go("groups")}>
               選擇要編輯的群組
             </Button>
           </div>
@@ -74,29 +74,30 @@ export function MemoryOverview({
                   <span className="text-sm [overflow-wrap:anywhere]">
                     {m.content}
                   </span>
-                  <span className="text-xs text-muted-foreground">
-                    {state.groups.find((g) => g.id === m.group_id)?.name ??
-                      "群組"}
-                    {" · "}
-                    {state.projects.find((p) => p.id === m.project_id)?.name ??
-                      "不指定專案"}
-                    {" · "}
+                  <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                    <span>
+                      {state.groups.find((g) => g.id === m.group_id)?.name ??
+                        "群組"}
+                    </span>
+                    <span>
+                      {state.projects.find((p) => p.id === m.project_id)?.name ??
+                        "不指定專案"}
+                    </span>
                     <span
                       className={m.source === "ai" ? "text-info" : undefined}
                     >
                       {memorySource[m.source] ?? "群組要求"}
                     </span>
-                    {" · "}
-                    {ago(m.created_at)}
+                    <time dateTime={m.created_at}>{ago(m.created_at)}</time>
                     {m.project_id &&
                       !state.groups
                         .find((g) => g.id === m.group_id)
                         ?.project_ids.includes(m.project_id) && (
                         <span className="text-warn">
-                          {" · "}專案已不在此群組，暫不使用
+                          專案已不在此群組，暫不使用
                         </span>
                       )}
-                  </span>
+                  </div>
                 </li>
               ))}
             </ul>

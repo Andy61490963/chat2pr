@@ -1,8 +1,14 @@
 import type { Page } from "@playwright/test";
+import type { listChecks } from "../server/checks";
 import type { Member } from "../server/members";
 import type { Detail, State } from "../src/app/shared";
 import type { DashboardGroup, Project, Task } from "../shared/types";
 import { endedStatuses } from "../shared/types";
+import {
+  hostUnavailablePrefix,
+  type CheckRunView,
+  type ScheduledCheck,
+} from "../shared/checks";
 import {
   isMergedInWeek,
   mergedWeekBounds,
@@ -153,6 +159,108 @@ export const group: DashboardGroup = {
   last_pending_at: null,
   created_at: timestamp,
   last_message_at: null,
+};
+
+export const groupMemory = {
+  id: "example-memory",
+  group_id: group.id,
+  project_id: null,
+  content: "設備保養相關問題先查示範手冊。",
+  source: "ai",
+  source_message_id: null,
+  created_at: timestamp,
+} satisfies State["memories"][number];
+
+type CheckListEntry = Awaited<ReturnType<typeof listChecks>>[number];
+
+const normalCheck: CheckListEntry = {
+  id: "example-check",
+  group_id: group.id,
+  project_id: project.id,
+  name: "示範服務檢查",
+  kind: "http",
+  target: "https://demo.invalid/health",
+  condition: {},
+  interval_minutes: 60,
+  daily_at: null,
+  notify: "group",
+  quiet_from: null,
+  quiet_to: null,
+  alert_text: "範例服務異常",
+  recovered_text: "範例服務已恢復",
+  rationale: "",
+  investigate: false,
+  status: "active",
+  version: 1,
+  approved_version: 1,
+  approved_by: "demo-admin",
+  created_by: "demo-admin",
+  state: "ok",
+  consecutive_errors: 0,
+  last_run_at: timestamp,
+  next_run_at: null,
+  last_investigated_at: null,
+  source_task_id: null,
+  created_at: timestamp,
+  updated_at: timestamp,
+  last_summary: "範例服務正常",
+  missing_connection: false,
+  host_unavailable_since: null,
+  system_issue: null,
+};
+
+const alertCheck = {
+  ...normalCheck,
+  id: "example-check-alert",
+  name: "示範設備檢查",
+  state: "alert",
+  last_summary: "示範設備的溫度超過門檻",
+} satisfies CheckListEntry;
+
+const connectionCheck: CheckListEntry = {
+  ...normalCheck,
+  id: "example-check-connection",
+  name: "示範資料庫檢查",
+  kind: "sql",
+  target: "SELECT 1 AS reading",
+  condition: { column: "reading", op: ">", value: 1 },
+  state: "unknown",
+  last_run_at: null,
+  last_summary: null,
+  missing_connection: true,
+};
+
+export const blockedCheck: CheckListEntry = {
+  ...normalCheck,
+  id: "example-check-blocked",
+  name: "示範連線檢查",
+  host_unavailable_since: timestamp,
+  last_summary: `${hostUnavailablePrefix}讀不到主機執行器`,
+};
+
+const checkDetail = (check: ScheduledCheck, runs: CheckRunView[] = []) =>
+  ({ check, runs });
+
+export const checkAttentionRoutes = {
+  "/api/checks": [
+    ...Array.from({ length: 20 }, (_, index) => ({
+      ...normalCheck,
+      id: `example-check-${index + 1}`,
+      name: `示範服務檢查 ${index + 1}`,
+    })),
+    alertCheck,
+    connectionCheck,
+  ],
+  [`/api/checks/${alertCheck.id}`]: checkDetail(alertCheck, [{
+    id: 1,
+    version: 1,
+    started_at: timestamp,
+    duration_ms: 20,
+    outcome: "alert",
+    summary: alertCheck.last_summary,
+  }]),
+  [`/api/checks/${connectionCheck.id}`]: checkDetail(connectionCheck),
+  [`/api/checks/${blockedCheck.id}`]: checkDetail(blockedCheck),
 };
 
 export const unnamedLineGroup: DashboardGroup = {
@@ -616,7 +724,7 @@ export async function mockDashboard(
   options: {
     state?: Record<string, unknown>;
     routes?: Record<string, unknown>;
-    pairingCode?: string;
+    pairingCodes?: Partial<Record<"line" | "discord", string>>;
     reauthConnectionSecrets?: boolean;
   } = {},
 ): Promise<void> {
@@ -758,8 +866,13 @@ export async function mockDashboard(
     if (request.method() === "POST" && pathname === "/api/alerts/seen") {
       return route.fulfill({ json: { ok: true } });
     }
-    if (request.method() === "POST" && pathname === "/api/pairing" && options.pairingCode) {
-      return route.fulfill({ json: { code: options.pairingCode, expiresIn: 600 } });
+    if (request.method() === "POST" && pathname === "/api/pairing" && options.pairingCodes) {
+      const { platform = state.settings.admin_notify_platform ?? "line" } =
+        (request.postDataJSON() ?? {}) as { platform?: unknown };
+      const code = platform === "line" || platform === "discord"
+        ? options.pairingCodes[platform]
+        : undefined;
+      if (code) return route.fulfill({ json: { code, expiresIn: 600 } });
     }
     return route.fulfill({
       status: 404,

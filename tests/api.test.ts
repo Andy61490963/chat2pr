@@ -479,7 +479,23 @@ describe("公開 Webhook 與管理 API 邊界", () => {
     expect(r.statusCode).toBe(403);
     await app.close();
   });
-  it("一次性 LINE 配對碼不能被另一人重複使用", async () => {
+  it("配對 API 拒絕不支援的平台並回傳中文原因", async () => {
+    const headers = await session(),
+      app = await buildApp(db);
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/api/pairing",
+        headers,
+        payload: { platform: "example" },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json().details).toContain("platform: 請選擇配對的聊天平台");
+    } finally {
+      await app.close();
+    }
+  });
+  it("省略平台時沿用 LINE，一次性配對碼不能被另一人重複使用", async () => {
     const headers = await session(),
       app = await buildApp(db);
     const { code } = (
@@ -487,7 +503,6 @@ describe("公開 Webhook 與管理 API 邊界", () => {
         method: "POST",
         url: "/api/pairing",
         headers,
-        payload: {},
       })
     ).json();
     for (const [event, user] of [

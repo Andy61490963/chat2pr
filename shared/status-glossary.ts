@@ -272,6 +272,15 @@ export const linePushServiceLabels = {
 
 export const checkListLabels = {
   empty: "還沒有定期檢查",
+  all: "全部",
+  attention: "需處理",
+  attentionEmpty: "目前沒有需要處理的定期檢查",
+} as const;
+
+export const checkAttentionLabels = {
+  equipment: "設備異常",
+  connection: "連線缺失",
+  system: "系統無法執行",
 } as const;
 
 export const chatRoutingLabels = {

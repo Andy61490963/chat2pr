@@ -912,7 +912,8 @@ function AdminNotifications({
   const [copied, setCopied] = useState(false);
   const dirty = platform !== saved;
   useUnsaved("settings-notifications", dirty);
-  const paired = saved === "discord" ? settings.admin_discord_id : settings.admin_line_id;
+  const paired = { line: !!settings.admin_line_id, discord: !!settings.admin_discord_id };
+  const canSave = dirty && paired[platform] && !busy;
   return (
     <Card role="region" aria-labelledby="admin-notifications-title">
       <CardHeader>
@@ -923,7 +924,7 @@ function AdminNotifications({
       <CardContent className="grid gap-4">
         <form className="grid gap-2" onSubmit={(event) => {
           event.preventDefault();
-          if (!dirty || busy) return;
+          if (!canSave) return;
           void run(
             () => request("/api/settings/admin-notifications", "PUT", { admin_notify_platform: platform }),
             "已儲存管理者通知設定",
@@ -937,39 +938,53 @@ function AdminNotifications({
               id="admin-notification-platform"
               className="min-h-11 w-full rounded-md border border-muted-foreground bg-background px-3 text-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary sm:w-48"
               value={platform}
-              onChange={(event) => setPlatform(event.target.value === "discord" ? "discord" : "line")}
+              disabled={busy}
+              aria-describedby={!paired[platform] || dirty ? "admin-notification-pairing-hint" : undefined}
+              onChange={(event) => {
+                setPlatform(event.target.value === "discord" ? "discord" : "line");
+                setPairing("");
+                setCopied(false);
+              }}
             >
-              <option value="line">{groupPlatformLabels.line}</option>
-              <option value="discord">{groupPlatformLabels.discord}</option>
+              {(["line", "discord"] as const).map((id) => (
+                <option key={id} value={id}>
+                  {groupPlatformLabels[id]}{!paired[id] && `（${adminNotificationLabels.unpaired}）`}
+                </option>
+              ))}
             </select>
-            <Button type="submit" className="min-h-11" disabled={!dirty || busy}>儲存通知設定</Button>
+            <Button type="submit" className="min-h-11" disabled={!canSave}>儲存通知設定</Button>
           </div>
         </form>
         <p role="status" className="flex flex-wrap items-center gap-2 text-sm">
           <span>{groupPlatformLabels[saved]} 私訊</span>
-          <Badge variant={paired ? "good" : "outline"}>
-            {paired ? adminNotificationLabels.paired : adminNotificationLabels.unpaired}
+          <Badge variant={paired[saved] ? "good" : "outline"}>
+            {paired[saved] ? adminNotificationLabels.paired : adminNotificationLabels.unpaired}
           </Badge>
         </p>
-        {!paired && (
-          <p className="text-sm text-muted-foreground">
-            請先配對以接收私訊。配對前可在看板鈴鐺查看通知。
-          </p>
-        )}
+        <div aria-live="polite" className="empty:hidden">
+          {(!paired[platform] || dirty) && (
+            <p id="admin-notification-pairing-hint" className="text-sm text-muted-foreground">
+              {paired[platform] && `${groupPlatformLabels[platform]} ${adminNotificationLabels.paired}，可以儲存通知設定。`}
+              {!paired[platform] && (dirty
+                ? `請先完成 ${groupPlatformLabels[platform]} 配對，再儲存通知設定。`
+                : "請先配對以接收私訊。配對前可在看板鈴鐺查看通知。")}
+            </p>
+          )}
+        </div>
         <div>
-          <Button variant="outline" className="min-h-11" disabled={busy || dirty}
+          <Button variant="outline" className="min-h-11" disabled={busy}
             onClick={() => void run(async () => {
               setCopied(false);
-              setPairing((await request<{ code: string }>("/api/pairing", "POST")).code);
+              setPairing((await request<{ code: string }>("/api/pairing", "POST", { platform })).code);
             }, "配對碼 10 分鐘內有效")}
           >
-            {paired ? "重新配對" : "產生配對碼"}
+            {paired[platform] ? "重新配對" : "產生配對碼"}
           </Button>
         </div>
-        {pairing && !dirty && (
+        {pairing && (
           <div className="rounded-lg bg-muted p-3 text-sm">
             <p className="text-muted-foreground">
-              請在 10 分鐘內私訊 {groupPlatformLabels[saved]} 機器人以下文字。
+              請在 10 分鐘內私訊 {groupPlatformLabels[platform]} 機器人以下文字。
             </p>
             <div className="flex flex-wrap items-center gap-2">
               <code className="break-all text-base font-semibold">配對 {pairing}</code>

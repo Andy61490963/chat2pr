@@ -15,7 +15,7 @@ import {
 } from "../../shared/checks";
 import type { CheckEnvironmentView } from "../../shared/check-environment";
 import type { ProjectDatabaseView } from "../../shared/project-database";
-import { checkListLabels } from "../../shared/status-glossary";
+import { checkAttentionLabels, checkListLabels } from "../../shared/status-glossary";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,7 +27,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Checkbox, Label, Textarea } from "@/components/ui/form-controls";
-import { type Request, type State, ago, date, message } from "./shared";
+import { type Request, type State, ago, date, message, writeQuery } from "./shared";
 import { ConfirmButton } from "./confirm";
 import { useGuard, useUnsaved } from "./unsaved";
 
@@ -79,6 +79,20 @@ function hostTrouble(c: Listed) {
       Date.now() - new Date(c.host_unavailable_since).getTime() >
       hostUnavailableAlertHours * 3600000,
   };
+}
+
+function executionBlocked(c: Listed, host: ReturnType<typeof hostTrouble>) {
+  return (
+    !!host ||
+    !!c.system_issue ||
+    c.environment?.state === "failed" ||
+    c.status === "failed" ||
+    (c.status === "active" && c.consecutive_errors > 0)
+  );
+}
+
+function readAttentionFilter() {
+  return new URLSearchParams(location.search).get("filter") === "attention";
 }
 
 const runTone = {
@@ -176,7 +190,7 @@ const stateLabel: Record<
 > = {
   unknown: ["尚未判定", "secondary"],
   ok: ["正常", "good"],
-  alert: ["異常", "danger"],
+  alert: [checkAttentionLabels.equipment, "danger"],
 };
 const kindLabel = {
   sql: "SQL 唯讀查詢",
@@ -568,13 +582,16 @@ export function ChecksView({
   state,
   request,
   admin,
+  visit,
 }: {
   state: State;
   request: Request;
   admin: boolean;
+  visit: number;
 }) {
   // null 表示還沒載入成功過：不能顯示「還沒有定期檢查」。
   const [checks, setChecks] = useState<Listed[] | null>(null);
+  const [attentionOnly, setAttentionOnly] = useState(readAttentionFilter);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [runs, setRuns] = useState<CheckRunView[]>([]);
@@ -598,6 +615,14 @@ export function ChecksView({
     const t = setInterval(() => void load(), 30000);
     return () => clearInterval(t);
   }, [load]);
+  useEffect(() => {
+    const syncFilter = () => {
+      if (location.pathname === "/checks") setAttentionOnly(readAttentionFilter());
+    };
+    syncFilter();
+    window.addEventListener("popstate", syncFilter);
+    return () => window.removeEventListener("popstate", syncFilter);
+  }, [visit]);
   useEffect(() => {
     if (!open) return;
     void request<{ runs: CheckRunView[] }>(`/api/checks/${open}`)
@@ -648,6 +673,20 @@ export function ChecksView({
   };
   const groupName = (id: string) =>
     state.groups.find((g) => g.id === id)?.name ?? id;
+  const selectFilter = (attention: boolean) => {
+    setAttentionOnly(attention);
+    writeQuery([["filter", attention ? "attention" : "", ""]]);
+  };
+  const rows = (checks ?? []).map((check) => {
+    const host = hostTrouble(check);
+    return { check, host, blocked: executionBlocked(check, host) };
+  });
+  const visibleRows = attentionOnly
+    ? rows.filter(
+        ({ check, blocked }) =>
+          check.state === "alert" || check.missing_connection || blocked,
+      )
+    : rows;
   // 同一種系統設定問題會讓所有檢查一起卡住：頁首每種問題只顯示一次，並列出受影響的數量。
   const issues = new Map<string, { issue: SystemIssue; count: number }>();
   for (const c of checks ?? [])
@@ -759,19 +798,44 @@ export function ChecksView({
               </p>
             </div>
           )}
-          <ul className="flex flex-col gap-2">
-            {(checks ?? []).map((c) => {
+          {!!rows.length && (
+            <div role="group" aria-label="檢查篩選" className="flex flex-wrap gap-2">
+              <Button
+                className="min-h-11"
+                variant={attentionOnly ? "outline" : "default"}
+                aria-pressed={!attentionOnly}
+                onClick={() => selectFilter(false)}
+              >
+                {checkListLabels.all}
+              </Button>
+              <Button
+                className="min-h-11"
+                variant={attentionOnly ? "default" : "outline"}
+                aria-pressed={attentionOnly}
+                onClick={() => selectFilter(true)}
+              >
+                {checkListLabels.attention}
+              </Button>
+            </div>
+          )}
+          {!!rows.length && !visibleRows.length && (
+            <p role="status" className="text-sm text-muted-foreground">
+              {checkListLabels.attentionEmpty}
+            </p>
+          )}
+          <ul aria-label="定期檢查清單" className="flex flex-col gap-2">
+            {visibleRows.map(({ check: c, host, blocked }) => {
               const tried =
                 trials[c.id]?.version === c.version ? trials[c.id] : null;
-              const host = hostTrouble(c);
               return (
                 <li key={c.id} className="rounded-lg border">
                   <button
                     type="button"
-                    className="flex w-full flex-wrap items-center gap-2 px-3 py-2 text-left"
+                    className="flex min-h-11 w-full flex-wrap items-center gap-2 px-3 py-2 text-left"
+                    aria-expanded={open === c.id}
                     onClick={() => setOpen(open === c.id ? null : c.id)}
                   >
-                    <span className="min-w-0 flex-1 truncate font-medium">
+                    <span className="min-w-0 grow basis-40 font-medium [overflow-wrap:anywhere]">
                       {c.name}
                     </span>
                     <Badge variant={stateLabel[c.state][1]}>
@@ -781,19 +845,17 @@ export function ChecksView({
                       {statusLabel[c.status][0]}
                     </Badge>
                     {c.missing_connection && (
-                      <Badge variant="danger">缺少資料庫連線</Badge>
+                      <Badge variant="danger">{checkAttentionLabels.connection}</Badge>
                     )}
-                    {host && (
-                      <Badge variant={host.overdue ? "danger" : "warn"}>
-                        {host.overdue ? "系統問題需要處理" : "系統暫時無法執行"}
+                    {blocked && (
+                      <Badge variant={host?.overdue ? "danger" : "warn"}>
+                        {checkAttentionLabels.system}
                       </Badge>
                     )}
-                    {c.system_issue && (
-                      <Badge variant="warn">等待系統問題排除</Badge>
-                    )}
-                    <span className="text-xs text-muted-foreground">
-                      {kindLabel[c.kind]}・{schedule(c)}・
-                      {groupName(c.group_id)}
+                    <span className="flex w-full flex-wrap gap-x-2 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                      <span>{kindLabel[c.kind]}</span>
+                      <span>{schedule(c)}</span>
+                      <span>{groupName(c.group_id)}</span>
                     </span>
                   </button>
                   {open === c.id && (
