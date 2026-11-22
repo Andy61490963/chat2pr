@@ -265,6 +265,15 @@ export const groupLabels = {
   unbound: "沒有可用專案",
 } as const;
 
+export const connectionStatusLabels = {
+  disabled: "未啟用",
+  stale: "待確認",
+  healthy: "正常",
+  needsAttention: "需處理",
+  noRecord: "尚無紀錄",
+  unchecked: "未檢查",
+} as const;
+
 export const systemStatusLabels = {
   attention: taskStatusFilterLabels.todo,
   runner: {

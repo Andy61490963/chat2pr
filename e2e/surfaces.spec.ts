@@ -166,30 +166,10 @@ for (const width of [1280, 920, 375]) {
   });
 }
 
-test("設定分區可用鍵盤跳轉，使用摩擦可在系統頁查看", async ({ page }) => {
-  await page.setViewportSize({ width: 375, height: 812 });
+test("使用摩擦可在系統頁查看", async ({ page }) => {
   await mockDashboard(page);
   await page.goto("/settings");
-  const sections = page.getByRole("navigation", { name: "設定分區" });
-  for (const [name, id] of [
-    ["AI 與額度", "settings-ai"],
-    ["管理者通知", "settings-notifications"],
-    ["LINE", "settings-line"],
-    ["服務連線", "settings-services"],
-    ["資料與外觀", "settings-data"],
-  ]) {
-    const link = sections.getByRole("link", { name, exact: true });
-    await link.focus();
-    await link.press("Enter");
-    await expect(page).toHaveURL(new RegExp(`/settings#${id}$`));
-    const heading = page.getByRole("heading", { level: 2, name, exact: true });
-    await expect(heading).toBeFocused();
-    await expect(heading).toBeInViewport();
-  }
-  await page.reload();
-  await expect(
-    page.getByRole("heading", { name: "資料與外觀" }),
-  ).toBeInViewport();
+  await expect(page.getByRole("tabpanel", { name: "AI 與執行" })).toBeVisible();
   await expect(page.getByText("使用摩擦", { exact: true })).toHaveCount(0);
   await page.goto("/system");
   await expect(page.getByRole("heading", { name: "使用摩擦" })).toBeVisible();
@@ -353,8 +333,8 @@ test("在 375px 可以用鍵盤調整 LINE 推播設定並看到私訊暫停", a
     policy = route.request().postDataJSON();
     return route.fulfill({ json: { ok: true } });
   });
-  await page.goto("/settings#settings-line");
-  const section = page.getByRole("region", { name: "LINE", exact: true });
+  await page.goto("/settings?tab=notifications");
+  const section = page.getByRole("region", { name: "LINE 推播（群組回覆與私訊）", exact: true });
   const mode = section.getByRole("combobox", { name: "LINE 私訊範圍" });
   const reserve = section.getByRole("spinbutton", { name: "保留給群組回覆的比例（%）" });
   const save = section.getByRole("button", { name: "儲存 LINE 推播設定" });
@@ -377,7 +357,7 @@ test("在 375px 可以用鍵盤調整 LINE 推播設定並看到私訊暫停", a
     expect((await field.boundingBox())?.height).toBeGreaterThanOrEqual(44);
   expect(await section.evaluate((node) => node.scrollWidth)).toBeLessThanOrEqual(375);
   const accessibility = await new AxeBuilder({ page })
-    .include('section[aria-labelledby="settings-line"]')
+    .include('[aria-labelledby="line-push-title"]')
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
     .analyze();
   expect(accessibility.violations).toEqual([]);
@@ -386,7 +366,7 @@ test("在 375px 可以用鍵盤調整 LINE 推播設定並看到私訊暫停", a
   await expect(reserve).toHaveValue("80");
 });
 
-test("LINE 額度用完時，每頁顯示簡短警示，按連結才顯示替代做法", async ({
+test("LINE 額度用完時，每頁顯示簡短警示，可用鍵盤展開說明且網址維持原樣", async ({
   page,
 }) => {
   await mockDashboard(page, {
@@ -416,10 +396,20 @@ test("LINE 額度用完時，每頁顯示簡短警示，按連結才顯示替代
       await expect(banner).toBeVisible();
       const help = page.getByText(/或在群組輸入 \/進度 取回/);
       await expect(help).toBeHidden();
-      await page.getByRole("link", { name: "怎麼辦" }).click();
+      const url = page.url();
+      const disclosure = page.getByRole("button", { name: "怎麼辦" });
+      await expect(disclosure).toHaveAttribute("aria-expanded", "false");
+      await expect(disclosure).toHaveAttribute("aria-controls", "line-quota-help");
+      await disclosure.press("Enter");
       await expect(help).toBeVisible();
-      await page.getByRole("link", { name: "收起說明" }).click();
+      const collapse = page.getByRole("button", { name: "收起說明" });
+      await expect(collapse).toBeFocused();
+      await expect(collapse).toHaveAttribute("aria-expanded", "true");
+      await expect(page).toHaveURL(url);
+      await collapse.press("Space");
       await expect(help).toBeHidden();
+      await expect(disclosure).toHaveAttribute("aria-expanded", "false");
+      await expect(page).toHaveURL(url);
     });
   }
 });
@@ -488,7 +478,7 @@ test("頁首警示在 375px 可用鍵盤收合，重新整理後保持收合，�
 
   // 640px 的瀏覽器在 200% 縮放時，版面以 320 CSS 像素重新排列。
   await page.setViewportSize({ width: 320, height: 812 });
-  await page.getByRole("link", { name: "怎麼辦" }).click();
+  await page.getByRole("button", { name: "怎麼辦" }).click();
   await expect(page.getByText(/或在群組輸入 \/進度 取回/)).toBeVisible();
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth),
@@ -674,6 +664,10 @@ test("系統架構說明 Discord 補送時可收訊，遇到限流會延後", as
     "Discord 補送時，頻道仍可接收新訊息。",
   );
   await expect(frame.locator("#cap-data")).toContainText("遇到限流時延後補送");
+  await frame.locator("#chaps").getByRole("button").first().press("Enter");
+  await expect(frame.locator("#cap-title")).toHaveText("成員在群組提需求");
+  await expect(frame.getByRole("region", { name: "動畫播放器" })).toBeFocused();
+  await expect(page).toHaveURL("/system?tab=architecture");
 });
 
 for (const [entry, title] of [

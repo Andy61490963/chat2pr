@@ -26,7 +26,7 @@ export type ConnectionSecretStatus = Record<
 
 export const secretReauthMessage =
   "連線金鑰尚未更新，因為 GitHub 登入已超過十分鐘。請重新登入後再輸入金鑰。";
-export const secretReauthTarget = "settings-secrets";
+export const secretReauthTarget = "/settings?tab=connections";
 
 export function removableConnectionSecret(field: ConnectionSecretField) {
   return field === "discordToken" || field === "discordApplicationId";

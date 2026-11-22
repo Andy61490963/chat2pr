@@ -1,4 +1,5 @@
 import { taskListQuery, type TaskStatusFilter } from "./task-list.js";
+import type { SettingsTab } from "./settings-tabs.js";
 
 export type NotificationView =
   "projects" | "groups" | "settings" | "checks" | "system";
@@ -16,8 +17,9 @@ export function notificationView(kind: string): NotificationView | null {
 
 export type NotificationTarget =
   | { task: string }
-  | { view: Exclude<NotificationView, "system"> }
+  | { view: Exclude<NotificationView, "system" | "settings"> }
   | { view: "system"; tab: "disk" }
+  | { view: "settings"; tab: SettingsTab }
   | { note: "由管理者到看板處理" | "僅供參考" };
 
 /**
@@ -30,8 +32,11 @@ export function notificationTarget(
 ): NotificationTarget {
   if (n.task_id) return { task: n.task_id };
   const view = notificationView(n.kind);
-  if (view && canOpenViews)
-    return view === "system" ? { view, tab: "disk" } : { view };
+  if (view && canOpenViews) {
+    if (view === "system") return { view, tab: "disk" };
+    if (view === "settings") return { view, tab: "connections" };
+    return { view };
+  }
   return { note: view ? "由管理者到看板處理" : "僅供參考" };
 }
 
@@ -74,8 +79,8 @@ export function notificationPath(n: {
   const target = notificationTarget(n, true);
   if (!("view" in target)) return "";
   const { view } = target;
-  if (view === "system")
-    return `system?${new URLSearchParams({ tab: target.tab })}`;
+  if (view === "system" || view === "settings")
+    return `${view}?${new URLSearchParams({ tab: target.tab })}`;
   if (view === "projects" && n.project_id)
     return (
       "projects?" +

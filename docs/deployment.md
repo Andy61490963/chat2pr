@@ -166,7 +166,7 @@ Invoke-RestMethod http://127.0.0.1:4312/health -Headers @{ 'x-runner-key' = $k }
 
 用固定 HTTPS 網址開啟看板，以擁有者的 GitHub 帳號登入。收件匣的「開始使用」卡片會列出六個啟用步驟，依序完成：
 
-1. **服務連線正常**：「設定 → 服務連線」按「檢查連線」，LINE、GitHub App、隔離執行器、HTTPS 入口都要是「正常」。
+1. **服務連線正常**：在看板「設定」的「連線與金鑰」分頁按「檢查連線」，LINE、GitHub App、隔離執行器、HTTPS 入口都要是「正常」。
 2. **Codex 已登入訂閱**（或 API 模式的「OpenAI API 可用」）。
 3. **至少一個專案通過驗證**：在「專案」新增專案，寫好「說明」（AI 依此分派需求），選儲存庫與基底分支，填敏感路徑，按「儲存並驗證環境」；存好後會打開專案詳情顯示驗證進度，通過後專案自動啟用。要自訂安裝／測試命令時展開「進階設定：手動安裝與測試指令」，說明見[專案環境自動設定](project-setup.md)。
 4. **群組已綁定專案並啟用**：把這台的 LINE 機器人加進群組，在「群組」頁勾選可修改的專案並啟用。機器人剛加入的群組預設停用。
@@ -221,7 +221,7 @@ Invoke-RestMethod http://127.0.0.1:4312/health -Headers @{ 'x-runner-key' = $k }
 | 外部入口     | `Invoke-RestMethod https://固定網址/health`      | `ok` 為 `True`                                                             |
 | 冒煙測試     | `npm run smoke`                                  | 全部通過                                                                   |
 | 開機自動啟動 | `Get-ScheduledTask -TaskName 'LINE-AgentFlow'`   | 存在，狀態為 `Ready` 或 `Running`                                          |
-| 服務連線     | 看板「設定 → 服務連線 → 檢查連線」               | 目前 AI 模式需要的項目全部「正常」                                         |
+| 服務連線     | 看板「連線與金鑰」分頁的「檢查連線」               | 目前 AI 模式需要的項目全部「正常」                                         |
 | 啟用步驟     | 看板收件匣                                       | 六步全部完成後，「開始使用」卡片不再顯示                                   |
 | 機密備份     | 人工                                             | `.local/secrets.json` 已另外安全保存（還原備份需要其中的 `sessionSecret`） |
 

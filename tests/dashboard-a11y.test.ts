@@ -13,9 +13,14 @@ describe("鈴鐺通知按下去會去哪", () => {
       ).toEqual({ task: "task-1" });
   });
   it("管理者看到沒有任務的通知時帶去能處理它的頁面", () => {
-    expect(
-      notificationTarget({ task_id: null, kind: "service_down" }, true),
-    ).toEqual({ view: "settings" });
+    for (const kind of ["service_down", "service_up"]) {
+      const notice = { task_id: null, kind };
+      expect(notificationTarget(notice, true)).toEqual({
+        view: "settings",
+        tab: "connections",
+      });
+      expect(notificationPath(notice)).toBe("settings?tab=connections");
+    }
     expect(
       notificationTarget({ task_id: null, kind: "repo_missing" }, true),
     ).toEqual({ view: "projects" });

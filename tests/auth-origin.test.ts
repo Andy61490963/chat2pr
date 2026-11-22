@@ -47,7 +47,8 @@ it("固定來源會建立短效 state cookie，並送往相同來源的 OAuth �
 });
 
 it.each([
-  ["settings-secrets", "/settings#settings-secrets"],
+  ["/settings?tab=connections", "/settings?tab=connections"],
+  ["settings-secrets", "/settings?tab=connections"],
   ["https://fictional.invalid/escaped", "/"],
 ])("重新登入只允許回到預定的看板位置（%s）", async (target, expected) => {
   vi.stubGlobal("fetch", vi.fn()

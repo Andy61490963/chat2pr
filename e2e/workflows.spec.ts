@@ -139,7 +139,7 @@ test("通知鈴鐺可用鍵盤開關選單、移動焦點並前往對應頁面",
   await page.keyboard.press("ArrowDown");
   await expect(last).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect(page).toHaveURL(/\/settings$/);
+  await expect(page).toHaveURL("/settings?tab=connections");
   await expect(
     page.getByRole("heading", { name: "設定", exact: true }),
   ).toBeVisible();
@@ -349,6 +349,35 @@ test("專案的完全存取要先確認才開啟，取消不送出", async ({ pa
   await section.getByRole("button", { name: "開啟完全存取" }).click();
   await dialog.getByRole("button", { name: "開啟完全存取" }).click();
   await expect.poll(() => bodies).toEqual([{ enabled: true }]);
+});
+
+test("登記資料庫連線會切換專案分頁並聚焦第一個欄位", async ({ page }) => {
+  const example = {
+    ...project,
+    name: "示範專案",
+    setup_mode: "auto" as const,
+    setup_plan: {
+      branch: "main",
+      sha: "abc123",
+      fingerprint: "demo",
+      configVersion: 1,
+      install: "",
+      test: "",
+      verification: "tests" as const,
+      dataSource: "inferred" as const,
+      explanation: "範例測試使用推測的資料庫結構。",
+      evidence: [],
+    },
+  };
+  await mockDashboard(page, { state: { projects: [example] } });
+  await page.goto("/projects");
+  await page.getByRole("button", { name: /示範專案/ }).click();
+  const detail = page.getByRole("dialog", { name: "示範專案" });
+  await detail.getByRole("tab", { name: /^環境驗證/ }).click();
+  await detail.getByRole("button", { name: "登記資料庫連線" }).press("Enter");
+  await expect(detail.getByRole("tab", { name: "連線與權限" })).toHaveAttribute("aria-selected", "true");
+  await expect(detail.getByRole("textbox", { name: "用白話描述連線" })).toBeFocused();
+  await expect(page).toHaveURL("/projects");
 });
 
 test("用白話描述資料庫連線，AI 整理後填進欄位並列出連不到的位址", async ({
@@ -856,7 +885,7 @@ test("設定優先列出異常，正常的檢索服務收在全部服務", async
       ],
     },
   });
-  await page.goto("/settings");
+  await page.goto("/settings?tab=connections");
   await expect(
     page.getByRole("listitem").filter({ hasText: "範例連線失敗" }).first(),
   ).toBeVisible();
