@@ -7,7 +7,7 @@ export function Wordmark({ className }: { className?: string }) {
         chat2pr
       </span>
       <span className="truncate text-[11px] text-muted-foreground">
-        LINE 需求到 PR
+        群組需求到 PR
       </span>
     </span>
   );

@@ -153,9 +153,8 @@ const narrowScreens = screens
     ({ path, signedOut, width }) =>
       !width &&
       (signedOut ||
-        ["/tasks", "/groups", "/projects", "/system", "/settings"].includes(
-          path.split("?")[0],
-        )),
+        ["/tasks", "/chat", "/groups", "/projects", "/system", "/settings"]
+          .includes(path.split("?")[0])),
   )
   .map((screen) => ({
     ...screen,
@@ -269,7 +268,7 @@ for (const theme of ["light", "dark"] as const) {
               .getByText("chat2pr", { exact: true })
               .filter({ visible: true }),
           ).toBeVisible();
-          await expect(page).toHaveTitle("chat2pr｜LINE 需求到 PR");
+          await expect(page).toHaveTitle("chat2pr｜群組需求到 PR");
         }
         if (screen.path === "/" && !screen.signedOut) {
           const reason = page.getByText(skipped.detail, { exact: true });

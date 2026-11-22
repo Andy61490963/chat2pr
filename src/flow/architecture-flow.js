@@ -422,9 +422,9 @@ import "@fontsource-variable/inter";
       anim: function (tl) { phase(tl, 0, "run"); travel(tl, "gh_slot", 0.7, "原始碼", "var(--fg)"); phase(tl, 0, "done"); } },
 
     { title: "安裝相依套件", where: "工作容器 → egress → 套件來源", cam: "work", focus: ["egress", "pkg"],
-      text: "先以 root 安裝審查放行的系統套件，存成這個專案的衍生映像，之後直接重用；測試要用 SQL Server 時改用內含 SQL Server 的映像。接著以非 root 執行專案的安裝命令。所有下載都只能經 egress 白名單代理，其他網址一律擋下。你也可以在專案頁查看環境驗證的排隊、安裝、測試或 AI 調整進度。",
-      chips: ["白名單代理", "衍生映像可重用", "非 root 安裝"],
-      data: "$ npm ci\n  CONNECT registry.npmjs.org:443   <ok>✓ 白名單內</ok>\n  CONNECT tracker.example.net:443  <no>✕ 拒絕</no>\n\n<k>專案看板</k>  驗證中\n你的專案正在安裝相依套件。",
+      text: "先安裝審查放行的系統套件，存成可重用的專案衍生映像，再以非 root 執行專案安裝命令。專案安裝預設經白名單代理下載，開啟完全存取時可直接連網。執行任務的安裝可使用已登記的直連資料庫與 SSH 主機，環境驗證的安裝只開放網路。",
+      chips: ["預設使用白名單代理", "衍生映像可重用", "非 root 安裝"],
+      data: "<k>預設的下載限制</k>\n$ npm ci\n  CONNECT registry.npmjs.org:443   <ok>✓ 白名單內</ok>\n  CONNECT tracker.example.net:443  <no>✕ 拒絕</no>\n\n<k>專案看板</k>  驗證中\n你的專案正在安裝相依套件。",
       end: { ph: ["done", "done"] },
       anim: function (tl) {
         phase(tl, 1, "run"); travel(tl, "slot_egress", 0.4, "下載"); travel(tl, "egress_pkg", 0.7, "下載");
@@ -436,20 +436,27 @@ import "@fontsource-variable/inter";
       } },
 
     { title: { change: "Codex 修改程式", query: "Codex 調查程式" }, where: "工作容器 → 訂閱轉送 → ChatGPT", cam: "ai", focus: ["relay", "gpt"],
-      text: { change: "Codex 在容器裡讀程式、改程式，推論一樣經訂閱轉送到 ChatGPT；缺套件時可以經白名單下載。它只看得到這次的需求、驗收條件與專案檔案。",
-              query: "Codex 在容器裡讀程式、必要時執行指令，推論經訂閱轉送到 ChatGPT。查詢在唯讀的工作副本裡進行，不會改到程式。" },
+      text: { change: "Codex 在容器裡讀程式、改程式，推論經訂閱轉送到 ChatGPT。開啟完全存取時，開發容器也可以使用已登記的直連資料庫與 SSH 主機，權限依登記的帳號而定。",
+              query: "Codex 在唯讀的工作副本裡調查程式，推論經訂閱轉送到 ChatGPT。開啟完全存取時，查詢只應執行唯讀的資料庫查詢與 SSH 命令。" },
       chips: { change: ["Codex SDK", "推論經轉送", "只動工作副本"], query: ["Codex SDK", "推論經轉送", "唯讀"] },
       data: { change: "src/components/OrderButton.tsx\n<no>-  className=\"btn bg-gray-700\"</no>\n<ok>+  className=\"btn bg-brand-green\"</ok>\n\nsrc/styles/mobile.css\n<ok>+  .order-btn { background: var(--brand-green); }</ok>",
               query: "$ rg -n \"OrderButton\" src\n  src/components/OrderButton.tsx:12\n  src/pages/Home.tsx:48\n$ rg -n \"api/orders\" src/components\n  OrderButton.tsx:31  <s>fetch(\"/api/orders\")</s>" },
       end: { ph: ["done", "done", "done"] },
       anim: function (tl) { phase(tl, 2, "run"); travel(tl, "slot_relay", 0.4, "推論", "var(--ai)"); travel(tl, "relay_gpt", 0.5, "推論", "var(--ai)"); travel(tl, "relay_gpt", 0.5, "回應", "var(--ai)", true); travel(tl, "slot_relay", 0.4, "回應", "var(--ai)", true); phase(tl, 2, "done", 0.6); } },
 
-    { modes: ["change"], title: "收集差異、跑測試", where: "工作容器（沒有網路）", cam: "work", focus: [],
-      text: "用可信的原始基底收集差異。有變更時，在沒有網路的容器裡跑專案的測試命令；測試寫死 LocalDB 時，系統會暫時把連線導向容器內的 SQL Server。沒有變更且 Codex 確認已符合需求時，群組和看板鈴鐺會顯示結果，你可以在看板查看判斷依據。",
-      chips: ["測試沒有網路", "不信任容器內 .git", "LocalDB 自動導向"],
-      data: "<k>變更</k>  2 個檔案（+2 −1）\n\n$ npm test\n  <ok>✓</ok> OrderButton 顯示品牌綠\n  <ok>✓</ok> 手機版按鈕樣式\n  <ok>✓</ok> 點擊後送出訂單\n<ok>Tests  128 passed (128)</ok>",
+    { modes: ["change"], title: "收集差異、跑測試", where: "工作容器", cam: "work", focus: [],
+      text: "差異收集使用可信的原始基底，沒有網路與登記的憑證。測試預設沒有網路，開啟完全存取時，任務及環境驗證的測試可使用已登記的直連資料庫與 SSH 主機。測試寫死 LocalDB 時，系統會暫時把連線導向容器內的 SQL Server。",
+      chips: ["差異收集無網路", "測試依專案權限", "LocalDB 自動導向"],
+      data: "<k>差異收集</k>  2 個檔案（+2 −1）\n  無網路與登記的憑證\n\n<k>測試</k>  連線依專案權限\n$ npm test\n  <ok>✓</ok> 訂購按鈕顯示品牌綠\n  <ok>✓</ok> 手機版按鈕樣式\n  <ok>✓</ok> 點擊後送出訂單\n<ok>128 項測試通過</ok>",
       end: { ph: ["done", "done", "done", "done", "done"] },
-      anim: function (tl) { phase(tl, 3, "run"); phase(tl, 3, "done", 0.5); tl.fromTo(netBadge, { opacity: 0, y: -6 }, { opacity: 1, y: 0, duration: 0.3 }); phase(tl, 4, "run"); phase(tl, 4, "done", 1.6); tl.to(netBadge, { opacity: 0, duration: 0.3 }); } },
+      anim: function (tl) {
+        phase(tl, 3, "run");
+        tl.fromTo(netBadge, { opacity: 0, y: -6 }, { opacity: 1, y: 0, duration: 0.3 });
+        phase(tl, 3, "done", 0.5);
+        tl.to(netBadge, { opacity: 0, duration: 0.3 });
+        phase(tl, 4, "run");
+        phase(tl, 4, "done", 1.6);
+      } },
 
     { modes: ["query"], title: "寫成調查報告", where: "工作容器", cam: "work", focus: [],
       text: "查詢不收集差異、不跑測試，也不做獨立審查。Codex 把找到的東西寫成報告，附檔案路徑與行號；回答會遮蔽常見的機密格式。",
@@ -459,7 +466,7 @@ import "@fontsource-variable/inter";
       anim: function (tl) { phase(tl, 3, "skip"); phase(tl, 4, "skip"); phase(tl, 5, "skip"); tl.to({}, { duration: 2.2 }); } },
 
     { modes: ["change"], title: "獨立審查", where: "唯讀工作區 → 訂閱轉送 → ChatGPT", cam: "ai", focus: ["relay", "gpt"],
-      text: "另一個 Codex 在唯讀的工作區重新檢查：變更符不符合需求與驗收條件、測試可不可信。不通過會自動修復一次，仍不通過就停下交給你。需要人或正式環境才能確認的項目，會列在 PR 的「待人工確認」。",
+      text: "另一個 Codex 在唯讀的工作區檢查變更與測試。開啟完全存取時，審查容器可以使用已登記的直連資料庫與 SSH 主機。不通過會自動修復一次，仍不通過就停下交給你。需要人或正式環境才能確認的項目，會列在 PR 的「待人工確認」。",
       chips: ["唯讀工作區", "自動修復 1 次", "待人工確認"],
       data: "<k>審查結果</k>  <ok>通過</ok>\n  <ok>✓</ok> 桌機與手機版按鈕為綠色\n  <ok>✓</ok> 點擊流程測試涵蓋下單\n<k>待人工確認</k>\n  · 正式環境的實際色差，合併前請目視確認",
       end: { ph: ["done", "done", "done", "done", "done", "done"] },
