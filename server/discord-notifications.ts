@@ -9,6 +9,8 @@ import {
 } from "./discord-platform.js";
 import { claimingNote, type QuickReply } from "./group-replies.js";
 import { config } from "./config.js";
+import { prepareDigest } from "./line-private.js";
+import { linePrivateDefaults } from "../shared/line-private.js";
 
 export function discordDeliveryError(error: unknown) {
   switch (discordStatus(error)) {
@@ -95,12 +97,7 @@ export async function flushDiscordNotifications(
     !settings.admin_discord_id
   )
     return;
-  const seen: string[] = [];
-  for (let i = 0; i < 10; i++) {
-    const id = await sendNextPrivate(db, platform, seen);
-    if (!id) break;
-    seen.push(id);
-  }
+  await flushDiscordPrivate(db, platform, settings);
 }
 
 async function sendNextGroup(
@@ -175,31 +172,41 @@ async function sendNextGroup(
   });
 }
 
-async function sendNextPrivate(
+/**
+ * 管理者私訊與 LINE 共用摘要流程：只送需要動手的事、超過 24 小時不補送、10 分鐘內最多一則。
+ * 原本逐則送出，切到 Discord 時曾把好幾天前排隊的 90 則舊通知一次送出（#207）。
+ */
+async function flushDiscordPrivate(
   db: Database,
   platform: DiscordChatPlatform,
-  seen: string[],
+  settings: Awaited<ReturnType<Database["settings"]>>,
 ) {
-  return db.transaction(async (c) => {
-    const {
-      rows: [n],
-    } = await c.query<{ id: string; text: string; recipient: string }>(
-      `SELECT n.id,n.text,s.value->>'admin_discord_id' AS recipient
-       FROM notifications n CROSS JOIN settings s
-       WHERE s.id=1 AND s.value->>'admin_notify_platform'='discord'
-       AND s.value->>'admin_discord_id' IS NOT NULL AND n.group_id IS NULL AND ${due} AND n.id<>ALL($2::uuid[])
-       ORDER BY n.created_at,n.id LIMIT 1 FOR UPDATE OF n,s SKIP LOCKED`,
-      [maxPushAttempts, seen],
-    );
-    if (!n) return;
-    await sendNotice(c, n.id, async () => {
-      await platform.sendToAdmin(
-        n.recipient,
-        `${n.text}\n\n看板：${config().publicUrl}`,
-        n.id,
-      );
-      return null;
+  const recipient = settings.admin_discord_id;
+  if (!recipient) return;
+  const digest = await prepareDigest(
+    db,
+    settings.line_private_mode ?? linePrivateDefaults.line_private_mode,
+  );
+  if (!digest) return;
+  try {
+    await platform.sendToAdmin(recipient, digest.text, digest.id);
+  } catch (error) {
+    await db.transaction(async (c) => {
+      const delay = discordRetryMs(error);
+      if (delay !== null) await deferDiscordNotices(c, digest.itemIds, delay);
+      else
+        await c.query(
+          `UPDATE notifications SET attempts=attempts+1,last_error=$2
+           WHERE id=ANY($1::uuid[]) AND sent_at IS NULL`,
+          [digest.itemIds, discordDeliveryError(error)],
+        );
     });
-    return n.id;
-  });
+    return;
+  }
+  await db.query(
+    `UPDATE notifications SET sent_at=$3,attempts=attempts+1,discord_retry_at=NULL,
+       last_error=CASE WHEN id=ANY($2::uuid[]) THEN NULL ELSE '已留在看板鈴鐺' END
+     WHERE id=ANY($1::uuid[])`,
+    [digest.itemIds, digest.itemIds.slice(0, 5), new Date()],
+  );
 }

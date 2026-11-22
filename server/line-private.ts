@@ -39,12 +39,14 @@ export function privateDigestText(items: { text: string }[], url: string) {
   });
   if (items.length > lines.length)
     lines.push(`另有 ${items.length - lines.length} 件，請到看板查看`);
-  return ["你的 LINE 通知摘要", ...lines, "", `看板：${url}`].join("\n");
+  // 不寫平台名稱：同一份摘要也會送到 Discord。
+  return ["你的通知摘要", ...lines, "", `看板：${url}`].join("\n");
 }
 
 type DigestItem = { id: string; text: string; line_digest_id: string | null };
 
-async function prepareDigest(db: Database, mode: LinePrivateMode) {
+/** LINE 與 Discord 的管理者私訊共用：篩選範圍、過期不補送、合併成摘要（#158、#207）。 */
+export async function prepareDigest(db: Database, mode: LinePrivateMode) {
   return db.transaction(async (c) => {
     const now = new Date();
     // 服務異常比對同一次中斷，恢復後留在鈴鐺；全通知模式的恢復私訊也須符合 15 分鐘門檻。

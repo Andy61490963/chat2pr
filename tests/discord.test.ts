@@ -446,42 +446,45 @@ it.each(["斜線指令", "文字指令"])(
 it.each([
   { status: 403, note: discordDeliveryNotes.permission },
   { status: 429, retry_after: 45.5, note: discordDeliveryNotes.rate },
-])("Discord /進度 補送遇到 $status 時歸還通知並依限流時間安排下一次補送", async (error) => {
-  const { platform, rest } = fakeRest();
-  const task = await discordTask();
-  await askInGroup(db.pool, task);
-  rest.post.mockResolvedValueOnce(null).mockRejectedValueOnce(error);
-  const before = Date.now();
-  await handleDiscordInteraction(db, platform, progressInteraction);
-  const pending = await progressDelivery(task.id);
-  expect(pending).toMatchObject({
-    sent_at: null,
-    sent_message_id: null,
-    last_error: error.note,
-    attempts: 0,
-    reply_failures: 0,
-  });
-  if (error.status === 429) {
-    expect(pending.discord_retry_at?.getTime()).toBeGreaterThanOrEqual(
-      before + 45_500,
-    );
+])(
+  "Discord /進度 補送遇到 $status 時歸還通知並依限流時間安排下一次補送",
+  async (error) => {
+    const { platform, rest } = fakeRest();
+    const task = await discordTask();
+    await askInGroup(db.pool, task);
+    rest.post.mockResolvedValueOnce(null).mockRejectedValueOnce(error);
+    const before = Date.now();
     await handleDiscordInteraction(db, platform, progressInteraction);
-    await new Line(db, platform).flushNotifications();
-    expect(rest.post).toHaveBeenCalledTimes(3);
-    await db.query(
-      "UPDATE notifications SET discord_retry_at=now()-interval '1 second' WHERE task_id=$1",
-      [task.id],
-    );
-  } else {
-    expect(pending.discord_retry_at).toBeNull();
-  }
-  await handleDiscordInteraction(db, platform, progressInteraction);
-  expect(await progressDelivery(task.id)).toMatchObject({
-    sent_message_id: expect.stringMatching(/^discord:\d+$/),
-    last_error: null,
-    discord_retry_at: null,
-  });
-});
+    const pending = await progressDelivery(task.id);
+    expect(pending).toMatchObject({
+      sent_at: null,
+      sent_message_id: null,
+      last_error: error.note,
+      attempts: 0,
+      reply_failures: 0,
+    });
+    if (error.status === 429) {
+      expect(pending.discord_retry_at?.getTime()).toBeGreaterThanOrEqual(
+        before + 45_500,
+      );
+      await handleDiscordInteraction(db, platform, progressInteraction);
+      await new Line(db, platform).flushNotifications();
+      expect(rest.post).toHaveBeenCalledTimes(3);
+      await db.query(
+        "UPDATE notifications SET discord_retry_at=now()-interval '1 second' WHERE task_id=$1",
+        [task.id],
+      );
+    } else {
+      expect(pending.discord_retry_at).toBeNull();
+    }
+    await handleDiscordInteraction(db, platform, progressInteraction);
+    expect(await progressDelivery(task.id)).toMatchObject({
+      sent_message_id: expect.stringMatching(/^discord:\d+$/),
+      last_error: null,
+      discord_retry_at: null,
+    });
+  },
+);
 
 it.each([
   { status: 503, note: discordDeliveryNotes.unavailable },
@@ -720,22 +723,53 @@ it("管理者切換到 Discord 後，以有效私訊代碼配對並送出通知�
     await db.query(`INSERT INTO notifications(kind,dedupe_key,text) VALUES
       ('approval','範例待確認','待確認示範專案'),('failed','範例失敗','示範專案處理失敗'),
       ('input_required','範例補問','請確認示範專案的補問')`);
+    // 切換前就排隊的舊通知與不需動手的通知不補送（#207：曾一次送出 90 則舊通知）。
+    await db.query(`INSERT INTO notifications(kind,dedupe_key,text,created_at) VALUES
+      ('approval','範例舊待確認','兩天前的待確認',now()-interval '2 days'),
+      ('answered','範例查詢完成','示範查詢完成',now())`);
     rest.post.mockClear();
     const lineFetch = vi.fn();
     vi.stubGlobal("fetch", lineFetch);
     await line.flushNotifications();
     expect(lineFetch).not.toHaveBeenCalled();
-    expect(rest.post.mock.calls.map(([route]) => route)).toEqual(
-      Array.from({ length: 3 }, () => [
-        "/users/@me/channels",
-        `/channels/${dmChannel}/messages`,
-      ]).flat(),
-    );
+    // 三則需要動手的通知合併成一則摘要。
+    expect(rest.post.mock.calls.map(([route]) => route)).toEqual([
+      "/users/@me/channels",
+      `/channels/${dmChannel}/messages`,
+    ]);
+    const sent = JSON.stringify(rest.post.mock.calls[1][1]);
+    expect(sent).toContain("你的通知摘要");
+    expect(sent).toContain("待確認示範專案");
+    expect(sent).not.toContain("兩天前的待確認");
+    expect(sent).not.toContain("示範查詢完成");
     expect(
-      await db.one(
-        "SELECT count(*)::int AS count FROM notifications WHERE group_id IS NULL AND sent_at IS NOT NULL",
+      await db.query(
+        "SELECT dedupe_key,sent_at IS NOT NULL AS done,last_error FROM notifications WHERE group_id IS NULL ORDER BY dedupe_key",
       ),
-    ).toEqual({ count: 3 });
+    ).toEqual(
+      expect.arrayContaining([
+        { dedupe_key: "範例待確認", done: true, last_error: null },
+        { dedupe_key: "範例失敗", done: true, last_error: null },
+        { dedupe_key: "範例補問", done: true, last_error: null },
+        {
+          dedupe_key: "範例舊待確認",
+          done: true,
+          last_error: expect.stringContaining("未補送"),
+        },
+        {
+          dedupe_key: "範例查詢完成",
+          done: true,
+          last_error: "已留在看板鈴鐺",
+        },
+      ]),
+    );
+    // 10 分鐘內不再送第二則摘要。
+    rest.post.mockClear();
+    await db.query(
+      "INSERT INTO notifications(kind,dedupe_key,text) VALUES('approval','範例新待確認','新的待確認')",
+    );
+    await line.flushNotifications();
+    expect(rest.post).not.toHaveBeenCalled();
   } finally {
     await app.close();
   }
