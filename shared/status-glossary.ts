@@ -305,6 +305,9 @@ export const projectSectionLabels = {
   ready: projectLabels.ready,
   unbound: "沒有群組使用",
 } as const;
+export const projectBindingText = {
+  next: "環境已就緒，下一步綁定群組",
+} as const;
 export const projectVerificationLabels = {
   passed: "通過",
   partial: "部分通過",

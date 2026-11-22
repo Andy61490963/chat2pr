@@ -1,11 +1,12 @@
 import {
   networkStatusLabels,
+  projectBindingText,
   projectLabels,
   projectSectionLabels,
   projectStatus,
   projectVerificationLabels,
 } from "../../shared/status-glossary.js";
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowUpRight,
   Brain,
@@ -15,6 +16,14 @@ import {
   Trash2,
 } from "lucide-react";
 import type { Knowledge, Project } from "../../shared/types.js";
+import { configuredChatPlatforms } from "../../shared/first-setup.js";
+import {
+  defaultProjectTab,
+  projectTabs,
+  readProjectTab,
+  type ProjectLocation,
+  type ProjectTab,
+} from "../../shared/project-tabs.js";
 import { indexPathsFromForm, validIndexPath } from "../../shared/repo-scope.js";
 import type { BranchCatalog } from "../../shared/task-branch.js";
 import { Badge } from "@/components/ui/badge";
@@ -209,41 +218,52 @@ export function ProjectsView({
   run,
   request,
   edit,
-  focusId = null,
-  focusTab = "overview",
-  focused,
+  detail,
+  onProjectChange,
+  onBindGroup,
 }: {
   state: State;
   busy: boolean;
   run: Run;
   request: Request;
   edit: (p: Partial<Project>) => void;
-  /** 剛存好的專案：打開它的詳情（從詳情按「編輯設定」進來的也回到同一個詳情），打開後呼叫 focused 清掉。 */
-  focusId?: string | null;
-  focusTab?: string;
-  focused?: () => void;
+  detail: ProjectLocation | null;
+  onProjectChange: (detail: ProjectLocation | null, push?: boolean) => void;
+  onBindGroup?: (projectId: string) => void;
 }) {
-  const [openId, setOpenId] = useState<string | null>(null);
   const guard = useGuard();
-  const [tab, setTab] = useState("overview");
+  const tab = detail?.tab ?? defaultProjectTab;
+  const tabList = useRef<HTMLDivElement>(null);
+  const tabIntent = useRef(0);
   const [databaseFocusId, setDatabaseFocusId] = useState<string | null>(null);
+  const open = state.projects.find((p) => p.id === detail?.id);
+  const openId = open?.id;
   useEffect(() => {
-    if (!focusId) return;
-    setDatabaseFocusId(null);
-    setTab(focusTab);
-    setOpenId(focusId);
-    focused?.();
-  }, [focusId, focusTab]);
-  const open = state.projects.find((p) => p.id === openId);
+    if (tab !== "access") setDatabaseFocusId(null);
+    const list = tabList.current;
+    const selected = list?.querySelector('[aria-selected="true"]');
+    if (!list || !selected) return;
+    const bounds = list.getBoundingClientRect();
+    const item = selected.getBoundingClientRect();
+    list.scrollLeft +=
+      Math.min(0, item.left - bounds.left) +
+      Math.max(0, item.right - bounds.right);
+  }, [openId, tab]);
   const sections = useMemo(
     () => projectListSections(state.projects, state.groups),
     [state.projects, state.groups],
   );
-  const openProject = (id: string) => {
-    setDatabaseFocusId(null);
-    setTab("overview");
-    setOpenId(id);
-  };
+  const openProject = (id: string) =>
+    onProjectChange({ id, tab: defaultProjectTab });
+  const boundGroups = open
+    ? state.groups.filter((g) => g.project_ids.includes(open.id))
+    : [];
+  const needsBinding =
+    !!open?.validated_at &&
+    !open.repo_missing_at &&
+    !boundGroups.some((g) => !g.left_at);
+  const hasGroups = state.groups.some((g) => !g.left_at);
+  const platforms = configuredChatPlatforms(state);
   return (
     <div className="@container flex min-w-0 flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -313,21 +333,24 @@ export function ProjectsView({
         </Card>
       )}
       {open && (
-        <Sheet open onOpenChange={(o) => !o && guard(() => setOpenId(null))}>
+        <Sheet
+          open
+          onOpenChange={(o) => !o && guard(() => onProjectChange(null))}
+        >
           <SheetContent className="sm:max-w-xl">
             <SheetHeader>
               <div className="flex items-center gap-2">
                 <ProjectBadge
                   project={open}
-                  bound={state.groups.some((g) =>
-                    g.project_ids.includes(open.id),
-                  )}
+                  bound={boundGroups.length > 0}
                 />
               </div>
-              <SheetTitle className="text-lg">{open.name}</SheetTitle>
+              <SheetTitle className="text-lg [overflow-wrap:anywhere]">
+                {open.name}
+              </SheetTitle>
               <SheetDescription asChild>
                 <a
-                  className="inline-flex w-fit items-center gap-1 font-mono text-xs hover:text-foreground"
+                  className="inline-flex w-fit max-w-full items-center gap-1 font-mono text-xs [overflow-wrap:anywhere] hover:text-foreground"
                   href={`https://github.com/${open.repo}`}
                   target="_blank"
                   rel="noreferrer"
@@ -342,29 +365,56 @@ export function ProjectsView({
               )}
             </SheetHeader>
             <Tabs
+              key={open.id}
               value={tab}
-              onValueChange={(v) => guard(() => {
-                setDatabaseFocusId(null);
-                setTab(v);
-              })}
-              className="min-h-0 flex-1"
+              onValueChange={(value) => {
+                // 分頁按鈕「得到焦點」就會切換。草稿確認視窗關閉時會把焦點還給分頁按鈕，
+                // 這不是使用者要切換：只接受剛在分頁列上按鍵或點擊造成的切換，
+                // 否則「繼續編輯」會讓確認視窗重開，「放棄修改」後又跳回原分頁。
+                if (performance.now() - tabIntent.current > 300) {
+                  tabList.current
+                    ?.querySelector<HTMLElement>('[aria-selected="true"]')
+                    ?.focus();
+                  return;
+                }
+                // 一次操作只算一次切換，之後焦點被還回來時不能再沿用。
+                tabIntent.current = 0;
+                // 等方向鍵處理完，再讓草稿確認視窗接手焦點。
+                setTimeout(() => {
+                  guard(() =>
+                    onProjectChange({ id: open.id, tab: readProjectTab(value) }),
+                  );
+                }, 0);
+              }}
+              className="min-h-0 min-w-0 flex-1"
             >
-              <TabsList aria-label="專案詳情" className="mx-3 flex-wrap h-auto">
-                <TabsTrigger value="overview">概況</TabsTrigger>
-                <TabsTrigger value="environment">
-                  環境驗證
-                  {(open.setup_input || validationFailed(open)) && (
-                    <span className="text-warn">
-                      （
-                      {open.setup_input
-                        ? projectLabels.question
-                        : projectLabels.failed}
-                      ）
-                    </span>
-                  )}
-                </TabsTrigger>
-                <TabsTrigger value="access">連線與權限</TabsTrigger>
-                <TabsTrigger value="memory">記憶</TabsTrigger>
+              <TabsList
+                ref={tabList}
+                onKeyDownCapture={() => (tabIntent.current = performance.now())}
+                onPointerDownCapture={() => (tabIntent.current = performance.now())}
+                onMouseDownCapture={() => (tabIntent.current = performance.now())}
+                aria-label="專案詳情"
+                className="mx-3 h-auto max-w-[calc(100%-1.5rem)] justify-start overflow-x-auto"
+              >
+                {(Object.entries(projectTabs) as [ProjectTab, string][]).map(
+                  ([value, label]) => (
+                    <TabsTrigger
+                      key={value}
+                      value={value}
+                      className="min-h-11 min-w-11 flex-none px-3 md:min-h-8"
+                    >
+                      {label}
+                      {value === "environment" &&
+                        (open.setup_input || validationFailed(open)) && (
+                          <span className="text-warn">
+                            （{open.setup_input
+                              ? projectLabels.question
+                              : projectLabels.failed}）
+                          </span>
+                        )}
+                    </TabsTrigger>
+                  ),
+                )}
               </TabsList>
               <div className="min-h-0 flex-1 overflow-y-auto">
                 <TabsContent
@@ -442,13 +492,45 @@ export function ProjectsView({
                         : "全儲存庫可索引文字"}
                     </dd>
                     <dt className="text-muted-foreground">群組</dt>
-                    <dd>
-                      {state.groups
-                        .filter((g) => g.project_ids.includes(open.id))
-                        .map((g) => g.name)
-                        .join("、") || "—"}
+                    <dd className="min-w-0 [overflow-wrap:anywhere]">
+                      {boundGroups.map((g) => g.name).join("、") ||
+                        (needsBinding ? projectLabels.unbound : "—")}
                     </dd>
                   </dl>
+                  {needsBinding && (
+                    <section
+                      className="grid gap-2 rounded-lg bg-muted/60 p-3 text-sm"
+                      aria-labelledby="project-binding"
+                    >
+                      <h3 id="project-binding" className="font-medium">
+                        {projectBindingText.next}
+                      </h3>
+                      {hasGroups ? (
+                        onBindGroup && (
+                          <Button
+                            variant="outline"
+                            className="min-h-11 justify-self-start"
+                            onClick={() => onBindGroup(open.id)}
+                          >
+                            綁定群組
+                          </Button>
+                        )
+                      ) : (
+                        <>
+                          <p>把機器人加入聊天平台，傳一則測試訊息後，就能在群組頁綁定專案。</p>
+                          {platforms.includes("line") && (
+                            <p>LINE 群組輸入「/任務 確認示範專案的首頁標題」。</p>
+                          )}
+                          {platforms.includes("discord") && (
+                            <p>Discord 文字頻道提及機器人，並在同一則訊息輸入「確認示範專案的首頁標題」。</p>
+                          )}
+                          {platforms.length === 0 && (
+                            <p>請先在設定頁連線 LINE 或 Discord。</p>
+                          )}
+                        </>
+                      )}
+                    </section>
+                  )}
                   {open.repo_missing_at && (
                     <div className="flex flex-col gap-1 rounded-lg bg-danger-soft px-3 py-2.5 text-sm text-danger">
                       <span className="font-medium">
@@ -469,16 +551,13 @@ export function ProjectsView({
                   )}
                   <SheetFooter>
                     <Button
-                      onClick={() =>
-                        guard(() => {
-                          setOpenId(null);
-                          edit(open);
-                        })
-                      }
+                      className="work-touch"
+                      onClick={() => guard(() => edit(open))}
                     >
                       編輯設定
                     </Button>
                     <Button
+                      className="work-touch"
                       variant="outline"
                       disabled={busy || !!open.setup_input}
                       onClick={() =>
@@ -500,6 +579,7 @@ export function ProjectsView({
                         g.project_ids.includes(open.id),
                       )) && (
                       <ConfirmButton
+                        className="work-touch"
                         variant="destructive"
                         disabled={busy}
                         title={`刪除專案「${open.name}」？`}
@@ -508,7 +588,7 @@ export function ProjectsView({
                         onConfirm={() =>
                           run(async () => {
                             await request(`/api/projects/${open.id}`, "DELETE");
-                            setOpenId(null);
+                            onProjectChange(null, false);
                           }, `已刪除專案「${open.name}」`)
                         }
                       >
@@ -543,7 +623,7 @@ export function ProjectsView({
                               className="min-h-11 shrink-0"
                               onClick={() =>
                                 guard(() => {
-                                  setTab("access");
+                                  onProjectChange({ id: open.id, tab: "access" });
                                   setDatabaseFocusId(open.id);
                                 })
                               }
@@ -852,6 +932,7 @@ function ProjectKnowledge({
   request: Request;
 }) {
   const [text, setText] = useState("");
+  useUnsaved(`project-knowledge:${p.id}`, !!text.trim());
   const items = state.knowledge.filter((k) => k.project_id === p.id);
   return (
     <div className="flex flex-col gap-2">
@@ -924,13 +1005,19 @@ function ProjectKnowledge({
         }}
       >
         <Input
+          aria-label="專案記憶內容"
+          className="min-w-0 min-h-11 md:min-h-9"
           placeholder="例：前端不要用 jQuery；日期一律用民國年"
           value={text}
           onChange={(e) => setText(e.target.value)}
           minLength={2}
           required
         />
-        <Button variant="outline" disabled={busy}>
+        <Button
+          className="min-h-11 md:min-h-9"
+          variant="outline"
+          disabled={busy}
+        >
           <Plus /> 新增
         </Button>
       </form>

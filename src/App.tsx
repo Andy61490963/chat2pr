@@ -94,6 +94,12 @@ import {
   settingsTabFromUrl,
   type SettingsTab,
 } from "../shared/settings-tabs.js";
+import {
+  defaultProjectTab,
+  projectFromUrl,
+  readProjectTab,
+  type ProjectLocation,
+} from "../shared/project-tabs.js";
 import { ChecksView } from "./app/checks";
 import { MembersView } from "./app/members";
 import { AlertBell } from "./app/alerts";
@@ -173,19 +179,7 @@ const views = [
   },
 ] as const;
 
-// 每個頁面有自己的網址，任務詳情以 ?task= 表示；重新整理、上一頁與分享連結都會回到同一處。
-function linkedProject(url: URL) {
-  const id = url.searchParams.get("project");
-  return url.pathname === "/projects" && id
-    ? {
-        id,
-        tab:
-          url.searchParams.get("tab") === "environment"
-            ? "environment"
-            : "overview",
-      }
-    : null;
-}
+// 每個頁面有自己的網址，重新整理、上一頁與分享連結都會回到同一處。
 const viewPaths: Record<View, string> = {
   inbox: "/",
   tasks: "/tasks",
@@ -261,11 +255,10 @@ export function App() {
     ),
     [busy, setBusy] = useState(false),
     [project, setProject] = useState<Partial<Project> | null>(null),
-    // 剛存好的專案 id；專案頁打開它的詳情後清掉。
-    [savedProject, setSavedProject] = useState<{
-      id: string;
-      tab: string;
-    } | null>(null),
+    [projectLocation, setProjectLocation] = useState(() =>
+      projectFromUrl(new URL(location.href)),
+    ),
+    [bindingProjectId, setBindingProjectId] = useState<string | null>(null),
     // 每次從導覽切換頁面就加一，讓該頁丟掉上一輪的篩選、照網址重新開始。
     [visit, setVisit] = useState(0),
     [taskHistoryRevision, setTaskHistoryRevision] = useState(0),
@@ -487,7 +480,9 @@ export function App() {
           setView(nextView);
           setSystemTab(readSystemTab(destination.searchParams.get("tab")));
           setSettingsTab(settingsTabFromUrl(destination));
-          setSavedProject(linkedProject(destination));
+          setProjectLocation(projectFromUrl(destination));
+          setProject(null);
+          setBindingProjectId(null);
           setTaskAfterNavigation(null);
           const id = destination.searchParams.get("task");
           if (id) void openTask(id, false);
@@ -542,8 +537,7 @@ export function App() {
       setSystemTab(readSystemTab(destination.searchParams.get("tab")));
       setSettingsTab(settingsTabFromUrl(destination));
     }
-    const linked = linkedProject(new URL(location.href));
-    if (linked) setSavedProject(linked);
+    setProjectLocation(projectFromUrl(new URL(location.href)));
     const id = new URLSearchParams(location.search).get("task");
     if (id) void openTask(id, false);
   }, [user, openTask]);
@@ -605,22 +599,46 @@ export function App() {
         else setSelected(await request<Detail>(`/api/tasks/${task.id}`));
       }
     }, done ?? "任務已更新");
-  const leave = (v: View, tab?: SystemTab | SettingsTab) => {
+  const leave = (
+    v: View,
+    tab?: SystemTab | SettingsTab,
+    detail: ProjectLocation | null = null,
+  ) => {
     setView(v);
     setSelected(null);
     setTaskAfterNavigation(null);
     // 從導覽進入一律是乾淨的頁面：不帶上一輪的篩選。
-    const path = tab
-      ? `${viewPaths[v]}?${new URLSearchParams({ tab })}`
-      : viewPaths[v];
+    const query = new URLSearchParams(
+      detail ? { project: detail.id, tab: detail.tab } : tab ? { tab } : {},
+    );
+    const path = viewPaths[v] + (query.size ? `?${query}` : "");
     if (path !== location.pathname + location.search + location.hash)
       history.pushState(null, "", path);
+    setProjectLocation(detail);
+    setBindingProjectId(null);
     setSystemTab(v === "system" ? readSystemTab(tab ?? null) : defaultSystemTab);
     setSettingsTab(
       v === "settings" ? readSettingsTab(tab ?? null) : defaultSettingsTab,
     );
     setVisit((n) => n + 1);
     window.scrollTo({ top: 0 });
+  };
+  const showProject = (detail: ProjectLocation | null, push = true) => {
+    const url = new URL(location.href);
+    if (viewFromPath(url.pathname) !== "projects") return;
+    if (detail) {
+      url.searchParams.set("project", detail.id);
+      url.searchParams.set("tab", detail.tab);
+    } else {
+      url.searchParams.delete("project");
+      url.searchParams.delete("tab");
+    }
+    if (url.href !== location.href) {
+      if (push) history.pushState(null, "", url);
+      else history.replaceState(null, "", url);
+      lastUrl.current = url.href;
+    }
+    setProjectLocation(detail);
   };
   const changeTab = (tab: SystemTab | SettingsTab) => {
     const url = new URL(location.href);
@@ -645,15 +663,24 @@ export function App() {
           ? readSettingsTab(tab)
           : undefined;
     guard(() => {
-      leave(v, nextTab);
-      if (v === "projects" && projectId)
-        setSavedProject({ id: projectId, tab: tab ?? "environment" });
+      leave(
+        v,
+        nextTab,
+        v === "projects" && projectId
+          ? { id: projectId, tab: readProjectTab(tab ?? "environment") }
+          : null,
+      );
     });
   };
   const changeSystemTab = (tab: SystemTab) => {
     changeTab(tab);
     setSystemTab(tab);
   };
+  const startGroupBinding = (id: string) =>
+    guard(() => {
+      leave("groups");
+      setBindingProjectId(id);
+    });
   // 從選單換頁時，選單關閉會把焦點還給觸發按鈕；改送到新頁面的標題。
   const fromMenu = useRef(false);
   const goFromMenu = (v: View, projectId?: string | null, tab?: string) => {
@@ -1322,6 +1349,8 @@ export function App() {
                   busy={busy}
                   run={run}
                   request={request}
+                  bindingProjectId={bindingProjectId}
+                  finishBinding={() => setBindingProjectId(null)}
                 />
                 <MemoryOverview state={state} go={go} />
               </>
@@ -1332,10 +1361,13 @@ export function App() {
                 busy={busy}
                 run={run}
                 request={request}
-                edit={setProject}
-                focusId={savedProject?.id}
-                focusTab={savedProject?.tab}
-                focused={() => setSavedProject(null)}
+                edit={(p) => {
+                  if (p.id) showProject(null);
+                  setProject(p);
+                }}
+                detail={projectLocation}
+                onProjectChange={showProject}
+                onBindGroup={admin ? startGroupBinding : undefined}
               />
             )}
             {current.id === "checks" && (
@@ -1479,7 +1511,7 @@ export function App() {
                   );
                   notice = result.notice;
                   setProject(null);
-                  setSavedProject({ id: result.saved.id, tab: "overview" });
+                  showProject({ id: result.saved.id, tab: defaultProjectTab });
                 }, "專案已儲存");
                 if (ok && notice) setToast(notice);
               }}

@@ -382,7 +382,7 @@ test("登記資料庫連線會切換專案分頁並聚焦第一個欄位", async
   await expect(
     manual.getByRole("textbox", { name: "主機", exact: true }),
   ).toBeFocused();
-  await expect(page).toHaveURL("/projects");
+  await expect(page).toHaveURL(`/projects?project=${example.id}&tab=access`);
 });
 
 test("用白話描述資料庫連線，AI 整理後填進欄位並列出連不到的位址", async ({

@@ -644,6 +644,47 @@ export const defaultState: State = {
   },
 };
 
+export const unboundProject: Project = {
+  ...project,
+  id: "project-unbound",
+  name: "示範專案",
+};
+
+export const unverifiedProject: Project = {
+  ...project,
+  id: "project-unverified",
+  name: "範例專案",
+  enabled: false,
+  validated_at: null,
+};
+
+export const firstSetupHealth: State["health"] = [
+  ...["github", "runner", "codex"].map((name) => ({
+    name,
+    ok: true,
+    detail: "範例服務連線正常",
+    checked_at: timestamp,
+  })),
+  { name: "line", ok: true, detail: "LINE 連線正常", checked_at: timestamp },
+];
+
+export const discordOnlySetup: Pick<
+  State,
+  "groups" | "integrations" | "health" | "connectionSecrets"
+> = {
+  groups: [discordGroup],
+  integrations: { ...defaultState.integrations, line: false },
+  health: [
+    ...firstSetupHealth.filter((entry) => entry.name !== "line"),
+    ...discordHealth,
+  ],
+  connectionSecrets: {
+    ...defaultState.connectionSecrets!,
+    lineSecret: { configured: false, updatedAt: null },
+    lineToken: { configured: false, updatedAt: null },
+  },
+};
+
 export const activityTask: Task = {
   ...task,
   title: "重新確認示範機台是否連得上",
