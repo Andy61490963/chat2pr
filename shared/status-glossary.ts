@@ -304,6 +304,9 @@ export const projectLabels = {
   unbound: "未綁定群組",
   ready: "可派工",
 } as const;
+export const taskProjectLabels = {
+  primary: "主要",
+} as const;
 export const projectSectionLabels = {
   attention: "需要處理",
   ready: projectLabels.ready,

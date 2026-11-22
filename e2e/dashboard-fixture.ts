@@ -773,6 +773,44 @@ export function reviewWorkbenchFixture() {
   return { state, tasks, details, pickLists, reviewSource };
 }
 
+export function assignmentWorkbenchFixture(mode: Task["mode"]) {
+  const fixture = reviewWorkbenchFixture();
+  const unassigned = fixture.details.get(fixture.tasks[2].id)!;
+  const pending: Task = {
+    ...unassigned.task,
+    mode,
+    title: mode === "query" ? "說明範例報工流程" : "更新範例報工畫面",
+  };
+  const frontend: Project = {
+    ...project,
+    name: "示範前端",
+    repo: "example/demo-frontend",
+  };
+  const backend: Project = {
+    ...project,
+    id: "23200000-0000-4000-8000-000000000002",
+    name: "示範工單派送程式超長名稱範例專案".repeat(3),
+    repo: `example/${"demo-backend".repeat(8)}`,
+  };
+  const state: State = {
+    ...fixture.state,
+    projects: [frontend, backend],
+    groups: [{ ...group, project_ids: [frontend.id, backend.id] }],
+    tasks: [pending],
+    pickLists: [],
+  };
+  const details = new Map([[pending.id, { ...unassigned, task: pending }]]);
+  return {
+    ...fixture,
+    state,
+    details,
+    tasks: [pending],
+    pickLists: [],
+    frontend,
+    backend,
+  };
+}
+
 export const activityTask: Task = {
   ...task,
   title: "重新確認示範機台是否連得上",

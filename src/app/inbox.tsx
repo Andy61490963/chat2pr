@@ -239,6 +239,7 @@ export function InboxView({
   const readyCount = countOf(state, readyStatuses);
   const lists = admin ? (state.pickLists ?? []) : [];
   const items = reviewItems(needs, lists, state.groups, admin);
+  const canBatch = admin && items.length > 1;
   const clear =
     items.length === 0 &&
     movingCount === 0 &&
@@ -250,8 +251,7 @@ export function InboxView({
   const mergedWeek =
     state.totals?.mergedWeek ??
     state.tasks.filter((t) => isMergedInWeek(t, week)).length;
-  const batchControls = !clear &&
-    admin &&
+  const batchControls = canBatch &&
     (eligible.size > 0 || selected.size > 0) && (
       <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
         <Button
@@ -381,8 +381,8 @@ export function InboxView({
           }
           batchControls={batchControls}
           checkbox={(item) =>
-            admin && item.kind === "task" && eligible.has(item.id) ? (
-              <label className="grid size-11 shrink-0 cursor-pointer place-items-center rounded-md">
+            canBatch && item.kind === "task" && eligible.has(item.id) ? (
+              <label className="grid size-11 shrink-0 cursor-pointer self-center place-items-center rounded-md">
                 <input
                   type="checkbox"
                   className={batchCheckbox}

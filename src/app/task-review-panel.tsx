@@ -1,7 +1,7 @@
 import { splitQueryAnswer } from "../../shared/query-answer.js";
 import { fullTaskTitle, taskListTitle } from "../../shared/task-title.js";
 import { riskNotes } from "../../shared/risk-notes.js";
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { TaskContextEvidence } from "./context-evidence";
 import { RunObserver } from "./run-observer";
 import { QueryReport } from "./query-report";
@@ -158,6 +158,7 @@ export type TaskReviewPanelProps = {
   busy: boolean;
   admin: boolean;
   reviewStatus?: string;
+  actionNotice?: ReactNode;
   onPrimaryMount?: (button: HTMLButtonElement | null) => void;
   go: (v: View, projectId?: string | null) => void;
   act: Act;
@@ -177,6 +178,7 @@ export function TaskReviewPanel({
   busy,
   admin,
   reviewStatus,
+  actionNotice,
   onPrimaryMount,
   go,
   act,
@@ -187,7 +189,6 @@ export function TaskReviewPanel({
 }: TaskReviewPanelProps) {
   const inWorkbench = reviewStatus !== undefined;
   const Title = inWorkbench ? "h2" : SheetTitle;
-  const Description = inWorkbench ? "div" : SheetDescription;
   const t = detail.task;
   const title = detail.fullTitle ?? fullTaskTitle(t.title, t.summary);
   const prSummary = detail.runs.find((run) => run.pr_summary)?.pr_summary;
@@ -307,7 +308,13 @@ export function TaskReviewPanel({
   const [copied, setCopied] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const projectHeading = useRef<HTMLParagraphElement>(null);
+  const [focusBoundProject, setFocusBoundProject] = useState(false);
   const [branchOpen, setBranchOpen] = useState(false);
+  useEffect(() => {
+    if (!focusBoundProject || !t.project_id) return;
+    projectHeading.current?.focus();
+    setFocusBoundProject(false);
+  }, [focusBoundProject, t.project_id]);
   // 任務出了新版本：選項與指定專案重來；補充需求的草稿只有沒動過（或剛存成這一版）才跟著更新，
   // 寫到一半的內容不再被背景更新洗掉。
   useEffect(() => {
@@ -491,17 +498,17 @@ export function TaskReviewPanel({
         ) : (
           <p className="font-semibold">處理專案</p>
         )}
-        <p className="mt-1 break-words">
-          來自「{review?.group_name ?? groupName(state, t)}」的
-          {t.mode === "query" ? "查詢" : "修改需求"}
-        </p>
-        <p
-          ref={projectHeading}
-          tabIndex={-1}
-          className="mt-2 font-medium break-words"
-        >
-          {review?.project_name ?? "尚未指定專案"}
-        </p>
+        {t.project_id ? (
+          <p
+            ref={projectHeading}
+            tabIndex={-1}
+            className="mt-2 font-medium [overflow-wrap:anywhere]"
+          >
+            {review?.project_name ?? projectName(state, t)}
+          </p>
+        ) : !editable && (
+          <p className="mt-2">尚未指定專案</p>
+        )}
         {review?.repo && (
           <p className="break-all font-mono text-xs">{review.repo}</p>
         )}
@@ -541,16 +548,18 @@ export function TaskReviewPanel({
             要先選好目標分支才能確認。請按下方「更換分支」選擇。
           </p>
         )}
-        {t.branch_selection?.reason && editable && !review?.confirmed && (
-          <p className="mt-1 break-words text-xs text-muted-foreground">
-            {t.branch_selection.reason}
-          </p>
-        )}
-        {(!review?.confirmed || t.project_routing?.status === "clear") && (
-          <p className="mt-2 break-words text-muted-foreground">
-            {t.project_routing?.reason ?? "請確認本次需求與目標專案"}
-          </p>
-        )}
+        {t.project_id && t.branch_selection?.reason && editable &&
+          !review?.confirmed && (
+            <p className="mt-1 break-words text-xs text-muted-foreground">
+              {t.branch_selection.reason}
+            </p>
+          )}
+        {t.project_id &&
+          (!review?.confirmed || t.project_routing?.status === "clear") && (
+            <p className="mt-2 break-words text-muted-foreground">
+              {t.project_routing?.reason ?? "請確認本次需求與目標專案"}
+            </p>
+          )}
         {!!t.project_routing?.evidence?.length && (
           <ul className="mt-1 space-y-1 text-xs text-muted-foreground">
             {t.project_routing.evidence.map((e, i) => (
@@ -573,15 +582,17 @@ export function TaskReviewPanel({
               .join("、")}
           </p>
         )}
-        <p className="mt-2 text-xs">
-          {review?.confirmed
-            ? review.confirmation?.kind === "manual"
-              ? `已由 ${review.confirmation.actor} 確認本版本`
-              : "本次查詢已通過專案證據檢查"
-            : editable
-              ? "待確認專案；綁定不代表這次需求一定屬於此專案"
-              : "保留當時的專案與執行紀錄"}
-        </p>
+        {t.project_id && (
+          <p className="mt-2 text-xs">
+            {review?.confirmed
+              ? review.confirmation?.kind === "manual"
+                ? `已由 ${review.confirmation.actor} 確認本版本`
+                : "本次查詢已通過專案證據檢查"
+              : editable
+                ? "待確認專案；綁定不代表這次需求一定屬於此專案"
+                : "保留當時的專案與執行紀錄"}
+          </p>
+        )}
         {editable && t.project_id && (
           <Button
             type="button"
@@ -616,6 +627,7 @@ export function TaskReviewPanel({
         )}
         {editable && (!t.project_id || assignOpen) && (
           <AssignProject
+            key={`${t.id}:${t.version}`}
             task={t}
             state={state}
             busy={busy}
@@ -623,7 +635,10 @@ export function TaskReviewPanel({
             go={admin ? go : undefined}
             sources={detail.sources}
             inWorkbench={inWorkbench}
-            onBound={() => projectHeading.current?.focus()}
+            onBound={() => setFocusBoundProject(true)}
+            onPrimaryMount={
+              assignPrimary && !amendPrimary ? onPrimaryMount : undefined
+            }
           />
         )}
       </section>
@@ -779,14 +794,6 @@ export function TaskReviewPanel({
               </p>
             </div>
           )}
-          {assignPrimary && (
-            <Button
-              ref={onPrimaryMount}
-              onClick={() => projectHeading.current?.focus()}
-            >
-              指定專案
-            </Button>
-          )}
           {canAnswer && (
             <Button ref={onPrimaryMount} onClick={focusAnswer}>
               {taskClarificationLabels.action}
@@ -908,41 +915,59 @@ export function TaskReviewPanel({
       )}
     </>
   );
+  const metadata = (
+    <dl className="flex flex-wrap gap-x-5 gap-y-2 text-xs [overflow-wrap:anywhere]">
+      {[
+        ["任務類型", t.mode === "query" ? "查詢任務" : "修改程式"],
+        ["群組", review?.group_name ?? groupName(state, t)],
+        ["專案", review?.project_name ?? projectName(state, t)],
+        ...(t.version > 1 ? [["版本", t.version]] : []),
+        ["建立", date(t.created_at)],
+        ["更新", ago(t.updated_at)],
+      ].map(([label, value]) => (
+        <div key={label} className="min-w-0">
+          <dt className="text-muted-foreground">{label}</dt>
+          <dd className="mt-0.5 font-medium text-foreground">{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+  const header = (
+    <SheetHeader className={cn("shrink-0 gap-2", inWorkbench && "pr-4")}>
+      <Title
+        data-task-title=""
+        tabIndex={-1}
+        className="text-lg leading-snug [overflow-wrap:anywhere] focus-visible:outline-hidden!"
+      >
+        {taskListTitle(t, title)}
+      </Title>
+      {inWorkbench ? metadata : (
+        <SheetDescription asChild>{metadata}</SheetDescription>
+      )}
+
+      {!inWorkbench && externalLinks}
+      {!inWorkbench && stationTrack}
+      {live && (
+        <RunProgressLine
+          run={{
+            phase: live.status,
+            startedAt: live.started_at,
+            deadline: live.deadline,
+            heartbeatAt: live.heartbeat_at,
+          }}
+        />
+      )}
+    </SheetHeader>
+  );
   return (
     <>
-      <SheetHeader className="shrink-0 gap-2">
-        <Title
-          data-task-title=""
-          tabIndex={-1}
-          className="text-lg leading-snug [overflow-wrap:anywhere] focus-visible:outline-hidden!"
-        >
-          {taskListTitle(t, title)}
-        </Title>
-        <Description className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-1 text-xs [overflow-wrap:anywhere]">
-          <span>{t.mode === "query" ? "查詢任務" : "修改程式"}</span>
-          <span>群組 {groupName(state, t)}</span>
-          <span>專案 {projectName(state, t)}</span>
-          {t.version > 1 && (
-            <span className="tabular-nums">版本 {t.version}</span>
-          )}
-          <span className="tabular-nums">建立於 {date(t.created_at)}</span>
-          <span className="tabular-nums">更新於 {ago(t.updated_at)}</span>
-        </Description>
-
-        {!inWorkbench && externalLinks}
-        {!inWorkbench && stationTrack}
-        {live && (
-          <RunProgressLine
-            run={{
-              phase: live.status,
-              startedAt: live.started_at,
-              deadline: live.deadline,
-              heartbeatAt: live.heartbeat_at,
-            }}
-          />
-        )}
-      </SheetHeader>
-      {inWorkbench && actions}
+      {inWorkbench ? (
+        <div className="lg:sticky lg:top-4 lg:z-10 lg:bg-background">
+          {actionNotice}
+          {header}
+          {actions}
+        </div>
+      ) : header}
       <div
         className={cn(
           "flex min-h-0 flex-1 flex-col gap-6 p-5",

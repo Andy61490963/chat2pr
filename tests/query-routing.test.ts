@@ -1,6 +1,7 @@
 import { beforeEach, afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import { db, reset, fixture, dashboardAction } from "./helpers.js";
+import { db, reset, fixture, dashboardAction, session } from "./helpers.js";
+import { buildApp } from "../server/app.js";
 import { Triage } from "../server/triage.js";
 import { GitHub } from "../server/github.js";
 import { Line } from "../server/line.js";
@@ -151,6 +152,7 @@ it("建議未綁定專案時保留待確認，管理者可同時綁定並指定"
     version: task.version + 1,
   });
   expect(assigned.project_routing.unboundSuggestions).toBeUndefined();
+  expect(assigned.project_routing.relatedProjects).toBeUndefined();
   expect(
     await db.one(
       "SELECT project_id FROM group_projects WHERE group_id=$1 AND project_id=$2",
@@ -163,6 +165,175 @@ it("建議未綁定專案時保留待確認，管理者可同時綁定並指定"
       [task.id],
     ),
   ).toEqual({ detail: expect.stringContaining("綁定並指定專案「範例倉庫」") });
+});
+
+async function assign(task: Task, projectId: string, body: object = {}) {
+  const app = await buildApp(db);
+  try {
+    return await app.inject({
+      method: "POST",
+      url: `/api/tasks/${task.id}/actions`,
+      headers: await session(),
+      payload: {
+        action: "assign",
+        version: task.version,
+        project_id: projectId,
+        ...body,
+      },
+    });
+  } finally {
+    await app.close();
+  }
+}
+
+it("查詢指定主要及參考專案，寫入路由和稽核並等待重新確認", async () => {
+  const { api, loader } = await projects();
+  const task = await propose("兩個畫面的庫存數字如何計算？");
+  const response = await assign(task, api.id, {
+    related_project_ids: [loader.id],
+  });
+  expect(response.statusCode).toBe(200);
+  const expected = {
+    project_id: api.id,
+    target_branch: api.base_branch,
+    version: task.version + 1,
+    status: "awaiting_approval",
+    approved_version: null,
+    project_routing: {
+      status: "uncertain",
+      basis: "none",
+      reason: "需求或目標已調整，請重新確認本次處理專案",
+      evidence: [],
+      bindingVersion: 0,
+      relatedProjects: [
+        { id: loader.id, name: loader.name, repo: loader.repo },
+      ],
+    },
+  };
+  expect(response.json()).toMatchObject(expected);
+  expect(
+    await db.one("SELECT * FROM tasks WHERE id=$1", [task.id]),
+  ).toMatchObject(expected);
+  expect(
+    await db.one(
+      "SELECT detail FROM audit WHERE task_id=$1 AND kind='assign'",
+      [task.id],
+    ),
+  ).toEqual({ detail: expect.stringContaining(`參考專案：${loader.name}`) });
+});
+
+it("修改任務帶參考專案欄位即使是空清單也回傳 400 和中文原因", async () => {
+  const { api, loader } = await projects();
+  const task = await propose("請更新範例畫面。", { taskType: "change" });
+  for (const related_project_ids of [[loader.id], []]) {
+    const response = await assign(task, api.id, { related_project_ids });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toContain("修改任務只能指定一個專案");
+  }
+  expect(
+    await db.one("SELECT version FROM tasks WHERE id=$1", [task.id]),
+  ).toEqual({ version: task.version });
+});
+
+it("拒絕未綁定、重複、主要、超量、停用或未驗證的參考專案，並保留原任務", async () => {
+  const { api, loader } = await projects();
+  const [unbound, disabled, unverified] = await db.query<Project>(
+    `INSERT INTO projects(name,repo,enabled,validated_at) VALUES
+       ('示範外部','example/outside',true,now()),
+       ('示範停用','example/disabled',false,now()),
+       ('示範待驗證','example/unverified',true,NULL) RETURNING *`,
+  );
+  await db.query(
+    "INSERT INTO group_projects(group_id,project_id) VALUES('group-a',$1),('group-a',$2)",
+    [disabled.id, unverified.id],
+  );
+  const extras = await db.query<{ id: string }>(
+    `INSERT INTO projects(name,repo,enabled,validated_at)
+     SELECT '示範專案 '||i,'example/demo-'||i,true,now() FROM generate_series(1,6) AS i
+     RETURNING id`,
+  );
+  const extraIds = extras.map(({ id }) => id);
+  await db.query(
+    "INSERT INTO group_projects(group_id,project_id) SELECT 'group-a',unnest($1::uuid[])",
+    [extraIds],
+  );
+  const task = await propose("請說明範例庫存欄位。");
+  const invalid: [string[], string][] = [
+    [[unbound.id], "此群組未綁定該參考專案"],
+    [[loader.id, loader.id.toUpperCase()], "參考專案有重複"],
+    [[api.id], "主要專案已包含在查詢範圍"],
+    [extraIds, "最多可選 5 個參考專案"],
+    [[disabled.id], "參考專案「示範停用」已停用"],
+    [[unverified.id], "參考專案「示範待驗證」尚未通過環境驗證"],
+  ];
+  for (const [related_project_ids, error] of invalid) {
+    const response = await assign(task, api.id, { related_project_ids });
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toContain(error);
+    expect(
+      await db.one("SELECT version,project_id FROM tasks WHERE id=$1", [
+        task.id,
+      ]),
+    ).toEqual({
+      version: task.version,
+      project_id: task.project_id,
+    });
+  }
+  expect(
+    await db.query("SELECT 1 FROM audit WHERE task_id=$1 AND kind='assign'", [
+      task.id,
+    ]),
+  ).toEqual([]);
+  const atLimit = await assign(task, api.id, {
+    related_project_ids: extraIds.slice(0, 5),
+  });
+  expect(atLimit.statusCode).toBe(200);
+  expect(
+    atLimit.json().project_routing.relatedProjects.map(({ id }: Project) => id),
+  ).toEqual(extraIds.slice(0, 5));
+});
+
+it("未帶參考專案欄位仍照原流程指定並記住，路由與稽核沿用原格式", async () => {
+  const { api, loader } = await projects();
+  const task = await propose(
+    `請比較 ${api.repo} 和 ${loader.repo} 的範例出貨紀錄。`,
+    {
+      projectId: loader.id,
+      routing: explicit(),
+    },
+  );
+  expect(task.project_routing?.relatedProjects).toEqual([
+    { id: api.id, name: api.name, repo: api.repo },
+  ]);
+  const remember = "範例出貨需求用示範專案";
+  const response = await assign(task, api.id, { remember });
+  expect(response.statusCode).toBe(200);
+  expect(response.json()).toMatchObject({
+    project_id: api.id,
+    status: "awaiting_approval",
+    version: task.version + 1,
+  });
+  expect(response.json().project_routing).toEqual({
+    status: "uncertain",
+    basis: "none",
+    reason: "需求或目標已調整，請重新確認本次處理專案",
+    evidence: [],
+    bindingVersion: 0,
+  });
+  expect(
+    await db.one(
+      "SELECT project_id,content FROM group_memories WHERE group_id=$1",
+      [task.group_id],
+    ),
+  ).toEqual({ project_id: api.id, content: remember });
+  expect(
+    await db.one(
+      "SELECT detail FROM audit WHERE task_id=$1 AND kind='assign'",
+      [task.id],
+    ),
+  ).toEqual({
+    detail: expect.stringMatching(/指定專案（需求版本 \d+；目標分支 [^）]+）$/),
+  });
 });
 
 it("從未綁定專案的有效索引取得建議，且只保存訊息引用", async () => {

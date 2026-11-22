@@ -2,6 +2,10 @@ import { createFollowupInTransaction, threadOf } from "./followup.js";
 import { withAssumptions } from "../shared/clarification.js";
 import { fullTaskTitle } from "../shared/task-title.js";
 import { taskEndLabels } from "../shared/status-glossary.js";
+import {
+  maxRelatedProjects,
+  type ProjectRouting,
+} from "../shared/project-routing.js";
 import { referencedSources } from "./retrieval.js";
 import { taskImageEvidence } from "./image-context.js";
 import { readReportImages } from "./query-report.js";
@@ -41,7 +45,17 @@ import {
 export const Assignment = z.object({
   project_id: z.string().uuid(),
   remember: z.string().trim().max(1000).optional(),
+  related_project_ids: z
+    .array(
+      z.string("參考專案識別碼必須是文字").toLowerCase(),
+      "請以清單提供參考專案",
+    )
+    .optional(),
 });
+type AssignmentProject = Pick<
+  Project,
+  "id" | "name" | "repo" | "enabled" | "validated_at" | "repo_missing_at"
+>;
 const BindAssignment = z.object({
   project_id: z
     .string("請選擇要綁定並指定的專案")
@@ -195,6 +209,8 @@ export class Tasks {
     channel: "dashboard" | "internal" = "internal",
   ) {
     const binding = action === "bind_assign" ? BindAssignment.parse(body) : null;
+    const assignment = action === "assign" ? Assignment.safeParse(body) : null;
+    const relatedIds = assignment?.data?.related_project_ids;
     // 更換分支要先問 GitHub 分支在不在。這一步放在交易之外，
     // GitHub 回應慢時才不會一直握著任務與專案的鎖，卡住同一筆任務的其他操作。
     const checked =
@@ -219,7 +235,22 @@ export class Tasks {
             )
           ).rows[0]
         : null;
-      if (!binding)
+      let references: AssignmentProject[] = [];
+      if (relatedIds?.length && relatedIds.length <= maxRelatedProjects) {
+        // 先鎖專案再鎖任務，和專案設定異動觸發器的順序一致。
+        references = (
+          await c.query<AssignmentProject>(
+            `SELECT p.id,p.name,p.repo,p.enabled,p.validated_at,p.repo_missing_at
+             FROM projects p JOIN tasks t ON t.id=$1
+             WHERE p.id=t.project_id OR (t.mode='query' AND EXISTS (
+               SELECT 1 FROM group_projects gp WHERE gp.group_id=t.group_id
+               AND gp.project_id=p.id AND gp.project_id::text=ANY($2::text[])
+             ))
+             ORDER BY p.id FOR SHARE OF p`,
+            [id, relatedIds],
+          )
+        ).rows;
+      } else if (!binding)
         await c.query(
           "SELECT p.id FROM projects p JOIN tasks t ON t.project_id=p.id WHERE t.id=$1 FOR SHARE OF p",
           [id],
@@ -231,6 +262,7 @@ export class Tasks {
       if (t.version !== version)
         throw new AppError(409, "需求版本已更新，請重新檢視");
       assertTransition(t.status, action);
+      let relatedProjects: ProjectRouting["relatedProjects"];
       if (["approve", "adopt", "target"].includes(action)) {
         if (channel !== "dashboard")
           throw new AppError(409, "請到看板確認目標專案後核准");
@@ -341,7 +373,14 @@ export class Tasks {
           ],
         );
       } else if (action === "assign" || binding) {
-        const a = binding ?? Assignment.parse(body);
+        const a =
+          binding ??
+          (assignment?.success ? assignment.data : Assignment.parse(body));
+        if (relatedIds !== undefined && t.mode !== "query")
+          throw new AppError(
+            400,
+            "修改任務只能指定一個專案，請移除參考專案後重新送出",
+          );
         const bound = await c.query<{ project_id: string }>(
           "SELECT project_id FROM group_projects WHERE group_id=$1",
           [t.group_id],
@@ -364,6 +403,35 @@ export class Tasks {
             throw new AppError(409, "這個群組已綁定 30 個專案，請到群組設定調整後再指定");
         } else if (!alreadyBound)
           throw new AppError(409, "此群組未綁定該專案");
+        if (relatedIds !== undefined) {
+          if (relatedIds.length > maxRelatedProjects)
+            throw new AppError(
+              409,
+              `最多可選 ${maxRelatedProjects} 個參考專案，請減少選擇後再指定`,
+            );
+          if (new Set(relatedIds).size !== relatedIds.length)
+            throw new AppError(409, "參考專案有重複，請移除重複的選擇");
+          if (relatedIds.includes(a.project_id.toLowerCase()))
+            throw new AppError(409, "主要專案已包含在查詢範圍，請從參考專案移除");
+          relatedProjects = relatedIds.map((projectId) => {
+            const p = references.find(({ id }) => id === projectId);
+            if (!p || !bound.rows.some(({ project_id }) => project_id === projectId))
+              throw new AppError(409, "此群組未綁定該參考專案，請重新選擇");
+            const unavailable = p.repo_missing_at
+              ? "找不到儲存庫"
+              : !p.enabled
+                ? "已停用"
+                : !p.validated_at
+                  ? "尚未通過環境驗證"
+                  : null;
+            if (unavailable)
+              throw new AppError(
+                409,
+                `參考專案「${p.name}」${unavailable}，請重新選擇可用的專案`,
+              );
+            return { id: p.id, name: p.name, repo: p.repo };
+          });
+        }
         // 新綁定由資料庫觸發器更新群組與任務版本，並以本次指定的專案產生待確認通知。
         await c.query(
           "UPDATE tasks SET project_id=$2,version=version+$3,approved_version=NULL,approved_paths='{}',pending_paths='{}',base_sha=NULL,branch=NULL,issue_number=NULL,issue_url=NULL,issue_version=NULL,status='awaiting_approval',updated_at=now() WHERE id=$1",
@@ -519,19 +587,37 @@ export class Tasks {
           "reopen",
         ].includes(action)
       ) {
+        const routing: ProjectRouting = {
+          status: "uncertain",
+          basis: "none",
+          reason: "需求或目標已調整，請重新確認本次處理專案",
+          evidence: [],
+          bindingVersion: 0,
+          // 人工指定的參考專案（路由已重設）仍依各自的設定分支提供。
+          relatedProjects:
+            relatedProjects ??
+            (action === "target" &&
+            t.mode === "query" &&
+            t.project_routing?.bindingVersion === 0
+              ? t.project_routing?.relatedProjects
+              : undefined),
+        };
         await c.query(
-          "UPDATE tasks SET project_routing=jsonb_build_object('status','uncertain','basis','none','reason',$2::text,'evidence','[]'::jsonb,'bindingVersion',0) WHERE id=$1",
-          [id, "需求或目標已調整，請重新確認本次處理專案"],
+          "UPDATE tasks SET project_routing=$2 WHERE id=$1",
+          [id, JSON.stringify(routing)],
         );
         await c.query(
           "INSERT INTO task_versions(task_id,version,summary,acceptance) SELECT id,version,summary,acceptance FROM tasks WHERE id=$1 ON CONFLICT DO NOTHING",
           [id],
         );
       }
+      const referenceAudit = relatedProjects
+        ? `（參考專案：${relatedProjects.map(({ name }) => name).join("、") || "無"}）`
+        : "";
       await this.db.audit(
         id,
         action,
-        `${actor} ${actionLabels[action] ?? "操作"}${candidate ? `「${candidate.name}」` : ""}（需求版本 ${version}；目標分支 ${result.target_branch ?? "待選擇"}）`,
+        `${actor} ${actionLabels[action] ?? "操作"}${candidate ? `「${candidate.name}」` : ""}（需求版本 ${version}；目標分支 ${result.target_branch ?? "待選擇"}）${referenceAudit}`,
         c,
       );
       return (await c.query("SELECT * FROM tasks WHERE id=$1", [id])).rows[0];

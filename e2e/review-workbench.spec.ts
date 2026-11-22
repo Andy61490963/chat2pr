@@ -1,6 +1,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import {
+  assignmentWorkbenchFixture,
   mockDashboard,
   project,
   reviewWorkbenchFixture,
@@ -166,10 +167,16 @@ test("桌面佇列依等待時間排序，每列只有一個狀態，審核面�
   }
   await checkAxe(page);
   await capture(page, testInfo, "1440px 審核工作台");
+  const reviewHeader = review.locator('[data-slot="sheet-header"]');
+  await expect(review).toHaveCSS("overflow-y", "visible");
   await page.evaluate(() => window.scrollTo(0, 500));
   await expect
-    .poll(async () => Math.round((await review.boundingBox())!.y))
+    .poll(async () => Math.round((await reviewHeader.boundingBox())!.y))
     .toBe(16);
+  expect((await review.boundingBox())!.y).toBeLessThan(0);
+  await expect(reviewHeader.locator("..").getByRole("button", {
+    name: "確認專案與分支並核准修改",
+  })).toBeVisible();
 });
 
 test("方向鍵移動選取，Enter 只把焦點移到主動作，下一個 Tab 到次要動作", async ({
@@ -311,10 +318,6 @@ test("核准、回答、指定專案與結束成功後前進並聚焦下一筆�
   });
   await expect(assignAction).toBeFocused();
   await assignAction.press("Enter");
-  await expect(
-    panel(page).getByText("尚未指定專案", { exact: true }),
-  ).toBeFocused();
-  await panel(page).getByRole("button", { name: "確認指定專案" }).click();
   await expect(approve(page)).toBeFocused();
   await expect(page).toHaveURL(new RegExp(`review=${ending.id}$`));
   await expect(row(page, unassigned.title)).toContainText("等你核准修改");
@@ -329,6 +332,205 @@ test("核准、回答、指定專案與結束成功後前進並聚焦下一筆�
   await expect(page).toHaveURL(new RegExp(`review=${fifth.id}$`));
   await expect(row(page, ending.title)).toHaveCount(0);
 });
+
+for (const width of [1440, 375]) {
+  for (const mode of ["query", "change"] as const) {
+    const isQuery = mode === "query";
+    const taskType = isQuery ? "查詢任務" : "修改程式";
+    test(`${taskType}的專案清單可用鍵盤指定且不溢出（${width}px）`, async ({
+      page,
+    }, testInfo) => {
+      await page.setViewportSize({ width, height: 900 });
+      const fixture = assignmentWorkbenchFixture(mode);
+      await openFixture(page, fixture);
+      const {
+        frontend,
+        backend,
+        tasks: [task],
+      } = fixture;
+      const endpoint = `/api/tasks/${task.id}/actions`;
+      await page.route(`**${endpoint}`, (route) =>
+        route.fulfill({
+          status: 409,
+          json: { error: "群組綁定已更新，請重新選擇專案。" },
+        }),
+      );
+      await page.goto("/");
+      const inbox = page.getByRole("region", { name: /需要你處理/ });
+      await expect(queue(page).getByRole("listitem")).toHaveCount(1);
+      await expect(queue(page).getByRole("checkbox")).toHaveCount(0);
+      await expect(inbox.getByRole("button", { name: "全選本頁" })).toHaveCount(
+        0,
+      );
+      await expect(inbox.getByRole("button", { name: "清除選取" })).toHaveCount(
+        0,
+      );
+      await row(page, task.title).click();
+      const review =
+        width === 375
+          ? page.getByRole("dialog", { name: task.title })
+          : panel(page);
+      // 「結束任務」只出現一次（手機曾在專案清單與動作列各出現一個）。
+      await expect(
+        review.getByRole("button", { name: "結束任務" }),
+      ).toHaveCount(1);
+      const fields = review.locator('[data-slot="sheet-header"] dl');
+      await expect(fields.locator("dt")).toHaveText([
+        "任務類型",
+        "群組",
+        "專案",
+        "建立",
+        "更新",
+      ]);
+      await expect(fields.locator("dd").first()).toHaveText(taskType);
+      // 資訊值用主文字色（高對比），不用淡色。
+      await expect(fields.locator("dd").first()).toHaveCSS(
+        "color",
+        await page.evaluate(() => getComputedStyle(document.body).color),
+      );
+      const section = review.getByRole("region", { name: "處理專案" });
+      const explanation = isQuery
+        ? "查詢可以同時參考多個專案的原始碼"
+        : "修改任務只能選一個專案，因為一個 PR 只能開在一個儲存庫";
+      const list = section
+        .getByRole("group", { name: explanation })
+        .getByRole("list");
+      await expect(list.getByRole("listitem")).toHaveCount(2);
+      await expect(
+        section.getByText("尚未指定專案", { exact: true }),
+      ).toHaveCount(0);
+      await expect(
+        section.getByText(task.project_routing!.reason, { exact: true }),
+      ).toHaveCount(0);
+      await expect(section.getByText(/請先選擇專案|待確認專案/)).toHaveCount(0);
+      const submit = section.getByRole("button", {
+        name: "指定專案",
+        exact: true,
+      });
+      await expect(
+        review.getByRole("button", { name: /^(確認)?指定專案$/ }),
+      ).toHaveCount(1);
+      await expect(submit).toBeDisabled();
+      const role = isQuery ? "checkbox" : "radio";
+      const first = list.getByRole(role, { name: frontend.name, exact: true });
+      const second = list.getByRole(role, { name: backend.name, exact: true });
+      // 點名稱及儲存庫文字也應能選取，長名稱仍可用鍵盤切換。
+      await list.getByText(frontend.repo, { exact: true }).click();
+      await expect(first).toBeChecked();
+      if (isQuery) {
+        await expect(
+          list.getByRole("listitem").first().getByText("主要", { exact: true }),
+        ).toBeVisible();
+        await second.press("Space");
+        await expect(second).toBeChecked();
+        await expect(first).toBeChecked();
+        await list.getByRole("button", { name: /^設為主要/ }).press("Enter");
+        await expect(second).toBeFocused();
+        await expect(
+          list.getByRole("listitem").last().getByText("主要", { exact: true }),
+        ).toBeVisible();
+      } else {
+        await first.press("ArrowDown");
+        await expect(second).toBeChecked();
+        await expect(first).not.toBeChecked();
+      }
+
+      await section.scrollIntoViewIfNeeded();
+      await waitForVisuals(page);
+      const geometry = await list.getByRole("listitem").evaluateAll((rows) =>
+        rows.map((row) => {
+          const label = row.querySelector("label")!;
+          const text = label.querySelector<HTMLElement>("input + span")!;
+          const bounds = row.getBoundingClientRect();
+          const textBounds = text.getBoundingClientRect();
+          return {
+            width: row.clientWidth,
+            fits:
+              textBounds.left >= bounds.left &&
+              textBounds.right <= bounds.right &&
+              text.scrollWidth === text.clientWidth,
+            touchHeight: label.offsetHeight,
+            nameHeight: text.firstElementChild!.getBoundingClientRect().height,
+          };
+        }),
+      );
+      expect(geometry[0].width).toBe(geometry[1].width);
+      expect(
+        geometry.every(({ fits, touchHeight }) => fits && touchHeight >= 44),
+      ).toBe(true);
+      expect(geometry[1].nameHeight).toBeGreaterThan(geometry[0].nameHeight);
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth),
+      ).toBe(width);
+      expect(await review.evaluate((element) => element.scrollWidth)).toBe(
+        await review.evaluate((element) => element.clientWidth),
+      );
+      await checkAxe(page);
+      await capture(page, testInfo, `${width}px ${taskType}專案清單`);
+
+      const request = page.waitForRequest(
+        (req) => req.url().endsWith(endpoint) && req.method() === "POST",
+      );
+      await submit.press("Enter");
+      expect((await request).postDataJSON()).toEqual({
+        action: "assign",
+        version: task.version,
+        project_id: backend.id,
+        ...(isQuery ? { related_project_ids: [frontend.id] } : {}),
+      });
+      await expect(review.getByRole("alert")).toHaveText(
+        "群組綁定已更新，請重新選擇專案。",
+      );
+      await expect(second).toBeChecked();
+
+      const assigned = {
+        ...task,
+        project_id: backend.id,
+        target_branch: backend.base_branch,
+        version: task.version + 1,
+        project_routing: {
+          ...task.project_routing!,
+          ...(isQuery
+            ? {
+                relatedProjects: [
+                  { id: frontend.id, name: frontend.name, repo: frontend.repo },
+                ],
+              }
+            : {}),
+        },
+      };
+      const taskDetail = fixture.details.get(task.id)!;
+      await page.route(`**/api/tasks/${task.id}`, (route) =>
+        route.fulfill({
+          json: {
+            ...taskDetail,
+            task: assigned,
+            projectReview: {
+              ...taskDetail.projectReview,
+              config_version: backend.config_version,
+              project_name: backend.name,
+              repo: backend.repo,
+              base_branch: backend.base_branch,
+            },
+          },
+        }),
+      );
+      await page.route(`**${endpoint}`, (route) => {
+        fixture.state.tasks = [assigned];
+        return route.fulfill({ json: assigned });
+      });
+      await submit.press("Enter");
+      await expect(
+        section.getByText(backend.name, { exact: true }),
+      ).toBeVisible();
+      await expect(submit).toHaveCount(0);
+      if (isQuery)
+        await expect(section.getByText(/一併查詢（唯讀）/)).toContainText(
+          frontend.name,
+        );
+    });
+  }
+}
 
 test("回答遭拒保留伺服器原因與草稿，鍵盤切換與上一頁會先詢問", async ({
   page,
@@ -419,7 +621,18 @@ test("1024px 的佇列與面板並排且沒有水平捲動", async ({ page }) =>
   expect(left.width).toBeGreaterThanOrEqual(360);
   expect(left.x + left.width).toBeLessThan(right.x);
   expect(right.x + right.width).toBeLessThanOrEqual(1024);
-  expect(right.height).toBeLessThan(812);
+  // 右欄跟頁面一起捲動，不另外產生一層捲軸。
+  expect(
+    await panel(page).evaluate((el) =>
+      [el, ...el.querySelectorAll("*")].some((node) => {
+        const { overflowY } = getComputedStyle(node);
+        return (
+          (overflowY === "auto" || overflowY === "scroll") &&
+          node.scrollHeight > node.clientHeight + 1
+        );
+      }),
+    ),
+  ).toBe(false);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(
     1024,
   );
