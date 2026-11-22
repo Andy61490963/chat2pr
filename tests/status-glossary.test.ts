@@ -1,10 +1,18 @@
 import { expect, it } from "vitest";
 import {
+  chatReplyHint,
   groupStatus,
   isUnnamedLineGroup,
   projectStatus,
 } from "../shared/status-glossary.js";
 import type { Project } from "../shared/types.js";
+
+it("聊天室依群組平台提示回覆位置，未選群組時使用通用提示", () => {
+  expect(chatReplyHint("line")).toBe("回覆請用 LINE");
+  expect(chatReplyHint("discord")).toBe("回覆請到 Discord 頻道");
+  expect(chatReplyHint()).toBe("回覆請回到原本的群組或頻道");
+});
+
 it("專案同時有多個條件時顯示下一步能處理的狀態", () => {
   const p = { enabled: true, validated_at: "2026-01-01" };
   expect(

@@ -24,6 +24,17 @@ export const groupPageText = {
   noSavedMessages: "沒有保留的訊息",
 } as const;
 
+const chatReplyLocations = {
+  line: "回覆請用 LINE",
+  discord: "回覆請到 Discord 頻道",
+} as const;
+
+export function chatReplyHint(platform?: Group["platform"]) {
+  return platform
+    ? chatReplyLocations[platform]
+    : "回覆請回到原本的群組或頻道";
+}
+
 export function isUnnamedLineGroup(group: Pick<Group, "platform" | "id" | "name">) {
   return (
     group.platform === "line" &&

@@ -17,7 +17,10 @@ import {
   groupKindLabels,
 } from "../../shared/group-delivery.js";
 import { statusLabels, type Group } from "../../shared/types.js";
-import { chatRoutingLabels } from "../../shared/status-glossary.js";
+import {
+  chatReplyHint,
+  chatRoutingLabels,
+} from "../../shared/status-glossary.js";
 import { CopyButton } from "./copy-button";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -114,6 +117,9 @@ export function ChatView({
   });
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-4">
+      <p role="status" className="shrink-0 text-sm text-muted-foreground">
+        機器人收到的群組對話與判讀結果僅供閱讀。{chatReplyHint(group?.platform)}。
+      </p>
       {!group ? (
         <Card>
           <Empty icon={<MessageSquare />} title="還沒有聊天室">

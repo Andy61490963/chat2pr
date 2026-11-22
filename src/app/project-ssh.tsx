@@ -211,7 +211,8 @@ export function ProjectSsh({
       <Label htmlFor={`ssh-${key}`}>{label}</Label>
       <Input
         id={`ssh-${key}`}
-        autoFocus={key === "name" && reviewing !== null}
+        autoFocus={key === "name"}
+        className="work-touch"
         type={options.type ?? "text"}
         placeholder={options.placeholder}
         autoComplete={
@@ -229,8 +230,7 @@ export function ProjectSsh({
         SSH 主機
       </h3>
       <p className="text-sm text-muted-foreground">
-        開啟完全存取後，Codex 可用登記的帳號 SSH
-        登入這些主機執行命令或複製檔案，就像你開著終端機。權限照登記的帳號，建議用只能讀的帳號。密碼與私鑰只寫入，不會再顯示，執行紀錄也會遮蔽。
+        開啟完全存取後，工作容器可以用登記的帳號登入這些主機、執行命令或複製檔案。權限依登記的帳號而定。
       </p>
       {!project.full_access && (
         <p className="text-sm text-warn">
@@ -271,6 +271,7 @@ export function ProjectSsh({
                 <Button
                   variant="outline"
                   size="sm"
+                  className="work-touch"
                   disabled={busy || testing === h.id}
                   onClick={() => void test(h)}
                 >
@@ -279,6 +280,7 @@ export function ProjectSsh({
                 <Button
                   variant="outline"
                   size="sm"
+                  className="work-touch"
                   disabled={busy || reviewing !== null}
                   onClick={() => open(h)}
                 >
@@ -287,6 +289,8 @@ export function ProjectSsh({
                 <ConfirmButton
                   variant="outline"
                   size="sm"
+                  className="work-touch"
+                  dialogActionClassName="work-touch"
                   disabled={busy}
                   title={`刪除 SSH 主機 ${h.name}？`}
                   description="之後的任務就不能再登入這台主機；帳密會一起刪除。"
@@ -309,7 +313,17 @@ export function ProjectSsh({
           ))}
         </ul>
       )}
-      <div className="space-y-2 rounded-lg border p-3">
+      <section
+        aria-labelledby="ssh-ai-title"
+        className="space-y-2 rounded-lg border p-3"
+      >
+        <h4 id="ssh-ai-title" className="text-sm font-medium">
+          交給 AI 整理
+        </h4>
+        <p id="ssh-describe-help" className="text-sm text-muted-foreground">
+          貼上的內容（含帳密）會送給 AI
+          模型整理。看板不保存原文。建議只貼不含密碼或私鑰的描述，憑證請在下方欄位手動填寫。
+        </p>
         <Label htmlFor="ssh-describe">用白話描述主機</Label>
         <Textarea
           id="ssh-describe"
@@ -320,23 +334,29 @@ export function ProjectSsh({
           disabled={extracting || candidates.length > 0}
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          placeholder="例如 U01 工控電腦 u01.example.test，帳號 reader，日誌在 C:/logs"
+          placeholder="例如示範主機 ssh.example.test，帳號 reader，日誌在 C:/logs"
           aria-describedby="ssh-describe-help"
         />
-        <p id="ssh-describe-help" className="text-xs text-muted-foreground">
-          你可以貼上多台主機的資料，帳密與私鑰也會交給 AI
-          判讀，原文只用於這次整理。
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="work-touch"
+            aria-describedby="ssh-ai-recipient"
+            disabled={
+              busy || extracting || candidates.length > 0 || !description.trim()
+            }
+            onClick={() => void extract()}
+          >
+            {extracting ? "AI 整理中…" : "交給 AI 整理"}
+          </Button>
+          <p id="ssh-ai-recipient" className="text-sm text-muted-foreground">
+            送出後，AI 模型會收到原文。
+          </p>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          可以一次描述多台主機。整理後按「核對草稿」，在下方欄位補齊憑證，再確認並儲存。
         </p>
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={
-            busy || extracting || candidates.length > 0 || !description.trim()
-          }
-          onClick={() => void extract()}
-        >
-          {extracting ? "AI 整理中…" : "交給 AI 整理"}
-        </Button>
         {extractError && (
           <p role="alert" className="text-sm text-danger">
             {extractError}
@@ -389,6 +409,7 @@ export function ProjectSsh({
                       <Button
                         variant="outline"
                         size="sm"
+                        className="work-touch"
                         disabled={busy || editing !== null}
                         onClick={() => review(host)}
                       >
@@ -397,6 +418,7 @@ export function ProjectSsh({
                       <Button
                         variant="outline"
                         size="sm"
+                        className="work-touch"
                         disabled={busy || reviewing === host.index}
                         onClick={() => discard(host.index)}
                       >
@@ -409,99 +431,125 @@ export function ProjectSsh({
             </ul>
           </>
         )}
-      </div>
-      {editing === null ? (
-        <div>
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={busy || hosts === null}
-            onClick={() => open()}
-          >
-            新增 SSH 主機
-          </Button>
-        </div>
-      ) : (
-        <div className="space-y-3 rounded-lg border p-3">
-          <div className="grid gap-3 sm:grid-cols-4">
-            {field("name", "名稱", {
-              placeholder: "例如 jet-u01",
-              className: "sm:col-span-4",
-            })}
-            {field("host", "SSH 主機位址", {
-              placeholder: "例如 10.3.7.31",
-              className: "sm:col-span-3",
-            })}
-            {field("port", "SSH 連接埠", { type: "number" })}
-            {field("username", "登入帳號", { className: "sm:col-span-4" })}
+      </section>
+      <section
+        aria-labelledby="ssh-manual-title"
+        className="space-y-3 rounded-lg border p-3"
+      >
+        <h4 id="ssh-manual-title" className="text-sm font-medium">
+          手動登記
+        </h4>
+        <p id="ssh-manual-help" className="text-sm text-muted-foreground">
+          直接填寫欄位即可新增主機。手動填入的密碼與私鑰只寫入、加密保存，儲存時不會送給
+          AI 模型。只需查看資料時，請使用唯讀帳號。
+        </p>
+        {editing === null ? (
+          <div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="work-touch"
+              aria-describedby="ssh-manual-help"
+              disabled={busy || hosts === null}
+              onClick={() => open()}
+            >
+              新增 SSH 主機
+            </Button>
           </div>
-          <fieldset className="space-y-1.5">
-            <legend className="text-sm font-medium">驗證方式</legend>
-            <div className="flex gap-4 text-sm">
-              {(["password", "key"] as const).map((a) => (
-                <label key={a} className="flex items-center gap-2">
-                  <input
-                    type="radio"
-                    name="ssh-auth"
-                    checked={draft.auth === a}
-                    onChange={() => set("auth", a)}
-                  />
-                  {a === "password" ? "密碼" : "私鑰"}
-                </label>
-              ))}
-            </div>
-          </fieldset>
-          {draft.auth === "password" ? (
-            field("password", "登入密碼", {
-              type: "password",
-              placeholder: editing === "new" ? "" : "不改就留空",
-            })
-          ) : (
-            <>
-              <div className="space-y-1.5">
-                <Label htmlFor="ssh-privateKey">私鑰</Label>
-                <Textarea
-                  id="ssh-privateKey"
-                  rows={3}
-                  placeholder={
-                    editing === "new"
-                      ? "-----BEGIN OPENSSH PRIVATE KEY-----"
-                      : "不改就留空"
-                  }
-                  value={draft.privateKey}
-                  onChange={(e) => set("privateKey", e.target.value)}
-                />
-              </div>
-              {field("passphrase", "私鑰密碼片語（選填）", {
-                type: "password",
+        ) : (
+          <div className="space-y-3">
+            <div className="grid gap-3 sm:grid-cols-4">
+              {field("name", "名稱", {
+                placeholder: "例如 demo-host",
+                className: "sm:col-span-4",
               })}
-            </>
-          )}
-          <div className="space-y-1.5">
-            <Label htmlFor="ssh-note">用途說明（選填，會告訴 Codex）</Label>
-            <Textarea
-              id="ssh-note"
-              rows={2}
-              placeholder="例如 U01 工控電腦，採集日誌在 C:/logs"
-              value={draft.note}
-              onChange={(e) => set("note", e.target.value)}
-            />
+              {field("host", "SSH 主機位址", {
+                placeholder: "例如 ssh.example.test",
+                className: "sm:col-span-3",
+              })}
+              {field("port", "SSH 連接埠", { type: "number" })}
+              {field("username", "登入帳號", { className: "sm:col-span-4" })}
+            </div>
+            <fieldset className="space-y-1.5">
+              <legend className="text-sm font-medium">驗證方式</legend>
+              <div className="flex gap-4 text-sm">
+                {(["password", "key"] as const).map((a) => (
+                  <label key={a} className="work-touch flex items-center gap-2">
+                    <input
+                      type="radio"
+                      name="ssh-auth"
+                      checked={draft.auth === a}
+                      onChange={() => set("auth", a)}
+                    />
+                    {a === "password" ? "密碼" : "私鑰"}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+            {draft.auth === "password" ? (
+              field("password", "登入密碼", {
+                type: "password",
+                placeholder: editing === "new" ? "" : "不改就留空",
+              })
+            ) : (
+              <>
+                <div className="space-y-1.5">
+                  <Label htmlFor="ssh-privateKey">私鑰</Label>
+                  <Textarea
+                    id="ssh-privateKey"
+                    rows={3}
+                    placeholder={
+                      editing === "new"
+                        ? "-----BEGIN OPENSSH PRIVATE KEY-----"
+                        : "不改就留空"
+                    }
+                    value={draft.privateKey}
+                    onChange={(e) => set("privateKey", e.target.value)}
+                  />
+                </div>
+                {field("passphrase", "私鑰密碼片語（選填）", {
+                  type: "password",
+                })}
+              </>
+            )}
+            <div className="space-y-1.5">
+              <Label htmlFor="ssh-note">用途說明（選填，會告訴 Codex）</Label>
+              <Textarea
+                id="ssh-note"
+                rows={2}
+                placeholder="例如示範主機的日誌在 C:/logs"
+                value={draft.note}
+                onChange={(e) => set("note", e.target.value)}
+              />
+            </div>
+            {formError && (
+              <p role="alert" className="text-sm text-danger">
+                {formError}
+              </p>
+            )}
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                className="work-touch"
+                aria-describedby="ssh-manual-help"
+                disabled={busy}
+                onClick={() => void save()}
+              >
+                {reviewing === null ? "儲存" : "確認並儲存"}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                className="work-touch"
+                disabled={busy}
+                onClick={close}
+              >
+                取消
+              </Button>
+            </div>
           </div>
-          {formError && (
-            <p role="alert" className="text-sm text-danger">
-              {formError}
-            </p>
-          )}
-          <div className="flex gap-2">
-            <Button size="sm" disabled={busy} onClick={() => void save()}>
-              {reviewing === null ? "儲存" : "確認並儲存"}
-            </Button>
-            <Button variant="outline" size="sm" disabled={busy} onClick={close}>
-              取消
-            </Button>
-          </div>
-        </div>
-      )}
+        )}
+      </section>
     </section>
   );
 }

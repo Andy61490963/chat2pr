@@ -128,7 +128,6 @@ const views = [
     label: "聊天室",
     icon: MessageSquare,
     section: "工作區",
-    hint: "機器人收到的群組對話與判讀結果，僅供閱讀，回覆請用 LINE",
   },
   {
     id: "groups",
@@ -390,7 +389,7 @@ export function App() {
   useEffect(() => {
     document.title = user
       ? `${waiting ? `(${waiting}) ` : ""}${taskTitle ?? pageLabel}｜chat2pr`
-      : "chat2pr｜LINE 需求到 PR";
+      : "chat2pr｜群組需求到 PR";
   }, [user, waiting, pageLabel, taskTitle]);
   // 一般成員打開管理頁的網址時回到收件匣，網址也跟著改。
   useEffect(() => {
@@ -1005,14 +1004,16 @@ export function App() {
             >
               {current.label}
             </h1>
-            <p
-              className={cn(
-                "mt-0.5 text-sm text-muted-foreground",
-                current.id !== "groups" && "hidden sm:block",
-              )}
-            >
-              {current.hint}
-            </p>
+            {"hint" in current && (
+              <p
+                className={cn(
+                  "mt-0.5 text-sm text-muted-foreground",
+                  current.id !== "groups" && "hidden sm:block",
+                )}
+              >
+                {current.hint}
+              </p>
+            )}
           </div>
           {state && (
             <div className="flex items-center gap-1.5">
@@ -1486,10 +1487,14 @@ export function App() {
 }
 
 const flow = [
-  [MessageSquare, "群組對話", "在 LINE 群組直接提需求"],
+  [MessageSquare, "群組對話", "在 LINE 群組或 Discord 頻道提需求"],
   [Brain, "AI 整理與分派", "合併零碎訊息、判斷要改哪個專案"],
   [Bot, "Codex 開發", "在隔離容器修改、測試、截圖驗收"],
-  [GitPullRequest, "你來合併", "審閱 PR，一鍵決定是否上線"],
+  [
+    GitPullRequest,
+    "你來合併",
+    "到 GitHub 審閱並合併 PR。部署依你們的流程。",
+  ],
 ] as const;
 
 function Login({
@@ -1511,18 +1516,13 @@ function Login({
         </div>
         <div className="my-auto flex max-w-md flex-col gap-6">
           <h2 className="text-2xl font-semibold tracking-tight">
-            LINE 群組需求 → GitHub PR
+            從群組需求到 GitHub PR
           </h2>
           <ol className="flex flex-col divide-y border-y text-sm">
-            {flow.map(([, label, hint], i) => (
-              <li key={label} className="flex gap-4 py-3">
-                <span className="w-4 text-muted-foreground tabular-nums">
-                  {i + 1}
-                </span>
-                <span className="flex flex-col">
-                  <span className="font-medium">{label}</span>
-                  <span className="text-muted-foreground">{hint}</span>
-                </span>
+            {flow.map(([, label, hint]) => (
+              <li key={label} className="flex flex-col py-3">
+                <span className="font-medium">{label}</span>
+                <span className="text-muted-foreground">{hint}</span>
               </li>
             ))}
           </ol>
@@ -1541,8 +1541,7 @@ function Login({
               登入控制台
             </h1>
             <p className="text-sm text-muted-foreground">
-              在 LINE 群組提需求，AI 整理成任務並交給 Codex 開發。
-              你只需要做決定。
+              在 LINE 群組或 Discord 頻道提需求，AI 整理成任務並交給 Codex 開發。
             </p>
           </div>
           {configured === null ? (
@@ -1605,12 +1604,21 @@ function Login({
             </>
           )}
           <ol className="flex flex-col gap-2 lg:hidden">
-            {flow.map(([Icon, label]) => (
+            {flow.map(([Icon, label, hint], index) => (
               <li
                 key={label}
-                className="flex items-center gap-2 rounded-lg border px-3 py-2.5 text-sm"
+                className="flex items-start gap-2 rounded-lg border px-3 py-2.5 text-sm"
               >
-                <Icon className="size-4 text-muted-foreground" /> {label}
+                <Icon
+                  aria-hidden="true"
+                  className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+                />
+                <div>
+                  <span className="font-medium">{label}</span>
+                  {index === flow.length - 1 && (
+                    <p className="text-muted-foreground">{hint}</p>
+                  )}
+                </div>
               </li>
             ))}
           </ol>

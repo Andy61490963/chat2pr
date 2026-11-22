@@ -376,7 +376,12 @@ test("登記資料庫連線會切換專案分頁並聚焦第一個欄位", async
   await detail.getByRole("tab", { name: /^環境驗證/ }).click();
   await detail.getByRole("button", { name: "登記資料庫連線" }).press("Enter");
   await expect(detail.getByRole("tab", { name: "連線與權限" })).toHaveAttribute("aria-selected", "true");
-  await expect(detail.getByRole("textbox", { name: "用白話描述連線" })).toBeFocused();
+  const manual = detail
+    .getByRole("region", { name: "資料庫連線" })
+    .getByRole("region", { name: "手動登記" });
+  await expect(
+    manual.getByRole("textbox", { name: "主機", exact: true }),
+  ).toBeFocused();
   await expect(page).toHaveURL("/projects");
 });
 

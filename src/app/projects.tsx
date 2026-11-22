@@ -87,6 +87,9 @@ import {
   validCollectExclude,
 } from "../../shared/build-output.js";
 
+const fullAccessConnections =
+  "工作容器可用已登記的直連資料庫與 SSH 主機，權限依登記的帳號而定。經 SSH 跳板的資料庫連線仍由本服務的主機使用。";
+
 export const emptyProject: Partial<Project> = {
   name: "",
   repo: "",
@@ -645,26 +648,24 @@ export function ProjectsView({
                       </Badge>
                     </div>
                     <p className="text-sm text-muted-foreground">
-                      你開啟後，這個專案的 AI 可以連到內網與已登記的資料庫、SSH
-                      主機。
+                      開啟後，安裝、開發、測試與審查可以連到這台伺服器可達的公司內網、Tailscale 與網際網路。
                     </p>
-                    <details className="text-xs text-muted-foreground">
-                      <summary className="cursor-pointer">說明</summary>
-                      <div className="mt-1">
-                        開啟後，這個專案的安裝、開發、測試與審查都能連公司內網、Tailscale
-                        與網際網路，Codex 與測試也拿得到下方登記的資料庫連線與
-                        SSH
-                        主機（權限照登記的帳號），就像在這台伺服器上開發。仍在容器裡執行，拿不到
-                        chat2pr 自己的機密；修改仍要你核准，PR
-                        仍由你合併。這台伺服器本身連不到的網路（例如沒有 VPN
-                        的廠內網段），開了也連不到。
-                      </div>
-                    </details>
+                    <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
+                      <li>
+                        執行任務的安裝、開發、測試與審查，以及環境驗證的測試：{fullAccessConnections}
+                      </li>
+                      <li>環境驗證的安裝：可連網，工作容器未取得登記的憑證。</li>
+                      <li>系統套件安裝與差異收集：工作容器未取得登記的憑證。</li>
+                    </ul>
+                    <p className="text-sm text-muted-foreground">
+                      這項授權也適用於登記的正式環境。查詢任務應使用唯讀查詢與命令，寫入資料或修改主機須由需求明確要求。
+                    </p>
                     <div>
                       {open.full_access ? (
                         <Button
                           variant="outline"
                           size="sm"
+                          className="work-touch"
                           disabled={busy}
                           onClick={() =>
                             void run(
@@ -686,9 +687,11 @@ export function ProjectsView({
                         <ConfirmButton
                           variant="outline"
                           size="sm"
+                          className="work-touch"
+                          dialogActionClassName="work-touch"
                           disabled={busy}
                           title={`開啟「${open.name}」的完全存取？`}
-                          description="AI 會在每個階段直接連公司內網、Tailscale 與網際網路，並用登記的資料庫帳號與 SSH 主機連真實系統；帳號能寫入，AI 就可能寫入。建議登記只有必要權限的帳號。開啟與關閉都會寫進活動紀錄。"
+                          description={`任務的安裝、開發、測試與審查，以及環境驗證的測試，都可以連公司內網、Tailscale 與網際網路。${fullAccessConnections} 登記的連線即使通往正式環境也可使用。帳號能寫入，AI 就可能寫入。請只登記具有必要權限的帳號。開啟與關閉都會寫進活動紀錄。`}
                           confirm="開啟完全存取"
                           onConfirm={() =>
                             run(

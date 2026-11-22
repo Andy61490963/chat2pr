@@ -129,7 +129,7 @@ export function ProjectDatabase({
     }
   };
   const loaded = view !== null;
-  const firstField = useRef<HTMLTextAreaElement>(null);
+  const firstField = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (!loaded || !onInitialFocus) return;
     firstField.current?.focus();
@@ -177,7 +177,9 @@ export function ProjectDatabase({
     <div className={`space-y-1.5 ${options.className ?? ""}`}>
       <Label htmlFor={`db-${key}`}>{label}</Label>
       <Input
+        ref={key === "host" ? firstField : undefined}
         id={`db-${key}`}
+        className="work-touch"
         type={options.type ?? "text"}
         inputMode={options.inputMode}
         autoComplete={options.type === "password" ? "new-password" : "off"}
@@ -300,13 +302,9 @@ export function ProjectDatabase({
       <div>
         <h3 className="font-medium">資料庫連線</h3>
         <p className="mt-1 text-xs text-muted-foreground">
-          選填。登記後由主機擷取資料庫的結構（不含資料），AI
+          選填。登記後可由主機擷取資料庫的結構，預設不擷取資料。AI
           用它在隔離容器裡建立測試資料庫。沒有登記時，AI
           會從程式碼推測結構自行模擬，不會停下來問你。
-        </p>
-        <p className="mt-1 text-xs text-muted-foreground">
-          密碼與私鑰只寫入，儲存後不會再顯示，也不會交給 AI
-          或工作容器。建議使用只有結構讀取權限的帳號。
         </p>
       </div>
 
@@ -319,6 +317,7 @@ export function ProjectDatabase({
           <Button
             variant="outline"
             size="sm"
+            className="work-touch"
             onClick={() => setReload((v) => v + 1)}
           >
             重新讀取
@@ -335,8 +334,8 @@ export function ProjectDatabase({
       {snapshot ? (
         <div className="space-y-2 rounded bg-muted p-3 text-sm" role="status">
           <p className="font-medium">
-            結構快照第 {snapshot.version} 版 · 擷取於{" "}
-            {date(snapshot.capturedAt)}
+            結構快照第 {snapshot.version} 版（擷取於 {date(snapshot.capturedAt)}
+            ）
           </p>
           <p className="text-muted-foreground">
             {Object.entries(objectLabels)
@@ -344,7 +343,7 @@ export function ProjectDatabase({
               .map(([key, label]) => `${label} ${snapshot.objects[key]}`)
               .join("、") || "沒有任何物件"}
             {snapshot.referenceRows > 0 &&
-              ` · 參考資料 ${snapshot.referenceRows} 列`}
+              `，參考資料 ${snapshot.referenceRows} 列`}
           </p>
           {snapshot.warnings.map((warning) => (
             <p key={warning} className="text-warn">
@@ -365,30 +364,47 @@ export function ProjectDatabase({
 
       {/* 讀取完成前整個表單停用，避免在空白草稿上按儲存，蓋掉已登記的連線。 */}
       <fieldset disabled={!loaded} className="min-w-0 space-y-4">
-        <div className="space-y-2 rounded-lg border p-3">
+        <section
+          aria-labelledby="db-ai-title"
+          className="space-y-2 rounded-lg border p-3"
+        >
+          <h4 id="db-ai-title" className="text-sm font-medium">
+            交給 AI 整理
+          </h4>
+          <p id="db-describe-help" className="text-sm text-muted-foreground">
+            貼上的內容（含帳密）會送給 AI
+            模型整理。看板不保存原文。建議只貼不含密碼或私鑰的描述，憑證請在下方欄位手動填寫。
+          </p>
           <Label htmlFor="db-describe">用白話描述連線</Label>
           <Textarea
-            ref={firstField}
             id="db-describe"
             rows={3}
             value={describe}
             spellCheck={false}
-            placeholder="例如：MES 測試庫在 100.85.185.123，port 1433，資料庫 MES_TEST，帳號 mes_reader 密碼 ……；廠內看板在 http://10.3.1.7:8096，要先連公司 VPN"
+            autoComplete="off"
+            aria-describedby="db-describe-help"
+            placeholder="例如示範資料庫在 db.example.test，連接埠 1433，帳號 reader"
             onChange={(e) => setDescribe(e.target.value)}
           />
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="work-touch"
+              aria-describedby="db-ai-recipient"
+              disabled={busy || extracting || !describe.trim()}
+              onClick={() => void extract()}
+            >
+              {extracting ? "AI 整理中…" : "交給 AI 整理"}
+            </Button>
+            <p id="db-ai-recipient" className="text-sm text-muted-foreground">
+              送出後，AI 模型會收到原文。
+            </p>
+          </div>
           <p className="text-xs text-muted-foreground">
-            可以包含帳號密碼。AI
-            整理後填進下面的欄位，並從這台伺服器實測提到的位址；原文不保存，核對後再按「儲存連線」。
+            整理結果會填到下方，伺服器也會測試提到的位址。請核對欄位後再儲存。
           </p>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={busy || extracting || !describe.trim()}
-            onClick={() => void extract()}
-          >
-            {extracting ? "AI 整理中…" : "交給 AI 整理"}
-          </Button>
           {extractError && (
             <p role="alert" className="text-sm text-danger">
               {extractError}
@@ -402,7 +418,7 @@ export function ProjectDatabase({
                   {extracted.endpoints.map((e) => (
                     <li
                       key={`${e.host}:${e.port}`}
-                      className={e.reachable ? "text-good" : "text-danger"}
+                      className={`wrap-anywhere ${e.reachable ? "text-good" : "text-danger"}`}
                     >
                       {e.reachable ? "✓" : "✕"} {e.purpose}：{e.host}:{e.port}，
                       {e.detail}
@@ -425,179 +441,208 @@ export function ProjectDatabase({
               ))}
             </div>
           )}
-        </div>
-        <div className="grid gap-3 sm:grid-cols-4">
-          {field("host", "主機", {
-            placeholder: "db.example.com 或 IP",
-            className: "sm:col-span-3",
-          })}
-          {field("port", "連接埠", { type: "number", inputMode: "numeric" })}
-          {field("database", "資料庫名稱", { className: "sm:col-span-2" })}
-          {field("username", "帳號", { className: "sm:col-span-2" })}
-          {field("password", "密碼", {
-            type: "password",
-            placeholder: connection ? keep : "",
-            className: "sm:col-span-4",
-          })}
-        </div>
-        <p className="text-xs text-muted-foreground">
-          目前支援 SQL Server。連線由主機發出，所以主機要連得到這台資料庫。
-        </p>
-        <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
-          <label className="flex items-center gap-2">
-            <Checkbox
-              checked={draft.encrypt}
-              onCheckedChange={(v) => set("encrypt", v === true)}
-            />
-            加密連線
-          </label>
-          <label className="flex items-center gap-2">
-            <Checkbox
-              checked={draft.trustServerCertificate}
-              onCheckedChange={(v) => set("trustServerCertificate", v === true)}
-            />
-            信任伺服器憑證（自簽憑證時勾選）
-          </label>
-          <label className="flex items-center gap-2">
-            <Checkbox
-              checked={draft.useSsh}
-              onCheckedChange={(v) => set("useSsh", v === true)}
-            />
-            經 SSH 跳板連線
-          </label>
-        </div>
-
-        {draft.useSsh && (
-          <div className="space-y-3 rounded-lg border p-3">
-            <p className="text-xs text-muted-foreground">
-              主機無法直接連到資料庫時使用：先登入跳板，再由跳板連到上面的資料庫主機與連接埠。私鑰與密碼擇一。
+        </section>
+        <section
+          aria-labelledby="db-manual-title"
+          className="space-y-4 rounded-lg border p-3"
+        >
+          <div className="space-y-2">
+            <h4 id="db-manual-title" className="text-sm font-medium">
+              手動登記
+            </h4>
+            <p id="db-manual-help" className="text-sm text-muted-foreground">
+              直接填寫欄位即可儲存連線。手動填入的密碼與私鑰只寫入、加密保存，儲存時不會送給
+              AI 模型。建議使用只有結構讀取權限的帳號。
             </p>
-            <div className="grid gap-3 sm:grid-cols-4">
-              {field("sshHost", "跳板主機", { className: "sm:col-span-3" })}
-              {field("sshPort", "連接埠", {
-                type: "number",
-                inputMode: "numeric",
-              })}
-              {field("sshUsername", "SSH 帳號", { className: "sm:col-span-4" })}
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="db-sshPrivateKey">私鑰</Label>
-              <Textarea
-                id="db-sshPrivateKey"
-                rows={3}
-                spellCheck={false}
-                className="font-mono text-xs"
-                value={draft.sshPrivateKey}
-                placeholder={
-                  connection?.ssh?.auth === "key"
-                    ? keep
-                    : "貼上 OpenSSH 或 PEM 格式的私鑰全文"
-                }
-                onChange={(e) => set("sshPrivateKey", e.target.value)}
+          </div>
+          <div className="grid gap-3 sm:grid-cols-4">
+            {field("host", "主機", {
+              placeholder: "db.example.com 或 IP",
+              className: "sm:col-span-3",
+            })}
+            {field("port", "連接埠", { type: "number", inputMode: "numeric" })}
+            {field("database", "資料庫名稱", { className: "sm:col-span-2" })}
+            {field("username", "帳號", { className: "sm:col-span-2" })}
+            {field("password", "密碼", {
+              type: "password",
+              placeholder: connection ? keep : "",
+              className: "sm:col-span-4",
+            })}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            目前支援 SQL Server。連線由主機發出，所以主機要連得到這台資料庫。
+          </p>
+          <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm">
+            <label className="work-touch flex items-center gap-2">
+              <Checkbox
+                checked={draft.encrypt}
+                onCheckedChange={(v) => set("encrypt", v === true)}
               />
-            </div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              {field("sshPassphrase", "私鑰的密碼片語（沒有就留空）", {
-                type: "password",
-              })}
-              {field("sshPassword", "或：SSH 密碼", {
-                type: "password",
-                placeholder: connection?.ssh?.auth === "password" ? keep : "",
-              })}
-            </div>
-            {connection?.ssh?.hostKey && (
-              <p className="break-all text-xs text-muted-foreground">
-                已記住跳板的主機金鑰：{connection.ssh.hostKey}
-                。之後不同就會拒絕連線。
+              加密連線
+            </label>
+            <label className="work-touch flex items-center gap-2">
+              <Checkbox
+                checked={draft.trustServerCertificate}
+                onCheckedChange={(v) =>
+                  set("trustServerCertificate", v === true)
+                }
+              />
+              信任伺服器憑證（自簽憑證時勾選）
+            </label>
+            <label className="work-touch flex items-center gap-2">
+              <Checkbox
+                checked={draft.useSsh}
+                onCheckedChange={(v) => set("useSsh", v === true)}
+              />
+              經 SSH 跳板連線
+            </label>
+          </div>
+
+          {draft.useSsh && (
+            <div className="space-y-3 rounded-lg border p-3">
+              <p className="text-xs text-muted-foreground">
+                主機無法直接連到資料庫時使用：先登入跳板，再由跳板連到上面的資料庫主機與連接埠。私鑰與密碼擇一。
               </p>
+              <div className="grid gap-3 sm:grid-cols-4">
+                {field("sshHost", "跳板主機", { className: "sm:col-span-3" })}
+                {field("sshPort", "連接埠", {
+                  type: "number",
+                  inputMode: "numeric",
+                })}
+                {field("sshUsername", "SSH 帳號", {
+                  className: "sm:col-span-4",
+                })}
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="db-sshPrivateKey">私鑰</Label>
+                <Textarea
+                  id="db-sshPrivateKey"
+                  rows={3}
+                  spellCheck={false}
+                  className="font-mono text-xs"
+                  value={draft.sshPrivateKey}
+                  placeholder={
+                    connection?.ssh?.auth === "key"
+                      ? keep
+                      : "貼上 OpenSSH 或 PEM 格式的私鑰全文"
+                  }
+                  onChange={(e) => set("sshPrivateKey", e.target.value)}
+                />
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                {field("sshPassphrase", "私鑰的密碼片語（沒有就留空）", {
+                  type: "password",
+                })}
+                {field("sshPassword", "或：SSH 密碼", {
+                  type: "password",
+                  placeholder: connection?.ssh?.auth === "password" ? keep : "",
+                })}
+              </div>
+              {connection?.ssh?.hostKey && (
+                <p className="break-all text-xs text-muted-foreground">
+                  已記住跳板的主機金鑰：{connection.ssh.hostKey}
+                  。之後不同就會拒絕連線。
+                </p>
+              )}
+            </div>
+          )}
+
+          <div className="space-y-1.5">
+            <Label htmlFor="db-referenceTables">參考資料表（選填）</Label>
+            <Textarea
+              id="db-referenceTables"
+              rows={2}
+              spellCheck={false}
+              value={draft.referenceTables}
+              placeholder={"每行一個，例如\ndbo.StatusCode"}
+              onChange={(e) => set("referenceTables", e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              只有列在這裡的資料表會連同資料一起擷取，每張最多 500
+              列。適合狀態代碼這類不含個資的對照表；留空就完全不讀取資料。
+            </p>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button
+              className="work-touch"
+              aria-describedby="db-manual-help"
+              disabled={busy || !dirty}
+              onClick={save}
+            >
+              儲存連線
+            </Button>
+            <Button
+              variant="outline"
+              className="work-touch"
+              disabled={busy || dirty || !connection}
+              onClick={test}
+            >
+              測試連線
+            </Button>
+            <Button
+              variant="outline"
+              className="work-touch"
+              disabled={busy || dirty || !connection}
+              onClick={capture}
+            >
+              {snapshot ? "重新擷取結構" : "擷取結構"}
+            </Button>
+            {connection && (
+              <ConfirmButton
+                variant="ghost"
+                className="work-touch"
+                dialogActionClassName="work-touch"
+                disabled={busy}
+                title="刪除資料庫連線？"
+                description="保存的密碼與私鑰會一併刪除。已擷取的結構快照會保留，AI 仍可使用。"
+                confirm="刪除連線"
+                onConfirm={() =>
+                  run(async () => {
+                    setTested(null);
+                    setActionError("");
+                    apply(await request<ProjectDatabaseView>(base, "DELETE"));
+                    setNotice("連線已刪除。");
+                  }, "資料庫連線已刪除")
+                }
+              >
+                刪除連線
+              </ConfirmButton>
+            )}
+            {snapshot && (
+              <ConfirmButton
+                variant="ghost"
+                className="work-touch"
+                dialogActionClassName="work-touch"
+                disabled={busy}
+                title="刪除結構快照？"
+                description="刪除後 AI 會改從程式碼推測資料庫結構。AI 自動設定的專案需要重新驗證環境才會恢復派工。"
+                confirm="刪除快照"
+                onConfirm={() =>
+                  run(async () => {
+                    setActionError("");
+                    const result = await request<
+                      ProjectDatabaseView & { queued: boolean }
+                    >(`${base}/snapshot`, "DELETE");
+                    apply(result);
+                    setNotice(
+                      result.queued
+                        ? "快照已刪除，並排程重新驗證環境。"
+                        : "快照已刪除。",
+                    );
+                  }, "結構快照已刪除")
+                }
+              >
+                刪除快照
+              </ConfirmButton>
             )}
           </div>
-        )}
-
-        <div className="space-y-1.5">
-          <Label htmlFor="db-referenceTables">參考資料表（選填）</Label>
-          <Textarea
-            id="db-referenceTables"
-            rows={2}
-            spellCheck={false}
-            value={draft.referenceTables}
-            placeholder={"每行一個，例如\ndbo.StatusCode"}
-            onChange={(e) => set("referenceTables", e.target.value)}
-          />
-          <p className="text-xs text-muted-foreground">
-            只有列在這裡的資料表會連同資料一起擷取，每張最多 500
-            列。適合狀態代碼這類不含個資的對照表；留空就完全不讀取資料。
-          </p>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <Button disabled={busy || !dirty} onClick={save}>
-            儲存連線
-          </Button>
-          <Button
-            variant="outline"
-            disabled={busy || dirty || !connection}
-            onClick={test}
-          >
-            測試連線
-          </Button>
-          <Button
-            variant="outline"
-            disabled={busy || dirty || !connection}
-            onClick={capture}
-          >
-            {snapshot ? "重新擷取結構" : "擷取結構"}
-          </Button>
-          {connection && (
-            <ConfirmButton
-              variant="ghost"
-              disabled={busy}
-              title="刪除資料庫連線？"
-              description="保存的密碼與私鑰會一併刪除。已擷取的結構快照會保留，AI 仍可使用。"
-              confirm="刪除連線"
-              onConfirm={() =>
-                run(async () => {
-                  setTested(null);
-                  setActionError("");
-                  apply(await request<ProjectDatabaseView>(base, "DELETE"));
-                  setNotice("連線已刪除。");
-                }, "資料庫連線已刪除")
-              }
-            >
-              刪除連線
-            </ConfirmButton>
+          {dirty && connection && (
+            <p className="text-xs text-muted-foreground">
+              有尚未儲存的修改；儲存後才能測試或擷取。
+            </p>
           )}
-          {snapshot && (
-            <ConfirmButton
-              variant="ghost"
-              disabled={busy}
-              title="刪除結構快照？"
-              description="刪除後 AI 會改從程式碼推測資料庫結構。AI 自動設定的專案需要重新驗證環境才會恢復派工。"
-              confirm="刪除快照"
-              onConfirm={() =>
-                run(async () => {
-                  setActionError("");
-                  const result = await request<
-                    ProjectDatabaseView & { queued: boolean }
-                  >(`${base}/snapshot`, "DELETE");
-                  apply(result);
-                  setNotice(
-                    result.queued
-                      ? "快照已刪除，並排程重新驗證環境。"
-                      : "快照已刪除。",
-                  );
-                }, "結構快照已刪除")
-              }
-            >
-              刪除快照
-            </ConfirmButton>
-          )}
-        </div>
-        {dirty && connection && (
-          <p className="text-xs text-muted-foreground">
-            有尚未儲存的修改；儲存後才能測試或擷取。
-          </p>
-        )}
+        </section>
       </fieldset>
 
       {actionError && (
@@ -621,7 +666,7 @@ export function ProjectDatabase({
           )}
           {tested.canWrite && (
             <p className="text-warn">
-              這個帳號有寫入權限。系統只會讀取結構，但建議改用唯讀帳號。
+              這個帳號有寫入權限。若只需要擷取結構或查詢資料，請改用唯讀帳號。
             </p>
           )}
         </div>
