@@ -1,4 +1,5 @@
 import type { Page } from "@playwright/test";
+import type { Member } from "../server/members";
 import type { Detail, State } from "../src/app/shared";
 import type { DashboardGroup, Project, Task } from "../shared/types";
 import { endedStatuses } from "../shared/types";
@@ -18,6 +19,23 @@ import { discordServiceText } from "../shared/status-glossary";
 import type { ActivityEvent } from "../shared/activity-groups";
 
 const timestamp = "2026-01-01T00:00:00Z";
+
+export const exampleOwner: Member = {
+  github_id: "1",
+  login: "demo-admin",
+  role: "admin",
+  added_by: null,
+  created_at: "",
+  owner: true,
+};
+
+export const exampleMember: Member = {
+  github_id: "2",
+  login: "demo-xiaolin",
+  role: "member",
+  added_by: exampleOwner.login,
+  created_at: timestamp,
+};
 
 export const systemSnapshot = {
   checkedAt: timestamp,
