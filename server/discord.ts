@@ -287,7 +287,7 @@ export async function ingestDiscord(db: Database, event: DiscordMessageEvent) {
           image=CASE WHEN messages.image_source_url=EXCLUDED.image_source_url THEN messages.image END,
           image_mime=CASE WHEN messages.image_source_url=EXCLUDED.image_source_url THEN messages.image_mime END,
           image_source_url=EXCLUDED.image_source_url,content_attempts=0,trigger_mode=EXCLUDED.trigger_mode,processed=EXCLUDED.processed,
-          revoked=false,batch_id=NULL,needs_source_review=EXCLUDED.needs_source_review,bot_reply=EXCLUDED.bot_reply,
+          revoked=false,batch_id=NULL,triage_defer=NULL,needs_source_review=EXCLUDED.needs_source_review,bot_reply=EXCLUDED.bot_reply,
           content_revision=messages.content_revision+1`,
         [
           row.id,

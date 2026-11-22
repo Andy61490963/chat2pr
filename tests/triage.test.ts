@@ -13,7 +13,8 @@ vi.mock("../server/config.js", async (original) => ({
   secrets: () => ({ openaiKey: "fictional-classifier-key" }),
 }));
 import { db, reset, fixture, session } from "./helpers.js";
-import { Triage, OpenAIClassifier } from "../server/triage.js";
+import { Triage, OpenAIClassifier, type Classifier } from "../server/triage.js";
+import { dueTriageGroups } from "../server/triage-window.js";
 import { Line } from "../server/line.js";
 import { Budget } from "../server/budget.js";
 import { GitHub } from "../server/github.js";
@@ -143,7 +144,105 @@ describe("需求判斷後的確定性關卡", () => {
       ).toEqual({ processed: expired });
       expect(
         await db.one("SELECT detail FROM audit WHERE kind='triage_skipped'"),
-      ).toEqual({ detail: "你在「測試群組」的討論尚未定案，系統未建立任務。" });
+      ).toEqual({
+        detail: expired
+          ? "你在「測試群組」的討論尚未定案，系統未建立任務。"
+          : "你在「測試群組」的討論尚未定案，系統會等新訊息，或在滿 15 分鐘時再判讀一次。",
+      });
+    },
+  );
+  it.each(["到期", "新訊息", "普通片段重試", "到期時普通片段仍在等候"] as const)(
+    "未定案討論依群組排程處理（%s）",
+    async (scenario) => {
+      const s = await setup();
+      const line = new Line(db);
+      const send = (id: string, text: string) =>
+        line.ingest({
+          events: [
+            {
+              webhookEventId: id,
+              type: "message",
+              source: { type: "group", groupId: s.group.id },
+              message: { id, type: "text", text },
+            },
+          ],
+        });
+      await db.query(
+        "UPDATE messages SET text='先朝這版改？我還想跟小林討論。' WHERE id='m1'",
+      );
+      if (scenario === "普通片段重試" || scenario === "到期時普通片段仍在等候")
+        await send("m2", "還有報表的部分");
+      const ageWindow = () =>
+        db.query(
+          "UPDATE groups SET first_pending_at=now()-interval '5 minutes',last_pending_at=now()-interval '1 minute'",
+        );
+      const github = new GitHub();
+      github.context = async () => ({
+    branches: {names:["main"],defaultBranch:"main",truncated:false}, branchError: null,
+        sha: "fictional-base",
+        paths: [],
+        files: {},
+        truncated: false,
+      });
+      const classify = vi.fn(
+        async ({ messages }: Parameters<Classifier["classify"]>[0]) =>
+          messages
+            .filter((m) => !m.contextOnly)
+            .map((m) =>
+              decision({
+                kind: "defer",
+                noTaskReason: m.id === "m1" ? "undecided_discussion" : null,
+                sourceIds: [m.id],
+              }),
+            ),
+      );
+      const triage = new Triage(db, { classify }, github, line, new Budget(db));
+      const process = () => triage.process(s.group.id, true);
+      await ageWindow();
+      await process();
+      expect(classify).toHaveBeenCalledTimes(1);
+      if (scenario === "新訊息") {
+        await send("m2", "小林補了一個做法，大家還在討論。");
+      } else if (scenario === "到期") {
+        for (const minutes of [5, 10, 14]) {
+          await db.query(
+            "UPDATE messages SET received_at=now()-make_interval(mins=>$1) WHERE id='m1'",
+            [minutes],
+          );
+          await ageWindow();
+          expect(await dueTriageGroups(db, s.group.id)).toEqual([]);
+          await process();
+        }
+        expect(classify).toHaveBeenCalledTimes(1);
+      }
+      const deadline =
+        scenario === "到期" || scenario === "到期時普通片段仍在等候";
+      if (deadline) {
+        await db.query(
+          "UPDATE messages SET received_at=now()-interval '15 minutes 1 second' WHERE id='m1'",
+        );
+      } else {
+        await ageWindow();
+      }
+      expect(await dueTriageGroups(db, s.group.id)).toHaveLength(1);
+      await process();
+      expect(classify).toHaveBeenCalledTimes(2);
+      expect(classify.mock.calls[1][0].messages.map((m) => m.id)).toEqual(
+        deadline
+          ? ["m1"]
+          : scenario === "新訊息"
+            ? ["m1", "m2"]
+            : ["m2"],
+      );
+      if (deadline) {
+        expect(classify.mock.calls[1][0].context).toMatchObject({
+          mustDecide: ["m1"],
+        });
+        expect(await db.query("SELECT id FROM tasks")).toEqual([]);
+        expect(await dueTriageGroups(db, s.group.id)).toEqual([]);
+        await process();
+        expect(classify).toHaveBeenCalledTimes(2);
+      }
     },
   );
   it("每日額度不足仍收訊，保留原文且不呼叫模型或累計辨識故障", async () => {
@@ -343,7 +442,8 @@ describe("需求判斷後的確定性關卡", () => {
     let calls = 0;
     const github = new GitHub();
     github.context = async () => ({
-    branches: {names:["main"],defaultBranch:"main",truncated:false}, branchError: null,
+      branches: { names: ["main"], defaultBranch: "main", truncated: false },
+      branchError: null,
       sha: "base",
       paths: [],
       files: {},

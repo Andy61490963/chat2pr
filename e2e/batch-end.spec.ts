@@ -33,6 +33,7 @@ const pickList: PickList = {
       id: "example-item",
       title: "補上範例說明",
       summary: "補上範例畫面的使用說明。",
+      riskReasons: [],
     },
   ],
 };

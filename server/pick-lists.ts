@@ -99,9 +99,10 @@ export async function pickLists(db: Database): Promise<PickList[]> {
     id,
     groupId: group_id,
     version,
-    items: items.map(({ id, title, summary }) => ({
+    items: items.map(({ id, title, summary, risk_reasons }) => ({
       id,
       title,
+      riskReasons: risk_reasons ?? [],
       summary:
         summary
           .trim()

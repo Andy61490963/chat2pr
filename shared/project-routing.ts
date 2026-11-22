@@ -1,11 +1,11 @@
 export interface RoutingEvidence {
-  kind: "message" | "repo";
+  kind: "message" | "repo" | "description";
   sourceId: string;
   quote: string;
 }
 export interface RoutingDecision {
   status: "clear" | "uncertain" | "conflict";
-  basis: "explicit" | "repository" | "none";
+  basis: "explicit" | "repository" | "project_description" | "none";
   reason: string;
   evidence: RoutingEvidence[];
 }

@@ -104,6 +104,54 @@ async function dashboard(
 }
 
 describe("待挑選清單和任務建立", () => {
+  it("會議紀錄只有修改登入功能的項目顯示敏感提醒", async () => {
+    const items = [
+      "首頁看板顯示今日待辦數量",
+      "報表匯出新增建立日期欄位",
+      "登入頁加上忘記密碼連結",
+    ];
+    const risk = "涉及敏感功能，必須人工審核";
+    await apply(
+      root,
+      "00000000-0000-4000-8000-000000000215",
+      `本次會議提到的改動：\n${items.map((title, i) => `${i + 1}. ${title}`).join("\n")}`,
+      items.map((title, i) =>
+        i === 2
+          ? {
+              ...original(title),
+              summary: "加上找回帳號存取的連結。",
+              acceptance: ["登入頁顯示忘記密碼連結。"],
+            }
+          : original(title),
+      ),
+    );
+    await dashboard(async (state, resolve) => {
+      const [list] = (await state()).pickLists;
+      expect(
+        list.items.map(({ title, riskReasons }) => [title, riskReasons]),
+      ).toEqual([
+        [items[0], []],
+        [items[1], []],
+        [items[2], [risk]],
+      ]);
+      expect(
+        await resolve(
+          list,
+          list.items.map(({ id }) => id),
+        ),
+      ).toBe(200);
+      expect((await state()).tasks).toEqual(
+        expect.arrayContaining(
+          items.map((title, i) =>
+            expect.objectContaining({
+              title,
+              risk_reasons: i === 2 ? [risk] : [],
+            }),
+          ),
+        ),
+      );
+    });
+  });
   it("六項只建立一張清單，選兩項後只建立兩張待確認任務", async () => {
     await meeting();
     await dashboard(async (state, resolve) => {
