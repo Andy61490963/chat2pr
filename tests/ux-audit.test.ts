@@ -672,7 +672,7 @@ describe("LINE 摘要連結", () => {
     );
     await new Line(db).flushNotifications();
     expect(texts).toEqual([
-      "你的 LINE 通知摘要\n• 群組通知\n• 辨識通知\n• 儲存庫通知\n\n看板：http://localhost:4310",
+      "你的通知摘要\n• 群組通知\n• 辨識通知\n• 儲存庫通知\n\n看板：http://localhost:4310",
     ]);
     const health = (await state()).health.find(
       (h: { name: string }) => h.name === "notifications",
