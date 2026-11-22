@@ -345,6 +345,12 @@ export const triageNoTaskLabels = {
   no_actionable_request: "訊息沒有明確需求，系統未建立任務。",
 } as const;
 
+export const undecidedDiscussionWaiting =
+  "討論尚未定案，系統會等新訊息，或在滿 15 分鐘時再判讀一次。";
+
+export const projectDescriptionPreselection =
+  "程式索引超過上限。需求與本群組唯一可用專案的說明相符，已預選該專案。請核對後確認。";
+
 export const sshProbeLabels = {
   reachable: "你可以從伺服器連到這個連接埠。",
   unreachable: "你無法從伺服器連到這個連接埠。",

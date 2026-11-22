@@ -3,10 +3,11 @@ import type { FastifyInstance } from "fastify";
 import { randomUUID } from "node:crypto";
 import { db, reset, fixture, session } from "./helpers.js";
 import { buildApp } from "../server/app.js";
-import { Triage } from "../server/triage.js";
+import { Triage, type Classifier } from "../server/triage.js";
 import { GitHub } from "../server/github.js";
 import { Line } from "../server/line.js";
 import { Budget } from "../server/budget.js";
+import { Retrieval } from "../server/retrieval.js";
 import type {
   Group,
   Message,
@@ -29,11 +30,7 @@ afterEach(async () => {
   await app.close();
 });
 afterAll(() => db.close());
-async function propose(
-  overrides: Partial<TriageDecision> = {},
-  sources: RoutingSource[] = [],
-  text = "請查報工的機台欄位用途",
-) {
+async function send(text: string) {
   const messageId = randomUUID();
   await new Line(db).ingest({
     events: [
@@ -45,6 +42,14 @@ async function propose(
       },
     ],
   });
+  return messageId;
+}
+async function propose(
+  overrides: Partial<TriageDecision> = {},
+  sources: RoutingSource[] = [],
+  text = "請查報工的機台欄位用途",
+) {
+  const messageId = await send(text);
   const d: TriageDecision = {
     kind: "request",
     projectId: project.id,
@@ -64,6 +69,11 @@ async function propose(
   if (d.routing?.basis === "explicit")
     d.routing.evidence = [
       { kind: "message", sourceId: messageId, quote: text },
+    ];
+  if (d.routing?.basis === "project_description")
+    d.routing.evidence = [
+      { kind: "message", sourceId: messageId, quote: text },
+      ...d.routing.evidence,
     ];
   const triage = new Triage(
     db,
@@ -147,6 +157,166 @@ it("唯一綁定不等於選對專案，沒有建議或證據都要確認", asyn
   const guessed = await propose();
   expect(guessed.status).toBe("awaiting_approval");
   expect(guessed.approved_version).toBeNull();
+});
+
+const dashboardDescription = "首頁看板顯示今日待辦與報表摘要";
+async function dashboardIndex(phase: "limited" | "failed" = "limited") {
+  await db.query("UPDATE projects SET description=$2 WHERE id=$1", [
+    project.id,
+    dashboardDescription,
+  ]);
+  await db.query(
+    "UPDATE settings SET value=jsonb_set(value,'{rag_enabled}','true')",
+  );
+  await db.query(
+    "INSERT INTO repo_indexes(project_id,wanted_sha,phase,truncated,total_chunks) VALUES($1,'fictional-base',$2,$2='limited',5001)",
+    [project.id, phase],
+  );
+}
+function descriptionRoute(
+  quote = dashboardDescription,
+): NonNullable<TriageDecision["routing"]> {
+  return {
+    status: "clear",
+    basis: "project_description",
+    reason: "需求提到專案說明所列的首頁看板",
+    evidence: [{ kind: "description", sourceId: project.id, quote }],
+  };
+}
+
+it("唯一綁定專案的索引超限時，依相符說明預選並等候人工核准", async () => {
+  await dashboardIndex();
+  const text = "請在首頁看板顯示今日待辦數量。";
+  const messageId = await send(text);
+  const github = new GitHub();
+  github.context = async () => ({
+    branches: {
+      names: [project.base_branch],
+      defaultBranch: project.base_branch,
+      truncated: false,
+    },
+    branchError: null,
+    sha: "fictional-base",
+    paths: [],
+    files: {},
+    truncated: false,
+  });
+  const retrieval = new Retrieval(db);
+  retrieval.lookup = async () => ({ hits: [], reason: "" });
+  let routingContext: unknown;
+  const classify: Classifier["classify"] = async ({ context }) => {
+    routingContext = context;
+    const routing = descriptionRoute();
+    routing.evidence.push({
+      kind: "message",
+      sourceId: messageId,
+      quote: text,
+    });
+    return [
+      {
+        kind: "request",
+        taskType: "change",
+        projectId: project.id,
+        title: "顯示今日待辦數量",
+        summary: text,
+        acceptance: ["首頁看板顯示今日待辦的總數"],
+        sourceIds: [messageId],
+        risks: [],
+        missing: [],
+        relatedTaskId: null,
+        suggestions: [],
+        routing,
+      },
+    ];
+  };
+  await new Triage(
+    db,
+    { classify },
+    github,
+    new Line(db),
+    new Budget(db),
+    retrieval,
+  ).process("group-a");
+  expect(routingContext).toMatchObject({
+    projects: [
+      {
+        id: project.id,
+        description: dashboardDescription,
+        indexLimitReached: true,
+      },
+    ],
+  });
+  const task = (await app.inject({ url: "/api/state", headers }))
+    .json()
+    .tasks.find((t: Task) => t.source_ids.includes(messageId)) as Task;
+  expect(task).toMatchObject({
+    project_id: project.id,
+    status: "awaiting_approval",
+    approved_version: null,
+    project_routing: {
+      status: "clear",
+      basis: "project_description",
+      reason: expect.stringContaining("程式索引超過上限"),
+      evidence: [],
+    },
+  });
+  const detail = (
+    await app.inject({ url: `/api/tasks/${task.id}`, headers })
+  ).json();
+  expect(detail.projectReview.confirmed).toBe(false);
+  expect((await action(task)).json()).toMatchObject({ status: "queued" });
+});
+
+it.each([
+  "一般索引失敗",
+  "虛構說明",
+  "多個已綁定專案",
+  "指名其他專案",
+] as const)("%s 時不能用專案說明預選修改專案", async (scenario) => {
+  await dashboardIndex(scenario === "一般索引失敗" ? "failed" : "limited");
+  if (scenario === "多個已綁定專案" || scenario === "指名其他專案") {
+    const other = await db.one<Project>(
+      "INSERT INTO projects(name,repo,enabled,validated_at) VALUES('另一個範例專案','test/other',true,now()) RETURNING *",
+    );
+    if (scenario === "多個已綁定專案")
+      await db.query("INSERT INTO group_projects VALUES('group-a',$1,now())", [
+        other.id,
+      ]);
+  }
+  const task = await propose(
+    {
+      taskType: "change",
+      routing: descriptionRoute(
+        scenario === "虛構說明" ? "不存在的說明" : undefined,
+      ),
+    },
+    [],
+    scenario === "指名其他專案"
+      ? "請修改另一個範例專案的首頁看板。"
+      : "請在首頁看板顯示今日待辦數量。",
+  );
+  expect(task).toMatchObject({ project_id: null, status: "awaiting_approval" });
+  expect(task.project_routing?.status).not.toBe("clear");
+});
+
+it("索引超限時，僅與專案說明相符的查詢仍待確認，指名專案的查詢照常排程", async () => {
+  await dashboardIndex();
+  const pending = await propose(
+    { routing: descriptionRoute() },
+    [],
+    "首頁看板的今日待辦在哪裡？",
+  );
+  expect(pending).toMatchObject({
+    project_id: null,
+    status: "awaiting_approval",
+    approved_version: null,
+  });
+  const named = await propose(
+    { routing: { ...explicit(), evidence: [] } },
+    [],
+    "請查 test/repo 的首頁看板。",
+  );
+  expect(named.status).toBe("queued");
 });
 it("明確指名的修改仍需看板確認，核准保存完整版本與操作者", async () => {
   const t = await propose(

@@ -21,10 +21,15 @@ import {
   type ConnectionSecretStatus,
 } from "../shared/connection-secrets";
 import type { ChatPage } from "../shared/chat";
-import { discordServiceText } from "../shared/status-glossary";
+import {
+  discordServiceText,
+  projectDescriptionPreselection,
+} from "../shared/status-glossary";
 import type { ActivityEvent } from "../shared/activity-groups";
+import type { PickList } from "../shared/pick-list";
 
 const timestamp = "2026-01-01T00:00:00Z";
+const bindingVersion = 1;
 
 export const exampleOwner: Member = {
   github_id: "1",
@@ -141,7 +146,7 @@ export const group: DashboardGroup = {
   trigger_mode: "auto",
   reply_mode: "all",
   trigger_version: 1,
-  binding_version: 1,
+  binding_version: bindingVersion,
   triage_failures: 0,
   triage_error: null,
   first_pending_at: null,
@@ -375,6 +380,59 @@ export const completedRun: RunView = {
   observed: false,
   threads: [],
   verification_scope: null,
+};
+
+export const meetingPickList: PickList = {
+  id: "example-meeting-risks",
+  groupId: group.id,
+  version: 1,
+  items: [
+    {
+      id: "example-home",
+      title: "首頁看板顯示今日待辦數量",
+      summary: "在首頁看板顯示今天要處理的項目數。",
+      riskReasons: [],
+    },
+    {
+      id: "example-export",
+      title: "報表匯出新增建立日期欄位",
+      summary: "在匯出的報表增加建立日期。",
+      riskReasons: [],
+    },
+    {
+      id: "example-login",
+      title: "登入頁加上忘記密碼連結",
+      summary: "在登入頁加上找回帳號存取的入口。",
+      riskReasons: ["涉及敏感功能，必須人工審核"],
+    },
+  ],
+};
+
+export const indexLimitedDetail: Detail = {
+  ...detail,
+  task: {
+    ...task,
+    title: meetingPickList.items[0].title,
+    summary: meetingPickList.items[0].summary,
+    mode: "change",
+    project_routing: {
+      status: "clear",
+      basis: "project_description",
+      reason: projectDescriptionPreselection,
+      evidence: [],
+      bindingVersion,
+    },
+  },
+  projectReview: {
+    binding_version: bindingVersion,
+    config_version: project.config_version,
+    project_name: project.name,
+    repo: project.repo,
+    base_branch: project.base_branch,
+    group_name: group.name,
+    confirmed: false,
+    confirmation: null,
+  },
 };
 
 export const answeredDetail: Detail = {

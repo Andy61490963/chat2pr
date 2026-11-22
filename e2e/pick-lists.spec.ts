@@ -1,7 +1,13 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 import type { PickList } from "../shared/pick-list";
-import { defaultState, group, mockDashboard, task } from "./dashboard-fixture";
+import {
+  defaultState,
+  group,
+  meetingPickList,
+  mockDashboard,
+  task,
+} from "./dashboard-fixture";
 
 const list: PickList = {
   id: "example-meeting",
@@ -18,8 +24,49 @@ const list: PickList = {
     id: `example-item-${index}`,
     title,
     summary: `${title}並保留原有功能。`,
+    riskReasons: [],
   })),
 };
+
+test("手機上只有登入項目顯示敏感提醒，鍵盤可選並讀到提醒", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await mockDashboard(page, {
+    state: { tasks: [], pickLists: [meetingPickList] },
+  });
+  await page.goto("/");
+  const card = page.getByRole("article", { name: "待挑選清單" });
+  for (const item of meetingPickList.items) {
+    const checkbox = card.getByRole("checkbox", { name: item.title });
+    await expect(checkbox).toHaveAccessibleDescription(
+      [item.summary, ...item.riskReasons].join(" "),
+    );
+  }
+  const login = card.getByRole("checkbox", {
+    name: meetingPickList.items[2].title,
+  });
+  await expect(
+    card.getByText("涉及敏感功能，必須人工審核", { exact: true }),
+  ).toHaveCount(1);
+  await login.focus();
+  await page.keyboard.press("Space");
+  await expect(login).toBeChecked();
+  const hitArea = await login.evaluate((input) => {
+    const { width, height } = input.closest("label")!.getBoundingClientRect();
+    return { width, height };
+  });
+  expect(hitArea.width).toBeGreaterThanOrEqual(44);
+  expect(hitArea.height).toBeGreaterThanOrEqual(44);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(
+    375,
+  );
+  expect(
+    (
+      await new AxeBuilder({ page })
+        .include("article[aria-labelledby^='pick-list-']")
+        .analyze()
+    ).violations,
+  ).toEqual([]);
+});
 
 for (const width of [1280, 375]) {
   test(`可以在 ${width}px 勾選並建立兩張待確認任務`, async ({ page }) => {

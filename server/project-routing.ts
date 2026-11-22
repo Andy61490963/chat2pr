@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { DbClient } from "./db.js";
 import { notifyGroup } from "./group-replies.js";
 import { AppError } from "./policy.js";
+import { projectDescriptionPreselection } from "../shared/status-glossary.js";
 import type {
   Message,
   Project,
@@ -16,13 +17,13 @@ import type {
 export const Routing = z
   .object({
     status: z.enum(["clear", "uncertain", "conflict"]),
-    basis: z.enum(["explicit", "repository", "none"]),
+    basis: z.enum(["explicit", "repository", "project_description", "none"]),
     reason: z.string().min(1).max(1000),
     evidence: z
       .array(
         z
           .object({
-            kind: z.enum(["message", "repo"]),
+            kind: z.enum(["message", "repo", "description"]),
             sourceId: z.string().max(1000),
             quote: z.string().min(1).max(2000),
           })
@@ -88,6 +89,7 @@ export function assessRouting(
   bindingVersion: number,
   sources: RoutingSource[] = [],
   knownProjects: Pick<Project, "id" | "name" | "repo">[] = projects,
+  limitedProjectId?: string,
 ): ProjectRouting {
   const uncertain = (reason: string, conflict = false): ProjectRouting => ({
     status: conflict ? "conflict" : "uncertain",
@@ -186,6 +188,35 @@ export function assessRouting(
     // 檔案路徑可能含斜線，不把它一律當成未綁定的儲存庫；衝突仍由模型明確回報。
     if (valid) return { ...route, bindingVersion };
   }
+  if (
+    route.basis === "project_description" &&
+    decision.taskType !== "query" &&
+    projects.length === 1 &&
+    limitedProjectId === project.id &&
+    !project.repo_missing_at &&
+    project.description.trim() &&
+    route.evidence.length === 2 &&
+    route.evidence.some(
+      (e) =>
+        e.kind === "description" &&
+        e.sourceId === project.id &&
+        e.quote.trim() &&
+        project.description.includes(e.quote),
+    ) &&
+    route.evidence.some(
+      (e) =>
+        e.kind === "message" &&
+        e.quote.trim() &&
+        roots.some((m) => m.id === e.sourceId && m.text?.includes(e.quote)),
+    )
+  )
+    return {
+      status: "clear",
+      basis: "project_description",
+      reason: projectDescriptionPreselection,
+      evidence: [],
+      bindingVersion,
+    };
   return uncertain(
     foreignRepos.length && route.basis === "explicit"
       ? "指定的儲存庫不在可用範圍，請檢查綁定"

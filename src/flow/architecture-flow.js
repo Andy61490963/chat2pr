@@ -366,10 +366,10 @@ import "@fontsource-variable/inter";
       anim: function (tl) { travel(tl, "app_emb", 0.6, "檢索"); travel(tl, "db_emb", 0.5, "比對", null, true); travel(tl, "app_db", 0.6, "結果", null, true); status(tl, "上下文已備妥"); } },
 
     { title: "AI 判讀需求", where: "執行器・判讀容器・訂閱轉送・ChatGPT", cam: "ai", focus: ["app", "runner", "relay", "gpt"],
-      text: { change: "app 請主機上的執行器開一個用完即丟的判讀容器。容器裡沒有 ChatGPT 登入檔，推論經「訂閱轉送」與 egress-ai 送到 ChatGPT。自動辨識會略過你和同事的分工與未定案討論。同一份會議紀錄或議題清單有三項以上修改需求時，會先收成一張待挑選清單，讓你勾選要建立的任務。明確需求會判別專案和風險，並寫出驗收條件；缺必要資訊時只問一件事。",
+      text: { change: "app 請主機上的執行器開一個用完即丟的判讀容器。容器裡沒有 ChatGPT 登入檔，推論經「訂閱轉送」與 egress-ai 送到 ChatGPT。自動辨識會略過同事分工。未定案的討論等到有新訊息或收訊滿 15 分鐘才再判讀，屆時仍未定案就略過。同一份會議紀錄或議題清單有三項以上修改需求時，會先逐項比對風險，再讓你從清單挑選要建立的任務。明確需求會判別專案並寫出驗收條件。缺必要資訊時只問一件事。",
               query: "app 請主機上的執行器開一個用完即丟的判讀容器。容器裡沒有 ChatGPT 登入檔，推論經「訂閱轉送」與 egress-ai 送到 ChatGPT。AI 判斷這是查詢，而且明確指名了專案；要求交出密碼、金鑰實際值的查詢才會被擋下等人確認。" },
       chips: ["一次性容器", "容器不持有登入", "固定風險規則"],
-      data: { change: "{\n  \"kind\":    <s>\"修改\"</s>,\n  \"project\": \"example-org/ShopWeb\",\n  \"title\":   \"首頁訂購按鈕改綠色\",\n  \"acceptance\": [\n    \"桌機與手機版首頁的訂購按鈕為綠色\",\n    \"點擊後仍能完成下單\"\n  ],\n  \"assumptions\": [\"沿用品牌綠\"],\n  \"risk\": \"低\"\n}",
+      data: { change: "{\n  \"kind\":    <s>\"修改\"</s>,\n  \"project\": \"example-org/ShopWeb\",\n  \"title\":   \"首頁訂購按鈕改綠色\",\n  \"acceptance\": [\n    \"桌機與手機版首頁的訂購按鈕為綠色\",\n    \"點擊後仍能完成下單\"\n  ],\n  \"assumptions\": [\"沿用品牌綠\"],\n  \"risk\": \"低\"\n}\n\n<k>其他判讀情境</k>\n  未定案的討論等新訊息或滿 15 分鐘再判讀\n  待挑選清單逐項顯示風險",
               query: "{\n  \"kind\":    <s>\"查詢\"</s>,\n  \"project\": \"example-org/ShopWeb\",\n  \"named\":   true,\n  \"title\":   \"訂購按鈕在哪\",\n  \"secrets\": false,\n  \"risk\":    \"低\"\n}" },
       end: { tri: true, triRows: 4, app: "判讀完成" },
       anim: function (tl) {
@@ -383,10 +383,10 @@ import "@fontsource-variable/inter";
       } },
 
     { title: { change: "修改一定先等你點頭", query: "明確的查詢可以自動開始" }, where: { change: "看板收件匣與聊天私訊", query: "app" }, cam: { change: "approve", query: "core" }, focus: { change: ["app", "admin"], query: ["app"] },
-      text: { change: "修改程式一律要人確認。任務會進到看板收件匣「待審核」，並依設定透過已配對的 LINE 或 Discord 私訊通知你。LINE 依額度送摘要，Discord 逐則排送。打開任務詳情核對目標儲存庫、需求與假設，按「確認專案並核准修改」。",
+      text: { change: "修改程式一律要人確認。任務會進到看板收件匣「待審核」，並依設定透過已配對的 LINE 或 Discord 私訊通知你。LINE 依額度送摘要，Discord 逐則排送。索引超過上限時，如果需求符合群組唯一可用專案的說明，系統可預選該專案。打開任務詳情核對專案、分支、需求與假設，再按「確認專案與分支並核准修改」。",
               query: "這次查詢明確指名已綁定的專案，判讀完就直接排程。索取機密實際值的查詢仍須人工確認。當系統無法確認目標時，你可以在收件匣查看符合需求的未綁定專案，管理者可一鍵綁定並指定，再確認任務。" },
       chips: { change: ["待審核", "核准只適用這個版本", "不會自動部署"], query: ["自動排程", "唯讀執行", "回答會遮蔽機密"] },
-      data: { change: "<k>任務 #128</k>  待審核\n  首頁訂購按鈕改綠色\n  example-org/ShopWeb ← main\n  我先這樣假設：沿用品牌綠\n\n<s>[ 確認專案並核准修改 ]</s>  ← 你按下\n<ok>✓ 已核准 v1</ok>",
+      data: { change: "<k>任務 #128</k>  待審核\n  首頁訂購按鈕改綠色\n  專案 example-org/ShopWeb\n  分支 main\n  我先這樣假設：沿用品牌綠\n\n<s>[ 確認專案與分支並核准修改 ]</s>\n<ok>✓ 已核准 v1</ok>",
               query: "<k>任務 #128</k>  查詢・自動排程\n  訂購按鈕在哪\n  example-org/ShopWeb ← main\n  依據：本次明確指名「ShopWeb」" },
       end: { tri: false, adm: { change: "approved", query: "none" }, app: { change: "已核准・排隊中", query: "自動排程・排隊中" } },
       anim: function (tl, mode) {

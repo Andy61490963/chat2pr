@@ -40,7 +40,11 @@ export function PickListForm({
                   type="checkbox"
                   className="size-5 shrink-0 accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
                   aria-labelledby={`pick-title-${item.id}`}
-                  aria-describedby={`pick-summary-${item.id}`}
+                  aria-describedby={
+                    item.riskReasons.length
+                      ? `pick-summary-${item.id} pick-risk-${item.id}`
+                      : `pick-summary-${item.id}`
+                  }
                   checked={selected.includes(item.id)}
                   onChange={(event) => {
                     const checked = event.currentTarget.checked;
@@ -64,6 +68,14 @@ export function PickListForm({
                   >
                     {item.summary}
                   </span>
+                  {item.riskReasons.length > 0 && (
+                    <span
+                      id={`pick-risk-${item.id}`}
+                      className="block text-sm text-warn"
+                    >
+                      {item.riskReasons.join("。")}
+                    </span>
+                  )}
                 </span>
               </label>
             </li>

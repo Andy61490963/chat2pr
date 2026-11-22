@@ -5,10 +5,61 @@ import {
   defaultState,
   detail,
   group,
+  indexLimitedDetail,
   mockDashboard,
   project,
   task,
 } from "./dashboard-fixture";
+
+test("手機上可核對索引超限時預選的專案，再由管理者核准修改", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  const { task: pending } = indexLimitedDetail;
+  const taskPath = `/api/tasks/${pending.id}`;
+  await mockDashboard(page, {
+    state: { tasks: [pending] },
+    routes: { [taskPath]: indexLimitedDetail },
+  });
+  let approvalRequests = 0;
+  await page.route(`**${taskPath}/actions`, async (route) => {
+    approvalRequests++;
+    expect(route.request().postDataJSON()).toEqual({
+      action: "approve",
+      version: pending.version,
+      project_id: project.id,
+      binding_version: indexLimitedDetail.projectReview?.binding_version,
+      config_version: project.config_version,
+      target_branch: pending.target_branch,
+    });
+    await route.fulfill({ json: { ...pending, status: "queued" } });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "檢視專案並確認" }).press("Enter");
+  const drawer = page.getByRole("dialog", { name: pending.title });
+  const review = drawer.getByRole("region", { name: "處理專案" });
+  await expect(review.getByText(project.name, { exact: true })).toBeVisible();
+  await expect(
+    review.getByText(/程式索引超過上限.*已預選該專案/),
+  ).toBeVisible();
+  await expect(drawer.getByText("AI 無法判斷要修改哪個專案")).toHaveCount(0);
+  const approve = drawer.getByRole("button", {
+    name: "確認專案與分支並核准修改",
+  });
+  await expect(approve).toBeEnabled();
+  expect((await approve.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(
+    375,
+  );
+  const { violations } = await new AxeBuilder({ page })
+    .include("[role='dialog']")
+    .analyze();
+  expect(violations).toEqual([]);
+  expect(approvalRequests).toBe(0);
+  await approve.press("Enter");
+  await expect(page.getByText("已確認專案並核准，開始排程")).toBeVisible();
+  expect(approvalRequests).toBe(1);
+});
 
 const warehouse = {
   ...project,
