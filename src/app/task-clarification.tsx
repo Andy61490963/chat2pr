@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type Ref } from "react";
 import type { Task } from "../../shared/types";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -9,12 +9,14 @@ import type { Act } from "./shared";
 export function TaskClarification({
   task,
   editable,
+  answerField,
   busy,
   act,
   answer,
 }: {
   task: Task;
   editable: boolean;
+  answerField: Ref<HTMLTextAreaElement> | null;
   busy: boolean;
   act: Act;
   /** 直接回答補問；系統把回答併進需求。成功才回傳 true，失敗時保留輸入。 */
@@ -49,7 +51,7 @@ export function TaskClarification({
           {task.question.choices.length > 0 && (
             <div className="flex flex-wrap gap-2" aria-label="常見答案">
               {task.question.choices.map((choice) =>
-                editable ? (
+                answerField ? (
                   <Button
                     key={choice}
                     type="button"
@@ -67,7 +69,7 @@ export function TaskClarification({
               )}
             </div>
           )}
-          {editable && (
+          {answerField && (
             <form
               className="flex flex-col gap-2"
               onSubmit={async (event) => {
@@ -78,6 +80,7 @@ export function TaskClarification({
             >
               <Label htmlFor="question-answer">回答這個問題</Label>
               <Textarea
+                ref={answerField}
                 id="question-answer"
                 rows={2}
                 maxLength={2000}

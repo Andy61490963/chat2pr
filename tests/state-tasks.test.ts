@@ -58,13 +58,35 @@ describe("/api/state 完整載入待處理任務", () => {
       `INSERT INTO tasks(project_id,group_id,title,summary,status,dedupe_key,updated_at) VALUES
         ($1,'group-a','本週合併','摘要','merged','week-1',now()),
         ($1,'group-a','三天前合併','摘要','merged','week-2',now()-interval '3 days'),
-        ($1,'group-a','上個月合併','摘要','merged','week-3',now()-interval '30 days')`,
+        ($1,'group-a','上個月合併','摘要','merged','week-3',now()-interval '30 days'),
+        ($1,'group-a','本週取消','摘要','cancelled','week-4',now()-interval '1 day')`,
       [project],
     );
     const body = await state("?tasks=1");
     expect(body.tasks).toHaveLength(1);
     expect(body.totals.mergedWeek).toBe(2);
     expect(body.totals.byStatus.merged).toBe(3);
+    const app = await buildApp(db);
+    try {
+      const query = new URLSearchParams({
+        filter: "closed",
+        mergedWeek: body.totals.mergedWeekDay,
+      });
+      const response = await app.inject({
+        url: `/api/tasks?${query}`,
+        headers: await session(),
+      });
+      expect(response.statusCode).toBe(200);
+      const page = response.json<TaskPage>();
+      expect(page.tasks).toHaveLength(body.totals.mergedWeek);
+      expect(page.tasks.map(({ title }) => title)).toEqual([
+        "本週合併",
+        "三天前合併",
+      ]);
+      expect(page.next).toBeNull();
+    } finally {
+      await app.close();
+    }
   });
 
   it("執行中的任務帶目前階段與期限；沒有執行或執行已結束的任務這些欄位為 null", async () => {
@@ -123,6 +145,9 @@ it("任務清單先篩選再分批，相同更新時間也不會漏列或重複"
     `INSERT INTO tasks(project_id,group_id,title,summary,status,dedupe_key,updated_at) VALUES
       ($1,'group-a','範例待執行任務','列印清單','queued','queued-demo','2026-01-03T01:00:00Z'),
       ($1,'group-a','範例歷史任務','更新圖示','closed','closed-demo','2026-01-02T01:00:00Z'),
+      ($1,'group-a','範例取消任務','列印清單','cancelled','cancel-demo','2026-01-02T01:00:00Z'),
+      ($1,'group-a','範例較舊任務','列印清單','merged','older-demo','2025-12-31T15:59:59.999999Z'),
+      ($1,'group-a','範例隔日任務','列印清單','merged','later-demo','2026-01-07T16:00:00Z'),
       (NULL,'group-a','範例未指定專案','列印清單','answered','no-project-demo','2026-01-02T01:00:00Z')`,
     [project],
   );
@@ -140,6 +165,7 @@ it("任務清單先篩選再分批，相同更新時間也不會漏列或重複"
     };
     const filters = {
       filter: "closed",
+      mergedWeek: "2026-01-07",
       project,
       group: "group-a",
       q: "列印清單",
@@ -158,7 +184,7 @@ it("任務清單先篩選再分批，相同更新時間也不會漏列或重複"
     expect(last.tasks.map(({ id }) => id)).toEqual(expected.slice(30));
     expect(last.next).toBeNull();
     expect((await list({ filter: "all" })).tasks[0].title).toBe(
-      "範例待執行任務",
+      "範例隔日任務",
     );
     expect(
       (await list({ filter: "closed", project: "none" })).tasks.map(
@@ -198,6 +224,54 @@ it("狀態快照、已結束清單與詳情都只採用該任務最後一筆結�
         reason: "改由小林整理", station: null,
       });
       expect(entry).not.toHaveProperty("ending_audit");
+    }
+  } finally {
+    await app.close();
+  }
+});
+
+it("任務詳情回傳驗證範圍，歷史建置紀錄也不公開測試輸出", async () => {
+  const project = await fixture();
+  const task = await db.one<{ id: string }>(
+    `INSERT INTO tasks(project_id,group_id,title,summary,status,dedupe_key,pr_url)
+     VALUES ($1,'group-a','更新範例報表','整理欄位','ready','demo-validation',$2) RETURNING id`,
+    [project, "https://demo.invalid/pull/12"],
+  );
+  const result = {
+    prUrl: "https://demo.invalid/pull/12",
+    verificationScope: { kind: "partial", limitations: "範例資料庫的查詢流程" },
+    report: "範例測試輸出",
+  };
+  await db.query(
+    `INSERT INTO runs(task_id,version,model,status,deadline,started_at,completed_at,result) VALUES
+       ($1,1,'demo-model','done',now(),now(),now(),$2),
+       ($1,1,'demo-model','done',now(),now()-interval '1 day',now()-interval '1 day',$3)`,
+    [
+      task.id,
+      JSON.stringify(result),
+      JSON.stringify({
+        prUrl: result.prUrl,
+        report: "僅執行建置檢查，未執行自動測試。\n範例建置輸出",
+      }),
+    ],
+  );
+  const app = await buildApp(db);
+  try {
+    const response = await app.inject({
+      url: `/api/tasks/${task.id}`,
+      headers: await session(),
+    });
+    expect(response.statusCode).toBe(200);
+    const { runs } = response.json<{
+      runs: { verification_scope: unknown }[];
+    }>();
+    expect(runs.map((run) => run.verification_scope)).toEqual([
+      result.verificationScope,
+      { kind: "build" },
+    ]);
+    for (const run of runs) {
+      expect(run).not.toHaveProperty("result");
+      expect(run).not.toHaveProperty("report");
     }
   } finally {
     await app.close();

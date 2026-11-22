@@ -1,10 +1,13 @@
 import {
   taskListEmptyLabels,
   taskListLabels,
+  statusLabels,
   taskStatusFilterLabels,
 } from "../../shared/status-glossary.js";
 import {
   countTaskFilterConditions,
+  mergedWeekBounds,
+  mergedWeekDay,
   taskStatusFilterIds,
   taskStatusFilters,
 } from "../../shared/task-list.js";
@@ -76,6 +79,7 @@ const defaults = {
   project: "all",
   by: "",
   q: "",
+  mergedWeek: "",
 };
 const preferenceKeys = [
   "filter",
@@ -84,6 +88,7 @@ const preferenceKeys = [
   "project",
   "by",
   "q",
+  "mergedWeek",
 ] as const;
 
 function statusPreference(values: string[]) {
@@ -119,6 +124,10 @@ function readPreferences(state: State, storageKey: string) {
     ),
     by: pick("by", (value) => ["project", "group", "none"].includes(value)),
     q: params.get("q") ?? "",
+    mergedWeek:
+      filter === "closed"
+        ? pick("mergedWeek", (day) => mergedWeekBounds(day) !== null)
+        : "",
   };
 }
 
@@ -337,7 +346,8 @@ export function TasksView({
   const [preferences, setPreferences] = useState(() =>
     readPreferences(state, storageKey),
   );
-  const { filter, group, project, status, q: search } = preferences;
+  const { filter, group, project, status, q: search, mergedWeek } = preferences;
+  const week = mergedWeek ? mergedWeekBounds(mergedWeek) : null;
   const mobile = useSyncExternalStore(subscribeToTaskLayout, isMobileWidth);
   const isHistory = filter === "all" || filter === "closed";
   const by = (preferences.by || (isHistory ? "none" : "project")) as By;
@@ -348,7 +358,10 @@ export function TasksView({
     const next = { ...preferences, ...updates };
     setPreferences(next);
     try {
-      localStorage.setItem(storageKey, new URLSearchParams(next).toString());
+      const remembered = new URLSearchParams(next);
+      // 下鑽日期只記在網址，避免日後從導覽開啟任務頁時沿用舊日期。
+      remembered.delete("mergedWeek");
+      localStorage.setItem(storageKey, remembered.toString());
     } catch {
       // 瀏覽器無法儲存偏好時仍保留此頁的操作。
     }
@@ -380,6 +393,7 @@ export function TasksView({
         .flatMap((id) => taskStatusFilters[id])
     : unfinishedStatuses;
   const narrowed =
+    !!week ||
     (!isHistory && status !== "") ||
     group !== "all" ||
     project !== "all" ||
@@ -405,8 +419,10 @@ export function TasksView({
   if (group !== "all") params.set("group", group);
   if (project !== "all") params.set("project", project);
   if (search) params.set("q", search);
+  if (week) params.set("mergedWeek", mergedWeek);
   const currentTab = tabs.find((tab) => tab.id === filter) ?? tabs[0];
   const emptyTab =
+    !week &&
     tabCount(currentTab.statuses) === 0 &&
     !state.tasks.some(
       (task) => currentTab.statuses?.includes(task.status) ?? true,
@@ -441,8 +457,9 @@ export function TasksView({
                   group: "all",
                   project: "all",
                   q: "",
+                  mergedWeek: "",
                 });
-                searchField.current?.focus();
+                (week ? closedTab : searchField).current?.focus();
               }}
             >
               清除篩選
@@ -469,13 +486,14 @@ export function TasksView({
       )}
     </Card>
   );
-  const filterCount = countTaskFilterConditions({
-    statuses: selectedStatuses,
-    group,
-    project,
-    by,
-    isHistory,
-  });
+  const filterCount =
+    countTaskFilterConditions({
+      statuses: selectedStatuses,
+      group,
+      project,
+      by,
+      isHistory,
+    }) + Number(!!week);
   const statusControls = !isHistory && (
     <fieldset className="min-w-0">
       <legend className="mb-1 text-sm text-muted-foreground">
@@ -582,7 +600,7 @@ export function TasksView({
   return (
     <Tabs
       value={filter}
-      onValueChange={(filter) => change({ filter })}
+      onValueChange={(filter) => change({ filter, mergedWeek: "" })}
       className="work-surface min-w-0 gap-4 md:gap-6"
     >
       <div className="flex flex-col gap-3">
@@ -604,12 +622,33 @@ export function TasksView({
               className="h-auto min-h-11 flex-none flex-wrap gap-y-0 px-1 text-center whitespace-normal sm:px-2.5"
             >
               {f.label}
-              <span className="text-xs text-muted-foreground">
-                {tabCount(f.statuses)}
-              </span>
+              {!(week && f.id === "closed") && (
+                <span className="text-xs text-muted-foreground">
+                  {tabCount(f.statuses)}
+                </span>
+              )}
             </TabsTrigger>
           ))}
         </TabsList>
+        {week && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+            <span>
+              {statusLabels.merged}，更新於{" "}
+              {mergedWeekDay(week.since).replaceAll("-", "/")} 至{" "}
+              {mergedWeek.replaceAll("-", "/")}（臺北時間）
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                change({ mergedWeek: "" });
+                closedTab.current?.focus();
+              }}
+            >
+              清除已合併日期篩選
+            </Button>
+          </div>
+        )}
         {!emptyTab && (
           <>
             {!mobile && statusControls}

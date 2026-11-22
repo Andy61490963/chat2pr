@@ -1,4 +1,9 @@
 import type { InstallReport } from "./install-plan.js";
+export type RunVerificationScope = {
+  kind: "build" | "partial";
+  limitations?: string;
+};
+
 export interface RunEvent {
   seq: number;
   at: string;
@@ -11,6 +16,8 @@ export interface RunEvent {
 }
 export interface RunView {
   pr_summary?: string | null;
+  /** 本次執行實際使用的有限驗證範圍。 */
+  verification_scope?: RunVerificationScope | null;
   query_sources?:
     | { name: string; repo: string; branch: string; commit: string | null }[]
     | null;

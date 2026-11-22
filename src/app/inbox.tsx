@@ -2,9 +2,16 @@ import {
   inboxStatusLabels,
   notificationLabels,
   projectLabels,
+  taskClarificationLabels,
+  taskListLabels,
   taskStatusFilterLabels,
 } from "../../shared/status-glossary.js";
-import type { TaskStatusFilter } from "../../shared/task-list.js";
+import {
+  isMergedInWeek,
+  mergedWeekBounds,
+  mergedWeekDay,
+  type TaskListDestination,
+} from "../../shared/task-list.js";
 import { taskListTitle } from "../../shared/task-title.js";
 import {
   activityDay,
@@ -18,7 +25,6 @@ import type { PickList } from "../../shared/pick-list.js";
 import { PickListForm } from "./pick-list";
 import {
   Activity,
-  AlertCircle,
   Archive,
   ArrowUpRight,
   Bot,
@@ -122,7 +128,8 @@ function setupSteps(state: State) {
     },
     {
       done: !!(state.settings.admin_notify_platform === "discord"
-        ? state.settings.admin_discord_id : state.settings.admin_line_id),
+        ? state.settings.admin_discord_id
+        : state.settings.admin_line_id),
       label: "管理者私訊通知已配對",
       hint: "在設定頁產生配對碼",
       view: "settings" as View,
@@ -135,6 +142,9 @@ function setupSteps(state: State) {
     },
   ];
 }
+
+export type TaskDrawerAction = "amend" | "answer";
+type OpenTask = (id: string, action?: TaskDrawerAction) => unknown;
 
 export function InboxView({
   state,
@@ -154,9 +164,8 @@ export function InboxView({
   busy: boolean;
   go: (v: View, projectId?: string | null) => void;
   admin: boolean;
-  showTasks: (filter: TaskStatusFilter | "closed") => void;
-  /** amend 為 true 時打開任務詳情並直接展開補充需求編輯。 */
-  open: (id: string, amend?: boolean) => unknown;
+  showTasks: (filter: TaskListDestination) => void;
+  open: OpenTask;
   act: Act;
   endTasks: (
     tasks: EndTaskSelection[],
@@ -220,12 +229,11 @@ export function InboxView({
     working.length === 0 &&
     ready.length === 0 &&
     lists.length === 0;
-  const week = Date.now() - 7 * 86400000;
+  const weekDay = state.totals?.mergedWeekDay ?? mergedWeekDay();
+  const week = mergedWeekBounds(weekDay)!;
   const mergedWeek =
     state.totals?.mergedWeek ??
-    state.tasks.filter(
-      (t) => t.status === "merged" && new Date(t.updated_at).getTime() > week,
-    ).length;
+    state.tasks.filter((t) => isMergedInWeek(t, week)).length;
   return (
     <div
       className={cn(
@@ -585,9 +593,10 @@ export function InboxView({
             <button
               type="button"
               className="work-touch font-medium hover:underline"
-              onClick={() => showTasks("closed")}
+              onClick={() => showTasks({ mergedWeek: weekDay })}
             >
-              近 7 天已合併 <span className="tabular-nums">{mergedWeek}</span>
+              {taskListLabels.mergedWeek}{" "}
+              <span className="tabular-nums">{mergedWeek}</span>
             </button>
             <span className="tabular-nums">
               累計 {state.totals?.tasks ?? state.tasks.length} 個需求
@@ -908,12 +917,14 @@ function DecisionCard({
   task: Task;
   state: State;
   busy: boolean;
-  open: (id: string, amend?: boolean) => unknown;
+  open: OpenTask;
   act: Act;
   go?: (v: View, projectId?: string | null) => void;
   selection?: React.ReactNode;
 }) {
-  const pick = t.status === "awaiting_approval" && !t.project_id;
+  const deciding = t.status === "awaiting_approval";
+  const hasQuestion = deciding && !!t.question;
+  const pick = deciding && !t.project_id && !hasQuestion;
   // 失敗說明拆成白話說明、建議與錯誤重點：建議固定排在最後，整段截兩行一定看不到。
   const failure = t.status === "failed" ? parseFailure(t.last_error) : null;
   // 主動作與任務詳情共用 primaryFix：重試、縮小需求範圍、前往頁面或看詳情。
@@ -921,14 +932,30 @@ function DecisionCard({
   // go 只在管理者時提供；成員看不到前往設定頁的按鈕，改用「詳情」當主按鈕。
   const target = go && fix.kind === "page" ? fix.page : null;
   const amend = t.status === "failed" && fix.kind === "amend";
+  const approvalStatus = hasQuestion
+    ? inboxStatusLabels.answer
+    : pick
+      ? inboxStatusLabels.chooseProject
+      : t.suggestions.length
+        ? inboxStatusLabels.chooseOption
+        : t.missing.length
+          ? inboxStatusLabels.amend
+          : inboxStatusLabels.review;
+  const failureAction = target
+    ? fixPageLabels[target]
+    : amend
+      ? taskClarificationLabels.amend
+      : fix.kind === "retry"
+        ? "重試任務"
+        : "查看詳情";
+  const status = deciding
+    ? approvalStatus
+    : inboxStatusLabels.fix(failureAction);
+  const detailFirst = !deciding && !target && !amend && fix.kind !== "retry";
   const reason =
-    t.status === "awaiting_approval"
-      ? pick
-        ? "請選擇這次需求要處理的專案。"
-        : (t.risk_reasons[0] ?? t.missing[0] ?? "需求等待確認")
-      : failure
-        ? failure.headline
-        : (t.last_error?.replace(/^Error: /, "") ?? statusLabels[t.status]);
+    deciding && !pick
+      ? (t.risk_reasons[0] ?? (!hasQuestion ? t.missing[0] : null))
+      : failure?.headline;
   return (
     <div className="py-4">
       <CardContent>
@@ -943,20 +970,14 @@ function DecisionCard({
                 {taskListTitle(t)}
               </span>
               <TaskRowFields task={t} state={state} />
-              <span
-                className={cn(
-                  "flex items-start gap-1.5 text-sm",
-                  t.status === "failed" ? "text-danger" : "text-warn",
-                )}
-              >
-                <AlertCircle className="mt-0.5 size-4 shrink-0" />
-                <span className="line-clamp-2 [overflow-wrap:anywhere]">
+              {reason && (
+                <span className="line-clamp-2 text-sm text-muted-foreground [overflow-wrap:anywhere]">
                   {reason}
                 </span>
-              </span>
+              )}
             </button>
           </div>
-          <StationTrack task={t} />
+          <StationTrack task={t} statusLabel={status} compact />
         </div>
         {failure && (
           <div className="mt-1.5 flex flex-col gap-1.5 pl-[1.375rem] text-sm">
@@ -983,21 +1004,28 @@ function DecisionCard({
           />
         ) : (
           <>
-            {t.status === "awaiting_approval" && t.suggestions.length > 0 && (
+            {deciding && !hasQuestion && t.suggestions.length > 0 && (
               <SuggestionList task={t} busy={busy} open={() => open(t.id)} />
             )}
             <div className="mt-4 flex flex-wrap gap-2">
-              {t.status === "awaiting_approval" && !t.missing.length && (
+              {hasQuestion && (
+                <Button disabled={busy} onClick={() => open(t.id, "answer")}>
+                  {taskClarificationLabels.action}
+                </Button>
+              )}
+              {deciding && !hasQuestion && !t.missing.length && (
                 <Button disabled={busy} onClick={() => open(t.id)}>
                   <Check /> 檢視專案並確認
                 </Button>
               )}
-              {t.status === "awaiting_approval" && t.missing.length > 0 && (
+              {deciding && (hasQuestion || t.missing.length > 0) && (
                 <Button
-                  variant={t.suggestions.length ? "outline" : "default"}
-                  onClick={() => open(t.id, true)}
+                  variant={
+                    hasQuestion || t.suggestions.length ? "outline" : "default"
+                  }
+                  onClick={() => open(t.id, "amend")}
                 >
-                  修改這一題
+                  {taskClarificationLabels.amend}
                 </Button>
               )}
               {/* 失敗時主按鈕依原因：先修設定的前往頁面、逾時先修改這一題；
@@ -1008,7 +1036,9 @@ function DecisionCard({
                 </Button>
               )}
               {amend && (
-                <Button onClick={() => open(t.id, true)}>修改這一題</Button>
+                <Button onClick={() => open(t.id, "amend")}>
+                  {taskClarificationLabels.amend}
+                </Button>
               )}
               {t.status === "failed" && (
                 <Button
@@ -1021,7 +1051,7 @@ function DecisionCard({
               )}
               <EndTaskButton task={t} busy={busy} act={act} />
               <Button
-                variant={fix.kind === "detail" ? "default" : "ghost"}
+                variant={detailFirst ? "default" : "ghost"}
                 onClick={() => open(t.id)}
               >
                 詳情

@@ -103,7 +103,7 @@ export type State = {
   alertsSeenAt?: string | null;
   /**
    * 資料庫裡的總筆數與各狀態數量；已結束的任務與動態只載入最近的一部分，差額用「載入更多」補上。
-   * 舊版伺服器沒有 byStatus、mergedWeek。
+   * 舊版伺服器可能沒有狀態分布與合併統計。
    */
   totals?: Pick<StateTotals, "tasks" | "activity"> & Partial<StateTotals>;
   /** 重試三次仍送不出去的 LINE 通知數。 */
@@ -491,6 +491,7 @@ export function StationTrack({
   task,
   labelled = false,
   statusLabel,
+  compact = false,
   endAction,
 }: {
   task: Pick<
@@ -504,6 +505,7 @@ export function StationTrack({
   >;
   labelled?: boolean;
   statusLabel?: string;
+  compact?: boolean;
   endAction?: ReactNode;
 }) {
   const { status } = task;
@@ -561,26 +563,34 @@ export function StationTrack({
 
   return (
     <span className="station-track" data-tone={statusVariant[status]}>
-      <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+      <span
+        className={cn(
+          "flex flex-wrap items-center gap-x-2 gap-y-1",
+          compact &&
+            "[&_[data-slot=badge]]:max-w-full [&_[data-slot=badge]]:whitespace-normal",
+        )}
+      >
         <StatusBadge status={status} label={statusLabel ?? label} />
-        <span className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">
-          {ended ? (
-            <>
-              {end?.actor &&
-                // 英數字結尾的帳號和「於」之間留空格，避免黏在一起。
-                `${end.actor}${/[A-Za-z0-9]$/.test(end.actor) ? " " : ""}於 `}
-              <time dateTime={endAt}>
-                {labelled ? date(endAt) : endDay.format(new Date(endAt))}
-              </time>{" "}
-              {completion ?? endCopy.event}
-              {labelled && end?.reason && `，原因是${end.reason}`}
-            </>
-          ) : at === undefined ? (
-            position
-          ) : (
-            `${position}站`
-          )}
-        </span>
+        {(!compact || ended) && (
+          <span className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+            {ended ? (
+              <>
+                {end?.actor &&
+                  // 英數字結尾的帳號和「於」之間留空格，避免黏在一起。
+                  `${end.actor}${/[A-Za-z0-9]$/.test(end.actor) ? " " : ""}於 `}
+                <time dateTime={endAt}>
+                  {labelled ? date(endAt) : endDay.format(new Date(endAt))}
+                </time>{" "}
+                {completion ?? endCopy.event}
+                {labelled && end?.reason && `，原因是${end.reason}`}
+              </>
+            ) : at === undefined ? (
+              position
+            ) : (
+              `${position}站`
+            )}
+          </span>
+        )}
         {ended && endAction}
       </span>
       {(!ended || at !== undefined) && (
