@@ -27,6 +27,7 @@ export type PickItem = Pick<
   | "question"
   | "assumptions"
   | "suggestions"
+  | "discord_thread_id"
 > & {
   configVersion: number | null;
   images: { id: string; hash: string; origin: Message["contextOrigin"] }[];
@@ -114,14 +115,16 @@ export async function pendingPickItems(
   db: Database,
   groupId: string,
   quotedIds: (string | null)[],
+  threadId: string | null = null,
 ) {
   const rows = await db.query<{ items: PickItem[] }>(
     `SELECT l.items FROM pick_lists l WHERE group_id=$1 AND ${pending}
+       AND (l.items->0->>'discord_thread_id') IS NOT DISTINCT FROM $3::text
        ORDER BY EXISTS (
          SELECT 1 FROM jsonb_array_elements(l.items) AS e(item)
          WHERE e.item->'source_ids' ?| $2::text[]
        ) DESC,created_at DESC,id LIMIT 20`,
-    [groupId, quotedIds],
+    [groupId, quotedIds, threadId],
   );
   return rows.flatMap(({ items }) =>
     items.map((item) => ({
@@ -168,8 +171,8 @@ export async function updatePickItem(
     rows: [list],
   } = await c.query<StoredList>(
     `SELECT id,items FROM pick_lists WHERE group_id=$1 AND ${pending}
-       AND items @> $2::jsonb FOR UPDATE`,
-    [groupId, JSON.stringify([{ id: item.id }])],
+       AND items @> $2::jsonb AND (items->0->>'discord_thread_id') IS NOT DISTINCT FROM $3::text FOR UPDATE`,
+    [groupId, JSON.stringify([{ id: item.id }]), item.discord_thread_id ?? null],
   );
   if (!list) throw new AppError(409, "待挑選清單已更新，請重新辨識補充訊息");
   const prior = list.items.find((entry) => entry.id === item.id)!;
@@ -270,8 +273,8 @@ async function createPickedTask(
     rows: [task],
   } = await c.query<Task>(
     `INSERT INTO tasks(group_id,project_id,title,summary,acceptance,missing,risk_reasons,source_ids,
-        status,dedupe_key,project_routing,target_branch,branch_selection,question,assumptions,suggestions)
-       VALUES($1,$2,$3,$4,$5,$6,$7,$8,'awaiting_approval',$9,$10,$11,$12,$13,$14,$15) RETURNING *`,
+        status,dedupe_key,project_routing,target_branch,branch_selection,question,assumptions,suggestions,discord_thread_id)
+       VALUES($1,$2,$3,$4,$5,$6,$7,$8,'awaiting_approval',$9,$10,$11,$12,$13,$14,$15,$16) RETURNING *`,
     [
       group.id,
       current ? item.project_id : null,
@@ -298,6 +301,7 @@ async function createPickedTask(
       JSON.stringify(item.question),
       JSON.stringify(item.assumptions),
       JSON.stringify(item.suggestions),
+      item.discord_thread_id ?? null,
     ],
   );
   await c.query(

@@ -279,6 +279,7 @@ export const statusChat: ChatPage = {
 };
 
 export const task: Task = {
+  discord_thread_id: null,
   id: "11111111-1111-4111-8111-111111111111",
   project_id: project.id,
   group_id: group.id,

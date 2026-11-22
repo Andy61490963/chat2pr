@@ -22,6 +22,30 @@ function imageUrls(
     .map((attachment) => attachment.url);
 }
 
+function textChannel(client: Client, id: string) {
+  const channel = client.channels.cache.get(id);
+  const thread =
+    channel?.type === ChannelType.PublicThread ||
+    channel?.type === ChannelType.PrivateThread ||
+    channel?.type === ChannelType.AnnouncementThread
+      ? channel
+      : undefined;
+  const parentChannel = thread?.parentId;
+  const parent = parentChannel
+    ? client.channels.cache.get(parentChannel)
+    : channel;
+  if (
+    parent?.type !== ChannelType.GuildText &&
+    parent?.type !== ChannelType.GuildAnnouncement
+  )
+    return;
+  return {
+    guildId: parent.guildId,
+    name: `${parent.guild.name}／#${parent.name}`,
+    ...(parentChannel && { parentChannel }),
+  };
+}
+
 function receive(
   client: Client,
   packet: GatewayDispatchPayload,
@@ -47,14 +71,8 @@ function receive(
         });
         return;
       }
-      const channel = client.channels.cache.get(message.channel_id);
-      if (
-        !client.user ||
-        !channel ||
-        (channel.type !== ChannelType.GuildText &&
-          channel.type !== ChannelType.GuildAnnouncement)
-      )
-        return;
+      const channel = textChannel(client, message.channel_id);
+      if (!client.user || !channel) return;
       if (
         message.webhook_id ||
         (message.type !== MessageType.Default &&
@@ -66,7 +84,8 @@ function receive(
         type: "create",
         id: message.id,
         channel: message.channel_id,
-        name: `${channel.guild.name}／#${channel.name}`,
+        name: channel.name,
+        ...(channel.parentChannel && { parentChannel: channel.parentChannel }),
         author: {
           id: message.author.id,
           bot: message.author.bot,
@@ -89,16 +108,16 @@ function receive(
     }
     case GatewayDispatchEvents.InteractionCreate: {
       const interaction = packet.d;
-      const channel = client.channels.cache.get(interaction.channel?.id ?? "");
+      const id = interaction.channel?.id;
+      const channel = id && textChannel(client, id);
       const user = interaction.member?.user;
       if (
         !client.user ||
         !interaction.guild_id ||
         !user ||
         user.bot ||
+        !id ||
         !channel ||
-        (channel.type !== ChannelType.GuildText &&
-          channel.type !== ChannelType.GuildAnnouncement) ||
         channel.guildId !== interaction.guild_id
       )
         return;
@@ -106,8 +125,9 @@ function receive(
         id: interaction.id,
         token: interaction.token,
         applicationId: interaction.application_id,
-        channel: channel.id,
-        name: `${channel.guild.name}／#${channel.name}`,
+        channel: id,
+        name: channel.name,
+        ...(channel.parentChannel && { parentChannel: channel.parentChannel }),
         botId: client.user.id,
         member: {
           id: user.id,
@@ -117,7 +137,7 @@ function receive(
       if (
         interaction.type === InteractionType.MessageComponent &&
         interaction.data.component_type === ComponentType.Button &&
-        interaction.message?.channel_id === channel.id &&
+        interaction.message?.channel_id === id &&
         interaction.message.author.id === client.user.id
       ) {
         void callbacks.interaction?.({

@@ -178,6 +178,7 @@ export class Retrieval {
       group_id: string;
       title: string;
       summary: string;
+      discord_thread_id?: string | null;
     },
     active: boolean,
   ): Promise<
@@ -187,12 +188,14 @@ export class Retrieval {
     const eligible = `FROM embeddings e JOIN tasks t ON t.id::text=e.ref_id AND t.project_id=e.project_id
       JOIN group_projects source ON source.group_id=t.group_id AND source.project_id=t.project_id
       JOIN group_projects target ON target.group_id=$3 AND target.project_id=e.project_id
-      WHERE e.kind='outcome' AND e.project_id=$1 AND t.id<>$2 AND t.target_branch=coalesce($4,(SELECT base_branch FROM projects WHERE id=$1)) AND t.status IN ('failed','ready','merged') AND ${enabled}`;
+      WHERE e.kind='outcome' AND e.project_id=$1 AND t.id<>$2 AND t.target_branch=coalesce($4,(SELECT base_branch FROM projects WHERE id=$1)) AND t.status IN ('failed','ready','merged') AND ${enabled}
+      AND (t.discord_thread_id IS NULL OR (t.group_id=$3 AND t.discord_thread_id=$5))`;
     const scope = [
       task.project_id,
       task.id,
       task.group_id,
       task.target_branch ?? null,
+      task.discord_thread_id ?? null,
     ];
     try {
       if (!(await this.db.one("SELECT 1 " + eligible + " LIMIT 1", scope)))
@@ -206,9 +209,9 @@ export class Retrieval {
         score: number;
         source_time: Date;
       }>(
-        'SELECT e.ref_id AS "taskId",e.content AS summary,1-(e.embedding <=> $5::vector) AS score,t.updated_at AS source_time ' +
+        'SELECT e.ref_id AS "taskId",e.content AS summary,1-(e.embedding <=> $6::vector) AS score,t.updated_at AS source_time ' +
           eligible +
-          " ORDER BY e.embedding <=> $5::vector,e.ref_id LIMIT 3",
+          " ORDER BY e.embedding <=> $6::vector,e.ref_id LIMIT 3",
         [...scope, JSON.stringify(v)],
       );
       await this.health("outcomes", true, "已檢索同專案任務結果");
@@ -225,6 +228,7 @@ export class Retrieval {
     projects: string[],
     active: boolean,
     bases: ProjectBase[] = [],
+    threadId: string | null = null,
   ): Promise<Lookup> {
     if (!active || !query.trim()) {
       const reason = active ? "沒有可供檢索的文字" : "未啟用";
@@ -243,11 +247,13 @@ export class Retrieval {
         WHERE s.kind IN ('message','memory','knowledge','task','image') AND (s.group_id=$1 OR s.kind='knowledge') AND (s.project_id IS NULL OR (s.project_id=ANY($4::uuid[])
         AND EXISTS(SELECT 1 FROM group_projects gp WHERE gp.group_id=$1 AND gp.project_id=s.project_id)))
         AND (s.kind NOT IN ('message','image') OR NOT(s.ref_id=ANY($3::text[])))
+        AND (s.discord_thread_id IS NOT DISTINCT FROM $5::text
+          OR (s.discord_thread_id IS NULL AND s.kind IN ('memory','knowledge')))
       ), bounded AS (SELECT *,row_number() OVER(PARTITION BY kind ORDER BY score DESC,id) AS n FROM ranked)
       SELECT kind,id,project_id,content,source_time,score,source_hash FROM bounded WHERE n<=CASE kind WHEN 'message' THEN 20 WHEN 'task' THEN 10 WHEN 'image' THEN 4 ELSE 5 END
       AND (kind<>'image' OR score>=0.45)
       ORDER BY score DESC,kind,id`,
-        [group, JSON.stringify(vector), exclude, projects],
+        [group, JSON.stringify(vector), exclude, projects, threadId],
       );
       const hits: Hit[] = [];
       const imageCandidates = rows.filter((r) => r.kind === "image");

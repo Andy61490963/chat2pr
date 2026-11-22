@@ -26,11 +26,24 @@ vi.mock("discord.js", async (original) => {
           "1",
           {
             type: discord.ChannelType.GuildText,
+            guildId: "4",
             name: "需求",
             guild: { name: "範例伺服器" },
           },
         ],
         ["10", { type: discord.ChannelType.PublicThread }],
+        ["11", { type: discord.ChannelType.PublicThread, parentId: "1" }],
+        ["12", { type: discord.ChannelType.PrivateThread, parentId: "1" }],
+        [
+          "13",
+          {
+            type: discord.ChannelType.GuildAnnouncement,
+            guildId: "4",
+            name: "公告",
+            guild: { name: "範例伺服器" },
+          },
+        ],
+        ["14", { type: discord.ChannelType.AnnouncementThread, parentId: "13" }],
       ]),
     };
     constructor(public options: { intents: number[] }) {
@@ -49,7 +62,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("Gateway 只收文字頻道事件，保留暱稱、同頻道引用與圖片附件", async () => {
+it("Gateway 保留文字頻道的暱稱、同頻道引用與圖片附件", async () => {
   const adapter = createDiscordGateway();
   const event = vi.fn(async () => {});
   const health = vi.fn(async () => {});
@@ -128,6 +141,54 @@ it("Gateway 只收文字頻道事件，保留暱稱、同頻道引用與圖片�
     await adapter.stop();
   }
 });
+
+it.each([
+  ["公開", "11", "1", "需求"],
+  ["私人", "12", "1", "需求"],
+  ["公告", "14", "13", "公告"],
+])(
+  "Gateway 保留%s討論串的實際頻道與父頻道",
+  async (_kind, channel, parent, name) => {
+    const adapter = createDiscordGateway();
+    const event = vi.fn(async () => {});
+    adapter.start("虛構權杖", { event, health: vi.fn(async () => {}) });
+    try {
+      const client = clients[0];
+      client.emit(Events.Raw, {
+        t: GatewayDispatchEvents.MessageCreate,
+        d: {
+          id: "30",
+          channel_id: channel,
+          guild_id: "4",
+          type: MessageType.Reply,
+          content: "查詢按鈕",
+          author: { id: "5", username: "小林" },
+          message_reference: { channel_id: channel, message_id: "21" },
+          attachments: [],
+        },
+      });
+      expect(event).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          type: "create",
+          channel,
+          parentChannel: parent,
+          name: `範例伺服器／#${name}`,
+          quotedId: "21",
+        }),
+      );
+      client.emit(Events.Raw, {
+        t: GatewayDispatchEvents.MessageDeleteBulk,
+        d: { channel_id: channel, ids: ["30", "31"] },
+      });
+      expect(event.mock.calls.slice(1)).toEqual([
+        [{ type: "delete", id: "30", channel }],
+        [{ type: "delete", id: "31", channel }],
+      ]);
+    } finally {
+      await adapter.stop();
+    }
+  },
+);
 
 it("可恢復的斷線交由 Gateway 續接，工作階段終止後會另建連線", async () => {
   vi.useFakeTimers();

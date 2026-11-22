@@ -205,6 +205,221 @@ it("Discord 群組送出補問、查詢答案、完成與失敗，收到需求�
   }
 });
 
+it("討論串沿用父頻道的設定，建立的需求在原討論串收到反應、補問及結果", async () => {
+  const { rest, platform } = fakeRest();
+  const { event } = fakeGateway(platform);
+  const thread = "100000000000000021";
+  const inThread = { channel: thread, parentChannel: channel };
+  const project = await fixture();
+  await event(create("20", { ...inThread, text: "/任務 整理示範專案" }));
+  const github = new GitHub();
+  github.context = async () => ({
+    branches: { names: ["main"], defaultBranch: "main", truncated: false },
+    branchError: null,
+    sha: "fixture-base",
+    paths: [],
+    files: {},
+    truncated: false,
+  });
+  const classify = vi.fn(async () => [
+    {
+      kind: "clarification" as const,
+      projectId: project,
+      title: "整理示範專案",
+      summary: "整理示範專案的按鈕",
+      acceptance: ["指定要調整的按鈕"],
+      sourceIds: [discordId("22")],
+      risks: [],
+      missing: [],
+      relatedTaskId: null,
+      suggestions: [],
+      question: { text: "要調整哪個按鈕？", choices: [] },
+    },
+  ]);
+  const line = new Line(db, platform);
+  const triage = new Triage(db, { classify }, github, line, new Budget(db));
+  await triage.process(group);
+  expect(classify).not.toHaveBeenCalled();
+  expect(
+    await db.query("SELECT id FROM tasks WHERE group_id=$1", [group]),
+  ).toEqual([]);
+  expect(
+    await db.query("SELECT id FROM groups WHERE platform='discord'"),
+  ).toEqual([{ id: group }]);
+
+  await db.query(
+    "UPDATE groups SET enabled=true,reply_mode='all',trigger_mode='command' WHERE id=$1",
+    [group],
+  );
+  await db.query(
+    "INSERT INTO group_projects(group_id,project_id) VALUES($1,$2)",
+    [group, project],
+  );
+  await event(create("21", { ...inThread, text: "小林正在整理按鈕。" }));
+  await event(create("22", { ...inThread, text: "/任務 整理示範專案" }));
+  await event(create("23", { text: "/任務 整理父頻道的清單" }));
+  await triage.process(group);
+  expect(classify).toHaveBeenCalledOnce();
+  const task = await db.one<Task>("SELECT * FROM tasks WHERE group_id=$1", [
+    group,
+  ]);
+  expect(task).toMatchObject({
+    source_ids: [discordId("22")],
+    discord_thread_id: discordId(thread),
+  });
+  expect(
+    await db.one("SELECT processed FROM messages WHERE id=$1", [
+      discordId("23"),
+    ]),
+  ).toMatchObject({ processed: false });
+
+  await notifyGroup(db.pool, task.id, "ready", "範例：完成", "整理完成");
+  await line.flushNotifications();
+  expect(rest.put).toHaveBeenCalledWith(
+    `/channels/${thread}/messages/22/reactions/${encodeURIComponent("✅")}/@me`,
+  );
+  expect(rest.post).toHaveBeenCalledWith(
+    `/channels/${thread}/messages`,
+    expect.objectContaining({
+      body: expect.objectContaining({ content: "整理完成" }),
+    }),
+  );
+  expect(
+    rest.post.mock.calls.every(
+      ([route]) => route === `/channels/${thread}/messages`,
+    ),
+  ).toBe(true);
+  const notice = await db.one<{ sent_message_id: string }>(
+    "SELECT sent_message_id FROM notifications WHERE task_id=$1 AND kind='group_question'",
+    [task.id],
+  );
+  await event(
+    create("24", {
+      ...inThread,
+      quotedId: notice.sent_message_id.slice("discord:".length),
+      text: "調整查詢按鈕",
+    }),
+  );
+  expect(
+    await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [task.id]),
+  ).toMatchObject({
+    question: null,
+    summary: expect.stringContaining("回答：調整查詢按鈕"),
+  });
+  await stop?.();
+  expect(rest.post).toHaveBeenLastCalledWith(
+    `/channels/${thread}/messages`,
+    expect.objectContaining({
+      body: expect.objectContaining({
+        message_reference: { message_id: "24", fail_if_not_exists: false },
+      }),
+    }),
+  );
+});
+
+it("在補問開出的討論串發言可直接作答，編輯和撤回會核對實際頻道", async () => {
+  const { rest, platform } = fakeRest();
+  const { event } = fakeGateway(platform);
+  const task = await discordTask();
+  await askInGroup(db.pool, task);
+  await new Line(db, platform).flushNotifications();
+  const notice = await db.one<{ sent_message_id: string }>(
+    "SELECT sent_message_id FROM notifications WHERE task_id=$1 AND kind='group_question'",
+    [task.id],
+  );
+  const thread = notice.sent_message_id.slice("discord:".length);
+  await event(
+    create("25", {
+      channel: thread,
+      parentChannel: channel,
+      text: "調整取消按鈕",
+    }),
+  );
+  expect(
+    await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [task.id]),
+  ).toMatchObject({
+    question: null,
+    version: task.version + 1,
+    summary: expect.stringContaining("回答：調整取消按鈕"),
+  });
+  const answer = "26";
+  await event(
+    create(answer, {
+      channel: thread,
+      parentChannel: channel,
+      text: "補上說明",
+    }),
+  );
+  await event({
+    type: "update",
+    id: answer,
+    channel: thread,
+    botId,
+    editedAt: "2026-11-21T00:00:00Z",
+    text: "補上完整說明",
+  });
+  await event({ type: "delete", id: answer, channel });
+  expect(
+    await db.one("SELECT text,revoked FROM messages WHERE id=$1", [
+      discordId(answer),
+    ]),
+  ).toEqual({ text: "補上完整說明", revoked: false });
+  await event({ type: "delete", id: answer, channel: thread });
+  expect(
+    await db.one("SELECT text,revoked FROM messages WHERE id=$1", [
+      discordId(answer),
+    ]),
+  ).toEqual({ text: null, revoked: true });
+  await stop?.();
+  expect(rest.post).toHaveBeenLastCalledWith(
+    `/channels/${thread}/messages`,
+    expect.objectContaining({
+      body: expect.objectContaining({
+        content: expect.stringContaining("收到你的回答"),
+      }),
+    }),
+  );
+});
+
+it("父頻道的進度不包含討論串任務，討論串內仍可取回未送達的補問", async () => {
+  const { rest, platform } = fakeRest();
+  const task = await discordTask();
+  const thread = "100000000000000027";
+  const scoped = await db.one<Task>(
+    "UPDATE tasks SET discord_thread_id=$2 WHERE id=$1 RETURNING *",
+    [task.id, discordId(thread)],
+  );
+  await askInGroup(db.pool, scoped);
+
+  await handleDiscordInteraction(db, platform, {
+    ...interaction,
+    kind: "progress",
+  });
+  expect(rest.patch.mock.calls.at(-1)?.[1]?.body).toMatchObject({
+    content: expect.stringContaining("這個頻道最近 7 天沒有需求"),
+  });
+  expect(rest.post).toHaveBeenCalledTimes(1);
+
+  await handleDiscordInteraction(db, platform, {
+    ...interaction,
+    id: "100000000000000028",
+    channel: thread,
+    parentChannel: channel,
+    kind: "progress",
+  });
+  expect(rest.patch.mock.calls.at(-1)?.[1]?.body).toMatchObject({
+    content: expect.stringContaining("這個討論串最近的需求"),
+  });
+  expect(rest.post).toHaveBeenLastCalledWith(
+    `/webhooks/${applicationId}/${interaction.token}`,
+    expect.objectContaining({
+      body: expect.objectContaining({
+        content: expect.stringContaining("要調整哪個按鈕？"),
+      }),
+    }),
+  );
+});
+
 it("Discord 按鈕只接受同頻道的現行版本，回覆機器人的補問也能作答", async () => {
   const { platform, rest } = fakeRest();
   const gateway = fakeGateway(platform);

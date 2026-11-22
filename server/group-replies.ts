@@ -66,8 +66,9 @@ export async function notifyGroupDirect(
   sourceMessageId?: string,
 ) {
   await c.query(
-    `INSERT INTO notifications(task_id,kind,dedupe_key,text,group_id,source_message_id)
-     SELECT $2,$3,$4,$5,g.id,$6 FROM groups g
+    `INSERT INTO notifications(task_id,kind,dedupe_key,text,group_id,source_message_id,discord_thread_id)
+     SELECT $2,$3,$4,$5,g.id,$6,m.discord_thread_id FROM groups g
+     LEFT JOIN messages m ON m.id=$6 AND m.group_id=g.id
      WHERE g.id=$1 AND g.left_at IS NULL AND ${groupRepliesOn} AND g.reply_mode IN ('results','all')
      ON CONFLICT DO NOTHING`,
     [groupId, taskId, `group_${kind}`, `group:${key}`, groupText(text), sourceMessageId ?? null],
@@ -178,7 +179,7 @@ export function progressSummary(
   total: number,
   pending: number,
   // Discord 的「群組」是頻道；用使用者看到的詞。
-  place: "群組" | "頻道" = "群組",
+  place: "群組" | "頻道" | "討論串" = "群組",
 ) {
   const lines = tasks.map(
     (t) =>
@@ -286,14 +287,16 @@ const newestOfTask = `NOT EXISTS(SELECT 1 FROM notifications m WHERE m.task_id=n
 const pendingFrom = `FROM notifications n JOIN tasks t ON t.id=n.task_id JOIN groups g ON g.id=n.group_id
   WHERE g.platform=$2 AND ${retrievable("n")} AND ${newestOfTask}
   AND (g.platform<>'discord' OR (n.kind<>'group_received' AND
-    (n.discord_retry_at IS NULL OR n.discord_retry_at<=now())))`;
+    (n.discord_retry_at IS NULL OR n.discord_retry_at<=now()) AND
+    (CASE WHEN n.source_message_id IS NOT NULL THEN n.discord_thread_id ELSE t.discord_thread_id END)
+      IS NOT DISTINCT FROM $4::text))`;
 
 /** 本群組可用 /進度 取回的通知數，以及其中是否有推播失敗過的。 */
 export async function pendingGroupReplies(c: DbClient, groupId: string) {
   const r = (
     await c.query<{ count: string; failed: boolean | null }>(
       `SELECT count(*) AS count,bool_or(n.last_error IS NOT NULL) AS failed ${pendingFrom}`,
-      [groupId, "line", claimingNote],
+      [groupId, "line", claimingNote, null],
     )
   ).rows[0];
   return { count: Number(r?.count ?? 0), failed: r?.failed === true };
@@ -311,12 +314,13 @@ export async function claimPendingGroupReplies(
   groupId: string,
   limit: number,
   platform: "line" | "discord" = "line",
+  threadId: string | null = null,
 ) {
   const rows = (
     await c.query<ClaimedReply & { kind: string }>(
       `SELECT n.id,n.kind,n.text,n.quick_replies ${pendingFrom}
        ORDER BY n.created_at,n.id FOR UPDATE OF n SKIP LOCKED`,
-      [groupId, platform, claimingNote],
+      [groupId, platform, claimingNote, threadId],
     )
   ).rows;
   const picked = rows.slice(0, limit);
@@ -360,14 +364,19 @@ export async function supersedeOlderGroupReplies(
 }
 
 /** 本群組還沒結束或 7 天內有變動的任務，只讀 group_id 等於本群組的資料。 */
-export async function progressTasks(c: DbClient, groupId: string, limit = 8) {
+export async function progressTasks(
+  c: DbClient,
+  groupId: string,
+  limit = 8,
+  threadId: string | null = null,
+) {
   const rows = (
     await c.query<ProgressTask & { total: string }>(
       `SELECT t.title,t.status,(t.status='awaiting_approval' AND t.question IS NOT NULL) AS asking,count(*) OVER() AS total
-       FROM tasks t WHERE t.group_id=$1
+       FROM tasks t WHERE t.group_id=$1 AND t.discord_thread_id IS NOT DISTINCT FROM $3::text
        AND (t.status NOT IN ('merged','answered','closed','rejected','cancelled') OR t.updated_at>now()-interval '7 days')
        ORDER BY t.updated_at DESC,t.id LIMIT $2`,
-      [groupId, limit],
+      [groupId, limit, threadId],
     )
   ).rows;
   return {
@@ -399,7 +408,7 @@ const waitText: Record<WaitReason, string> = {
   paused:
     "系統目前暫停中，這件事已經保留，恢復後會自動繼續處理，不用重新提出。",
 };
-/** 工作被保留時告訴群組一聲，不要讓人以為機器人沒反應；同一群組每 6 小時最多一則。 */
+/** 工作被保留時告訴成員一聲，同一群組或討論串每 6 小時最多一則。 */
 export async function tellGroupWaiting(
   c: Queryable,
   taskId: string,
@@ -411,7 +420,7 @@ export async function tellGroupWaiting(
     reason === "busy" && place ? queuedText(place) : waitText[reason];
   await c.query(
     `INSERT INTO notifications(task_id,kind,dedupe_key,text,group_id)
-     SELECT t.id,'group_waiting','group:waiting:'||g.id||':'||$3::text,$2,g.id FROM tasks t JOIN groups g ON g.id=t.group_id
+     SELECT t.id,'group_waiting','group:waiting:'||COALESCE(t.discord_thread_id,g.id)||':'||$3::text,$2,g.id FROM tasks t JOIN groups g ON g.id=t.group_id
      WHERE t.id=$1 AND g.left_at IS NULL AND ${groupRepliesOn} AND g.reply_mode IN ('results','all')
      ON CONFLICT DO NOTHING`,
     [taskId, text, String(bucket)],

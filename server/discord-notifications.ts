@@ -110,23 +110,29 @@ async function sendNextGroup(
       rows: [n],
     } = await c.query<{
       id: string;
-      group_id: string;
+      channel_id: string;
       kind: string;
       text: string;
       origin: string | null;
       quick_replies: QuickReply[] | null;
     }>(
-      // 等同一任務較新的補送結算後，再決定舊通知是否仍須推播。
-      `SELECT n.id,n.group_id,n.kind,n.text,n.quick_replies,
-         COALESCE(direct.discord_reply_message_id,direct.discord_message_id,source.message_id) AS origin
+      // 撤回只移除引用，目的地仍是原頻道或討論串。較新的補送要先結算，才決定是否推播舊通知。
+      `SELECT n.id,n.kind,n.text,n.quick_replies,COALESCE(target.thread_id,g.id) AS channel_id,
+         COALESCE(CASE WHEN NOT direct.revoked THEN COALESCE(direct.discord_reply_message_id,direct.discord_message_id) END,
+           source.message_id) AS origin
        FROM notifications n JOIN groups g ON g.id=n.group_id
        LEFT JOIN tasks t ON t.id=n.task_id AND t.group_id=g.id
-       LEFT JOIN messages direct ON direct.id=n.source_message_id AND direct.group_id=g.id AND NOT direct.revoked
+       LEFT JOIN messages direct ON direct.id=n.source_message_id AND direct.group_id=g.id
+       CROSS JOIN LATERAL (
+         SELECT CASE WHEN n.source_message_id IS NOT NULL
+           THEN COALESCE(n.discord_thread_id,direct.discord_thread_id) ELSE t.discord_thread_id END AS thread_id
+       ) target
        LEFT JOIN LATERAL (
          SELECT COALESCE(m.discord_reply_message_id,m.discord_message_id) AS message_id
          FROM unnest(t.source_ids) WITH ORDINALITY AS s(id,pos)
          JOIN messages m ON m.id=s.id AND m.group_id=g.id
-         WHERE NOT m.revoked AND (m.discord_reply_message_id IS NOT NULL OR m.discord_message_id IS NOT NULL)
+         WHERE NOT m.revoked AND m.discord_thread_id IS NOT DISTINCT FROM target.thread_id
+           AND (m.discord_reply_message_id IS NOT NULL OR m.discord_message_id IS NOT NULL)
          ORDER BY s.pos LIMIT 1
        ) source ON true
        WHERE g.platform='discord' AND g.reply_mode<>'off' AND g.left_at IS NULL AND ${due}
@@ -150,12 +156,12 @@ async function sendNextGroup(
     }
     await sendNotice(c, n.id, async () => {
       if (n.kind === "group_received" && n.origin) {
-        await platform.react(n.group_id, n.origin);
+        await platform.react(n.channel_id, n.origin);
         // 反應沒有自己的訊息識別碼，原文仍屬於群組成員。
         return null;
       }
       const result = await platform.sendToGroup(
-        n.group_id,
+        n.channel_id,
         {
           text:
             n.kind === "group_answered"

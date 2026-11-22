@@ -32,6 +32,7 @@ export type DiscordMessageEvent =
       text: string;
       images: readonly string[];
       quotedId?: string;
+      parentChannel?: string;
       /** 斜線指令以互動識別碼保存，另記下可供群組回覆的原始互動訊息。 */
       interactionReplyId?: string | null;
       botId: string;
@@ -94,12 +95,25 @@ export async function ingestDiscord(db: Database, event: DiscordMessageEvent) {
     (event.author.bot || event.author.id === event.botId)
   )
     return;
-  const groupId = discordId(event.channel);
+  const channelId = discordId(event.channel);
   const id = discordId(event.id);
   const editedAt = event.type === "update" ? new Date(event.editedAt) : null;
   if (editedAt && !Number.isFinite(editedAt.getTime())) return;
 
   return db.transaction(async (c) => {
+    const threadId =
+      event.type === "create" && event.parentChannel ? channelId : null;
+    // 編輯與撤回依已保存的頻道核對，討論串離開快取後仍可處理。
+    const groupId =
+      event.type === "create"
+        ? discordId(event.parentChannel ?? event.channel)
+        : (
+            await c.query<{ group_id: string }>(
+              "SELECT group_id FROM messages WHERE id=$1 AND COALESCE(discord_thread_id,group_id)=$2",
+              [id, channelId],
+            )
+          ).rows[0]?.group_id;
+    if (!groupId) return;
     if (event.type === "create") {
       await c.query(
         "INSERT INTO groups(id,name,platform,reply_mode) VALUES($1,$2,'discord','off') ON CONFLICT DO NOTHING",
@@ -148,19 +162,31 @@ export async function ingestDiscord(db: Database, event: DiscordMessageEvent) {
     )
       return;
 
-    const quote =
+    let quote =
       event.type === "create" && event.quotedId
         ? discordId(event.quotedId)
         : original?.quoted_id;
-    const quotedNotice =
-      quote &&
+    const noticeById = async (noticeId: string, questionOnly: boolean) =>
       (
         await c.query<{ kind: string; answer: string | null }>(
           `SELECT n.kind,t.answer FROM notifications n JOIN tasks t ON t.id=n.task_id
-         WHERE n.sent_message_id=$1 AND n.group_id=$2 AND t.group_id=$2 LIMIT 1`,
-          [quote, groupId],
+         WHERE n.sent_message_id=$1 AND n.group_id=$2 AND t.group_id=$2
+           AND (NOT $3 OR n.kind='group_question') LIMIT 1`,
+          [noticeId, groupId, questionOnly],
         )
       ).rows[0];
+    let quotedNotice = quote ? await noticeById(quote, false) : undefined;
+    // 從訊息開啟的討論串與起始訊息共用識別碼。
+    if (
+      !quotedNotice &&
+      threadId &&
+      threadId !== quote &&
+      event.type === "create" &&
+      !isTaskCommand(event.text)
+    ) {
+      quotedNotice = await noticeById(threadId, true);
+      if (quotedNotice) quote = threadId;
+    }
     const sensitive =
       quotedNotice &&
       quotedNotice.kind === "group_question" &&
@@ -222,12 +248,6 @@ export async function ingestDiscord(db: Database, event: DiscordMessageEvent) {
       event.type === "create"
         ? redact(event.author.name)
         : original!.sender_name;
-    const quoted =
-      event.type === "create"
-        ? event.quotedId
-          ? discordId(event.quotedId)
-          : null
-        : original!.quoted_id;
     const command =
       isTaskCommand(text) ||
       text.includes(`<@${event.botId}>`) ||
@@ -236,8 +256,9 @@ export async function ingestDiscord(db: Database, event: DiscordMessageEvent) {
     const detail =
       quotedNotice &&
       quotedNotice.kind === "group_answered" &&
-      !!quotedNotice.answer &&
-      detailRequest.test(text);
+      detailRequest.test(text)
+        ? quotedNotice.answer
+        : null;
     const asked =
       !progress &&
       !sensitive &&
@@ -259,8 +280,8 @@ export async function ingestDiscord(db: Database, event: DiscordMessageEvent) {
     for (const row of rows) {
       await c.query(
         `INSERT INTO messages(id,group_id,discord_message_id,discord_edited_at,user_id,sender_name,type,text,quoted_id,
-          image_source_url,trigger_mode,processed,needs_source_review,received_at,bot_reply,discord_reply_message_id)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,COALESCE((SELECT received_at FROM messages WHERE id=$3),now()),$14,$15)
+          image_source_url,trigger_mode,processed,needs_source_review,received_at,bot_reply,discord_reply_message_id,discord_thread_id)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,COALESCE((SELECT received_at FROM messages WHERE id=$3),now()),$14,$15,$16)
          ON CONFLICT(id) DO UPDATE SET discord_edited_at=EXCLUDED.discord_edited_at,user_id=EXCLUDED.user_id,
           sender_name=EXCLUDED.sender_name,type=EXCLUDED.type,text=EXCLUDED.text,quoted_id=EXCLUDED.quoted_id,
           image=CASE WHEN messages.image_source_url=EXCLUDED.image_source_url THEN messages.image END,
@@ -279,7 +300,7 @@ export async function ingestDiscord(db: Database, event: DiscordMessageEvent) {
           sender,
           row.url ? "image" : row.text ? "text" : "attachment",
           row.text,
-          row.id === id ? quoted : null,
+          row.id === id ? (quote ?? null) : null,
           row.url,
           eligible ? (command || botReply ? "command" : "auto") : "chat",
           !eligible || !!asked,
@@ -288,6 +309,7 @@ export async function ingestDiscord(db: Database, event: DiscordMessageEvent) {
           event.type === "create" && event.interactionReplyId
             ? discordId(event.interactionReplyId)
             : null,
+          channelId === groupId ? null : channelId,
         ],
       );
     }
@@ -317,7 +339,7 @@ export async function ingestDiscord(db: Database, event: DiscordMessageEvent) {
       if (progress) return { progress: group.enabled } as const;
       if (sensitive) return { credential: true } as const;
       if (detail && group.enabled)
-        return { detail: quotedNotice.answer! } as const;
+        return { detail } as const;
     }
   });
 }
