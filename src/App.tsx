@@ -1339,7 +1339,7 @@ export function App() {
               />
             )}
             {current.id === "checks" && (
-              <ChecksView state={state} request={request} admin={admin} />
+              <ChecksView state={state} request={request} admin={admin} visit={visit} />
             )}
             {current.id === "system" && (
               <SystemView

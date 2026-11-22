@@ -1,7 +1,9 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page, type TestInfo } from "@playwright/test";
+import { expect, test, type Locator, type Page, type TestInfo } from "@playwright/test";
 import {
   answeredDetail,
+  blockedCheck,
+  checkAttentionRoutes,
   defaultState,
   departedLineGroup,
   discordGroup,
@@ -9,6 +11,7 @@ import {
   emitDashboardEvent,
   exhaustedPushHealth,
   group,
+  groupMemory,
   mockDashboard,
   statusChat,
   statusProjects,
@@ -41,6 +44,13 @@ async function verifyLayout(
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
     .analyze();
   expect(violations).toEqual([]);
+}
+
+async function verifyTouchHeight(control: Locator) {
+  const height = await control.evaluate((element) =>
+    element instanceof HTMLElement ? element.offsetHeight : 0,
+  );
+  expect(height).toBeGreaterThanOrEqual(44);
 }
 
 for (const viewport of [
@@ -191,14 +201,20 @@ for (const viewport of [
       );
     });
 
-    test("管理者可用鍵盤切換通知平台，查看 Discord 配對狀態與配對指示", async ({
+    test("管理者可用鍵盤先配對 Discord，再儲存通知目的地", async ({
       page,
     }, info) => {
       const settings = { ...defaultState.settings, admin_line_id: "已綁定" };
-      await mockDashboard(page, { state: { settings }, pairingCode: "0123456789abcdef" });
+      await mockDashboard(page, {
+        state: { settings },
+        pairingCodes: { line: "abcdef0123456789", discord: "0123456789abcdef" },
+      });
+      let saves = 0;
       await page.route("**/api/settings/admin-notifications", async (route) => {
+        saves++;
         expect(route.request().method()).toBe("PUT");
         expect(route.request().postDataJSON()).toEqual({ admin_notify_platform: "discord" });
+        expect(settings.admin_discord_id).toBe("已綁定");
         settings.admin_notify_platform = "discord";
         await route.fulfill({ json: { ok: true } });
       });
@@ -207,21 +223,110 @@ for (const viewport of [
       await expect(region.getByRole("status")).toContainText("LINE 私訊");
       await expect(region.getByRole("status")).toContainText("已配對");
       const select = region.getByRole("combobox", { name: "管理者通知送到" });
+      const save = region.getByRole("button", { name: "儲存通知設定" });
+      await expect(select.locator("option[value=discord]")).toHaveText("Discord（尚未配對）");
       await select.focus();
       await page.keyboard.press("ArrowDown");
       await expect(select).toHaveValue("discord");
-      await region.getByRole("button", { name: "儲存通知設定" }).press("Enter");
-      await expect(region.getByRole("status")).toContainText("Discord 私訊");
-      await expect(region.getByRole("status")).toContainText("尚未配對");
+      await expect(save).toBeDisabled();
+      await expect(region.getByText("請先完成 Discord 配對，再儲存通知設定。")).toBeVisible();
       const pairing = region.getByRole("button", { name: "產生配對碼" });
-      expect((await pairing.boundingBox())?.height).toBeGreaterThanOrEqual(44);
+      await verifyTouchHeight(select);
+      await verifyTouchHeight(pairing);
       await pairing.press("Enter");
       await expect(region.getByText("配對 0123456789abcdef")).toBeVisible();
       await expect(region.getByText(/在 10 分鐘內私訊 Discord 機器人/)).toBeVisible();
+      await expect(save).toBeDisabled();
+      await expect(region.getByRole("status")).toContainText("LINE 私訊");
+      expect(saves).toBe(0);
+      await verifyLayout(page, info, "[aria-labelledby='admin-notifications-title']", "切換通知目的地前先配對");
       settings.admin_discord_id = "已綁定";
       await emitDashboardEvent(page, "update");
+      await expect(select.locator("option[value=discord]")).toHaveText("Discord");
+      await expect(region.getByText("Discord 已配對，可以儲存通知設定。")).toBeVisible();
+      await expect(save).toBeEnabled();
+      await verifyTouchHeight(save);
+      await save.press("Enter");
+      await expect(region.getByRole("status")).toContainText("Discord 私訊");
       await expect(region.getByRole("status")).toContainText("已配對");
-      await verifyLayout(page, info, "[aria-labelledby='admin-notifications-title']", "設定頁管理者通知與配對");
+      expect(saves).toBe(1);
+    });
+
+    test("群組記憶分欄顯示中繼資料且沒有間隔點", async ({ page }, info) => {
+      const namedGroup = { ...group, name: "範例群組" };
+      await mockDashboard(page, {
+        state: { groups: [namedGroup], memories: [groupMemory] },
+      });
+      await page.goto("/groups");
+      const region = page.getByRole("region", { name: "最近新增的群組記憶" });
+      const row = region.getByRole("listitem").filter({ hasText: groupMemory.content });
+      await expect(row).toBeVisible();
+      for (const field of [namedGroup.name, "不指定專案", "AI 自動記住"]) {
+        await expect(row.getByText(field, { exact: true })).toBeVisible();
+      }
+      await expect(row.locator("time")).toHaveAttribute("datetime", groupMemory.created_at);
+      await expect(row).not.toContainText(/[・·]/);
+      const edit = region.getByRole("button", { name: "選擇要編輯的群組" });
+      await verifyTouchHeight(edit);
+      await verifyLayout(page, info, "[aria-labelledby='recent-group-memory-title']", "群組記憶中繼資料");
+    });
+
+    test("定期檢查從 22 項篩出 2 項需處理，可展開原因並保留網址", async ({ page }, info) => {
+      await mockDashboard(page, { routes: checkAttentionRoutes });
+      await page.goto("/checks");
+      const filters = page.getByRole("group", { name: "檢查篩選" });
+      const all = filters.getByRole("button", { name: "全部" });
+      const attention = filters.getByRole("button", { name: "需處理" });
+      const list = page.getByRole("list", { name: "定期檢查清單" });
+      const rows = list.locator(":scope > li");
+      await expect(rows).toHaveCount(22);
+      await expect(all).toHaveAttribute("aria-pressed", "true");
+      for (const button of [all, attention]) {
+        await verifyTouchHeight(button);
+      }
+      await attention.press("Enter");
+      await expect(page).toHaveURL("/checks?filter=attention");
+      await expect(rows).toHaveCount(2);
+      await page.reload();
+      await expect(attention).toHaveAttribute("aria-pressed", "true");
+      await expect(rows).toHaveCount(2);
+      const device = list.getByRole("button", { name: /示範設備檢查/ });
+      const database = list.getByRole("button", { name: /示範資料庫檢查/ });
+      await expect(device).toContainText("設備異常");
+      await expect(database).toContainText("連線缺失");
+      await verifyTouchHeight(device);
+      await device.press("Enter");
+      await expect(device).toHaveAttribute("aria-expanded", "true");
+      await expect(list.getByRole("list", { name: "最近結果明細" }))
+        .toContainText("示範設備的溫度超過門檻");
+      await database.press("Enter");
+      await expect(database).toHaveAttribute("aria-expanded", "true");
+      await expect(list.getByText(/這個專案還沒有登記資料庫連線/)).toBeVisible();
+      await verifyLayout(page, info, "#scheduled-checks", "定期檢查篩選與異常原因");
+      await all.press("Enter");
+      await expect(page).toHaveURL("/checks");
+      await expect(rows).toHaveCount(22);
+      await attention.press("Enter");
+      const navigation = page.getByRole("navigation", { name: "看板導覽" });
+      if (viewport.width === 375) {
+        await navigation.getByRole("button", { name: "更多", exact: true }).press("Enter");
+        await page.getByRole("menuitem", { name: "定期檢查", exact: true }).press("Enter");
+      } else {
+        await navigation.getByRole("button", { name: "定期檢查", exact: true }).press("Enter");
+      }
+      await expect(page).toHaveURL("/checks");
+      await expect(rows).toHaveCount(22);
+    });
+
+    test("需處理篩選納入系統無法執行的定期檢查", async ({ page }) => {
+      await mockDashboard(page, {
+        routes: { ...checkAttentionRoutes, "/api/checks": [blockedCheck] },
+      });
+      await page.goto("/checks?filter=attention");
+      const check = page.getByRole("button", { name: /示範連線檢查/ });
+      await expect(check).toContainText("系統無法執行");
+      await check.press("Enter");
+      await expect(page.getByText(/系統暫時無法執行（讀不到主機執行器）/)).toBeVisible();
     });
 
     test("推播額度用完時，推播列省去重複警示與舊時間", async ({

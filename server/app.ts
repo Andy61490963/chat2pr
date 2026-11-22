@@ -1600,6 +1600,14 @@ export async function buildApp(
       const { rows: [{ value: before }] } = await c.query<{ value: Partial<Settings> }>(
         "SELECT value FROM settings WHERE id=1 FOR UPDATE",
       );
+      const discord = changes.admin_notify_platform === "discord";
+      if (!(discord ? before.admin_discord_id : before.admin_line_id)) {
+        const platform = discord ? "Discord" : "LINE";
+        throw new AppError(
+          409,
+          `無法儲存管理者通知：${platform} 尚未配對，請先完成配對再儲存。`,
+        );
+      }
       const diff = settingsDiff(before, changes);
       if (!diff.length) return;
       await c.query("UPDATE settings SET value=value || $1::jsonb WHERE id=1", [JSON.stringify(changes)]);
@@ -1639,6 +1647,12 @@ export async function buildApp(
   });
   app.post("/api/pairing", async (req) => {
     await requireAdmin(db, req);
+    const input = z
+      .object({
+        platform: z.enum(["line", "discord"], "請選擇配對的聊天平台").optional(),
+      })
+      .optional()
+      .parse(req.body);
     const code = token().slice(0, 16);
     await db.transaction(async (c) => {
       const { rows: [{ platform }] } = await c.query<{ platform: string }>(
@@ -1647,7 +1661,7 @@ export async function buildApp(
       await c.query("DELETE FROM pairing_codes");
       await c.query(
         "INSERT INTO pairing_codes(code_hash,expires_at,platform) VALUES($1,now()+interval '10 minutes',$2)",
-        [hash(code), platform],
+        [hash(code), input?.platform ?? platform],
       );
     });
     return { code, expiresIn: 600 };
