@@ -155,6 +155,7 @@ export const taskStationLabels = {
 export const taskListLabels = {
   active: "進行中與待處理",
   ended: "已結束",
+  mergedWeek: "近 7 天已合併",
 } as const;
 
 export const taskListEmptyLabels = {
@@ -167,6 +168,25 @@ export const taskListEmptyLabels = {
 export const inboxStatusLabels = {
   clear: "都處理完了",
   clearDescription: "目前沒有需要你處理、執行中或待合併的工作。",
+  answer: "等你回答：補充需求",
+  chooseProject: "等你決定：選專案",
+  review: "等你決定：確認需求",
+  chooseOption: "等你決定：選方案",
+  amend: "等你補充：修改需求",
+  fix: (action: string) => `等你處理：${action}`,
+} as const;
+
+export const taskClarificationLabels = {
+  action: "回答問題",
+  amend: "修改這一題",
+} as const;
+
+export const taskAcceptanceLabels = {
+  heading: "預期驗收條件",
+  build: "驗證範圍僅包含建置檢查，未執行自動測試。",
+  partial: "只執行了部分自動測試。",
+  uncovered: (scope: string) => `未涵蓋的範圍：${scope}`,
+  unknownScope: "請查看執行紀錄確認細項。",
 } as const;
 
 export const activityStatusLabels = {

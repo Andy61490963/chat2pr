@@ -676,7 +676,7 @@ test("你能在手機首屏看到查詢重點，並從底部修改這一題", as
     ratio: 1,
   });
   await expect(
-    dialog.getByRole("heading", { name: "驗收條件", exact: true }),
+    dialog.getByRole("heading", { name: "預期驗收條件", exact: true }),
   ).toHaveCount(0);
   const amend = dialog.getByRole("button", { name: "修改這一題", exact: true });
   await expect(dialog.getByText("修改這一題", { exact: true })).toHaveCount(1);
@@ -739,7 +739,7 @@ for (const status of ["ready", "merged"] as const) {
       result.locator("xpath=following::section[@aria-label='處理專案']"),
     ).toHaveCount(1);
     await expect(
-      dialog.getByRole("heading", { name: "驗收條件", exact: true }),
+      dialog.getByRole("heading", { name: "預期驗收條件", exact: true }),
     ).toBeVisible();
   });
 }

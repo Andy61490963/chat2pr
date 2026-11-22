@@ -98,6 +98,7 @@ import type {
   TaskStatus,
 } from "../shared/types.js";
 import { describeChanges, settingsDiff } from "../shared/settings-diff.js";
+import { mergedWeekBounds, mergedWeekDay } from "../shared/task-list.js";
 import { containsCredential } from "../shared/credentials.js";
 import {
   taskEndColumns,
@@ -509,6 +510,8 @@ export async function buildApp(
     const user = await requireUser(db, req);
     reply.header("Cache-Control", "no-store");
     const admin = user.role === "admin";
+    const weekDay = mergedWeekDay();
+    const week = mergedWeekBounds(weekDay)!;
     // 清單預設只給最近的資料；看板按「載入更多」時才放大。
     const limits = z
       .object({
@@ -547,8 +550,8 @@ export async function buildApp(
         `SELECT (SELECT count(*)::int FROM tasks) AS tasks,(SELECT count(*)::int FROM audit WHERE $1::boolean OR task_id IS NOT NULL) AS activity,
            coalesce((SELECT jsonb_object_agg(status,n) FROM (SELECT status,count(*)::int AS n FROM tasks GROUP BY status) s),'{}') AS by_status,
            (SELECT count(*)::int FROM tasks WHERE status='merged'
-             AND (updated_at AT TIME ZONE 'Asia/Taipei')::date>(now() AT TIME ZONE 'Asia/Taipei')::date-7) AS merged_week`,
-        [admin],
+             AND updated_at >= $2::timestamptz AND updated_at < $3::timestamptz) AS merged_week`,
+        [admin, week.since, week.until],
       ),
       dashboardAlerts(db, admin),
       db.one<{ seen_at: string }>(
@@ -647,6 +650,7 @@ export async function buildApp(
         activity: totals?.activity ?? 0,
         byStatus: totals?.by_status ?? {},
         mergedWeek: totals?.merged_week ?? 0,
+        mergedWeekDay: weekDay,
         unfinishedOmitted: Math.max(
           0,
           countStatuses(totals?.by_status, unfinishedStatuses) -
@@ -835,6 +839,12 @@ export async function buildApp(
           .union([z.literal("none"), z.uuid()], { error: "請選擇有效的專案" })
           .optional(),
         q: z.string().optional(),
+        mergedWeek: z
+          .string("已合併任務的日期格式不正確，請重新從收件匣開啟統計。")
+          .refine((day) => mergedWeekBounds(day) !== null, {
+            message: "已合併任務的日期格式不正確，請重新從收件匣開啟統計。",
+          })
+          .optional(),
         before: z.iso
           .datetime({ error: "任務清單的更新時間格式不正確" })
           .optional(),
@@ -844,6 +854,7 @@ export async function buildApp(
         message: "載入下一批任務時需要提供更新時間和任務編號",
       })
       .parse(req.query);
+    const week = query.mergedWeek ? mergedWeekBounds(query.mergedWeek) : null;
     const pageSize = 30;
     const rows = await db.query<TaskWithEndAudit & { cursor_time: string }>(
       `WITH picked AS (
@@ -853,6 +864,7 @@ export async function buildApp(
            AND ($3::text IS NULL OR coalesce(t.project_id::text,'none')=$3)
            AND ($4::text IS NULL OR strpos(lower(t.title||' '||t.summary),lower($4))>0)
            AND ($5::timestamptz IS NULL OR (t.updated_at,t.id)<($5,$6::uuid))
+           AND ($8::timestamptz IS NULL OR (t.updated_at >= $8 AND t.updated_at < $9::timestamptz))
          ORDER BY t.updated_at DESC,t.id DESC LIMIT $7
        )
        SELECT t.*,r.status AS run_phase,r.started_at AS run_started_at,r.deadline AS run_deadline,
@@ -865,13 +877,15 @@ export async function buildApp(
        ${taskEndJoins}
        ORDER BY t.updated_at DESC,t.id DESC`,
       [
-        query.filter === "closed" ? endedStatuses : null,
+        week ? ["merged"] : query.filter === "closed" ? endedStatuses : null,
         query.group ?? null,
         query.project ?? null,
         query.q || null,
         query.before ?? null,
         query.beforeId ?? null,
         pageSize + 1,
+        week?.since ?? null,
+        week?.until ?? null,
       ],
     );
     const last = rows[pageSize - 1];

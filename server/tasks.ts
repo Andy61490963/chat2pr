@@ -577,7 +577,19 @@ export class Tasks {
         [id],
       ),
       this.db.query(
-        "SELECT r.id,result->'querySources' AS query_sources,CASE WHEN result->>'prUrl'=$2 AND version=$3 THEN result->>'prSummary' END AS pr_summary,version,status,outcome,observed,model,started_at,completed_at,heartbeat_at,deadline,install_report,COALESCE((SELECT jsonb_agg(jsonb_build_object('phase',e.phase,'threadId',e.thread_id) ORDER BY e.id) FROM run_events e WHERE e.run_id=r.id AND e.kind='thread'),'[]') AS threads FROM runs r WHERE task_id=$1 ORDER BY started_at DESC LIMIT 50",
+        `SELECT r.id,result->'querySources' AS query_sources,
+           CASE WHEN result->>'prUrl'=$2 AND version=$3 THEN result->>'prSummary' END AS pr_summary,
+           CASE
+             WHEN result ? 'verificationScope' THEN NULLIF(result->'verificationScope','null'::jsonb)
+             WHEN result->>'prUrl'=$2 AND version=$3 AND starts_with(result->>'report','僅執行建置檢查，未執行自動測試。')
+               THEN '{"kind":"build"}'::jsonb
+             WHEN result->>'prUrl'=$2 AND version=$3 AND starts_with(result->>'report','只執行了部分測試。未涵蓋：')
+               THEN '{"kind":"partial"}'::jsonb
+           END AS verification_scope,
+           version,status,outcome,observed,model,started_at,completed_at,heartbeat_at,deadline,install_report,
+           COALESCE((SELECT jsonb_agg(jsonb_build_object('phase',e.phase,'threadId',e.thread_id) ORDER BY e.id)
+             FROM run_events e WHERE e.run_id=r.id AND e.kind='thread'),'[]') AS threads
+         FROM runs r WHERE task_id=$1 ORDER BY started_at DESC LIMIT 50`,
         [id, task.pr_url, task.version],
       ),
       this.fullTitle(task),

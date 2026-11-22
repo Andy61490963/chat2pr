@@ -51,6 +51,8 @@ export interface StateTotals {
   byStatus: Partial<Record<TaskStatus, number>>;
   /** 近 7 天（臺北時間，含今天）合併的任務數。 */
   mergedWeek: number;
+  /** 合併統計採用的臺北日期，供下鑽及其後續分頁沿用。 */
+  mergedWeekDay: string;
   /** 未結束的任務超過 UNFINISHED_LIMIT 時沒有載入的筆數；平常是 0。 */
   unfinishedOmitted: number;
 }

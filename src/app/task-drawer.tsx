@@ -42,10 +42,19 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
-import { AssignProject, BudgetRetry, EndTaskButton } from "./inbox";
+import {
+  AssignProject,
+  BudgetRetry,
+  EndTaskButton,
+  type TaskDrawerAction,
+} from "./inbox";
 import { CopyButton } from "./copy-button";
 import { deliveryNotice, undelivered } from "../../shared/group-delivery.js";
-import { followupText } from "../../shared/status-glossary.js";
+import {
+  followupText,
+  taskAcceptanceLabels,
+  taskClarificationLabels,
+} from "../../shared/status-glossary.js";
 import { useUnsaved } from "./unsaved";
 import {
   type Act,
@@ -153,8 +162,8 @@ export function TaskDrawer({
   state,
   busy,
   admin,
-  startAmend,
-  amendStarted,
+  startAction,
+  actionStarted,
   close,
   go,
   act,
@@ -167,10 +176,9 @@ export function TaskDrawer({
   state: State;
   busy: boolean;
   admin: boolean;
-  /** 從收件匣「縮小需求範圍」開啟：一打開就展開補充需求編輯。 */
-  startAmend?: boolean;
-  /** 已展開補充需求編輯；呼叫端清掉這次的要求，之後再開同一個任務不會又自動展開。 */
-  amendStarted?: () => void;
+  /** 從收件匣開啟時要定位的表單。 */
+  startAction?: TaskDrawerAction;
+  actionStarted?: () => void;
   close: () => void;
   go: (v: View, projectId?: string | null) => void;
   act: Act;
@@ -210,6 +218,15 @@ export function TaskDrawer({
   ].includes(t.status);
   // 已回覆的任務可以補充需求後重新處理。
   const canAmend = editable || t.status === "answered";
+  const canAnswer = t.status === "awaiting_approval" && !!t.question;
+  const answerField = useRef<HTMLTextAreaElement>(null);
+  const focusAnswer = () => {
+    const field = answerField.current;
+    if (!field) return false;
+    field.focus({ preventScroll: true });
+    field.scrollIntoView({ block: "center" });
+    return true;
+  };
   const saved = { summary: t.summary, acceptance: t.acceptance.join("\n") };
   const visibleAcceptance =
     t.mode === "query"
@@ -222,6 +239,10 @@ export function TaskDrawer({
           );
         })
       : t.acceptance;
+  // 執行紀錄只提供整體範圍，尚無對應個別驗收條件的測試結果。
+  const verification = detail.runs.find(
+    (run) => run.version === t.version,
+  )?.verification_scope;
   const [summary, setSummary] = useState(saved.summary);
   const [acceptance, setAcceptance] = useState(saved.acceptance);
   // 草稿是從哪個版本開始寫的；任務在背景更新時用來判斷要不要保留草稿。
@@ -357,7 +378,8 @@ export function TaskDrawer({
   const amendButton = canAmend && (
     <Button
       variant={
-        amendFirst || (deciding && t.missing.length > 0 && !options)
+        !canAnswer &&
+        (amendFirst || (deciding && t.missing.length > 0 && !options))
           ? "default"
           : "outline"
       }
@@ -365,14 +387,14 @@ export function TaskDrawer({
       aria-controls="amend-task"
       onClick={() => (amendOpen ? setAmendOpen(false) : openAmend())}
     >
-      {amendOpen ? "收合修改表單" : "修改這一題"}
+      {amendOpen ? "收合修改表單" : taskClarificationLabels.amend}
       {amendDirty && <span className="text-xs">（尚未儲存）</span>}
     </Button>
   );
   // 從收件匣「縮小需求範圍」打開：直接展開補充需求編輯（只在剛打開時做一次）。
   useEffect(() => {
-    if (!startAmend) return;
-    amendStarted?.();
+    if (startAction !== "amend") return;
+    actionStarted?.();
     if (canAmend) openAmend();
   }, []);
   const resultReport = report.body && (
@@ -416,6 +438,13 @@ export function TaskDrawer({
       <SheetContent
         className="sm:max-w-2xl"
         onOpenAutoFocus={(event) => {
+          if (startAction === "answer") {
+            actionStarted?.();
+            if (focusAnswer()) {
+              event.preventDefault();
+              return;
+            }
+          }
           if (!titleRef.current) return;
           event.preventDefault();
           titleRef.current.focus({ preventScroll: true });
@@ -908,21 +937,33 @@ export function TaskDrawer({
             </p>
           </section>
           {visibleAcceptance.length > 0 && (
-            <section className="flex flex-col gap-2">
+            <section
+              aria-label={taskAcceptanceLabels.heading}
+              className="flex flex-col gap-2"
+            >
               <h3 className="text-xs font-medium text-muted-foreground">
-                驗收條件
+                {taskAcceptanceLabels.heading}
               </h3>
-              <ul className="flex flex-col gap-1.5">
+              <ul className="list-disc space-y-1.5 pl-5">
                 {visibleAcceptance.map((a, i) => (
-                  <li
-                    key={i}
-                    className="flex gap-2 text-sm [overflow-wrap:anywhere]"
-                  >
-                    <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+                  <li key={i} className="text-sm [overflow-wrap:anywhere]">
                     {a}
                   </li>
                 ))}
               </ul>
+              {verification && (
+                <p className="text-sm text-muted-foreground [overflow-wrap:anywhere]">
+                  {verification.kind === "build"
+                    ? taskAcceptanceLabels.build
+                    : `${taskAcceptanceLabels.partial} ${
+                        verification.limitations
+                          ? taskAcceptanceLabels.uncovered(
+                              verification.limitations,
+                            )
+                          : taskAcceptanceLabels.unknownScope
+                      }`}
+                </p>
+              )}
             </section>
           )}
           {t.status === "awaiting_approval" && t.question && (
@@ -935,6 +976,7 @@ export function TaskDrawer({
             key={t.id}
             task={t}
             editable={canAmend}
+            answerField={canAnswer ? answerField : null}
             busy={busy}
             act={act}
             answer={answer}
@@ -1225,6 +1267,11 @@ export function TaskDrawer({
             t.status,
           )) && (
           <SheetFooter className="shrink-0 items-center">
+            {canAnswer && (
+              <Button onClick={focusAnswer}>
+                {taskClarificationLabels.action}
+              </Button>
+            )}
             {options && (
               <Button
                 disabled={busy || sensitive || pick === null || !canConfirm}
@@ -1245,7 +1292,7 @@ export function TaskDrawer({
                   : `確認專案與分支並採用方案 ${pick + 1}`}
               </Button>
             )}
-            {deciding && !options && !t.missing.length && (
+            {deciding && !canAnswer && !options && !t.missing.length && (
               <Button
                 disabled={busy || !canConfirm}
                 onClick={() =>

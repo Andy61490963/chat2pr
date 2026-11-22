@@ -4,6 +4,12 @@ import type { Detail, State } from "../src/app/shared";
 import type { DashboardGroup, Project, Task } from "../shared/types";
 import { endedStatuses } from "../shared/types";
 import {
+  isMergedInWeek,
+  mergedWeekBounds,
+  mergedWeekDay,
+} from "../shared/task-list";
+import type { RunView } from "../shared/observation";
+import {
   checkEnvironmentLimits,
   defaultCheckEnvironmentPolicy,
 } from "../shared/check-environment";
@@ -355,6 +361,21 @@ export const detail: Detail = {
   thread: { before: [], after: [] },
 };
 
+export const completedRun: RunView = {
+  id: "demo-run",
+  version: task.version,
+  status: "done",
+  outcome: "ready",
+  model: "demo-model",
+  started_at: timestamp,
+  completed_at: timestamp,
+  heartbeat_at: timestamp,
+  deadline: timestamp,
+  observed: false,
+  threads: [],
+  verification_scope: null,
+};
+
 export const answeredDetail: Detail = {
   ...detail,
   task: { ...task, status: "answered", answer: "示範報表每天更新一次。" },
@@ -509,6 +530,10 @@ export async function mockDashboard(
     reauthConnectionSecrets?: boolean;
   } = {},
 ): Promise<void> {
+  const state = { ...defaultState, ...options.state } as State;
+  if (state.totals) {
+    state.totals = { mergedWeekDay: mergedWeekDay(), ...state.totals };
+  }
   const routes: Record<string, unknown> = {
     "/api/public/status": { githubConfigured: true },
     "/api/me": {
@@ -518,7 +543,7 @@ export async function mockDashboard(
       role: "admin",
       owner: true,
     },
-    "/api/state": { ...defaultState, ...options.state },
+    "/api/state": state,
     "/api/codex/account": {
       plan: "demo",
       allowed: true,
@@ -628,10 +653,15 @@ export async function mockDashboard(
     }
     // 任務頁「已結束／全部」分批讀取：預設用狀態快照裡的任務回應，個別測試可自行覆寫。
     if (request.method() === "GET" && pathname === "/api/tasks") {
-      const closed =
-        new URL(request.url()).searchParams.get("filter") === "closed";
+      const params = new URL(request.url()).searchParams;
+      const closed = params.get("filter") === "closed";
+      const week = mergedWeekBounds(params.get("mergedWeek") ?? "");
       const tasks = ((routes["/api/state"] as { tasks?: Task[] }).tasks ?? [])
-        .filter((entry) => !closed || endedStatuses.includes(entry.status))
+        .filter((entry) =>
+          week
+            ? isMergedInWeek(entry, week)
+            : !closed || endedStatuses.includes(entry.status),
+        )
         .sort((a, b) => b.updated_at.localeCompare(a.updated_at));
       return route.fulfill({ json: { tasks, next: null } });
     }

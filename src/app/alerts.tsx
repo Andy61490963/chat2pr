@@ -201,7 +201,7 @@ export function AlertBell({
       void openView?.(
         target.view,
         a.project_id,
-          "tab" in target ? target.tab : projectNoticeTab(a.kind),
+        "tab" in target ? target.tab : projectNoticeTab(a.kind),
       );
     }
   };
@@ -328,13 +328,19 @@ export function AlertBell({
         <Button
           variant="ghost"
           size="icon"
-          aria-label={unread ? `通知，${unread} 則未讀` : "通知"}
           title="通知"
           className="relative size-11 md:size-9"
         >
-          {unread ? <BellRing /> : <Bell />}
+          {/* 徽章只顯示「9+」，完整數字放在讀屏文字；不用 aria-label 蓋掉可見內容（axe label-content-name-mismatch）。 */}
+          <span className="sr-only">
+            {unread ? `通知，${unread} 則未讀` : "通知"}
+          </span>
+          {unread ? <BellRing aria-hidden /> : <Bell aria-hidden />}
           {unread > 0 && (
-            <span className="absolute top-1 right-1 min-w-4 rounded-full bg-danger px-1 text-[10px] leading-4 font-semibold text-danger-soft tabular-nums">
+            <span
+              aria-hidden
+              className="absolute top-1 right-1 min-w-4 rounded-full bg-danger px-1 text-[10px] leading-4 font-semibold text-danger-soft tabular-nums"
+            >
               {unread > 9 ? "9+" : unread}
             </span>
           )}

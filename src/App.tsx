@@ -45,7 +45,7 @@ import type {
 } from "../shared/types.js";
 import { LINE_QUOTA } from "../shared/line-quota.js";
 import { groupPageText } from "../shared/status-glossary.js";
-import { taskListQuery, type TaskStatusFilter } from "../shared/task-list.js";
+import { taskListQuery, type TaskListDestination } from "../shared/task-list.js";
 import {
   reservedQuotaHold,
   subscriptionGateName,
@@ -61,7 +61,7 @@ import {
 import { cn } from "@/lib/utils";
 import { GroupsView } from "./app/groups";
 import { ChatView } from "./app/chat";
-import { InboxView } from "./app/inbox";
+import { InboxView, type TaskDrawerAction } from "./app/inbox";
 import { ProjectForm, ProjectsView } from "./app/projects";
 import { saveProject } from "./app/project-form";
 import { applyTheme, pickSettings, SettingsView } from "./app/settings";
@@ -425,10 +425,16 @@ export function App() {
   }, [user, subscription, loadAccount]);
   const viewRef = useRef(view);
   viewRef.current = view;
+  // 從收件匣開啟指定表單的要求只使用一次。
+  const taskAction = useRef<{ id: string; action: TaskDrawerAction } | null>(
+    null,
+  );
   const openTask = useCallback(
-    async (id: string, push = true) => {
+    async (id: string, push = true, action?: TaskDrawerAction) => {
       try {
-        setSelected(await request<Detail>(`/api/tasks/${id}`));
+        const detail = await request<Detail>(`/api/tasks/${id}`);
+        taskAction.current = action ? { id, action } : null;
+        setSelected(detail);
         writeUrl(viewRef.current, id, push);
       } catch (e) {
         setToast({ text: message(e), error: true });
@@ -661,7 +667,7 @@ export function App() {
     heading.current?.focus({ preventScroll: true });
   };
   // 收件匣與通知直接開啟對應篩選的任務清單。
-  const showTasks = (filter: TaskStatusFilter | "closed", taskId?: string) =>
+  const showTasks = (filter: TaskListDestination, taskId?: string) =>
     guard(() => {
       leave("tasks");
       history.replaceState(
@@ -671,15 +677,10 @@ export function App() {
       );
       if (taskId) setTaskAfterNavigation(taskId);
     });
-  // 收件匣「縮小需求範圍」：打開任務詳情後直接展開補充需求編輯。只對下一次開啟的那個任務有效。
-  const amendNext = useRef<string | null>(null);
   // 已開著另一個任務、而且補充需求還沒送出時，先問再切換。
-  const showTask = (id: string, amend = false) =>
+  const showTask = (id: string, action?: TaskDrawerAction) =>
     guard(
-      () => {
-        amendNext.current = amend ? id : null;
-        void openTask(id);
-      },
+      () => void openTask(id, true, action),
       { prefixes: ["task"] },
     );
   const loadMoreActivity = () => {
@@ -1405,8 +1406,12 @@ export function App() {
           state={state}
           busy={busy}
           admin={admin}
-          startAmend={amendNext.current === selected.task.id}
-          amendStarted={() => (amendNext.current = null)}
+          startAction={
+            taskAction.current?.id === selected.task.id
+              ? taskAction.current.action
+              : undefined
+          }
+          actionStarted={() => (taskAction.current = null)}
           close={() => guard(closeTask, { prefixes: ["task"] })}
           go={go}
           act={act}
