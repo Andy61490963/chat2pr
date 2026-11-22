@@ -207,8 +207,8 @@ async function createChangeFollowup(
   const risk = classifyRisk(text, []);
   const t = (
     await c.query<Task>(
-      `INSERT INTO tasks(project_id,group_id,title,summary,acceptance,risk_reasons,missing,source_ids,status,parent_id,dedupe_key,suggestions,mode)
-       VALUES($1,$2,$3,$4,$5,$6,'[]','{}','awaiting_approval',$7,$8,'[]','change') RETURNING *`,
+      `INSERT INTO tasks(project_id,group_id,title,summary,acceptance,risk_reasons,missing,source_ids,status,parent_id,dedupe_key,suggestions,mode,discord_thread_id)
+       VALUES($1,$2,$3,$4,$5,$6,'[]','{}','awaiting_approval',$7,$8,'[]','change',$9) RETURNING *`,
       [
         parent.project_id,
         parent.group_id,
@@ -218,6 +218,7 @@ async function createChangeFollowup(
         JSON.stringify(risk ? [risk] : []),
         parent.id,
         `followup:${parent.id}:${randomUUID()}`,
+        parent.discord_thread_id ?? null,
       ],
     )
   ).rows[0];
@@ -286,8 +287,8 @@ export async function createFollowupInTransaction(
   const risk = queryRisk(options.riskText ?? question) || options.retainedRisk;
   const t = (
     await c.query<Task>(
-      `INSERT INTO tasks(project_id,group_id,title,summary,acceptance,risk_reasons,missing,source_ids,status,approved_version,parent_id,dedupe_key,suggestions,mode)
-         VALUES($1,$2,$3,$4,$5,$6,'[]','{}',$7,$8,$9,$10,'[]','query') RETURNING *`,
+      `INSERT INTO tasks(project_id,group_id,title,summary,acceptance,risk_reasons,missing,source_ids,status,approved_version,parent_id,dedupe_key,suggestions,mode,discord_thread_id)
+         VALUES($1,$2,$3,$4,$5,$6,'[]','{}',$7,$8,$9,$10,'[]','query',$11) RETURNING *`,
       [
         parent.project_id,
         parent.group_id,
@@ -301,6 +302,7 @@ export async function createFollowupInTransaction(
         risk ? null : 1,
         parent.id,
         `followup:${parent.id}:${randomUUID()}`,
+        parent.discord_thread_id ?? null,
       ],
     )
   ).rows[0];

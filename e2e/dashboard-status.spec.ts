@@ -180,7 +180,7 @@ for (const viewport of [
       await invite.press("Enter");
       await expect(
         services.getByText(
-          /讀取訊息歷史、傳送訊息、加入反應、嵌入連結與附加檔案/,
+          /讀取訊息歷史、傳送訊息、在討論串中傳送訊息、加入反應、嵌入連結與附加檔案/,
         ),
       ).toBeVisible();
       await verifyLayout(

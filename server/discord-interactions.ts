@@ -39,6 +39,7 @@ export type DiscordInteraction = {
   token: string;
   applicationId: string;
   channel: string;
+  parentChannel?: string;
   name: string;
   member: { id: string; name: string };
   botId: string;
@@ -126,6 +127,7 @@ async function restoreDiscordReplies(
 async function replyWithProgress(
   db: Database,
   groupId: string,
+  threadId: string | null,
   send: SendProgress,
 ) {
   const { summary, pending } = await db.transaction(async (c) => {
@@ -141,10 +143,21 @@ async function replyWithProgress(
         summary: group?.enabled ? repliesOff : disabledAck,
         pending: undefined,
       };
-    const { tasks, total } = await progressTasks(c, groupId);
-    const pending = await claimPendingGroupReplies(c, groupId, 4, "discord");
+    const { tasks, total } = await progressTasks(c, groupId, 8, threadId);
+    const pending = await claimPendingGroupReplies(
+      c,
+      groupId,
+      4,
+      "discord",
+      threadId,
+    );
     return {
-      summary: progressSummary(tasks, total, pending.replies.length, "頻道"),
+      summary: progressSummary(
+        tasks,
+        total,
+        pending.replies.length,
+        threadId ? "討論串" : "頻道",
+      ),
       pending,
     };
   });
@@ -209,16 +222,19 @@ export async function replyDiscordText(
   event: DiscordMessageEvent,
   reply: TextReply,
 ) {
-  const group = discordId(event.channel);
+  const channel = discordId(event.channel);
+  const parent = event.type === "create" ? event.parentChannel : undefined;
+  const group = parent ? discordId(parent) : channel;
   const origin = discordId(event.id);
   if ("progress" in reply) {
     await replyWithProgress(
       db,
       group,
+      parent ? channel : null,
       async (message, id) =>
         (
           await platform.sendToGroup(
-            group,
+            channel,
             message,
             id ?? `progress:${event.id}`,
             origin,
@@ -234,7 +250,7 @@ export async function replyDiscordText(
         ? [credentialAnswerAck]
         : lineChunks(splitQueryAnswer(reply.detail).body, 5, 1850);
   await platform.replyToMessage(
-    { groupId: group, messageId: origin },
+    { groupId: channel, messageId: origin },
     messages,
   );
 }
@@ -245,7 +261,8 @@ export async function handleDiscordInteraction(
   event: DiscordInteraction,
 ) {
   const rest = platform.rest;
-  const groupId = discordId(event.channel);
+  const groupId = discordId(event.parentChannel ?? event.channel);
+  const threadId = event.parentChannel ? discordId(event.channel) : null;
   const original = Routes.webhookMessage(
     event.applicationId,
     event.token,
@@ -276,7 +293,7 @@ export async function handleDiscordInteraction(
       // 公開回覆的訊息識別碼可供頻道成員引用；關閉回覆時只回覆發出指令的人。
       if (!visible) await edit(group?.enabled ? repliesOff : disabledAck);
       else
-        await replyWithProgress(db, groupId, async (message, noticeId) =>
+        await replyWithProgress(db, groupId, threadId, async (message, noticeId) =>
           noticeId
             ? discordMessageId(
                 await rest.post(
@@ -330,6 +347,7 @@ export async function handleDiscordInteraction(
       type: "create",
       id: event.id,
       channel: event.channel,
+      parentChannel: event.parentChannel,
       name: event.name,
       interactionReplyId: anchor ? rawDiscordId(anchor) : null,
       author: event.member,

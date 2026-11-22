@@ -174,6 +174,7 @@ export interface TaskEndSummary {
 }
 
 export interface Task {
+  discord_thread_id?: string | null;
   /** 看板讀取任務時提供；進行中的任務為 null。 */
   end_summary?: TaskEndSummary | null;
   /** 草擬定期檢查的查詢任務：記下要求的排程。 */
@@ -271,6 +272,7 @@ export interface Message {
   content_revision?: number;
   needs_source_review?: boolean;
   discord_message_id?: string | null;
+  discord_thread_id?: string | null;
   image_source_url?: string | null;
   trigger_mode?: "auto" | "command" | "chat";
   contextOnly?: boolean;

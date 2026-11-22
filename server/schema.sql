@@ -55,6 +55,7 @@ ALTER TABLE messages ADD COLUMN IF NOT EXISTS content_revision integer NOT NULL 
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS needs_source_review boolean NOT NULL DEFAULT false;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS discord_message_id text;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS discord_reply_message_id text;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS discord_thread_id text;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS discord_edited_at timestamptz;
 CREATE INDEX IF NOT EXISTS messages_discord_source ON messages(discord_message_id) WHERE discord_message_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS messages_pending ON messages(group_id,received_at) WHERE processed=false;
@@ -128,6 +129,8 @@ CREATE TABLE IF NOT EXISTS notifications (
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS reply_failures integer NOT NULL DEFAULT 0;
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS discord_retry_at timestamptz;
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS source_message_id text;
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS discord_thread_id text;
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS discord_thread_id text;
 -- 私訊摘要先保存批次，再對 LINE 推播；重試同一批沿用同一個 LINE 重試鍵。
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_digest_id uuid;
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_outage_started_at timestamptz;
@@ -256,30 +259,32 @@ CREATE OR REPLACE TRIGGER copy_image_version AFTER UPDATE OF version ON tasks FO
  WHEN (NEW.version<>OLD.version) EXECUTE FUNCTION copy_task_image_refs();
 ALTER TABLE embeddings DROP CONSTRAINT IF EXISTS embeddings_kind_check;
 ALTER TABLE embeddings ADD CONSTRAINT embeddings_kind_check CHECK(kind IN ('message','task','memory','knowledge','repo','outcome','image'));
+ALTER TABLE group_memories ADD COLUMN IF NOT EXISTS discord_thread_id text;
+
 CREATE OR REPLACE VIEW rag_sources AS
- SELECT 'message'::text kind, id ref_id, group_id, NULL::uuid project_id, text AS content, received_at AS source_time
+ SELECT 'message'::text kind, id ref_id, group_id, NULL::uuid project_id, text AS content, received_at AS source_time, discord_thread_id
  FROM messages WHERE type='text' AND NOT revoked AND text IS NOT NULL AND text<>''
  AND received_at > message_retention_cutoff()
  UNION ALL
  SELECT 'image',o.message_id,o.group_id,NULL::uuid,concat_ws(E'\n',o.summary,o.recognized_text,
-   CASE WHEN o.uncertainties<>'[]'::jsonb THEN '辨識不確定：'||o.uncertainties::text END),m.received_at
+   CASE WHEN o.uncertainties<>'[]'::jsonb THEN '辨識不確定：'||o.uncertainties::text END),m.received_at,m.discord_thread_id
  FROM image_observations o JOIN messages m ON m.id=o.message_id AND m.group_id=o.group_id
  WHERE NOT m.revoked AND m.received_at>message_retention_cutoff() AND m.image IS NOT NULL AND encode(sha256(m.image),'hex')=o.source_hash
  UNION ALL
- SELECT 'task', id::text, group_id, project_id, concat_ws(E'\n',title,summary,acceptance::text), updated_at
+ SELECT 'task', id::text, group_id, project_id, concat_ws(E'\n',title,summary,acceptance::text), updated_at,discord_thread_id
  FROM tasks t WHERE project_id IS NULL OR EXISTS (SELECT 1 FROM group_projects g WHERE g.group_id=t.group_id AND g.project_id=t.project_id)
  UNION ALL
- SELECT 'memory', id::text, group_id, project_id, content, created_at FROM group_memories m
+ SELECT 'memory', id::text, group_id, project_id, content, created_at,discord_thread_id FROM group_memories m
  WHERE project_id IS NULL OR EXISTS (SELECT 1 FROM group_projects g WHERE g.group_id=m.group_id AND g.project_id=m.project_id)
  UNION ALL
- SELECT 'knowledge', id::text, NULL::text, project_id, content, created_at FROM project_knowledge k
+ SELECT 'knowledge', id::text, NULL::text, project_id, content, created_at,NULL::text FROM project_knowledge k
  WHERE status<>'closed' AND EXISTS (SELECT 1 FROM group_projects g WHERE g.project_id=k.project_id)
  UNION ALL
  SELECT 'outcome', id::text, group_id, project_id,
    concat_ws(E'\n', '標題：'||left(title,200), '需求：'||left(summary,1200),
      '審查：'||left(nullif(review_note,''),800),
      CASE WHEN status='failed' THEN '失敗原因：'||left(coalesce(last_error,'未記錄'),800) END,
-     CASE status WHEN 'merged' THEN '狀態：已合併' WHEN 'ready' THEN '狀態：待合併' ELSE '狀態：需要處理，未合併' END), updated_at
+     CASE status WHEN 'merged' THEN '狀態：已合併' WHEN 'ready' THEN '狀態：待合併' ELSE '狀態：需要處理，未合併' END), updated_at,discord_thread_id
  FROM tasks t WHERE status IN ('ready','merged','failed') AND project_id IS NOT NULL
  AND EXISTS (SELECT 1 FROM group_projects g WHERE g.group_id=t.group_id AND g.project_id=t.project_id);
 

@@ -123,8 +123,8 @@ export const discordDeliveryNotes = {
   origin: "找不到原訊息，無法加入收到反應。請在看板查看需求。",
 } as const;
 export const discordGroupReplyLabels = {
-  all: "收到需求時會在原訊息加上反應，補問與結果會回到頻道",
-  results: "補問與結果會回到頻道",
+  all: "收到需求時會在原訊息加上反應，補問與結果會回到原頻道或討論串",
+  results: "補問與結果會回到原頻道或討論串",
 } as const;
 export const statusLabels: Record<TaskStatus, string> = {
   awaiting_approval: "待審核",

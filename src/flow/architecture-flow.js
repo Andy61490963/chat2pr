@@ -344,7 +344,7 @@ import "@fontsource-variable/inter";
       anim: function (tl) { showBubble(tl, "m1"); travel(tl, "line_tunnel", 1.1, "訊息"); travel(tl, "tunnel_app", 0.6, "訊息"); status(tl, "收到 Webhook"); } },
 
     { title: "驗證來源並保存群組訊息", where: "app 與 PostgreSQL", cam: "entry", focus: ["app", "db", "line"],
-      text: "app 驗證 LINE 簽章，也接收 Discord 長連線送來的訊息和斜線指令。兩邊的群組訊息都存進 PostgreSQL，有圖片就在背景下載。LINE 可即時回覆「收到」。Discord 依頻道設定在原訊息加上 ✅。",
+      text: "app 驗證 LINE 簽章，也接收 Discord 長連線送來的訊息和斜線指令。兩邊的群組訊息都存進 PostgreSQL，有圖片就在背景下載。LINE 可即時回覆「收到」。Discord 討論串沿用父頻道設定，✅、補問與結果都回到原討論串。",
       chips: ["簽章錯誤回 401", "reply token 不算額度", "原文保留 30 天"],
       data: "<ok>✓ 簽章正確</ok>\n\n<k>messages 新增一列</k>\n  id          \"5129…\"\n  group_id    \"C1f3…\"\n  type        \"text\"\n  received_at 10:02:11\n\n<k>回覆（reply token）</k>\n<s>收到，我會把這則需求整理好交給管理者確認，</s>\n<s>處理完會在這裡回報。</s>",
       end: { bub: ["m1", "r1"], app: "已存檔・已回收到" },

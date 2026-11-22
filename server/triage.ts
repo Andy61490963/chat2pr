@@ -484,18 +484,31 @@ export class Triage {
         return;
       const followupBatch = await isFollowupBatch(this.db, groupId);
       const messages = await this.db.query<Message>(
-        "SELECT * FROM messages WHERE group_id=$1 AND NOT processed AND NOT revoked AND received_at>message_retention_cutoff() AND trigger_mode<>'chat' AND ($2='auto' OR trigger_mode='command') ORDER BY received_at,id LIMIT 100",
+        `WITH pending AS (
+           SELECT * FROM messages WHERE group_id=$1 AND NOT processed AND NOT revoked
+             AND received_at>message_retention_cutoff() AND trigger_mode<>'chat'
+             AND ($2='auto' OR trigger_mode='command')
+         )
+         SELECT * FROM pending
+         WHERE discord_thread_id IS NOT DISTINCT FROM (
+           SELECT discord_thread_id FROM pending ORDER BY received_at,id LIMIT 1
+         )
+         ORDER BY received_at,id LIMIT 100`,
         [groupId, group.trigger_mode],
       );
       if (!messages.length) return;
+      // 各討論串可能開放給不同成員，判讀來源需與回覆目的地一致。
+      const threadId = messages[0].discord_thread_id ?? null;
       // 只有明確引用的同群組訊息才能跟隨指令，不能把附近閒聊或其他群組的圖派工。
       const attachments = await this.db.query<Message>(
         `SELECT * FROM messages WHERE group_id=$1 AND (id=ANY($2) OR discord_message_id=ANY($2))
-           AND NOT(id=ANY($3)) AND NOT revoked AND received_at>message_retention_cutoff()`,
+           AND NOT(id=ANY($3)) AND NOT revoked AND received_at>message_retention_cutoff()
+           AND discord_thread_id IS NOT DISTINCT FROM $4::text`,
         [
           groupId,
           messages.map((m) => m.quoted_id).filter(Boolean),
           messages.map((m) => m.id),
+          threadId,
         ],
       );
       messages.push(
@@ -544,14 +557,14 @@ export class Triage {
           });
         }
         const memories = await this.db.query<Memory>(
-          "SELECT m.id,m.content,m.project_id,m.created_at,p.name AS project FROM group_memories m LEFT JOIN projects p ON p.id=m.project_id WHERE m.group_id=$1 AND (m.project_id IS NULL OR EXISTS (SELECT 1 FROM group_projects gp WHERE gp.group_id=$1 AND gp.project_id=m.project_id)) ORDER BY m.created_at",
-          [groupId],
+          "SELECT m.id,m.content,m.project_id,m.created_at,p.name AS project FROM group_memories m LEFT JOIN projects p ON p.id=m.project_id WHERE m.group_id=$1 AND (m.discord_thread_id IS NULL OR m.discord_thread_id=$2) AND (m.project_id IS NULL OR EXISTS (SELECT 1 FROM group_projects gp WHERE gp.group_id=$1 AND gp.project_id=m.project_id)) ORDER BY m.created_at",
+          [groupId, threadId],
         );
         // 碎片化對話需要足夠上下文：近三天的對話、被引用的舊訊息，以及群組所有未結束與近期任務。
         const ids = messages.map((m) => m.id);
         const conversation = await this.db.query(
-          "SELECT * FROM (SELECT id,type,text,quoted_id,received_at FROM messages WHERE group_id=$1 AND NOT revoked AND received_at>greatest(now()-interval '3 days',message_retention_cutoff()) AND NOT(id=ANY($2)) ORDER BY received_at DESC LIMIT 301) recent ORDER BY received_at",
-          [groupId, ids],
+          "SELECT * FROM (SELECT id,type,text,quoted_id,received_at FROM messages WHERE group_id=$1 AND NOT revoked AND received_at>greatest(now()-interval '3 days',message_retention_cutoff()) AND NOT(id=ANY($2)) AND discord_thread_id IS NOT DISTINCT FROM $3::text ORDER BY received_at DESC LIMIT 301) recent ORDER BY received_at",
+          [groupId, ids, threadId],
         );
         const conversationTruncated = conversation.length > 300;
         if (conversationTruncated) conversation.shift();
@@ -562,19 +575,19 @@ export class Triage {
           .map((m) => (m as { quoted_id: string | null }).quoted_id)
           .filter(Boolean);
         const quoted = await this.db.query(
-          "SELECT id,type,text,received_at FROM messages WHERE group_id=$1 AND NOT revoked AND received_at>message_retention_cutoff() AND id=ANY($2)",
-          [groupId, quotedIds],
+          "SELECT id,type,text,received_at FROM messages WHERE group_id=$1 AND NOT revoked AND received_at>message_retention_cutoff() AND id=ANY($2) AND discord_thread_id IS NOT DISTINCT FROM $3::text",
+          [groupId, quotedIds, threadId],
         );
         // 成員引用的機器人訊息（查詢回答、完成通知）：代表在接續對應的任務。
         const quotedBotMessages = quotedIds.length
           ? await this.db.query(
-              'SELECT n.sent_message_id AS id,n.task_id AS "taskId",t.title AS "taskTitle",left(n.text,1500) AS text FROM notifications n JOIN tasks t ON t.id=n.task_id WHERE n.group_id=$1 AND n.sent_message_id=ANY($2)',
-              [groupId, quotedIds],
+              'SELECT n.sent_message_id AS id,n.task_id AS "taskId",t.title AS "taskTitle",left(n.text,1500) AS text FROM notifications n JOIN tasks t ON t.id=n.task_id WHERE n.group_id=$1 AND n.sent_message_id=ANY($2) AND t.discord_thread_id IS NOT DISTINCT FROM $3::text',
+              [groupId, quotedIds, threadId],
             )
           : [];
         const existing = await this.db.query<Task>(
-          "SELECT * FROM tasks t WHERE group_id=$1 AND (project_id IS NULL OR EXISTS (SELECT 1 FROM group_projects gp WHERE gp.group_id=$1 AND gp.project_id=t.project_id)) AND (status NOT IN ('rejected','cancelled','merged','closed') OR updated_at>now()-interval '90 days') ORDER BY created_at DESC LIMIT 201",
-          [groupId],
+          "SELECT * FROM tasks t WHERE group_id=$1 AND discord_thread_id IS NOT DISTINCT FROM $2::text AND (project_id IS NULL OR EXISTS (SELECT 1 FROM group_projects gp WHERE gp.group_id=$1 AND gp.project_id=t.project_id)) AND (status NOT IN ('rejected','cancelled','merged','closed') OR updated_at>now()-interval '90 days') ORDER BY created_at DESC LIMIT 201",
+          [groupId, threadId],
         );
         const tasksTruncated = existing.length > 200;
         if (tasksTruncated) existing.pop();
@@ -683,6 +696,7 @@ export class Triage {
           projects.map((p) => p.id),
           s.rag_enabled,
           repositories.map((p) => ({ id: p.id, sha: p.sha })),
+          threadId,
         );
         lookup.contextEvidence = contextEvidence;
         lookup.contextLimits = {
@@ -804,6 +818,7 @@ export class Triage {
           this.db,
           groupId,
           quotedIds,
+          threadId,
         );
         const decisions = await this.classifier.classify({
           messages,
@@ -1117,14 +1132,16 @@ export class Triage {
     >("SELECT id,name,repo FROM projects");
     // 引用機器人回答或通知的訊息 → 那則通知所屬的任務；引用就確定是在接續它，不靠 AI 猜。
     const quotedTask = new Map<string, string>();
+    const threadId =
+      messages.find((m) => !m.contextOnly)?.discord_thread_id ?? null;
     const quotedBot = messages.filter((m) => m.quoted_id);
     if (quotedBot.length)
       for (const r of await this.db.query<{
         sent_message_id: string;
         task_id: string;
       }>(
-        "SELECT n.sent_message_id,n.task_id FROM notifications n JOIN tasks t ON t.id=n.task_id WHERE n.group_id=$1 AND t.group_id=$1 AND n.sent_message_id=ANY($2)",
-        [group.id, quotedBot.map((m) => m.quoted_id)],
+        "SELECT n.sent_message_id,n.task_id FROM notifications n JOIN tasks t ON t.id=n.task_id WHERE n.group_id=$1 AND t.group_id=$1 AND n.sent_message_id=ANY($2) AND t.discord_thread_id IS NOT DISTINCT FROM $3::text",
+        [group.id, quotedBot.map((m) => m.quoted_id), threadId],
       ))
         for (const m of quotedBot)
           if (m.quoted_id === r.sent_message_id)
@@ -1304,8 +1321,8 @@ export class Triage {
           if (inferred && settings.value.auto_memory === false) continue;
           const content = redact(d.summary.trim()).slice(0, 1000);
           const known = await c.query(
-            "SELECT 1 FROM group_memories WHERE group_id=$1 AND lower(regexp_replace(content,'\\s','','g'))=lower(regexp_replace($2,'\\s','','g'))",
-            [group.id, content],
+            "SELECT 1 FROM group_memories WHERE group_id=$1 AND (discord_thread_id IS NULL OR discord_thread_id=$3) AND lower(regexp_replace(content,'\\s','','g'))=lower(regexp_replace($2,'\\s','','g'))",
+            [group.id, content, threadId],
           );
           // AI 自行歸納的記憶不是成員要求的，不在群組回報。
           if (known.rowCount) {
@@ -1316,13 +1333,14 @@ export class Triage {
           if (!inferred)
             await tellCommand(d, "memory", triageRememberedText(content));
           await c.query(
-            "INSERT INTO group_memories(group_id,project_id,content,source,source_message_id) VALUES($1,$2,$3,$4,$5)",
+            "INSERT INTO group_memories(group_id,project_id,content,source,source_message_id,discord_thread_id) VALUES($1,$2,$3,$4,$5,$6)",
             [
               group.id,
               d.projectId,
               content,
               inferred ? "ai" : "chat",
               d.sourceIds[0],
+              threadId,
             ],
           );
           await this.db.audit(
@@ -1381,10 +1399,10 @@ export class Triage {
         let related: Task | undefined;
         if (d.relatedTaskId) {
           related = (
-            await c.query("SELECT * FROM tasks WHERE id=$1 AND group_id=$2", [
-              d.relatedTaskId,
-              group.id,
-            ])
+            await c.query(
+              "SELECT * FROM tasks WHERE id=$1 AND group_id=$2 AND discord_thread_id IS NOT DISTINCT FROM $3::text",
+              [d.relatedTaskId, group.id, threadId],
+            )
           ).rows[0];
           if (
             !related ||
@@ -1543,6 +1561,7 @@ export class Triage {
             missing: missing.map(redact),
             risk_reasons: risk ? [redact(risk)] : [],
             source_ids: sourceIds,
+            discord_thread_id: threadId,
             project_routing: { ...routing, reason: redact(routing.reason) },
             target_branch: branch.name,
             branch_selection: {
@@ -1717,7 +1736,7 @@ export class Triage {
         const key = `${group.id}:${[...d.sourceIds].sort().join(",")}:${d.title}`;
         const t = (
           await c.query(
-            "INSERT INTO tasks(project_id,group_id,title,summary,acceptance,risk_reasons,missing,source_ids,status,approved_version,parent_id,dedupe_key,suggestions,mode,question,assumptions,check_draft) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT(dedupe_key) DO NOTHING RETURNING *",
+            "INSERT INTO tasks(project_id,group_id,title,summary,acceptance,risk_reasons,missing,source_ids,status,approved_version,parent_id,dedupe_key,suggestions,mode,question,assumptions,check_draft,discord_thread_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) ON CONFLICT(dedupe_key) DO NOTHING RETURNING *",
             [
               projectId,
               group.id,
@@ -1739,6 +1758,7 @@ export class Triage {
               d.schedule && d.taskType === "query"
                 ? JSON.stringify(d.schedule)
                 : null,
+              threadId,
             ],
           )
         ).rows[0] as Task | undefined;
