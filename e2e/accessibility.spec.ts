@@ -130,7 +130,22 @@ const screens: {
     path: "/system?tab=architecture",
     loaded: "工作容器各階段的權限",
   },
-  { name: "設定", path: "/settings", loaded: /^方案 demo/ },
+  { name: "設定的 AI 與執行分頁", path: "/settings", loaded: /^方案 demo/ },
+  {
+    name: "設定的通知分頁",
+    path: "/settings?tab=notifications",
+    loaded: "管理者通知送到",
+  },
+  {
+    name: "設定的連線與金鑰分頁",
+    path: "/settings?tab=connections",
+    loaded: "OpenAI API 金鑰",
+  },
+  {
+    name: "設定的資料與外觀分頁",
+    path: "/settings?tab=data",
+    loaded: "介面外觀",
+  },
   { name: "登入", path: "/", loaded: "使用 GitHub 登入", signedOut: true },
 ];
 const narrowScreens = screens
@@ -177,7 +192,7 @@ test("方向鍵切換任務狀態與詳情時，選取的分頁會標示對應�
 
 test("外觀選項可用方向鍵選取，重新載入後保留深色偏好", async ({ page }) => {
   await mockDashboard(page);
-  await page.goto("/settings");
+  await page.goto("/settings?tab=data");
   const theme = page.getByRole("radiogroup", { name: "介面外觀" });
   await theme.getByRole("radio", { name: "跟隨系統" }).focus();
   await page.keyboard.press("ArrowLeft");

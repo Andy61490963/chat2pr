@@ -8,7 +8,7 @@ const section = "連線金鑰";
 test("擁有者能在手機用鍵盤確認並更新金鑰", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 800 });
   await mockDashboard(page);
-  await page.goto("/settings#settings-secrets");
+  await page.goto("/settings?tab=connections");
   const settings = page.getByRole("region", { name: section });
   const input = settings.getByLabel("OpenAI API 金鑰", { exact: true });
   const update = settings.getByRole("button", { name: "更新 OpenAI API 金鑰" });
@@ -20,10 +20,15 @@ test("擁有者能在手機用鍵盤確認並更新金鑰", async ({ page }) => 
   const dialog = page.getByRole("dialog", { name: "確認更新連線金鑰" });
   await expect(dialog.getByText("將更新 OpenAI API 金鑰。")).toBeVisible();
   await expect(dialog).not.toContainText(key);
-  const scan = () =>
-    new AxeBuilder({ page })
+  // 對話框淡入期間按鈕是半透明的，axe 會量到過低的對比；等動畫結束再檢查。
+  const scan = async () => {
+    await page.evaluate(() =>
+      Promise.all(document.getAnimations().map((a) => a.finished)),
+    );
+    return new AxeBuilder({ page })
       .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
       .analyze();
+  };
   expect((await scan()).violations).toEqual([]);
   await dialog.getByRole("button", { name: "先不要" }).click();
   await expect(update).toBeFocused();
@@ -52,7 +57,7 @@ test("擁有者能在手機用鍵盤確認並更新金鑰", async ({ page }) => 
 
 test("擁有者可以確認移除 Discord 選填權杖", async ({ page }) => {
   await mockDashboard(page);
-  await page.goto("/settings#settings-secrets");
+  await page.goto("/settings?tab=connections");
   await page.getByRole("checkbox", { name: "移除 Discord 機器人權杖" }).check();
   await page.getByRole("button", { name: "更新 Discord 機器人權杖" }).click();
   const dialog = page.getByRole("dialog", { name: "確認更新連線金鑰" });
@@ -76,7 +81,7 @@ test("一般管理者只看到權限說明", async ({ page }) => {
       },
     },
   });
-  await page.goto("/settings#settings-secrets");
+  await page.goto("/settings?tab=connections");
   await expect(page.getByText("連線金鑰只有擁有者能更新")).toBeVisible();
   await expect(page.getByRole("region", { name: section })).toHaveCount(0);
   await expect(page.getByLabel("OpenAI API 金鑰", { exact: true })).toHaveCount(
@@ -88,7 +93,7 @@ test("登入時間超過十分鐘時清空輸入並提供回到連線金鑰的�
   page,
 }) => {
   await mockDashboard(page, { reauthConnectionSecrets: true });
-  await page.goto("/settings#settings-secrets");
+  await page.goto("/settings?tab=connections");
   const input = page.getByLabel("OpenAI API 金鑰", { exact: true });
   await input.fill(key);
   await page.getByRole("button", { name: "更新 OpenAI API 金鑰" }).click();
@@ -99,5 +104,5 @@ test("登入時間超過十分鐘時清空輸入並提供回到連線金鑰的�
   await expect(input).toHaveValue("");
   await expect(
     page.getByRole("link", { name: "使用 GitHub 重新登入" }),
-  ).toHaveAttribute("href", "/auth/github?returnTo=settings-secrets");
+  ).toHaveAttribute("href", "/auth/github?returnTo=%2Fsettings%3Ftab%3Dconnections");
 });

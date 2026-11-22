@@ -92,8 +92,8 @@ for (const viewport of [
       page,
     }, info) => {
       await mockDashboard(page);
-      await page.goto("/settings");
-      const section = page.getByRole("region", { name: "資料與外觀" });
+      await page.goto("/settings?tab=data");
+      const section = page.getByRole("tabpanel", { name: "資料與外觀" });
       await expect(
         section.getByText("資料保存", { exact: true }),
       ).toBeVisible();
@@ -108,7 +108,7 @@ for (const viewport of [
       await verifyLayout(
         page,
         info,
-        "section[aria-labelledby='settings-data']",
+        "[role='tabpanel'][data-state='active']",
         "設定頁資料保存",
       );
     });
@@ -172,8 +172,8 @@ for (const viewport of [
       page,
     }, info) => {
       await mockDashboard(page, { state: { health: discordHealth } });
-      await page.goto("/settings");
-      const services = page.getByRole("region", { name: "服務連線" });
+      await page.goto("/settings?tab=connections");
+      const services = page.getByRole("tabpanel", { name: /^連線與金鑰/ });
       await expect(services.getByText("已連線", { exact: true })).toBeVisible();
       const invite = services.getByText("邀請機器人到伺服器", { exact: true });
       await invite.focus();
@@ -186,7 +186,7 @@ for (const viewport of [
       await verifyLayout(
         page,
         info,
-        "#settings-services",
+        "[role=tabpanel][data-state=active]",
         "設定頁 Discord 連線",
       );
     });
@@ -202,7 +202,7 @@ for (const viewport of [
         settings.admin_notify_platform = "discord";
         await route.fulfill({ json: { ok: true } });
       });
-      await page.goto("/settings");
+      await page.goto("/settings?tab=notifications");
       const region = page.getByRole("region", { name: "管理者通知", exact: true });
       await expect(region.getByRole("status")).toContainText("LINE 私訊");
       await expect(region.getByRole("status")).toContainText("已配對");
@@ -221,15 +221,15 @@ for (const viewport of [
       settings.admin_discord_id = "已綁定";
       await emitDashboardEvent(page, "update");
       await expect(region.getByRole("status")).toContainText("已配對");
-      await verifyLayout(page, info, "section[aria-labelledby='settings-notifications']", "設定頁管理者通知與配對");
+      await verifyLayout(page, info, "[aria-labelledby='admin-notifications-title']", "設定頁管理者通知與配對");
     });
 
     test("推播額度用完時，推播列省去重複警示與舊時間", async ({
       page,
     }, info) => {
       await mockDashboard(page, { state: { health: exhaustedPushHealth } });
-      await page.goto("/settings");
-      const services = page.getByRole("region", { name: "服務連線" });
+      await page.goto("/settings?tab=connections");
+      const services = page.getByRole("tabpanel", { name: /^連線與金鑰/ });
       const push = services.getByRole("listitem").filter({
         has: page.getByText("LINE 推播（群組回覆與私訊）", { exact: true }),
       });
@@ -250,7 +250,7 @@ for (const viewport of [
       await expect(
         quota.getByText("需處理", { exact: true }).first(),
       ).toBeVisible();
-      await verifyLayout(page, info, "#settings-services", "設定頁服務連線");
+      await verifyLayout(page, info, "[role=tabpanel][data-state=active]", "設定頁服務連線");
     });
 
     test("定期檢查空狀態有可執行的動作和範例，規則可用鍵盤展開", async ({
@@ -271,10 +271,15 @@ for (const viewport of [
       await summary.focus();
       await summary.press("Enter");
       await expect(rules).toBeVisible();
-      await page.getByRole("button", { name: "新增定期檢查" }).click();
-      await expect(
-        page.getByRole("textbox", { name: "名稱", exact: true }),
-      ).toBeVisible();
+      const add = page.getByRole("button", { name: "新增定期檢查" });
+      const card = page.locator("#scheduled-checks");
+      const name = card.getByRole("textbox", { name: "名稱", exact: true });
+      await expect(name).toHaveCount(0);
+      await add.press("Enter");
+      await expect(page).toHaveURL("/checks");
+      await expect(name).toBeFocused();
+      await expect(name).toBeInViewport();
+      await expect(card.locator("[data-slot='card-header'] + [data-slot='card-content'] form")).toHaveCount(1);
     });
 
     test("聊天室統一沒有需求的標籤並保留等待辨識", async ({ page }, info) => {

@@ -5,6 +5,10 @@ import { Database } from "./db.js";
 import { config, secrets, token } from "./config.js";
 import { AppError } from "./policy.js";
 import { secretReauthTarget } from "../shared/connection-secrets.js";
+
+// 舊登入連結和更新前建立的登入狀態都回到相同的設定分頁。
+const isSecretReauthTarget = (target: string | null | undefined) =>
+  target === secretReauthTarget || target === "settings-secrets";
 export const hash = (s: string) => createHash("sha256").update(s).digest("hex");
 export type Role = "admin" | "member";
 export interface UserSession {
@@ -69,7 +73,7 @@ export async function registerAuth(app: FastifyInstance, db: Database) {
   app.get("/auth/github", async (req, reply) => {
     // 先回到固定回呼所屬的網域，避免從 localhost 建立的 cookie 無法送到公開回呼。
     const publicUrl = new URL(config().publicUrl);
-    const returnTo = (req.query as { returnTo?: string }).returnTo === secretReauthTarget
+    const returnTo = isSecretReauthTarget((req.query as { returnTo?: string }).returnTo)
       ? secretReauthTarget
       : null;
     const loginUrl = new URL("/auth/github", publicUrl);
@@ -146,7 +150,7 @@ export async function registerAuth(app: FastifyInstance, db: Database) {
     reply
       .clearCookie("af_oauth", { path: "/" })
       .setCookie("af_session", session, { ...opts(), maxAge: 43200 });
-    return reply.redirect(state.return_to === secretReauthTarget ? `/settings#${secretReauthTarget}` : "/");
+    return reply.redirect(isSecretReauthTarget(state.return_to) ? secretReauthTarget : "/");
   });
   app.get("/api/me", async (req) => {
     const s = await requireUser(db, req);

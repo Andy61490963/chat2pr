@@ -223,8 +223,10 @@ export function ProjectsView({
   const [openId, setOpenId] = useState<string | null>(null);
   const guard = useGuard();
   const [tab, setTab] = useState("overview");
+  const [databaseFocusId, setDatabaseFocusId] = useState<string | null>(null);
   useEffect(() => {
     if (!focusId) return;
+    setDatabaseFocusId(null);
     setTab(focusTab);
     setOpenId(focusId);
     focused?.();
@@ -235,6 +237,7 @@ export function ProjectsView({
     [state.projects, state.groups],
   );
   const openProject = (id: string) => {
+    setDatabaseFocusId(null);
     setTab("overview");
     setOpenId(id);
   };
@@ -337,7 +340,10 @@ export function ProjectsView({
             </SheetHeader>
             <Tabs
               value={tab}
-              onValueChange={(v) => guard(() => setTab(v))}
+              onValueChange={(v) => guard(() => {
+                setDatabaseFocusId(null);
+                setTab(v);
+              })}
               className="min-h-0 flex-1"
             >
               <TabsList aria-label="專案詳情" className="mx-3 flex-wrap h-auto">
@@ -531,11 +537,11 @@ export function ProjectsView({
                               type="button"
                               variant="outline"
                               size="sm"
-                              className="shrink-0"
+                              className="min-h-11 shrink-0"
                               onClick={() =>
                                 guard(() => {
                                   setTab("access");
-                                  requestAnimationFrame(jumpToDatabase);
+                                  setDatabaseFocusId(open.id);
                                 })
                               }
                             >
@@ -706,6 +712,11 @@ export function ProjectsView({
                   <Separator />
                   <ProjectDatabase
                     key={`database-${open.id}`}
+                    onInitialFocus={
+                      databaseFocusId === open.id
+                        ? () => setDatabaseFocusId(null)
+                        : undefined
+                    }
                     project={open}
                     busy={busy}
                     run={run}
@@ -748,17 +759,6 @@ function missingGroups(p: Project, state: State) {
 
 // 沒有通過驗證、而且留有失敗原因；儲存庫接回後的「請重新驗證」提醒不算失敗。
 const validationFailed = (p: Project) => validationKind(p) === "failed";
-
-// 「登記資料庫連線」按鈕：捲到詳情裡的資料庫連線區塊並聚焦第一個欄位。
-function jumpToDatabase() {
-  const section = document.getElementById("project-database");
-  section?.scrollIntoView({ behavior: "smooth", block: "start" });
-  section
-    ?.querySelector<HTMLElement>(
-      "input:enabled, textarea:enabled, button:enabled",
-    )
-    ?.focus({ preventScroll: true });
-}
 
 function ValidationError({
   text,

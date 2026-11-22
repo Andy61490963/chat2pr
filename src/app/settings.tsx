@@ -16,12 +16,19 @@ import {
 } from "../../shared/line-private.js";
 import {
   adminNotificationLabels,
+  connectionStatusLabels,
   dataRetentionSecretText,
   discordServiceLabels,
   discordServiceText,
   groupPlatformLabels,
   networkStatusLabels,
+  systemStatusLabels,
 } from "../../shared/status-glossary.js";
+import {
+  readSettingsTab,
+  settingsTabs,
+  type SettingsTab,
+} from "../../shared/settings-tabs.js";
 import {
   maxCodexReserve,
   reserveLabel,
@@ -56,6 +63,10 @@ import {
   Progress,
   Separator,
   Switch,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
   segmentedListClass,
   segmentedItemClass,
 } from "@/components/ui/form-controls";
@@ -208,7 +219,9 @@ function QuotaCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Codex 訂閱額度</CardTitle>
+        <CardTitle role="heading" aria-level={2}>
+          Codex 訂閱額度
+        </CardTitle>
         <CardDescription>
           與你個人使用 Codex 共用同一個帳號的額度
         </CardDescription>
@@ -457,7 +470,9 @@ function AiCard({
   return (
     <Card>
       <CardHeader>
-        <CardTitle id="ai-mode-title">AI 執行模式</CardTitle>
+        <CardTitle id="ai-mode-title" role="heading" aria-level={2}>
+          AI 執行模式
+        </CardTitle>
         <CardDescription>切換只影響之後開始的判讀與開發</CardDescription>
       </CardHeader>
       <CardContent>
@@ -474,7 +489,7 @@ function AiCard({
           }}
         >
           <div className="space-y-2">
-            <label className="flex items-center gap-2 text-sm">
+            <label className="work-touch flex items-center gap-2 text-sm">
               <Switch
                 aria-describedby="triage-pause-hint"
                 checked={form.triage_paused}
@@ -487,7 +502,7 @@ function AiCard({
               訊息與圖片照常接收；暫停期間不建立或更新需求，已核准任務仍可執行。取消暫停後會處理尚未判讀的訊息。全域暫停仍優先停止判讀與派工。
             </p>
           </div>
-          <label className="flex items-center gap-2 text-sm">
+          <label className="work-touch flex items-center gap-2 text-sm">
             <Switch
               checked={form.rag_enabled}
               onCheckedChange={(v) => set("rag_enabled", v)}
@@ -495,7 +510,7 @@ function AiCard({
             從過去對話與任務找參考資料
           </label>
           <div className="space-y-2">
-            <label className="flex items-center gap-2 text-sm">
+            <label className="work-touch flex items-center gap-2 text-sm">
               <Switch
                 aria-describedby="group-replies-hint"
                 checked={form.group_replies}
@@ -512,7 +527,7 @@ function AiCard({
             </p>
           </div>
           <div className="space-y-2">
-            <label className="flex items-center gap-2 text-sm">
+            <label className="work-touch flex items-center gap-2 text-sm">
               <Switch
                 aria-describedby="code-downloads-hint"
                 checked={form.code_downloads}
@@ -529,7 +544,7 @@ function AiCard({
             </p>
           </div>
           <div className="space-y-2">
-            <label className="flex items-center gap-2 text-sm">
+            <label className="work-touch flex items-center gap-2 text-sm">
               <Switch
                 aria-describedby="open-network-hint"
                 checked={form.container_network === "open"}
@@ -818,13 +833,15 @@ function ThemeCard() {
   return (
     <Card>
       <CardHeader>
-        <CardTitle id="theme-title">介面外觀</CardTitle>
+        <CardTitle id="theme-title" role="heading" aria-level={2}>
+          介面外觀
+        </CardTitle>
       </CardHeader>
       <CardContent>
         <div
           role="radiogroup"
           aria-labelledby="theme-title"
-          className={segmentedListClass}
+          className={cn(segmentedListClass, "h-auto")}
         >
           {(
             [
@@ -838,7 +855,7 @@ function ThemeCard() {
               data-state={theme === value ? "active" : "inactive"}
               className={cn(
                 segmentedItemClass,
-                "cursor-pointer has-focus-visible:border-ring has-focus-visible:ring-[3px] has-focus-visible:ring-ring/50 has-focus-visible:outline-1",
+                "work-touch h-auto cursor-pointer has-focus-visible:border-ring has-focus-visible:ring-[3px] has-focus-visible:ring-ring/50 has-focus-visible:outline-1",
               )}
             >
               <input
@@ -858,33 +875,26 @@ function ThemeCard() {
   );
 }
 
-const settingsSections = {
-  "settings-ai": "AI 與額度",
-  "settings-notifications": "管理者通知",
-  "settings-line": "LINE",
-  "settings-services": "服務連線",
-  "settings-secrets": "連線金鑰",
-  "settings-data": "資料與外觀",
-} as const;
-
-function SettingsSection({
-  id,
+function SettingsPanel({
+  value,
+  active,
   children,
 }: {
-  id: keyof typeof settingsSections;
+  value: SettingsTab;
+  active: SettingsTab;
   children: React.ReactNode;
 }) {
   return (
-    <section aria-labelledby={id} className="flex flex-col gap-3">
-      <h2 id={id} tabIndex={-1} className="scroll-mt-4 text-lg font-semibold">
-        {settingsSections[id]}
-      </h2>
-      <div className="@container">
-        <div className="grid items-start gap-4 @3xl:grid-cols-[repeat(auto-fit,minmax(20rem,1fr))]">
-          {children}
-        </div>
+    <TabsContent
+      value={value}
+      forceMount
+      hidden={active !== value}
+      className="@container min-w-0"
+    >
+      <div className="grid grid-cols-1 items-start gap-4 @3xl:grid-cols-[repeat(auto-fit,minmax(20rem,1fr))]">
+        {children}
       </div>
-    </section>
+    </TabsContent>
   );
 }
 
@@ -904,7 +914,12 @@ function AdminNotifications({
   useUnsaved("settings-notifications", dirty);
   const paired = saved === "discord" ? settings.admin_discord_id : settings.admin_line_id;
   return (
-    <Card>
+    <Card role="region" aria-labelledby="admin-notifications-title">
+      <CardHeader>
+        <CardTitle id="admin-notifications-title" role="heading" aria-level={2}>
+          管理者通知
+        </CardTitle>
+      </CardHeader>
       <CardContent className="grid gap-4">
         <form className="grid gap-2" onSubmit={(event) => {
           event.preventDefault();
@@ -973,6 +988,8 @@ function AdminNotifications({
 }
 
 export function SettingsView({
+  tab,
+  onTabChange,
   state,
   busy,
   run,
@@ -982,6 +999,8 @@ export function SettingsView({
   owner,
   refreshState,
 }: {
+  tab: SettingsTab;
+  onTabChange: (tab: SettingsTab) => void;
   state: State;
   busy: boolean;
   run: Run;
@@ -1076,44 +1095,81 @@ export function SettingsView({
                 }
               >
                 {disabled
-                  ? "未啟用"
+                  ? connectionStatusLabels.disabled
                   : h
                     ? stale
-                      ? "待確認"
+                      ? connectionStatusLabels.stale
                       : h.ok
-                        ? "正常"
-                        : "需處理"
+                        ? connectionStatusLabels.healthy
+                        : connectionStatusLabels.needsAttention
                     : // 使用時才更新的項目沒有紀錄，代表還沒用到，不是漏了檢查。
                       onUse
-                      ? "尚無紀錄"
-                      : "未檢查"}
+                      ? connectionStatusLabels.noRecord
+                      : connectionStatusLabels.unchecked}
               </Badge>
             )}
           </li>
         ),
       };
     });
+  const discordNeedsAttention =
+    discordStatus === "disconnected" || discordStatus === "configError";
+  const counts: Partial<Record<SettingsTab, number>> = {
+    notifications: Number(push.blocked) + Number(push.failed > 0),
+    connections:
+      serviceRows.filter((entry) => entry.action).length +
+      Number(discordNeedsAttention),
+  };
+  const tabList = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    // 設定內容在登入與載入狀態後才出現，直接開啟分區網址時補上錨點跳轉。
-    const id = location.hash.slice(1);
-    if (!Object.hasOwn(settingsSections, id)) return;
-    const target = document.getElementById(id);
-    target?.scrollIntoView();
-    target?.focus({ preventScroll: true });
-  }, []);
+    // 從網址開啟分頁時，只移動分頁列，讓手機也看得到目前選取的標籤。
+    const list = tabList.current;
+    const selected = list?.querySelector('[aria-selected="true"]');
+    if (!list || !selected) return;
+    const bounds = list.getBoundingClientRect();
+    const item = selected.getBoundingClientRect();
+    list.scrollLeft +=
+      Math.min(0, item.left - bounds.left) +
+      Math.max(0, item.right - bounds.right);
+  }, [tab]);
 
   return (
-    <div className="flex flex-col gap-6">
-      <nav aria-label="設定分區" className="flex flex-wrap gap-2">
-        {Object.entries(settingsSections)
-          .filter(([id]) => owner || id !== "settings-secrets")
-          .map(([id, label]) => (
-            <Button key={id} asChild variant="outline" className="min-h-11">
-              <a href={`#${id}`}>{label}</a>
-            </Button>
-          ))}
-      </nav>
-      <SettingsSection id="settings-ai">
+    <Tabs
+      value={tab}
+      onValueChange={(value) => onTabChange(readSettingsTab(value))}
+      className="min-w-0 gap-4"
+    >
+      <TabsList
+        ref={tabList}
+        aria-label="設定分頁"
+        className="h-auto max-w-full justify-start overflow-x-auto"
+      >
+        {(Object.entries(settingsTabs) as [SettingsTab, string][]).map(
+          ([id, label]) => {
+            const count = counts[id] ?? 0;
+            return (
+              <TabsTrigger
+                key={id}
+                value={id}
+                className="min-h-11 min-w-11 flex-none px-3 md:min-h-8"
+              >
+                {label}
+                {count > 0 && (
+                  <Badge variant="warn" className="px-1.5">
+                    <span className="sr-only">
+                      {" "}{systemStatusLabels.attention}{" "}
+                    </span>
+                    {count}
+                    <span className="sr-only"> 項</span>
+                  </Badge>
+                )}
+              </TabsTrigger>
+            );
+          },
+        )}
+      </TabsList>
+      {/* 保留各張卡片的草稿與離頁提醒。 */}
+      <SettingsPanel value="ai" active={tab}>
         <AiCard
           replyCount={
             state.groups.filter(
@@ -1136,14 +1192,20 @@ export function SettingsView({
             request={request}
           />
         )}
-      </SettingsSection>
-      <SettingsSection id="settings-notifications">
-        <AdminNotifications key={s.admin_notify_platform ?? "line"} settings={s} busy={busy} run={run} request={request} />
-      </SettingsSection>
-      <SettingsSection id="settings-line">
-        <Card>
+      </SettingsPanel>
+      <SettingsPanel value="notifications" active={tab}>
+        <AdminNotifications
+          key={s.admin_notify_platform ?? "line"}
+          settings={s}
+          busy={busy}
+          run={run}
+          request={request}
+        />
+        <Card role="region" aria-labelledby="line-push-title">
           <CardHeader>
-            <CardTitle>LINE 推播（群組回覆與私訊）</CardTitle>
+            <CardTitle id="line-push-title" role="heading" aria-level={2}>
+              LINE 推播（群組回覆與私訊）
+            </CardTitle>
             <CardDescription>
               過去 {linePrivateDigestMinutes}{" "}
               分鐘未送出摘要時，新通知會立即送出。接下來累積的通知會在上一則送出滿{" "}
@@ -1218,11 +1280,13 @@ export function SettingsView({
             )}
           </CardContent>
         </Card>
-      </SettingsSection>
-      <SettingsSection id="settings-services">
+      </SettingsPanel>
+      <SettingsPanel value="connections" active={tab}>
         <Card>
           <CardHeader>
-            <CardTitle>連線狀態</CardTitle>
+            <CardTitle role="heading" aria-level={2}>
+              服務連線
+            </CardTitle>
             <CardAction>
               <Button
                 variant="outline"
@@ -1260,7 +1324,7 @@ export function SettingsView({
               <ul>{serviceRows.map((entry) => entry.row)}</ul>
             </details>
             <details className="mt-3 text-sm">
-              <summary className="cursor-pointer text-muted-foreground">
+              <summary className="min-h-11 cursor-pointer py-3 text-muted-foreground">
                 Webhook 網址
               </summary>
               <div className="mt-2 flex flex-col gap-1 font-mono text-xs break-all">
@@ -1272,14 +1336,15 @@ export function SettingsView({
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>Discord</CardTitle>
+            <CardTitle role="heading" aria-level={2}>
+              Discord
+            </CardTitle>
             <CardAction>
               <Badge
                 variant={
                   discordStatus === "connected"
                     ? "good"
-                    : discordStatus === "disconnected" ||
-                        discordStatus === "configError"
+                    : discordNeedsAttention
                       ? "danger"
                       : "secondary"
                 }
@@ -1317,23 +1382,23 @@ export function SettingsView({
             </details>
           </CardContent>
         </Card>
-      </SettingsSection>
-      {owner ? (
-        <SettingsSection id="settings-secrets">
+        {owner ? (
           <ConnectionSecrets
             status={state.connectionSecrets}
             request={request}
             refresh={refreshState}
           />
-        </SettingsSection>
-      ) : (
-        <p className="text-sm">連線金鑰只有擁有者能更新</p>
-      )}
-      <SettingsSection id="settings-data">
+        ) : (
+          <p className="col-span-full text-sm">連線金鑰只有擁有者能更新</p>
+        )}
+      </SettingsPanel>
+      <SettingsPanel value="data" active={tab}>
         <ThemeCard />
         <Card>
           <CardHeader>
-            <CardTitle>資料保存</CardTitle>
+            <CardTitle role="heading" aria-level={2}>
+              資料保存
+            </CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground">
@@ -1349,7 +1414,9 @@ export function SettingsView({
         </Card>
         <Card>
           <CardHeader>
-            <CardTitle>對話、記憶與任務結果索引</CardTitle>
+            <CardTitle role="heading" aria-level={2}>
+              對話、記憶與任務結果索引
+            </CardTitle>
           </CardHeader>
           <CardContent className="grid gap-3 text-sm">
             <dl className="grid grid-cols-2 gap-2">
@@ -1374,6 +1441,7 @@ export function SettingsView({
             </p>
             <Button
               variant="outline"
+              className="min-h-11"
               disabled={busy || state.rag.active}
               onClick={() =>
                 void run(
@@ -1386,7 +1454,7 @@ export function SettingsView({
             </Button>
           </CardContent>
         </Card>
-      </SettingsSection>
-    </div>
+      </SettingsPanel>
+    </Tabs>
   );
 }

@@ -201,7 +201,7 @@ export function AlertBell({
       void openView?.(
         target.view,
         a.project_id,
-        target.view === "system" ? target.tab : projectNoticeTab(a.kind),
+          "tab" in target ? target.tab : projectNoticeTab(a.kind),
       );
     }
   };

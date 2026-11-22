@@ -87,6 +87,13 @@ import {
   readSystemTab,
   type SystemTab,
 } from "../shared/system-tabs.js";
+import {
+  defaultSettingsTab,
+  migrateSettingsHash,
+  readSettingsTab,
+  settingsTabFromUrl,
+  type SettingsTab,
+} from "../shared/settings-tabs.js";
 import { ChecksView } from "./app/checks";
 import { MembersView } from "./app/members";
 import { AlertBell } from "./app/alerts";
@@ -198,7 +205,9 @@ const viewFromPath = (path: string): View =>
 const writeUrl = (view: View, task: string | null, push = true) => {
   // 同一頁開關任務詳情時保留篩選等參數；換頁就清掉。
   const q = new URLSearchParams(
-    viewPaths[view] === location.pathname ? location.search : "",
+    viewPaths[view] === (location.pathname.replace(/\/+$/, "") || "/")
+      ? location.search
+      : "",
   );
   if (task) q.set("task", task);
   else q.delete("task");
@@ -226,6 +235,10 @@ export function App() {
     [systemTab, setSystemTab] = useState(() =>
       readSystemTab(new URLSearchParams(location.search).get("tab")),
     ),
+    [settingsTab, setSettingsTab] = useState(() =>
+      settingsTabFromUrl(new URL(location.href)),
+    ),
+    [lineQuotaHelpOpen, setLineQuotaHelpOpen] = useState(false),
     [state, setState] = useState<State | null>(null),
     [user, setUser] = useState<{
       csrf: string;
@@ -436,6 +449,10 @@ export function App() {
   // 記下目前網址：按上一頁時若選擇繼續編輯，要把網址改回來。
   const lastUrl = useRef(location.href);
   useEffect(() => {
+    const migrated = migrateSettingsHash(new URL(location.href));
+    if (migrated) history.replaceState(null, "", migrated);
+  }, []);
+  useEffect(() => {
     lastUrl.current = location.href;
   });
   // 瀏覽器上一頁／下一頁：依網址切換頁面與任務詳情。
@@ -445,17 +462,26 @@ export function App() {
       const previousUrl = lastUrl.current;
       const destination = new URL(location.href);
       const previous = new URL(previousUrl);
-      // 設定分區的上一頁／下一頁只移動錨點，表單仍留在同一頁。
+      const nextView = viewFromPath(destination.pathname);
+      const migrated = migrateSettingsHash(destination);
+      // 設定頁內切換分頁時，草稿仍留在掛載中的面板。
       if (
-        destination.pathname === viewPaths.settings &&
-        destination.pathname === previous.pathname &&
-        destination.search === previous.search
-      )
+        nextView === "settings" &&
+        viewFromPath(previous.pathname) === "settings" &&
+        destination.searchParams.get("task") ===
+          previous.searchParams.get("task")
+      ) {
+        if (migrated) history.replaceState(null, "", migrated);
+        lastUrl.current = location.href;
+        setSettingsTab(settingsTabFromUrl(destination));
         return;
+      }
       guard(
         () => {
-          setView(viewFromPath(destination.pathname));
+          if (migrated) history.replaceState(null, "", migrated);
+          setView(nextView);
           setSystemTab(readSystemTab(destination.searchParams.get("tab")));
+          setSettingsTab(settingsTabFromUrl(destination));
           setSavedProject(linkedProject(destination));
           setTaskAfterNavigation(null);
           const id = destination.searchParams.get("task");
@@ -504,10 +530,12 @@ export function App() {
       !location.search
     ) {
       history.replaceState(null, "", back);
+      const destination = new URL(location.href);
+      const migrated = migrateSettingsHash(destination);
+      if (migrated) history.replaceState(null, "", migrated);
       setView(viewFromPath(location.pathname));
-      setSystemTab(
-        readSystemTab(new URLSearchParams(location.search).get("tab")),
-      );
+      setSystemTab(readSystemTab(destination.searchParams.get("tab")));
+      setSettingsTab(settingsTabFromUrl(destination));
     }
     const linked = linkedProject(new URL(location.href));
     if (linked) setSavedProject(linked);
@@ -572,31 +600,53 @@ export function App() {
         else setSelected(await request<Detail>(`/api/tasks/${task.id}`));
       }
     }, done ?? "任務已更新");
-  const leave = (v: View, nextSystemTab?: SystemTab) => {
+  const leave = (v: View, tab?: SystemTab | SettingsTab) => {
     setView(v);
     setSelected(null);
     setTaskAfterNavigation(null);
     // 從導覽進入一律是乾淨的頁面：不帶上一輪的篩選。
-    const path = nextSystemTab
-      ? `${viewPaths[v]}?${new URLSearchParams({ tab: nextSystemTab })}`
+    const path = tab
+      ? `${viewPaths[v]}?${new URLSearchParams({ tab })}`
       : viewPaths[v];
     if (path !== location.pathname + location.search + location.hash)
       history.pushState(null, "", path);
-    setSystemTab(nextSystemTab ?? defaultSystemTab);
+    setSystemTab(v === "system" ? readSystemTab(tab ?? null) : defaultSystemTab);
+    setSettingsTab(
+      v === "settings" ? readSettingsTab(tab ?? null) : defaultSettingsTab,
+    );
     setVisit((n) => n + 1);
     window.scrollTo({ top: 0 });
   };
+  const changeTab = (tab: SystemTab | SettingsTab) => {
+    const url = new URL(location.href);
+    url.searchParams.set("tab", tab);
+    if (url.href !== location.href) history.pushState(null, "", url);
+  };
+  const changeSettingsTab = (tab: SettingsTab) => {
+    changeTab(tab);
+    setSettingsTab(tab);
+  };
   // 換頁前先確認沒有未儲存的修改。
-  const go = (v: View, projectId?: string | null, tab?: string) =>
+  const go = (v: View, projectId?: string | null, tab?: string) => {
+    if (v === "settings" && view === v) {
+      changeSettingsTab(readSettingsTab(tab ?? null));
+      heading.current?.focus({ preventScroll: true });
+      return;
+    }
+    const nextTab =
+      tab && v === "system"
+        ? readSystemTab(tab)
+        : tab && v === "settings"
+          ? readSettingsTab(tab)
+          : undefined;
     guard(() => {
-      leave(v, v === "system" && tab ? readSystemTab(tab) : undefined);
+      leave(v, nextTab);
       if (v === "projects" && projectId)
         setSavedProject({ id: projectId, tab: tab ?? "environment" });
     });
+  };
   const changeSystemTab = (tab: SystemTab) => {
-    const url = new URL(location.href);
-    url.searchParams.set("tab", tab);
-    history.pushState(null, "", url);
+    changeTab(tab);
     setSystemTab(tab);
   };
   // 從選單換頁時，選單關閉會把焦點還給觸發按鈕；改送到新頁面的標題。
@@ -728,6 +778,8 @@ export function App() {
       ? "disk"
       : defaultSystemTab
     : undefined;
+  const showServiceNotice =
+    view !== "settings" || settingsTab !== "connections";
   const notices = [
     admin &&
       goneProjects.length > 0 && {
@@ -743,7 +795,7 @@ export function App() {
           "services",
           ...down.map((h) => [h.name, h.outage_started_at]).sort(),
         ],
-        visible: view !== "settings",
+        visible: showServiceNotice,
       },
     (state?.settings.paused || state?.settings.triage_paused) && {
       key: state.settings.paused ? "dispatch-paused" : "triage-paused",
@@ -1035,7 +1087,7 @@ export function App() {
               </Button>
             </p>
           )}
-          {admin && down.length > 0 && view !== "settings" && (
+          {admin && down.length > 0 && showServiceNotice && (
             <p
               role="alert"
               className="flex flex-wrap items-center gap-2 px-2 py-2 text-sm text-danger"
@@ -1048,7 +1100,7 @@ export function App() {
               <Button
                 variant="outline"
                 size="xs"
-                onClick={() => go("settings")}
+                onClick={() => go("settings", null, "connections")}
               >
                 前往設定
               </Button>
@@ -1076,7 +1128,7 @@ export function App() {
                     開始派工
                   </Button>
                 ) : (
-                  view !== "settings" && (
+                  (view !== "settings" || settingsTab !== defaultSettingsTab) && (
                     <Button
                       variant="outline"
                       size="xs"
@@ -1106,7 +1158,10 @@ export function App() {
                     : `${hold}，額度恢復後會自動繼續。`}
               </span>
               {admin &&
-                (view !== holdView || (holdTab && systemTab !== holdTab)) && (
+                (view !== holdView ||
+                  (holdTab
+                    ? systemTab !== holdTab
+                    : settingsTab !== defaultSettingsTab)) && (
                   <Button
                     variant="outline"
                     size="xs"
@@ -1130,18 +1185,20 @@ export function App() {
                   />
                   <span>LINE 本月推播額度已用完，你仍可在看板查看通知。</span>
                 </p>
-                <a
-                  id="line-quota-help-link"
-                  href="#line-quota-help"
+                <button
+                  type="button"
+                  aria-expanded={lineQuotaHelpOpen}
+                  aria-controls="line-quota-help"
+                  onClick={() => setLineQuotaHelpOpen((open) => !open)}
                   className="work-touch inline-flex items-center font-medium underline underline-offset-4"
                 >
-                  怎麼辦
-                </a>
+                  {lineQuotaHelpOpen ? "收起說明" : "怎麼辦"}
+                </button>
               </div>
               <div
                 id="line-quota-help"
-                tabIndex={-1}
-                className="hidden pb-2 target:block"
+                hidden={!lineQuotaHelpOpen}
+                className="pb-2"
               >
                 <p>
                   額度通常在下個月初重置，你可以先從任務詳情複製結果貼回群組，或在群組輸入
@@ -1150,12 +1207,6 @@ export function App() {
                 <p>
                   你仍會在群組收到即時確認，額度恢復後會續送仍有效的群組回覆和私訊。
                 </p>
-                <a
-                  href="#line-quota-help-link"
-                  className="work-touch inline-flex items-center font-medium underline underline-offset-4"
-                >
-                  收起說明
-                </a>
               </div>
             </div>
           )}
@@ -1307,6 +1358,8 @@ export function App() {
             )}
             {current.id === "settings" && (
               <SettingsView
+                tab={settingsTab}
+                onTabChange={changeSettingsTab}
                 state={state}
                 busy={busy}
                 run={run}

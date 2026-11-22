@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
   connectionSecretFields,
@@ -30,7 +30,10 @@ export function ConnectionSecrets({
       </p>
     );
   return (
-    <Card className="col-span-full min-w-0">
+    <Card className="col-span-full min-w-0" role="region" aria-labelledby="connection-secrets-title">
+      <CardHeader>
+        <h2 id="connection-secrets-title" className="font-semibold">連線金鑰</h2>
+      </CardHeader>
       <CardContent>
         <ul className="divide-y">
           {connectionSecretFields.map((field) => (
@@ -175,7 +178,7 @@ function ConnectionSecretRow({
           variant="outline"
           className="min-h-11 justify-self-start"
         >
-          <a href={`/auth/github?returnTo=${secretReauthTarget}`}>
+          <a href={`/auth/github?${new URLSearchParams({ returnTo: secretReauthTarget })}`}>
             使用 GitHub 重新登入
           </a>
         </Button>

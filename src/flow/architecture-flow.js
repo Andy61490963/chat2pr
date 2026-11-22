@@ -651,7 +651,11 @@ import "@fontsource-variable/inter";
       cb.className = "chap"; cb.type = "button";
       var n = document.createElement("span"); n.className = "n"; n.textContent = i + 1;
       cb.appendChild(n); cb.appendChild(document.createTextNode(pick(s.title)));
-      cb.addEventListener("click", function () { hideCover(); go(i, playing); document.getElementById("player").scrollIntoView({ behavior: RM ? "auto" : "smooth", block: "start" }); });
+      cb.addEventListener("click", function () {
+        hideCover();
+        go(i, playing);
+        document.getElementById("player").focus();
+      });
       li.appendChild(cb); chapsEl.appendChild(li); chaps.push(cb);
     });
   }

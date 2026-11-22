@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Project } from "../../shared/types.js";
 import {
   objectLabels,
@@ -58,11 +58,13 @@ export function ProjectDatabase({
   busy,
   request,
   run,
+  onInitialFocus,
 }: {
   project: Project;
   busy: boolean;
   request: Request;
   run: Run;
+  onInitialFocus?: () => void;
 }) {
   const base = `/api/projects/${project.id}/database`;
   const [view, setView] = useState<ProjectDatabaseView | null>(null);
@@ -127,6 +129,12 @@ export function ProjectDatabase({
     }
   };
   const loaded = view !== null;
+  const firstField = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (!loaded || !onInitialFocus) return;
+    firstField.current?.focus();
+    onInitialFocus();
+  }, [loaded, onInitialFocus]);
   const dirty = JSON.stringify(draft) !== saved;
   useUnsaved(`project-database:${project.id}`, dirty);
 
@@ -286,8 +294,7 @@ export function ProjectDatabase({
 
   return (
     <section
-      id="project-database"
-      className="scroll-mt-4 space-y-4 rounded-lg border p-4"
+      className="space-y-4 rounded-lg border p-4"
       aria-label="資料庫連線"
     >
       <div>
@@ -361,6 +368,7 @@ export function ProjectDatabase({
         <div className="space-y-2 rounded-lg border p-3">
           <Label htmlFor="db-describe">用白話描述連線</Label>
           <Textarea
+            ref={firstField}
             id="db-describe"
             rows={3}
             value={describe}
