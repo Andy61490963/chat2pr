@@ -1,4 +1,5 @@
 import {
+  groupPlatformLabels,
   inboxStatusLabels,
   notificationLabels,
   projectLabels,
@@ -13,6 +14,7 @@ import {
   type TaskListDestination,
 } from "../../shared/task-list.js";
 import { taskListTitle } from "../../shared/task-title.js";
+import { firstSetupStatus } from "../../shared/first-setup.js";
 import {
   activityDay,
   activityDetail,
@@ -96,51 +98,62 @@ import {
 } from "./shared";
 
 function setupSteps(state: State) {
-  const ok = (name: string) => state.health.find((h) => h.name === name)?.ok;
-  const ai = state.settings.ai_mode === "api" ? "openai" : "codex";
-  return [
+  const status = firstSetupStatus(state);
+  const platformNames = status.platforms.map((p) => groupPlatformLabels[p]);
+  const subscription = state.settings.ai_mode !== "api";
+  const required = [
     {
-      done: !!(ok("github") && ok("line") && ok("runner")),
+      done: status.services,
       label: "服務連線正常",
       hint: "在設定頁按「檢查連線」",
-      view: "settings" as View,
+      view: "settings",
     },
     {
-      done: !!ok(ai),
-      label: ai === "codex" ? "服務的 Codex 已登入訂閱" : "OpenAI API 可用",
-      hint:
-        ai === "codex"
-          ? "在主機執行 npm run codex:login，再檢查連線"
-          : "在本機設定頁填入 API 金鑰",
-      view: "settings" as View,
+      done: status.chat,
+      label: platformNames.length
+        ? `${platformNames.join("或")}收件連線正常`
+        : "至少接通一個收件平台",
+      hint: platformNames.length
+        ? "在設定頁檢查群組使用的聊天平台連線"
+        : "在設定頁接通 LINE 或 Discord",
+      view: "settings",
     },
     {
-      done: state.projects.some((p) => p.enabled && p.validated_at),
-      label: "至少一個專案通過驗證",
-      hint: "新增專案並驗證環境",
-      view: "projects" as View,
+      done: status.ai,
+      label: subscription ? "服務的 Codex 已登入訂閱" : "OpenAI API 可用",
+      hint: subscription
+        ? "在主機執行 npm run codex:login，再檢查連線"
+        : "在本機設定頁填入 API 金鑰",
+      view: "settings",
     },
     {
-      done: state.groups.some((g) => g.enabled && g.project_ids.length),
-      label: "群組已綁定專案並啟用",
-      hint: "把機器人加進群組後，在群組頁勾選專案",
-      view: "groups" as View,
+      done: status.project,
+      label: "至少一個專案通過驗證並啟用",
+      hint: "新增專案、驗證環境並啟用",
+      view: "projects",
     },
     {
-      done: !!(state.settings.admin_notify_platform === "discord"
-        ? state.settings.admin_discord_id
-        : state.settings.admin_line_id),
-      label: "管理者私訊通知已配對",
-      hint: "在設定頁產生配對碼",
-      view: "settings" as View,
+      done: status.route,
+      label: "群組已綁定可派工的專案",
+      hint: "在群組頁勾選可派工的專案，並允許群組提出需求",
+      view: "groups",
     },
     {
-      done: !state.settings.paused,
+      done: status.dispatch,
       label: "開始自動派工",
       hint: "右上角切換",
-      view: "inbox" as View,
+      view: "inbox",
     },
-  ];
+  ] as const;
+  const optional = [
+    {
+      done: status.notifications,
+      label: "管理者私訊通知已配對",
+      hint: "在設定頁產生配對碼",
+      view: "settings",
+    },
+  ] as const;
+  return { required, optional };
 }
 
 export type TaskDrawerAction = "amend" | "answer";
@@ -212,7 +225,11 @@ export function InboxView({
     setNotify(true);
   };
   const setup = setupSteps(state);
-  const left = setup.filter((s) => !s.done);
+  const left = setup.required.filter((s) => !s.done);
+  const groups = [
+    { title: "必須設定", steps: left },
+    { title: "選配", steps: setup.optional.filter((s) => !s.done) },
+  ];
   // 清單用已載入的任務（未結束的伺服器一律載入）；摘要的數字用伺服器的實際數量。
   const working = state.tasks.filter((t) => moving.includes(t.status));
   const ready = state.tasks.filter((t) => readyStatuses.includes(t.status));
@@ -244,34 +261,40 @@ export function InboxView({
       {left.length > 0 && (
         <Card className="gap-3">
           <CardContent>
-            <div className="mb-3 flex items-center justify-between">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <h2 className="font-semibold">開始使用</h2>
               <span className="text-sm text-muted-foreground">
-                已完成 {setup.length - left.length} / {setup.length}
+                必須設定已完成 {setup.required.length - left.length} / {setup.required.length}
               </span>
             </div>
-            <ul className="grid gap-2 sm:grid-cols-2">
-              {left.map((s) => (
-                <li
-                  key={s.label}
-                  className="flex items-start gap-3 rounded-lg bg-muted/60 px-3 py-2.5"
-                >
-                  <Circle className="mt-0.5 size-4 text-warn" />
-                  <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="text-sm font-medium">{s.label}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {s.hint}
-                    </span>
-                  </span>
-                  {/* 成員進不了設定、專案與群組頁，不給會被彈回的連結。 */}
-                  {admin && s.view !== "inbox" && (
-                    <Button variant="link" size="sm" onClick={() => go(s.view)}>
-                      前往 <ChevronRight />
-                    </Button>
-                  )}
-                </li>
+            <div className="grid gap-4">
+              {groups.map(({ title, steps }) => steps.length > 0 && (
+                <div key={title} className="grid gap-2">
+                  <h3 className="text-sm font-medium">{title}</h3>
+                  <ul className="grid gap-2 sm:grid-cols-2">
+                    {steps.map((s) => (
+                      <li
+                        key={s.label}
+                        className="flex items-start gap-3 rounded-lg bg-muted/60 px-3 py-2.5"
+                      >
+                        <Circle className="mt-0.5 size-4 shrink-0 text-warn" />
+                        <span className="flex min-w-0 flex-1 flex-col">
+                          <span className="text-sm font-medium">{s.label}</span>
+                          <span className="text-xs text-muted-foreground">{s.hint}</span>
+                        </span>
+                        {/* 成員沒有管理頁權限。 */}
+                        {admin && s.view !== "inbox" && (
+                          <Button variant="link" size="sm" className="min-h-11 shrink-0 md:min-h-8" onClick={() => go(s.view)}>
+                            前往 <span className="sr-only">設定：{s.label}</span>
+                            <ChevronRight />
+                          </Button>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
               ))}
-            </ul>
+            </div>
           </CardContent>
         </Card>
       )}

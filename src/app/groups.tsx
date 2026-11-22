@@ -238,14 +238,24 @@ export function GroupsView({
   run,
   request,
   openSettings,
+  bindingProjectId,
+  finishBinding,
 }: {
   state: State;
   busy: boolean;
   run: Run;
   request: Request;
   openSettings: () => void;
+  bindingProjectId: string | null;
+  finishBinding: () => void;
 }) {
-  const [openId, setOpenId] = useState<string | null>(null);
+  const available = state.groups.filter((g) => !g.left_at);
+  const binding = state.projects.find(
+    (p) => p.id === bindingProjectId && !p.repo_missing_at,
+  );
+  const [openId, setOpenId] = useState<string | null>(
+    binding && available.length === 1 ? available[0].id : null,
+  );
   const [platform, setPlatform] = useState<Group["platform"] | "all">("all");
   const guard = useGuard();
   const open = state.groups.find((g) => g.id === openId);
@@ -299,6 +309,11 @@ export function GroupsView({
         {stuck > 0 && `，${stuck} 個${groupLabels.unbound}`}
         {halted > 0 && `，${halted} 個${groupLabels.stopped}`}
       </p>
+      {binding && !open && (
+        <p className="break-words text-sm">
+          選擇要綁定「{binding.name}」的群組，再儲存變更。
+        </p>
+      )}
       {matches.length === 0 && (
         <Empty icon={<MessageSquare />} title="這個平台還沒有群組">
           把機器人加入群組或伺服器，並傳一則訊息。
@@ -321,10 +336,26 @@ export function GroupsView({
         <Sheet
           open
           onOpenChange={(o) =>
-            !o && guard(() => setOpenId(null), { prefixes: ["group"] })
+            !o && guard(
+              () => {
+                setOpenId(null);
+                finishBinding();
+              },
+              { prefixes: ["group"] },
+            )
           }
         >
-          <SheetContent className="sm:max-w-xl">
+          <SheetContent
+            className="sm:max-w-xl"
+            onOpenAutoFocus={(event) => {
+              if (!binding || open.left_at) return;
+              const heading = document.getElementById("group-projects-heading");
+              if (heading) {
+                event.preventDefault();
+                heading.focus();
+              }
+            }}
+          >
             <SheetHeader>
               <SheetTitle className="text-lg [overflow-wrap:anywhere]">
                 {groupName(open)}
@@ -346,6 +377,7 @@ export function GroupsView({
                 busy={busy}
                 run={run}
                 request={request}
+                bindingProjectId={open.left_at ? undefined : binding?.id}
               />
             </div>
           </SheetContent>
@@ -472,6 +504,7 @@ function GroupCard({
   run,
   request,
   openSettings,
+  bindingProjectId,
 }: {
   group: Group;
   state: State;
@@ -479,10 +512,15 @@ function GroupCard({
   run: Run;
   request: Request;
   openSettings: () => void;
+  bindingProjectId?: string;
 }) {
   const savedName = isUnnamedLineGroup(g) ? "" : g.name;
+  const initialIds = () =>
+    bindingProjectId && !g.project_ids.includes(bindingProjectId)
+      ? [...g.project_ids, bindingProjectId]
+      : g.project_ids;
   const [name, setName] = useState(savedName),
-    [ids, setIds] = useState<string[]>(g.project_ids),
+    [ids, setIds] = useState(initialIds),
     [enabled, setEnabled] = useState(g.enabled),
     [triggerMode, setTriggerMode] = useState(g.trigger_mode),
     [replyMode, setReplyMode] = useState(g.reply_mode ?? "results"),
@@ -492,7 +530,7 @@ function GroupCard({
   // 例如 LINE 群組改名不會把還沒儲存的專案綁定洗掉。
   const savedIds = g.project_ids.join();
   useEffect(() => setName(savedName), [savedName]);
-  useEffect(() => setIds(g.project_ids), [savedIds]);
+  useEffect(() => setIds(initialIds()), [savedIds, bindingProjectId]);
   useEffect(() => setEnabled(g.enabled), [g.enabled]);
   useEffect(() => setTriggerMode(g.trigger_mode), [g.trigger_mode]);
   useEffect(() => setReplyMode(g.reply_mode ?? "results"), [g.reply_mode]);
@@ -691,7 +729,18 @@ function GroupCard({
         </div>
       )}
       <div className="flex flex-col gap-2">
-        <h3 className="text-sm font-medium">可修改的專案</h3>
+        <h3
+          id="group-projects-heading"
+          tabIndex={-1}
+          className="text-sm font-medium"
+        >
+          可修改的專案
+        </h3>
+        {bindingProjectId && !enabled && (
+          <p className="text-sm text-muted-foreground">
+            若要開始接收需求，請開啟上方的「允許這個群組提出需求」，再儲存變更。
+          </p>
+        )}
         <div className="flex flex-wrap gap-2">
           {/* 找不到儲存庫的專案不能綁定，不列出來。 */}
           {state.projects
@@ -700,7 +749,9 @@ function GroupCard({
               <Button
                 key={p.id}
                 size="sm"
+                className="min-h-11 md:min-h-8"
                 variant={ids.includes(p.id) ? "default" : "outline"}
+                aria-pressed={ids.includes(p.id)}
                 onClick={() => toggle(p.id)}
                 title={p.validated_at ? p.repo : "尚未通過環境驗證"}
               >
@@ -733,6 +784,7 @@ function GroupCard({
         {dirty && (
           <div className="flex gap-2">
             <Button
+              className="work-touch"
               disabled={busy}
               onClick={() =>
                 void run(
@@ -751,6 +803,7 @@ function GroupCard({
               儲存變更
             </Button>
             <Button
+              className="work-touch"
               variant="ghost"
               onClick={() => {
                 setName(savedName);
