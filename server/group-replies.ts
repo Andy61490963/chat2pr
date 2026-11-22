@@ -177,6 +177,8 @@ export function progressSummary(
   tasks: ProgressTask[],
   total: number,
   pending: number,
+  // Discord 的「群組」是頻道；用使用者看到的詞。
+  place: "群組" | "頻道" = "群組",
 ) {
   const lines = tasks.map(
     (t) =>
@@ -184,8 +186,8 @@ export function progressSummary(
   );
   if (total > tasks.length) lines.push(`…另外還有 ${total - tasks.length} 件`);
   const head = tasks.length
-    ? `這個群組最近的需求（還沒結束或 7 天內有變動）：\n${lines.join("\n")}`
-    : "這個群組最近 7 天沒有需求。";
+    ? `這個${place}最近的需求（還沒結束或 7 天內有變動）：\n${lines.join("\n")}`
+    : `這個${place}最近 7 天沒有需求。`;
   return groupText(
     `${head}\n\n${pending ? "下面是先前沒送到的回覆。" : "目前沒有待取回的結果。"}`,
   );

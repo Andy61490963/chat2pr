@@ -14,22 +14,36 @@ function replaceSecrets(secrets: string[], replacement: string) {
   ]
     .filter((n) => n.length >= 4)
     .sort((a, b) => b.length - a.length);
-  return (text: string) => needles.reduce((t, n) => t.split(n).join(replacement), text);
+  return (text: string) =>
+    needles.reduce((t, n) => t.split(n).join(replacement), text);
 }
+
+// Discord 應用程式 ID 是公開識別碼，也等於機器人的使用者 ID；遮掉它會讓頻道裡的「@機器人」
+// 變成看不懂的字，提及就觸發不了需求（實測時發現）。只遮真正的機密。
+const publicIdentifiers = new Set(["discordApplicationId"]);
 
 function configuredConnectionSecrets() {
   const stored = readSecrets();
-  return connectionSecretFields.flatMap((field) => stored[field] ? [stored[field]] : []);
+  return connectionSecretFields.flatMap((field) =>
+    !publicIdentifiers.has(field) && stored[field] ? [stored[field]] : [],
+  );
 }
 
 export function scrubConnectionSecrets(text: string) {
-  return replaceSecrets(configuredConnectionSecrets(), "[已遮蔽連線金鑰]")(text);
+  return replaceSecrets(
+    configuredConnectionSecrets(),
+    "[已遮蔽連線金鑰]",
+  )(text);
 }
 
 export function scrubber(secrets: string[]) {
   const scrubDatabase = replaceSecrets(secrets, SCRUBBED);
-  const scrubConfigured = replaceSecrets(configuredConnectionSecrets(), "[已遮蔽連線金鑰]");
-  return (text: string) => redactDiscordToken(scrubDatabase(scrubConfigured(text)));
+  const scrubConfigured = replaceSecrets(
+    configuredConnectionSecrets(),
+    "[已遮蔽連線金鑰]",
+  );
+  return (text: string) =>
+    redactDiscordToken(scrubDatabase(scrubConfigured(text)));
 }
 
 /** 遮蔽執行器回傳的整個結果（stdout、stderr、觀測事件）；沒有機密時原樣傳回。 */
@@ -42,6 +56,10 @@ export function scrubResult<T>(value: T, scrub: (text: string) => string): T {
 /** 檔案內容（base64）是否含有任一機密。 */
 export function containsSecret(base64: string, secrets: string[]) {
   const text = Buffer.from(base64, "base64").toString("utf8");
-  return redactDiscordToken(text) !== text ||
-    [...secrets, ...configuredConnectionSecrets()].some((s) => s.length >= 4 && text.includes(s));
+  return (
+    redactDiscordToken(text) !== text ||
+    [...secrets, ...configuredConnectionSecrets()].some(
+      (s) => s.length >= 4 && text.includes(s),
+    )
+  );
 }

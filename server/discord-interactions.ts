@@ -144,7 +144,7 @@ async function replyWithProgress(
     const { tasks, total } = await progressTasks(c, groupId);
     const pending = await claimPendingGroupReplies(c, groupId, 4, "discord");
     return {
-      summary: progressSummary(tasks, total, pending.replies.length),
+      summary: progressSummary(tasks, total, pending.replies.length, "頻道"),
       pending,
     };
   });
