@@ -128,6 +128,11 @@ export function registerChat(app: FastifyInstance, db: Database) {
     >(
       `
       SELECT m.id,m.type,m.received_at,m.revoked,
+        CASE
+          WHEN m.revoked THEN 'revoked'
+          WHEN m.received_at>message_retention_cutoff() THEN 'readable'
+          ELSE 'expired'
+        END AS availability,
         coalesce(CASE WHEN q.id IS NOT NULL THEN left(coalesce(nullif(q.text,''),
           CASE q.type WHEN 'image' THEN '圖片' WHEN 'sticker' THEN '貼圖' ELSE '附件' END),200) END,
           left(bn.text,200)) AS quoted_text,

@@ -288,6 +288,21 @@ export interface Message {
   revoked: boolean;
   processed: boolean;
 }
+
+export type MessageAvailability = "readable" | "revoked" | "expired";
+
+export interface SourceMessage {
+  id: string;
+  type: string;
+  text: string | null;
+  sender: string | null;
+  received_at: string;
+  availability: MessageAvailability;
+  /** 舊版欄位在任務詳情表示不可讀，在聊天室表示撤回。 */
+  revoked: boolean;
+  has_image: boolean;
+}
+
 export interface Memory {
   id: string;
   group_id: string;

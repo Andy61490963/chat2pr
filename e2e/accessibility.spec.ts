@@ -33,6 +33,7 @@ const chat: ChatPage = {
       quoted_text: null,
       quoted_sender: null,
       quoted_bot_id: null,
+      availability: "readable",
       revoked: false,
       expired: false,
       has_image: false,

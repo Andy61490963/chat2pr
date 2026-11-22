@@ -40,6 +40,7 @@ import type {
   Memory,
   Project,
   Settings,
+  SourceMessage,
   StateTotals,
   Task,
   TaskStatus,
@@ -145,15 +146,7 @@ export type Detail = {
       uncertainties: string[];
     } | null;
   }[];
-  sources: {
-    id: string;
-    type: string;
-    text: string | null;
-    sender: string | null;
-    received_at: string;
-    revoked: boolean;
-    has_image: boolean;
-  }[];
+  sources: SourceMessage[];
   history: Audit[];
   references: {
     id: string;

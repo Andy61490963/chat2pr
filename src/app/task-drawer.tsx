@@ -54,6 +54,7 @@ import {
   followupText,
   taskAcceptanceLabels,
   taskClarificationLabels,
+  unavailableMessageLabels,
 } from "../../shared/status-glossary.js";
 import { useUnsaved } from "./unsaved";
 import {
@@ -1146,15 +1147,29 @@ export function TaskDrawer({
             </section>
           )}
           <Tabs value={tab} onValueChange={setTab} className="gap-4">
-            <TabsList aria-label="任務紀錄" className="w-full">
-              <TabsTrigger value="sources">
+            <TabsList
+              aria-label="任務紀錄"
+              className="w-full max-sm:h-auto max-sm:justify-start"
+            >
+              <TabsTrigger
+                value="sources"
+                className="max-sm:min-h-11 max-sm:flex-none"
+              >
                 來源訊息
                 <span className="text-xs text-muted-foreground">
                   {detail.sources.length}
                 </span>
               </TabsTrigger>
-              <TabsTrigger value="history">時間軸</TabsTrigger>
-              <TabsTrigger value="runs">
+              <TabsTrigger
+                value="history"
+                className="max-sm:min-h-11 max-sm:flex-none"
+              >
+                時間軸
+              </TabsTrigger>
+              <TabsTrigger
+                value="runs"
+                className="max-sm:min-h-11 max-sm:flex-none"
+              >
                 執行紀錄
                 {detail.runs.length > 0 && (
                   <span className="text-xs text-muted-foreground">
@@ -1163,7 +1178,12 @@ export function TaskDrawer({
                 )}
               </TabsTrigger>
               {hasEvidence && (
-                <TabsTrigger value="evidence">判讀依據</TabsTrigger>
+                <TabsTrigger
+                  value="evidence"
+                  className="max-sm:min-h-11 max-sm:flex-none"
+                >
+                  判讀依據
+                </TabsTrigger>
               )}
             </TabsList>
             <TabsContent value="sources">
@@ -1172,22 +1192,26 @@ export function TaskDrawer({
                   {detail.sources.map((m) => (
                     <div
                       key={m.id}
-                      className="self-start rounded-2xl rounded-tl-sm bg-muted px-3.5 py-2.5 text-sm"
+                      className="max-w-full self-start rounded-2xl rounded-tl-sm bg-muted px-3.5 py-2.5 text-sm"
                     >
-                      {m.sender && (
+                      {m.availability === "readable" && m.sender && (
                         <span className="mb-0.5 block text-xs font-medium text-muted-foreground">
                           {m.sender}
                         </span>
                       )}
                       <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">
-                        {m.revoked
-                          ? "此訊息已撤回"
-                          : (m.text ??
-                            (m.type === "image"
-                              ? "（圖片）"
-                              : "（內容已到期）"))}
+                        {m.availability === "revoked"
+                          ? unavailableMessageLabels.revoked
+                          : m.availability === "expired"
+                            ? unavailableMessageLabels.expired(
+                                state.settings.retention_days,
+                              )
+                            : (m.text ??
+                              (m.type === "image"
+                                ? "（圖片）"
+                                : "（沒有文字內容）"))}
                       </p>
-                      {m.has_image && !m.revoked && (
+                      {m.has_image && m.availability === "readable" && (
                         <img
                           className="mt-2 max-w-full rounded-lg"
                           src={`/api/messages/${m.id}/image`}

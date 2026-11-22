@@ -107,6 +107,11 @@ export const connectionSecretStatusLabels = {
 
 export const messageEditLabel = "來源訊息已編輯";
 
+export const unavailableMessageLabels = {
+  revoked: "此訊息已撤回",
+  expired: (retentionDays: number) => `原文已超過保存期限（${retentionDays} 天）`,
+} as const;
+
 export const adminNotificationLabels = {
   destination: "管理者通知送到",
   paired: "已配對",

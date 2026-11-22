@@ -272,6 +272,7 @@ export const statusChat: ChatPage = {
     quoted_text: null,
     quoted_sender: null,
     quoted_bot_id: null,
+    availability: "readable",
     revoked: false,
     expired: false,
     has_image: false,
@@ -365,6 +366,36 @@ export const detail: Detail = {
   runs: [],
   groupDeliveries: [],
   thread: { before: [], after: [] },
+};
+
+export const availabilitySources: Detail["sources"] = (
+  ["readable", "revoked", "expired"] as const
+).map((availability) => ({
+  id: `example-source-${availability}`,
+  type: "text",
+  text: availability === "readable" ? "請整理範例畫面。" : null,
+  sender: availability === "readable" ? "小林" : null,
+  received_at: timestamp,
+  availability,
+  revoked: availability !== "readable",
+  has_image: false,
+}));
+
+export const availabilityChat: ChatPage = {
+  messages: availabilitySources.map((m) => ({
+    ...m,
+    revoked: m.availability === "revoked",
+    expired: m.availability === "expired",
+    quoted_id: null,
+    quoted_text: null,
+    quoted_sender: null,
+    quoted_bot_id: null,
+    image_state: null,
+    routing: "chat",
+    tasks: [],
+  })),
+  bot_messages: [],
+  next: null,
 };
 
 export const completedRun: RunView = {

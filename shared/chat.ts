@@ -1,4 +1,4 @@
-import type { TaskStatus } from "./types.js";
+import type { SourceMessage, TaskStatus } from "./types.js";
 import type { BotMessage } from "./group-delivery.js";
 
 export type TriggerMode = "command" | "auto";
@@ -11,12 +11,7 @@ export const isTaskCommand = (text: string | null | undefined) =>
 export const isProgressCommand = (text: string | null | undefined) =>
   /^\/進度(?:\s|[:：]|$)/u.test(text ?? "");
 
-export interface ChatMessage {
-  id: string;
-  sender: string | null;
-  type: string;
-  text: string | null;
-  received_at: string;
+export interface ChatMessage extends SourceMessage {
   quoted_id: string | null;
   // 被引用訊息的內容摘要與發言者；對方已撤回、到期或早於機器人加入時為空值。
   // 引用的是機器人送到群組的訊息時，發言者固定為「機器人」。
@@ -24,9 +19,7 @@ export interface ChatMessage {
   quoted_sender: string | null;
   /** 引用的是機器人訊息時，該則在 bot_messages 的 id（通知編號，不是 LINE 訊息 ID），用來跳到那一則。 */
   quoted_bot_id: string | null;
-  revoked: boolean;
   expired: boolean;
-  has_image: boolean;
   image_state: "ready" | "pending" | "failed" | null;
   routing: "chat" | "pending" | "processed";
   tasks: { id: string; title: string; status: TaskStatus }[];

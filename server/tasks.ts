@@ -27,6 +27,7 @@ import {
   type EndTaskSelection,
   type EndTasksResult,
   type Project,
+  type SourceMessage,
   type Task,
 } from "../shared/types.js";
 import { deliveryState, type GroupDelivery } from "../shared/group-delivery.js";
@@ -561,12 +562,18 @@ export class Tasks {
     if (!row) throw new AppError(404, "找不到任務");
     const task = withTaskEnd(row);
     const [rawSources, history, runs, fullTitle] = await Promise.all([
-      this.db.query<{
-        user_id: string | null;
-        sender: string | null;
-        [key: string]: unknown;
-      }>(
-        `SELECT id,type,CASE WHEN received_at>message_retention_cutoff() AND NOT revoked THEN text ELSE NULL END AS text,quoted_id,received_at,(revoked OR received_at<=message_retention_cutoff()) AS revoked,(image IS NOT NULL AND NOT revoked AND received_at>message_retention_cutoff()) AS has_image,
+      this.db.query<
+        SourceMessage & { user_id: string | null; quoted_id: string | null }
+      >(
+        `SELECT id,type,quoted_id,received_at,
+          CASE
+            WHEN revoked THEN 'revoked'
+            WHEN received_at>message_retention_cutoff() THEN 'readable'
+            ELSE 'expired'
+          END AS availability,
+          (revoked OR received_at<=message_retention_cutoff()) AS revoked,
+          CASE WHEN NOT revoked AND received_at>message_retention_cutoff() THEN text END AS text,
+          (image IS NOT NULL AND NOT revoked AND received_at>message_retention_cutoff()) AS has_image,
           CASE WHEN NOT revoked AND received_at>message_retention_cutoff() AND user_id IS NOT NULL THEN '成員 '||left(md5(group_id||':'||user_id),6) END AS sender,
           CASE WHEN NOT revoked AND received_at>message_retention_cutoff() THEN user_id END AS user_id
           FROM messages WHERE group_id=$1 AND id=ANY($2) ORDER BY received_at`,
