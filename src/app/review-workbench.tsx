@@ -289,9 +289,10 @@ export function ReviewWorkbench({
     const target =
       primary.current?.isConnected && !primary.current.disabled
         ? primary.current
-        : root.querySelector<HTMLElement>(
+        : (root.querySelector<HTMLElement>("[data-task-project-choice]:enabled") ??
+          root.querySelector<HTMLElement>(
             "[data-task-title], [data-review-error]",
-          );
+          ));
     if (!target) return;
     target.focus();
     focusId.current = null;
@@ -369,19 +370,22 @@ export function ReviewWorkbench({
   const index = sorted.findIndex(({ id }) => id === item?.id);
   const previous = sorted[index - 1];
   const next = sorted[index + 1];
+  const actionNotice = actionError && (
+    <div
+      role="alert"
+      className="border-b bg-danger-soft px-4 py-3 text-sm text-danger [overflow-wrap:anywhere]"
+    >
+      {actionError}
+    </div>
+  );
   const content = item && (
     <div
       ref={panel}
       data-review-id={item.id}
       className="min-w-0 [&_a[data-slot=button]]:max-lg:min-h-11 [&_button]:max-w-full [&_button]:whitespace-normal [&_button]:max-lg:min-h-11 [&_select]:max-lg:min-h-11 [&_summary]:max-lg:min-h-11"
     >
-      {actionError && (
-        <div
-          role="alert"
-          className="sticky top-0 z-10 border-b bg-danger-soft px-4 py-3 text-sm text-danger [overflow-wrap:anywhere]"
-        >
-          {actionError}
-        </div>
+      {(!desktop || !detail) && actionNotice && (
+        <div className="sticky top-0 z-10">{actionNotice}</div>
       )}
       {list ? (
         <PickListForm
@@ -421,6 +425,7 @@ export function ReviewWorkbench({
               busy={busy}
               admin={admin}
               reviewStatus={item.status}
+              actionNotice={desktop ? actionNotice : undefined}
               onPrimaryMount={attachPrimary}
               act={(task, action, body, done) =>
                 finish(
@@ -502,7 +507,7 @@ export function ReviewWorkbench({
       {desktop && items.length > 0 && (
         <section
           aria-label="審核面板"
-          className="work-ledger sticky top-4 max-h-[calc(100dvh-2rem)] min-w-0 overflow-y-auto"
+          className="work-ledger min-w-0"
           key={item?.id}
         >
           {item && !suspended ? (

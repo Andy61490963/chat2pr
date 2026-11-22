@@ -2,7 +2,7 @@ import { beforeEach, afterAll, it, expect, vi } from "vitest";
 import { reviewVerdict } from "../server/pr-body.js";
 import { transientFailure } from "../server/execution.js";
 import { codexSdkCrash } from "./failure-samples.js";
-import { db, reset, fixture, confirmTask } from "./helpers.js";
+import { db, reset, fixture, confirmTask, dashboardAction } from "./helpers.js";
 import {
   Execution,
   noConnectionHint,
@@ -1918,6 +1918,68 @@ it("跨專案查詢把其他已綁定專案的原始碼唯讀提供，未綁定�
     ]),
   );
 });
+it("手動指定的參考專案在更換分支及核准後仍唯讀提供給查詢", async () => {
+  const s = await queryScenario();
+  const other = await db.one<Project>(
+    "INSERT INTO projects(name,repo,enabled,validated_at) VALUES('示範後端','example/demo-backend',true,now()) RETURNING *",
+  );
+  await db.query(
+    "INSERT INTO group_projects(group_id,project_id) VALUES('group-a',$1)",
+    [other.id],
+  );
+  const pending = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [
+    s.task.id,
+  ]);
+  const assigned = await dashboardAction(
+    pending.id,
+    "assign",
+    pending.version,
+    {
+      project_id: pending.project_id,
+      related_project_ids: [other.id],
+    },
+  );
+  const base = vi.spyOn(GitHub.prototype, "base").mockResolvedValue("demo-sha");
+  try {
+    const target = await dashboardAction(
+      assigned.id,
+      "target",
+      assigned.version,
+      {
+        target_branch: "develop",
+      },
+    );
+    const approved = await dashboardAction(
+      target.id,
+      "approve",
+      target.version,
+    );
+    expect(approved).toMatchObject({
+      status: "queued",
+      target_branch: "develop",
+    });
+  } finally {
+    base.mockRestore();
+  }
+  const uploaded: string[] = [];
+  s.runner.uploadEnvironment = async (_run, _image, directory) => {
+    uploaded.push(directory);
+  };
+  await s.execution.execute(pending.id);
+  expect(
+    (await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [pending.id]))
+      .status,
+  ).toBe("answered");
+  expect(uploaded).toEqual(["projects/demo-backend"]);
+  expect(JSON.parse(s.prompts[0]).relatedProjects).toEqual([
+    expect.objectContaining({
+      name: other.name,
+      repo: other.repo,
+      path: "/agentflow/env/projects/demo-backend",
+    }),
+  ]);
+});
+
 it("交給 Codex 的版本資訊說明本機 master 只是紀錄，不要再連 GitHub 核對", async () => {
   const s = await queryScenario();
   await s.execution.execute(s.task.id);

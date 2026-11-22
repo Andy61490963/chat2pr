@@ -961,6 +961,7 @@ export async function buildApp(
         config_version: z.number().int().positive().optional(),
         target_branch: z.string().max(200).optional(),
         remember: z.string().optional(),
+        related_project_ids: z.unknown().optional(),
         index: z.number().int().optional(),
         value: z.string().trim().min(1).max(500).optional(),
       })

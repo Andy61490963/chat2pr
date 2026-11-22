@@ -87,6 +87,9 @@ for (const width of [1280, 375]) {
     const hitArea = await first.locator("..").boundingBox();
     expect(hitArea?.width).toBeGreaterThanOrEqual(44);
     expect(hitArea?.height).toBeGreaterThanOrEqual(44);
+    const firstRow = queue.getByRole("button", { name: new RegExp(task.title) });
+    const rowBounds = (await firstRow.boundingBox())!;
+    expect(Math.abs(hitArea!.y + hitArea!.height / 2 - (rowBounds.y + rowBounds.height / 2))).toBeLessThanOrEqual(1);
     await first.press("Space");
     await expect(first).toBeChecked();
     await expect(

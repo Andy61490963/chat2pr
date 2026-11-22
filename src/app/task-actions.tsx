@@ -1,8 +1,9 @@
-import { useState } from "react";
-import { Check, ChevronRight, RefreshCw } from "lucide-react";
+import { useId, useState } from "react";
+import { ChevronRight, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox, Label } from "@/components/ui/form-controls";
-import { projectLabels } from "../../shared/status-glossary.js";
+import { maxRelatedProjects } from "../../shared/project-routing.js";
+import { projectLabels, taskProjectLabels } from "../../shared/status-glossary.js";
 import type { Project, Task } from "../../shared/types.js";
 import { ConfirmButton } from "./confirm";
 import type { Act, State, View } from "./shared";
@@ -46,6 +47,7 @@ export function AssignProject({
   go,
   sources,
   onBound,
+  onPrimaryMount,
   inWorkbench = false,
 }: {
   task: Task;
@@ -56,6 +58,7 @@ export function AssignProject({
   go?: (v: View, projectId?: string | null) => void;
   sources?: { id: string; text: string | null }[];
   onBound?: () => unknown;
+  onPrimaryMount?: (button: HTMLButtonElement | null) => void;
   inWorkbench?: boolean;
 }) {
   const group = state.groups.find((g) => g.id === t.group_id);
@@ -70,9 +73,20 @@ export function AssignProject({
           ? "已停用"
           : "";
   const options = bound.filter((p) => !blocked(p));
-  const [pick, setPick] = useState(options.length === 1 ? options[0].id : "");
+  const query = t.mode === "query";
+  const fieldId = useId();
+  const [picks, setPicks] = useState(() =>
+    query && t.project_id
+      ? [t.project_id, ...(t.project_routing?.relatedProjects ?? []).map((p) => p.id)]
+      : options.length === 1
+        ? [options[0].id]
+        : [],
+  );
   const [remember, setRemember] = useState(false);
-  const chosen = options.find((p) => p.id === pick);
+  const selected = picks.filter((id) => options.some((p) => p.id === id));
+  const chosen = options.find((p) => p.id === selected[0]);
+  const atLimit = query && selected.length >= maxRelatedProjects + 1;
+  const overLimit = query && selected.length > maxRelatedProjects + 1;
   const rule = chosen ? `「${t.title}」這類需求改 ${chosen.name}` : "";
   const suggestions = (
     !t.project_id ? (t.project_routing?.unboundSuggestions ?? []) : []
@@ -153,39 +167,87 @@ export function AssignProject({
           })}
         </ul>
       )}
-      <span className="text-sm font-medium">
-        {suggestions.length
-          ? "你也可以選擇已綁定的專案。"
-          : "這次需求要處理哪個專案？"}
-      </span>
-      <div className="flex flex-wrap gap-2">
-        {bound.map((p) => (
-          <Button
-            key={p.id}
-            size="sm"
-            variant={
-              !inWorkbench && pick === p.id && !suggestions.length
-                ? "default"
-                : "outline"
-            }
-            aria-pressed={pick === p.id}
-            className={
-              suggestions.length
-                ? "h-auto min-h-11 max-w-full motion-reduce:transition-none"
-                : undefined
-            }
-            disabled={!!blocked(p)}
-            onClick={() => setPick(p.id)}
-          >
-            {pick === p.id && <Check />}
-            <span className="min-w-0 whitespace-normal break-all text-left">
-              {p.name}（{p.repo}）
-              {blocked(p) &&
-                (inWorkbench ? `（${blocked(p)}）` : `・${blocked(p)}`)}
-            </span>
-          </Button>
-        ))}
-      </div>
+      {bound.length > 0 && (
+        <fieldset className="min-w-0">
+          <legend className="text-sm font-medium">
+            {query
+              ? "查詢可以同時參考多個專案的原始碼"
+              : "修改任務只能選一個專案，因為一個 PR 只能開在一個儲存庫"}
+          </legend>
+          {atLimit && (
+            <p className="mt-1 text-sm text-muted-foreground" role="status">
+              {overLimit
+                ? `最多可選 ${maxRelatedProjects} 個參考專案，請減少選擇後再指定。`
+                : `已選滿 ${maxRelatedProjects} 個參考專案，取消勾選後即可更換。`}
+            </p>
+          )}
+          <ul role="list" className="mt-2 divide-y rounded-lg border bg-background">
+            {bound.map((p) => {
+              const choiceId = `${fieldId}-${p.id}-choice`;
+              const titleId = `${fieldId}-${p.id}-name`;
+              const descriptionId = `${fieldId}-${p.id}-description`;
+              const checked = selected.includes(p.id);
+              const primary = query && chosen?.id === p.id;
+              const unavailable = blocked(p);
+              return (
+                <li key={p.id} className="flex min-w-0 flex-wrap items-center gap-x-2 px-3">
+                  <label className="flex min-h-11 min-w-0 flex-1 cursor-pointer items-center gap-3 py-2 has-disabled:cursor-default">
+                    <input
+                      id={choiceId}
+                      type={query ? "checkbox" : "radio"}
+                      name={fieldId}
+                      className="size-5 shrink-0 accent-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground"
+                      aria-labelledby={titleId}
+                      aria-describedby={descriptionId}
+                      data-task-project-choice=""
+                      checked={checked}
+                      disabled={busy || !!unavailable || (atLimit && !checked)}
+                      onChange={(event) =>
+                        setPicks(
+                          query
+                            ? event.currentTarget.checked
+                              ? [...selected, p.id]
+                              : selected.filter((id) => id !== p.id)
+                            : [p.id],
+                        )
+                      }
+                    />
+                    <span className="min-w-0 [overflow-wrap:anywhere]">
+                      <span id={titleId} className="block font-medium">
+                        {p.name}
+                      </span>
+                      <span id={descriptionId} className="block">
+                        <span className="block text-xs text-muted-foreground">{p.repo}</span>
+                        {unavailable && <span className="block text-xs">{unavailable}</span>}
+                        {primary && (
+                          <span className="mt-1 inline-block rounded-sm bg-muted px-1.5 text-xs font-medium">
+                            {taskProjectLabels.primary}
+                          </span>
+                        )}
+                      </span>
+                    </span>
+                  </label>
+                  {query && checked && !primary && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={busy}
+                      className="min-h-11"
+                      onClick={() => {
+                        document.getElementById(choiceId)?.focus();
+                        setPicks([p.id, ...selected.filter((id) => id !== p.id)]);
+                      }}
+                    >
+                      設為主要<span className="sr-only">（{p.name}）</span>
+                    </Button>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </fieldset>
+      )}
       {!options.length && (
         <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
           {bound.length
@@ -211,35 +273,40 @@ export function AssignProject({
         </p>
       )}
       {chosen && (
-        <Label className="font-normal text-muted-foreground">
+        <Label className="min-h-11 font-normal text-muted-foreground [overflow-wrap:anywhere]">
           <Checkbox
             checked={remember}
             onCheckedChange={(v) => setRemember(v === true)}
           />
-          記住：{rule}
+          <span className="min-w-0">記住：{rule}</span>
         </Label>
       )}
       <div className="flex flex-wrap gap-2">
         <Button
-          variant={inWorkbench || suggestions.length ? "outline" : "default"}
-          className={
-            suggestions.length
-              ? "min-h-11 motion-reduce:transition-none"
-              : undefined
+          ref={onPrimaryMount}
+          variant={
+            suggestions.length || (inWorkbench && !onPrimaryMount)
+              ? "outline"
+              : "default"
           }
-          disabled={busy || !chosen}
+          className="min-h-11 motion-reduce:transition-none"
+          disabled={busy || !chosen || overLimit}
           onClick={() =>
             void act(
               t,
               "assign",
-              { project_id: pick, remember: remember ? rule : undefined },
+              {
+                project_id: chosen?.id,
+                remember: remember ? rule : undefined,
+                ...(query ? { related_project_ids: selected.slice(1) } : {}),
+              },
               remember ? "已指定專案並記住" : "已指定專案",
             )
           }
         >
-          {inWorkbench ? "確認指定專案" : "指定專案"}
+          指定專案
         </Button>
-        {!inWorkbench && <EndTaskButton task={t} busy={busy} act={act} />}
+        {/* 「結束任務」由審核面板的動作列提供，這裡不再放一個，避免同一畫面出現兩個。 */}
       </div>
     </div>
   );

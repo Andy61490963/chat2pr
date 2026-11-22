@@ -371,12 +371,8 @@ export function ProjectsView({
                 // 分頁按鈕「得到焦點」就會切換。草稿確認視窗關閉時會把焦點還給分頁按鈕，
                 // 這不是使用者要切換：只接受剛在分頁列上按鍵或點擊造成的切換，
                 // 否則「繼續編輯」會讓確認視窗重開，「放棄修改」後又跳回原分頁。
-                if (performance.now() - tabIntent.current > 300) {
-                  tabList.current
-                    ?.querySelector<HTMLElement>('[aria-selected="true"]')
-                    ?.focus();
-                  return;
-                }
+                // 只忽略切換、不搬動焦點：焦點留在原處，使用者接著按 Enter 仍會切到該分頁。
+                if (performance.now() - tabIntent.current > 300) return;
                 // 一次操作只算一次切換，之後焦點被還回來時不能再沿用。
                 tabIntent.current = 0;
                 // 等方向鍵處理完，再讓草稿確認視窗接手焦點。
