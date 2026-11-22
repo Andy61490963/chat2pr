@@ -186,7 +186,7 @@ export function TaskClarification({
                         variant="outline"
                         size="sm"
                         disabled={busy || !!draft}
-                        aria-label={`修改第 ${index + 1} 項假設`}
+                        aria-label={`修改假設（第 ${index + 1} 項）`}
                         onClick={() =>
                           setEditing({
                             index,

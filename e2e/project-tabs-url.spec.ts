@@ -216,7 +216,11 @@ test("一般成員開啟專案分享連結時回到收件匣", async ({ page }) 
     },
   });
   await page.goto(`/projects?project=${unboundProject.id}&tab=memory`);
-  await expect(page).toHaveURL("/");
+  // 回到收件匣；桌面會自動打開第一筆待審案件，網址可能帶 ?review=。
+  await expect
+    .poll(() => new URL(page.url()).pathname)
+    .toBe("/");
+  expect(new URL(page.url()).searchParams.has("project")).toBe(false);
   await expect(
     page.getByRole("dialog", { name: unboundProject.name }),
   ).toHaveCount(0);

@@ -14,6 +14,7 @@ async function checkMobileAccessibility(page: Page) {
     375,
   );
   await page.evaluate(() => document.fonts.ready);
+  await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => undefined))));
   const { violations } = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
     .analyze();
@@ -22,7 +23,7 @@ async function checkMobileAccessibility(page: Page) {
 
 test.use({ viewport: { width: 375, height: 812 }, reducedMotion: "reduce" });
 
-test("手機收件匣的二十張待審卡片各顯示一個下一步，回答問題直達表單", async ({
+test("手機收件匣的二十筆待審案件各顯示一個下一步，回答問題直達表單", async ({
   page,
 }) => {
   const withQuestion: Task = {
@@ -67,24 +68,15 @@ test("手機收件匣的二十張待審卡片各顯示一個下一步，回答�
   for (const label of ["需求等待確認", "等你決定", "審核站"]) {
     await expect(queue.getByText(label, { exact: true })).toHaveCount(0);
   }
-  await expect(
-    queue.getByRole("img", { name: "站別軌道，目前在審核站" }),
-  ).toHaveCount(20);
-  await expect(
-    queue.getByRole("button", { name: "修改這一題", exact: true }),
-  ).toHaveCount(2);
-  const answerAction = queue.getByRole("button", {
-    name: "回答問題",
-    exact: true,
-  });
-  await expect(answerAction).toHaveAttribute("data-variant", "default");
-  const target = (await answerAction.boundingBox())!;
-  expect(target.width).toBeGreaterThanOrEqual(44);
-  expect(target.height).toBeGreaterThanOrEqual(44);
   await checkMobileAccessibility(page);
 
-  await answerAction.press("Enter");
+  await queue.getByRole("button", { name: new RegExp(task.title) }).press("Enter");
   const drawer = page.getByRole("dialog", { name: task.title });
+  const answerAction = drawer.getByRole("button", { name: "回答問題", exact: true });
+  await expect(answerAction).toBeFocused();
+  await expect(answerAction).toHaveAttribute("data-variant", "default");
+  expect(await answerAction.evaluate((button: HTMLButtonElement) => button.offsetHeight)).toBeGreaterThanOrEqual(44);
+  await answerAction.press("Enter");
   const answer = drawer.getByRole("textbox", { name: "回答這個問題" });
   await expect(answer).toBeFocused();
   await expect(answer).toBeInViewport();
@@ -99,12 +91,7 @@ test("手機收件匣的二十張待審卡片各顯示一個下一步，回答�
   await expect(acceptance.locator("svg")).toHaveCount(0);
   await checkMobileAccessibility(page);
 
-  const drawerAnswer = drawer.getByRole("button", {
-    name: "回答問題",
-    exact: true,
-  });
-  await expect(drawerAnswer).toHaveAttribute("data-variant", "default");
-  await drawerAnswer.press("Enter");
+  await answerAction.press("Enter");
   await expect(answer).toBeFocused();
   await expect(answer).toBeInViewport();
   const amend = drawer.getByRole("button", { name: "修改這一題", exact: true });

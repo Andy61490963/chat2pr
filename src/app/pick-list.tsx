@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import type { PickList } from "../../shared/pick-list.js";
 import { pickListLabels } from "../../shared/status-glossary.js";
 import { ConfirmButton } from "./confirm";
+import { useUnsaved } from "./unsaved";
 
 const actionClass =
   "min-h-11 max-w-full whitespace-normal motion-reduce:transition-none focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground";
@@ -12,13 +13,45 @@ export function PickListForm({
   group,
   busy,
   resolve,
+  onPrimaryMount,
 }: {
   list: PickList;
   group: string;
   busy: boolean;
   resolve: (ids: string[]) => unknown;
+  onPrimaryMount: (button: HTMLButtonElement | null) => void;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
+  useUnsaved("task-pick-list", selected.length > 0);
+  const canCreate = !busy && selected.length > 0;
+  const actions = (
+    <div className="mt-4 flex flex-wrap gap-2">
+      <Button
+        ref={onPrimaryMount}
+        type="button"
+        className={`${actionClass} aria-disabled:opacity-50`}
+        aria-disabled={!canCreate || undefined}
+        onClick={() => {
+          if (canCreate) void resolve(selected);
+        }}
+      >
+        建立選取的任務
+      </Button>
+      <ConfirmButton
+        variant="outline"
+        className={`${actionClass} border-muted-foreground dark:border-muted-foreground`}
+        dialogActionClassName={actionClass}
+        disabled={busy}
+        title={`這 ${list.items.length} 項待辦全部不做？`}
+        description="你會結束這張清單，清單裡的項目都不會建立任務。"
+        confirm="全部不做"
+        dismiss="返回清單"
+        onConfirm={() => resolve([])}
+      >
+        全部不做
+      </ConfirmButton>
+    </div>
+  );
   return (
     <article
       className="min-w-0 p-4 [overflow-wrap:anywhere]"
@@ -28,6 +61,7 @@ export function PickListForm({
         {pickListLabels.pending}
       </h3>
       <p className="mt-1 text-sm text-muted-foreground">{group}</p>
+      {actions}
       <fieldset className="mt-4 min-w-0" disabled={busy}>
         <legend className="text-sm">
           勾選你要建立的任務，送出後這張清單就會結束。
@@ -82,29 +116,6 @@ export function PickListForm({
           ))}
         </ul>
       </fieldset>
-      <div className="mt-4 flex flex-wrap gap-2">
-        <Button
-          type="button"
-          className={actionClass}
-          disabled={busy || !selected.length}
-          onClick={() => void resolve(selected)}
-        >
-          建立選取的任務
-        </Button>
-        <ConfirmButton
-          variant="outline"
-          className={`${actionClass} border-muted-foreground dark:border-muted-foreground`}
-          dialogActionClassName={actionClass}
-          disabled={busy}
-          title={`這 ${list.items.length} 項待辦全部不做？`}
-          description="你會結束這張清單，清單裡的項目都不會建立任務。"
-          confirm="全部不做"
-          dismiss="返回清單"
-          onConfirm={() => resolve([])}
-        >
-          全部不做
-        </ConfirmButton>
-      </div>
     </article>
   );
 }

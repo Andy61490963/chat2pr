@@ -79,9 +79,6 @@ for (const colorScheme of ["light", "dark"] as const) {
       await expect(
         page.getByRole("heading", { name: "需要你處理 3", exact: true }),
       ).toBeVisible();
-      await expect(
-        page.getByRole("img", { name: "站別軌道，目前在審核站" }),
-      ).toBeVisible();
       expect(await withinViewport()).toBe(true);
       for (const name of [
         "需要你處理 3",
@@ -97,7 +94,9 @@ for (const colorScheme of ["light", "dark"] as const) {
       for (const name of ["需要你處理 3", "進行中 1", "待合併 1"]) {
         const section = page.getByRole("region", { name, exact: true });
         const heading = section.getByRole("heading", { name, exact: true });
-        const ledger = section.locator(":scope > .work-ledger");
+        const ledger = name.startsWith("需要你處理")
+          ? section.getByRole("list", { name: "待決策佇列" })
+          : section.locator(":scope > .work-ledger");
         const firstRow = ledger.locator(":scope > :first-child");
         await expect(firstRow).toBeVisible();
         await expect(heading).toHaveCSS("border-bottom-width", "0px");
@@ -105,6 +104,11 @@ for (const colorScheme of ["light", "dark"] as const) {
         await expect(firstRow).toHaveCSS("border-top-width", "0px");
       }
       await capture("收件匣");
+      await page.getByRole("list", { name: "待決策佇列" })
+        .getByRole("button", { name: new RegExp(task.title) }).click();
+      await expect(
+        page.getByRole("img", { name: "站別軌道，目前在審核站" }),
+      ).toBeVisible();
 
       await page.goto("/tasks");
       const queryRow = page.getByRole("button", {

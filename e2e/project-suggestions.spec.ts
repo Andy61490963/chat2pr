@@ -35,7 +35,10 @@ test("手機上可核對索引超限時預選的專案，再由管理者核准�
     await route.fulfill({ json: { ...pending, status: "queued" } });
   });
   await page.goto("/");
-  await page.getByRole("button", { name: "檢視專案並確認" }).press("Enter");
+  await page
+    .getByRole("list", { name: "待決策佇列" })
+    .getByRole("button", { name: new RegExp(pending.title) })
+    .press("Enter");
   const drawer = page.getByRole("dialog", { name: pending.title });
   const review = drawer.getByRole("region", { name: "處理專案" });
   await expect(review.getByText(project.name, { exact: true })).toBeVisible();
@@ -160,23 +163,29 @@ for (const width of [1280, 375]) {
       return route.fulfill({ json: assigned });
     });
     await page.goto("/");
+    await page.getByRole("list", { name: "待決策佇列" })
+      .getByRole("button", { name: new RegExp(pending.title) }).click();
+    const drawer = width < 1024
+      ? page.getByRole("dialog", { name: pending.title })
+      : page.getByRole("region", { name: "審核面板" });
     await expect(
-      page.getByText("看起來是 範例倉庫（尚未綁定這個群組）"),
+      drawer.getByText("看起來是 範例倉庫（尚未綁定這個群組）"),
     ).toBeVisible();
-    await page.getByRole("button", { name: "查看引用訊息" }).click();
-    const drawer = page.getByRole("dialog", { name: pending.title });
     await drawer
       .locator("summary")
       .filter({ hasText: "查看引用訊息" })
       .press("Enter");
     await expect(drawer.locator("blockquote")).toHaveText(source.text);
     const bind = drawer.getByRole("button", { name: /綁定並指定這個專案/ });
-    const box = await bind.boundingBox();
+    const box = await bind.evaluate((button: HTMLButtonElement) => ({
+      width: button.offsetWidth, height: button.offsetHeight,
+    }));
     expect(box?.height).toBeGreaterThanOrEqual(44);
     expect(box?.width).toBeGreaterThanOrEqual(44);
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth),
     ).toBe(width);
+    await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => undefined))));
     const { violations } = await new AxeBuilder({ page }).analyze();
     expect(
       violations.map(({ id, nodes }) => ({

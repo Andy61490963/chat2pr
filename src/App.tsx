@@ -61,7 +61,8 @@ import {
 import { cn } from "@/lib/utils";
 import { GroupsView } from "./app/groups";
 import { ChatView } from "./app/chat";
-import { InboxView, type TaskDrawerAction } from "./app/inbox";
+import { InboxView } from "./app/inbox";
+import { pickListReviewId } from "../shared/review-queue.js";
 import { ProjectForm, ProjectsView } from "./app/projects";
 import { saveProject } from "./app/project-form";
 import { applyTheme, pickSettings, SettingsView } from "./app/settings";
@@ -69,7 +70,6 @@ import {
   type Account,
   type Detail,
   type Request,
-  type Run,
   type State,
   type View,
   attention,
@@ -250,6 +250,14 @@ export function App() {
       null,
     ),
     [selected, setSelected] = useState<Detail | null>(null),
+    [reviewId, setReviewId] = useState(() =>
+      viewFromPath(location.pathname) === "inbox"
+        ? new URLSearchParams(location.search).get("review")
+        : null,
+    ),
+    [reviewError, setReviewError] = useState<{ id: string; text: string } | null>(
+      null,
+    ),
     [taskAfterNavigation, setTaskAfterNavigation] = useState<string | null>(
       null,
     ),
@@ -418,15 +426,14 @@ export function App() {
   }, [user, subscription, loadAccount]);
   const viewRef = useRef(view);
   viewRef.current = view;
-  // 從收件匣開啟指定表單的要求只使用一次。
-  const taskAction = useRef<{ id: string; action: TaskDrawerAction } | null>(
-    null,
+  const loadTaskDetail = useCallback(
+    (id: string) => request<Detail>(`/api/tasks/${id}`),
+    [request],
   );
   const openTask = useCallback(
-    async (id: string, push = true, action?: TaskDrawerAction) => {
+    async (id: string, push = true) => {
       try {
-        const detail = await request<Detail>(`/api/tasks/${id}`);
-        taskAction.current = action ? { id, action } : null;
+        const detail = await loadTaskDetail(id);
         setSelected(detail);
         writeUrl(viewRef.current, id, push);
       } catch (e) {
@@ -438,7 +445,7 @@ export function App() {
         }
       }
     },
-    [request],
+    [loadTaskDetail],
   );
   const closeTask = () => {
     setSelected(null);
@@ -446,6 +453,19 @@ export function App() {
   };
   // 記下目前網址：按上一頁時若選擇繼續編輯，要把網址改回來。
   const lastUrl = useRef(location.href);
+  const setReview = useCallback((id: string | null, push = true) => {
+    if (viewRef.current !== "inbox" || location.pathname !== "/") return;
+    const url = new URL(location.href);
+    if (id) url.searchParams.set("review", id);
+    else url.searchParams.delete("review");
+    if (url.href !== location.href) {
+      if (push) history.pushState(null, "", url);
+      else history.replaceState(null, "", url);
+    }
+    lastUrl.current = location.href;
+    setReviewId(id);
+    setReviewError(null);
+  }, []);
   useEffect(() => {
     const migrated = migrateSettingsHash(new URL(location.href));
     if (migrated) history.replaceState(null, "", migrated);
@@ -484,6 +504,10 @@ export function App() {
           setProject(null);
           setBindingProjectId(null);
           setTaskAfterNavigation(null);
+          setReviewId(
+            nextView === "inbox" ? destination.searchParams.get("review") : null,
+          );
+          setReviewError(null);
           const id = destination.searchParams.get("task");
           if (id) void openTask(id, false);
           else setSelected(null);
@@ -505,7 +529,7 @@ export function App() {
     const id = selected?.task.id;
     if (!state || !id) return;
     let active = true;
-    void request<Detail>(`/api/tasks/${id}`)
+    void loadTaskDetail(id)
       .then(
         (d) => active && setSelected((cur) => (cur?.task.id === id ? d : cur)),
       )
@@ -513,7 +537,7 @@ export function App() {
     return () => {
       active = false;
     };
-  }, [state, selected?.task.id, request]);
+  }, [state, selected?.task.id, loadTaskDetail]);
   useEffect(() => {
     if (!user) return;
     let back: string | null = null;
@@ -533,7 +557,11 @@ export function App() {
       const destination = new URL(location.href);
       const migrated = migrateSettingsHash(destination);
       if (migrated) history.replaceState(null, "", migrated);
-      setView(viewFromPath(location.pathname));
+      const restoredView = viewFromPath(location.pathname);
+      setView(restoredView);
+      setReviewId(
+        restoredView === "inbox" ? destination.searchParams.get("review") : null,
+      );
       setSystemTab(readSystemTab(destination.searchParams.get("tab")));
       setSettingsTab(settingsTabFromUrl(destination));
     }
@@ -560,7 +588,11 @@ export function App() {
   }, [toast]);
   // 回傳是否成功：表單只在成功時清空輸入。請求已成功但重新整理失敗仍算成功，
   // 否則輸入留著，使用者再按一次就會重複送出（例如重複追問）。
-  const run: Run = async (fn, done = "已儲存") => {
+  const run = async <T,>(
+    fn: () => Promise<T>,
+    done: string | ((result: T) => string) = "已儲存",
+    onError = (text: string) => setToast({ text, error: true }),
+  ) => {
     setBusy(true);
     try {
       let toastText: string;
@@ -568,7 +600,7 @@ export function App() {
         const result = await fn();
         toastText = typeof done === "function" ? done(result) : done;
       } catch (e) {
-        setToast({ text: message(e), error: true });
+        onError(message(e));
         return false;
       }
       setToast({ text: toastText });
@@ -583,20 +615,48 @@ export function App() {
       setBusy(false);
     }
   };
+  const reviewRun = <T,>(
+    id: string,
+    fn: () => Promise<T>,
+    done: string | ((result: T) => string),
+  ) => {
+    setReviewError(null);
+    return run(fn, done, (text) => setReviewError({ id, text }));
+  };
+  const postTaskAction = (task: Task, action: Action, body: object) =>
+    request<Task>(`/api/tasks/${task.id}/actions`, "POST", {
+      action,
+      version: task.version,
+      ...body,
+    });
+  const postTaskAnswer = (task: Task, text: string) =>
+    request(`/api/tasks/${task.id}/answer`, "POST", {
+      text,
+      version: task.version,
+    });
+  const postTaskRelink = (task: Task, parentId: string | null) =>
+    request(`/api/tasks/${task.id}/relink`, "POST", {
+      parent_id: parentId,
+      version: task.version,
+    });
+  const followupTask = (task: Task, text: string) =>
+    run(
+      async () => {
+        const created = await request<{ id: string; status: string }>(
+          `/api/tasks/${task.id}/followup`,
+          "POST",
+          { text },
+        );
+        await openTask(created.id);
+      },
+      task.mode === "query" ? "已送出追問" : "已建立新的一題，等待你確認",
+    );
   const act = (task: Task, action: Action, body: object = {}, done?: string) =>
     run(async () => {
-      const updated = await request<Task>(
-        `/api/tasks/${task.id}/actions`,
-        "POST",
-        {
-          action,
-          version: task.version,
-          ...body,
-        },
-      );
+      const updated = await postTaskAction(task, action, body);
       if (selected?.task.id === task.id) {
         if (updated.id !== task.id) await openTask(updated.id);
-        else setSelected(await request<Detail>(`/api/tasks/${task.id}`));
+        else setSelected(await loadTaskDetail(task.id));
       }
     }, done ?? "任務已更新");
   const leave = (
@@ -606,6 +666,8 @@ export function App() {
   ) => {
     setView(v);
     setSelected(null);
+    setReviewId(null);
+    setReviewError(null);
     setTaskAfterNavigation(null);
     // 從導覽進入一律是乾淨的頁面：不帶上一輪的篩選。
     const query = new URLSearchParams(
@@ -705,11 +767,8 @@ export function App() {
       if (taskId) setTaskAfterNavigation(taskId);
     });
   // 已開著另一個任務、而且補充需求還沒送出時，先問再切換。
-  const showTask = (id: string, action?: TaskDrawerAction) =>
-    guard(
-      () => void openTask(id, true, action),
-      { prefixes: ["task"] },
-    );
+  const showTask = (id: string) =>
+    guard(() => void openTask(id), { prefixes: ["task"] });
   const loadMoreActivity = () => {
     activityLimit.current = Math.min(activityLimit.current * 2, 2000);
     return refresh();
@@ -1290,6 +1349,36 @@ export function App() {
                 showTasks={showTasks}
                 open={showTask}
                 act={act}
+                reviewId={reviewId}
+                setReview={setReview}
+                reviewSuspended={!!selected}
+                reviewError={
+                  reviewError?.id === reviewId ? reviewError.text : undefined
+                }
+                loadTaskDetail={loadTaskDetail}
+                reviewActions={{
+                  go,
+                  open: showTask,
+                  followup: followupTask,
+                  act: (task, action, body = {}, done = "任務已更新") =>
+                    reviewRun(
+                      task.id,
+                      () => postTaskAction(task, action, body),
+                      done,
+                    ),
+                  answer: (task, text) =>
+                    reviewRun(
+                      task.id,
+                      () => postTaskAnswer(task, text),
+                      "已收到回答",
+                    ),
+                  relink: (task, parentId) =>
+                    reviewRun(
+                      task.id,
+                      () => postTaskRelink(task, parentId),
+                      "已更新這一題接續的位置",
+                    ),
+                }}
                 endTasks={(tasks, reason, notify) =>
                   run(
                     () =>
@@ -1303,7 +1392,8 @@ export function App() {
                   )
                 }
                 resolvePickList={(list, itemIds) =>
-                  run(
+                  reviewRun(
+                    pickListReviewId(list.id),
                     () =>
                       request<{ created: number }>(
                         `/api/pick-lists/${list.id}/resolve`,
@@ -1438,46 +1528,20 @@ export function App() {
           state={state}
           busy={busy}
           admin={admin}
-          startAction={
-            taskAction.current?.id === selected.task.id
-              ? taskAction.current.action
-              : undefined
-          }
-          actionStarted={() => (taskAction.current = null)}
           close={() => guard(closeTask, { prefixes: ["task"] })}
           go={go}
           act={act}
           open={showTask}
-          followup={(task, text) =>
-            run(
-              async () => {
-                const created = await request<{ id: string; status: string }>(
-                  `/api/tasks/${task.id}/followup`,
-                  "POST",
-                  { text },
-                );
-                await openTask(created.id);
-              },
-              task.mode === "query"
-                ? "已送出追問"
-                : "已建立新的一題，等待你確認",
-            )
-          }
+          followup={followupTask}
           answer={(task, text) =>
             run(async () => {
-              await request(`/api/tasks/${task.id}/answer`, "POST", {
-                text,
-                version: task.version,
-              });
+              await postTaskAnswer(task, text);
               await openTask(task.id, false);
             }, "已收到回答")
           }
           relink={(task, parentId) =>
             run(async () => {
-              await request(`/api/tasks/${task.id}/relink`, "POST", {
-                parent_id: parentId,
-                version: task.version,
-              });
+              await postTaskRelink(task, parentId);
               await openTask(task.id, false);
             }, "已更新這一題接續的位置")
           }

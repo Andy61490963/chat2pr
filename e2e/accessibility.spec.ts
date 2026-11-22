@@ -101,6 +101,8 @@ const screens: {
 }[] = [
   { name: "收件匣", path: "/", loaded: task.title },
   { name: "手機收件匣", path: "/", loaded: task.title, width: 375 },
+  { name: "審核工作台的面板", path: `/?review=${task.id}`, loaded: question },
+  { name: "手機全頁審核", path: `/?review=${task.id}`, loaded: question, width: 375 },
   { name: "任務清單", path: "/tasks", loaded: task.title },
   { name: "任務詳情", path: `/tasks?task=${task.id}`, loaded: question },
   { name: "聊天室", path: "/chat", loaded: message },
@@ -260,9 +262,14 @@ for (const theme of ["light", "dark"] as const) {
           );
         }
         await page.goto(screen.path);
-        await expect(
-          page.getByText(screen.loaded, { exact: true }),
-        ).toBeVisible();
+        if (screen.path === "/" && !screen.signedOut) {
+          await expect(
+            page.getByRole("list", { name: "待決策佇列" })
+              .getByRole("button", { name: new RegExp(task.title) }),
+          ).toBeVisible();
+        } else {
+          await expect(page.getByText(screen.loaded, { exact: true })).toBeVisible();
+        }
         if (screen.signedOut) {
           await expect(
             page
@@ -324,6 +331,7 @@ for (const theme of ["light", "dark"] as const) {
             .press("Enter");
           await expect(page.getByRole("menu", { name: "更多" })).toBeVisible();
         }
+        await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => undefined))));
         const { violations } = await new AxeBuilder({ page }).analyze();
         const failures = violations
           .filter(

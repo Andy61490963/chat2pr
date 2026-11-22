@@ -685,6 +685,94 @@ export const discordOnlySetup: Pick<
   },
 };
 
+const reviewImageId = "demo-review-image";
+const reviewImagePath = `/api/messages/${reviewImageId}/image`;
+
+export function reviewWorkbenchFixture() {
+  const now = Date.now();
+  const tasks = Array.from({ length: 26 }, (_, index): Task => {
+    const kind = index % 3;
+    const created = new Date(now - (26 - index) * 25 * 60_000).toISOString();
+    return {
+      ...task,
+      id: `demo-review-${index + 1}`,
+      title: `核對範例需求 ${String(index + 1).padStart(2, "0")}`,
+      mode: kind === 1 ? "query" : "change",
+      project_id: kind === 2 ? null : project.id,
+      target_branch: kind === 2 ? null : "main",
+      group_id: kind === 1 ? discordGroup.id : group.id,
+      created_at: created,
+      updated_at: new Date(now).toISOString(),
+      question: kind === 1 ? { text: "要整理哪一個月份？", choices: ["十月"] } : null,
+      project_routing: {
+        status: kind === 2 ? "uncertain" : "clear",
+        basis: kind === 2 ? "none" : "explicit",
+        reason: kind === 2 ? "訊息未指定專案。" : "需求原文指名測試專案。",
+        evidence: kind === 2 ? [] : [
+          { kind: "message", sourceId: "demo-review-source", quote: "測試專案" },
+        ],
+        bindingVersion: group.binding_version!,
+      },
+    };
+  });
+  const pickLists: PickList[] = Array.from({ length: 4 }, (_, index) => ({
+    id: `demo-review-list-${index + 1}`,
+    groupId: group.id,
+    version: 1,
+    items: [
+      { id: `demo-pick-${index + 1}`, title: `整理範例清單 ${index + 1}`, summary: "彙整範例待辦。", riskReasons: [] },
+    ],
+  }));
+  const state: State = {
+    ...defaultState,
+    groups: [group, discordGroup],
+    settings: { ...defaultState.settings, admin_line_id: "demo-line" },
+    health: ["github", "line", "runner", "codex", "openai", "tunnel", "notifications"].map((name) => ({
+      name,
+      ok: true,
+      detail: "服務正常",
+      checked_at: new Date(now).toISOString(),
+    })),
+    tasks: [...tasks].reverse(),
+    pickLists,
+  };
+  const reviewSource = "請更新測試專案的範例畫面。";
+  const details = new Map(tasks.map((entry, index) => {
+    const source = {
+      id: "demo-review-source",
+      type: "text",
+      text: reviewSource,
+      sender: "小林",
+      received_at: entry.created_at,
+      revoked: false,
+      availability: "readable" as const,
+      has_image: false,
+    };
+    const entryDetail: Detail = {
+      ...detail,
+      task: entry,
+      projectReview: {
+        binding_version: group.binding_version!,
+        config_version: entry.project_id ? project.config_version : null,
+        project_name: entry.project_id ? project.name : null,
+        repo: entry.project_id ? project.repo : null,
+        base_branch: entry.target_branch,
+        group_name: entry.group_id === group.id ? group.name : discordGroup.name,
+        confirmed: false,
+        confirmation: null,
+      },
+      sources: index === 0 ? [
+        source,
+        { ...source, id: reviewImageId, type: "image", text: null, has_image: true },
+        { ...source, id: "demo-review-revoked", text: null, sender: null, revoked: true, availability: "revoked" as const },
+        { ...source, id: "demo-review-expired", text: null, sender: null, revoked: true, availability: "expired" as const },
+      ] : index === 1 ? [] : [source],
+    };
+    return [entry.id, entryDetail] as const;
+  }));
+  return { state, tasks, details, pickLists, reviewSource };
+}
+
 export const activityTask: Task = {
   ...task,
   title: "重新確認示範機台是否連得上",
@@ -872,6 +960,15 @@ export async function mockDashboard(
     if (!pathname.startsWith("/api/")) return route.continue();
     if (request.method() === "GET" && Object.hasOwn(routes, pathname)) {
       return route.fulfill({ json: routes[pathname] });
+    }
+    if (request.method() === "GET" && pathname === reviewImagePath) {
+      return route.fulfill({
+        contentType: "image/png",
+        body: Buffer.from(
+          "iVBORw0KGgoAAAANSUhEUgAAAPAAAAFoAQAAAABBbEulAAAAIklEQVR4nO3BMQEAAADCoPVPbQhfoAAAAAAAAAAAAACA1wArmAAB3qaDtgAAAABJRU5ErkJggg==",
+          "base64",
+        ),
+      });
     }
     if (request.method() === "PUT" && pathname === "/api/secrets") {
       if (!(routes["/api/me"] as { owner?: boolean }).owner)
