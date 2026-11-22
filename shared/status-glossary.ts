@@ -176,8 +176,12 @@ export const inboxStatusLabels = {
   answer: "等你回答：補充需求",
   chooseProject: "等你決定：選專案",
   review: "等你決定：確認需求",
+  approveChange: "等你核准修改",
   chooseOption: "等你決定：選方案",
+  chooseTasks: "等你決定：挑選任務",
   amend: "等你補充：修改需求",
+  retry: "重試任務",
+  viewFailure: "查看詳情",
   fix: (action: string) => `等你處理：${action}`,
 } as const;
 

@@ -176,7 +176,10 @@ for (const pending of [false, true]) {
     const firstRequest = page.waitForRequest(isStateRequest);
     await page.goto("/");
     await firstRequest;
-    const initialTask = page.getByText(task.title, { exact: true });
+    // 桌面會自動打開第一筆，標題同時出現在佇列與審核面板；只看佇列。
+    const initialTask = page
+      .getByRole("list", { name: "待決策佇列" })
+      .getByText(task.title, { exact: true });
     if (!pending) await expect(initialTask).toBeVisible();
     await emitDashboardEvent(page, "connected");
     releaseInitialRead();

@@ -70,15 +70,17 @@ for (const width of [1280, 375]) {
 
     await page.goto("/");
     const inbox = page.getByRole("region", { name: /需要你處理/ });
-    const list = inbox.getByRole("article", { name: "待挑選清單" });
+    const queue = inbox.getByRole("list", { name: "待決策佇列" });
+    const listRow = queue.getByRole("button", { name: /待挑選清單/ });
+    const list = page.getByRole("article", { name: "待挑選清單" });
     const listItem = list.getByRole("checkbox", {
       name: pickList.items[0].title,
     });
     const first = inbox.getByRole("checkbox", {
       name: `選取「${task.title}」`,
     });
-    await expect(inbox.getByRole("checkbox")).toHaveCount(4);
-    await expect(listItem).not.toBeChecked();
+    await expect(queue.getByRole("checkbox")).toHaveCount(3);
+    await expect(listRow).toBeVisible();
     await expect(
       page.getByRole("checkbox", { name: `選取「${queued.title}」` }),
     ).toHaveCount(0);
@@ -94,7 +96,7 @@ for (const width of [1280, 375]) {
     const selectAll = inbox.getByRole("button", { name: "全選本頁" });
     await selectAll.press("Enter");
     await expect(inbox.getByRole("checkbox", { checked: true })).toHaveCount(3);
-    await expect(listItem).not.toBeChecked();
+    await expect(listRow).toBeVisible();
     const clear = inbox.getByRole("button", { name: "清除選取" });
     await clear.press("Enter");
     await expect(inbox.getByRole("checkbox", { checked: true })).toHaveCount(0);
@@ -120,6 +122,7 @@ for (const width of [1280, 375]) {
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth),
     ).toBe(width);
+    await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => undefined))));
     const { violations } = await new AxeBuilder({ page }).analyze();
     expect(
       violations.map(({ id, nodes }) => ({
@@ -134,9 +137,12 @@ for (const width of [1280, 375]) {
     await expect(page.getByRole("status")).toHaveText(
       "已結束 2 張任務，略過 1 張狀態或需求已變更的任務。",
     );
-    await expect(inbox.getByRole("checkbox")).toHaveCount(1);
-    await expect(listItem).toBeVisible();
+    await expect(queue.getByRole("checkbox")).toHaveCount(0);
+    await expect(listRow).toBeVisible();
     await expect(inbox).toBeFocused();
+    await listRow.click();
+    await expect(listItem).toBeVisible();
+    await expect(listItem).not.toBeChecked();
   });
 }
 
@@ -154,8 +160,10 @@ test("成員仍可結束單張任務", async ({ page }) => {
   });
   await page.goto("/");
   const inbox = page.getByRole("region", { name: /需要你處理/ });
+  await inbox.getByRole("list", { name: "待決策佇列" })
+    .getByRole("button", { name: new RegExp(task.title) }).click();
   await expect(
-    inbox.getByRole("button", { name: "結束任務", exact: true }),
+    page.getByRole("button", { name: "結束任務", exact: true }),
   ).toBeVisible();
   await expect(inbox.getByRole("checkbox")).toHaveCount(0);
   await expect(inbox.getByRole("button", { name: "全選本頁" })).toHaveCount(0);

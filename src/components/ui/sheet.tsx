@@ -14,11 +14,13 @@ function SheetContent({
   className,
   children,
   side = "right",
+  showCloseButton = true,
   onOpenAutoFocus,
   onCloseAutoFocus,
   ...props
 }: React.ComponentProps<typeof SheetPrimitive.Content> & {
   side?: "top" | "right" | "bottom" | "left";
+  showCloseButton?: boolean;
 }) {
   const focus = useDialogFocus(onOpenAutoFocus, onCloseAutoFocus);
   return (
@@ -43,10 +45,12 @@ function SheetContent({
         {...props}
       >
         {children}
-        <SheetPrimitive.Close className="work-touch absolute top-1 right-1 grid place-items-center rounded-xs md:top-4 md:right-4 opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none">
-          <XIcon className="size-4" />
-          <span className="sr-only">關閉</span>
-        </SheetPrimitive.Close>
+        {showCloseButton && (
+          <SheetPrimitive.Close className="work-touch absolute top-1 right-1 grid place-items-center rounded-xs md:top-4 md:right-4 opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none">
+            <XIcon className="size-4" />
+            <span className="sr-only">關閉</span>
+          </SheetPrimitive.Close>
+        )}
       </SheetPrimitive.Content>
     </SheetPrimitive.Portal>
   );

@@ -34,6 +34,10 @@ test("手機上只有登入項目顯示敏感提醒，鍵盤可選並讀到提�
     state: { tasks: [], pickLists: [meetingPickList] },
   });
   await page.goto("/");
+  await page
+    .getByRole("list", { name: "待決策佇列" })
+    .getByRole("button", { name: new RegExp(meetingPickList.items[0].title) })
+    .click();
   const card = page.getByRole("article", { name: "待挑選清單" });
   for (const item of meetingPickList.items) {
     const checkbox = card.getByRole("checkbox", { name: item.title });
@@ -58,6 +62,10 @@ test("手機上只有登入項目顯示敏感提醒，鍵盤可選並讀到提�
   expect(hitArea.height).toBeGreaterThanOrEqual(44);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(
     375,
+  );
+  // 手機面板滑入動畫期間量到的顏色不準，等動畫結束再掃。
+  await page.evaluate(() =>
+    Promise.all(document.getAnimations().map((a) => a.finished)),
   );
   expect(
     (
@@ -96,6 +104,8 @@ for (const width of [1280, 375]) {
       await route.fulfill({ json: { created: 2 } });
     });
     await page.goto("/");
+    await page.getByRole("list", { name: "待決策佇列" })
+      .getByRole("button", { name: new RegExp(list.items[0].title) }).click();
     const card = page.getByRole("article", { name: "待挑選清單" });
     await expect(card.getByText(group.name)).toBeVisible();
     await expect(card.getByRole("checkbox")).toHaveCount(6);
@@ -114,12 +124,13 @@ for (const width of [1280, 375]) {
       await card
         .getByText(list.items[4].title, { exact: true })
         .evaluate(
-          (title) => title.closest("label")!.getBoundingClientRect().height,
+          (title) => title.closest("label")!.offsetHeight,
         ),
     ).toBeGreaterThanOrEqual(44);
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth),
     ).toBe(width);
+    await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished.catch(() => undefined))));
     expect(
       (
         await new AxeBuilder({ page })
@@ -158,6 +169,8 @@ test("全部不做可以返回清單，也可以一次結束", async ({ page }) 
     await route.fulfill({ json: { created: 0 } });
   });
   await page.goto("/");
+  await page.getByRole("list", { name: "待決策佇列" })
+    .getByRole("button", { name: new RegExp(list.items[0].title) }).click();
   const card = page.getByRole("article", { name: "待挑選清單" });
   const dismiss = card.getByRole("button", { name: "全部不做" });
   const dialog = page.getByRole("dialog", { name: "這 6 項待辦全部不做？" });
