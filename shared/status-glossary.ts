@@ -1,5 +1,16 @@
 import type { TaskStatus, Project, Group } from "./types.js";
 
+export const memberRoleLabels = {
+  admin: "管理者",
+  member: "成員",
+} as const;
+
+export const memberRoleText = {
+  adminPermissions: "管理群組、專案、設定、系統與成員名單",
+  owner: "擁有者，固定為管理者",
+  saving: "正在變更角色",
+} as const;
+
 export const groupPlatformLabels = {
   line: "LINE",
   discord: "Discord",

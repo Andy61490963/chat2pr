@@ -118,6 +118,31 @@ describe("成員名單與權限", () => {
       ).statusCode,
     ).toBe(403);
   });
+  it("升為管理者或降為成員時，回傳目標帳號的已儲存角色", async () => {
+    const login = "demo-xiaolin";
+    const added = await add(login, "member");
+    expect(added.statusCode).toBe(200);
+    const member = added.json();
+    const headers = await loginAs(member.github_id, login);
+    for (const [role, access] of [
+      ["admin", 200],
+      ["member", 403],
+    ] as const) {
+      const updated = await app.inject({
+        method: "PUT",
+        url: `/api/members/${member.github_id}`,
+        headers: owner,
+        payload: { role },
+      });
+      expect(updated.statusCode).toBe(200);
+      expect(updated.json()).toEqual({ ...member, role });
+      const list = await app.inject({ url: "/api/members", headers: owner });
+      expect(list.json()).toContainEqual(updated.json());
+      expect(
+        (await app.inject({ url: "/api/members", headers })).statusCode,
+      ).toBe(access);
+    }
+  });
   it("不在名單上的人沒有權限；移除成員立即登出，升為管理者可管理名單", async () => {
     const stranger = await loginAs("9999", "stranger");
     expect(
