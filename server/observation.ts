@@ -3,19 +3,10 @@ import type { RunEvent } from "../shared/observation.js";
 import { Database } from "./db.js";
 import { redact } from "./policy.js";
 
+/** 執行紀錄與動態用：先遮蔽帳密（與其他出口同一套規則），再去掉 http 網址的查詢參數與 ANSI 控制碼。 */
 export function safeDetail(value: string) {
   return redact(
     value
-      .replace(
-        /-----BEGIN [^\n]*PRIVATE KEY-----[\s\S]*?(?:-----END [^\n]*PRIVATE KEY-----|$)/g,
-        "[已遮蔽私鑰]",
-      )
-      .replace(/\beyJ[\w-]+\.[\w-]+\.[\w-]+/g, "[已遮蔽權杖]")
-      .replace(
-        /((?:authorization|access_token|refresh_token|id_token|api[_-]?key|password|secret|auth)["']?\s*[:=]\s*)(?:"[^"\n]*"|'[^'\n]*'|[^\s,}]+)/gi,
-        "$1[已遮蔽]",
-      )
-      .replace(/Bearer\s+[^\s"']+/gi, "Bearer [已遮蔽]")
       .replace(/https?:\/\/[^\s<>"']+/g, (url) => {
         try {
           const u = new URL(url);

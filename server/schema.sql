@@ -222,11 +222,20 @@ CREATE OR REPLACE FUNCTION run_content_visible(rid uuid) RETURNS boolean LANGUAG
   WHERE m.id IS NULL OR m.revoked OR m.received_at<=message_retention_cutoff()
  ) FROM runs r JOIN tasks t ON t.id=r.task_id WHERE r.id=rid
 $$;
+-- 可接續的候選修改（runs.result.candidate）裡，AI 的修改說明與審查意見可能引述需求原文：
+-- 來源撤回或到期時清掉，並標記不再接續（沒有修改說明就不能照它發布）。
+-- 檔案、統計與 diff 是儲存庫內容，完成後的 prSummary／answer 與 PR、tasks.answer 相同，照舊保留。
+CREATE OR REPLACE FUNCTION erase_candidate_quotes(result jsonb) RETURNS jsonb LANGUAGE sql IMMUTABLE AS $$
+ SELECT jsonb_set(result #- '{candidate,codexSummary}' #- '{candidate,feedback}','{candidate,settled}','true')
+$$;
 CREATE OR REPLACE FUNCTION erase_run_content() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
  IF NEW.revoked OR NEW.received_at<=message_retention_cutoff() THEN
   UPDATE run_events SET detail=NULL WHERE run_id IN (
    SELECT r.id FROM runs r JOIN tasks t ON t.id=r.task_id WHERE t.group_id=NEW.group_id AND NEW.id=ANY(t.source_ids)
+  );
+  UPDATE runs SET result=erase_candidate_quotes(result) WHERE result ? 'candidate' AND task_id IN (
+   SELECT t.id FROM tasks t WHERE t.group_id=NEW.group_id AND NEW.id=ANY(t.source_ids)
   );
  END IF;
  RETURN NULL;

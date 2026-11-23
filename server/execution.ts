@@ -2080,7 +2080,7 @@ ${querySummary(answer)}`,
           }
           findings = verdict.findings;
         }
-        feedback = `驗證未通過，請修正：${findings.join("\n")}\n${report}`;
+        feedback = `驗證未通過，請修正：${redact(findings.join("\n"))}\n${report}`;
         // 先記下結論再做其他事：第一次未通過記下修復要用的意見，修復途中中斷可從這裡接續；
         // 修復後仍未通過就不再接續。
         if (attempt === 0) {

@@ -1,3 +1,4 @@
+import { maskCredentials } from "../shared/credentials.js";
 import { safeDetail } from "./observation.js";
 
 /**
@@ -192,8 +193,10 @@ export function phaseEndEvents(
       exitCode: result.exitCode,
       detail:
         phase === "install" || phase === "test"
-          ? result.stdout.slice(-4000) + "\n" + result.stderr.slice(-2000)
-          : result.stderr.slice(-4000),
+          ? maskCredentials(result.stdout).slice(-4000) +
+            "\n" +
+            maskCredentials(result.stderr).slice(-2000)
+          : maskCredentials(result.stderr).slice(-4000),
     },
   ];
 }

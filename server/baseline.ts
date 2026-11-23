@@ -3,7 +3,7 @@ import type { GitHub } from "./github.js";
 import { randomUUID } from "node:crypto";
 import type { Project, Task } from "../shared/types.js";
 import { baselineFailurePlain, parseFailure } from "../shared/failure-text.js";
-import { AppError } from "./policy.js";
+import { AppError, redact } from "./policy.js";
 import { approvalNotice } from "./project-routing.js";
 import { describeTestFailures, parseTestFailures } from "./test-failures.js";
 
@@ -141,7 +141,7 @@ export async function createBaselineRepair(
           parent.project_id,
           parent.group_id,
           `修復目標分支 ${branch}`.slice(0, 120),
-          `目標分支「${branch}」在修改前就有建置或測試沒有通過，請找出原因並修好，讓完整測試全部通過。\n${failure.detail}`,
+          `目標分支「${branch}」在修改前就有建置或測試沒有通過，請找出原因並修好，讓完整測試全部通過。\n${redact(failure.detail)}`,
           JSON.stringify([
             "完整測試全部通過，包含修改前就失敗的測試",
             "不刪除、略過、停用或放寬任何測試，也不改測試命令",

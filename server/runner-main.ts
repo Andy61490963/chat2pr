@@ -1,3 +1,4 @@
+import { maskCredentials } from "../shared/credentials.js";
 import { ObservationBuffer, safeDetail } from "./observation.js";
 import { registerRunnerSecrets } from "./runner-secrets.js";
 import { registerRunnerAuth } from "./runner-auth.js";
@@ -514,7 +515,7 @@ app.post("/phase", async (req) => {
           }),
           reviewDeadline.remaining(), true, true, observe, { reviewCopy: true },
         );
-        const summary = safeDetail([replay.stdout.slice(-4000), replay.stderr.slice(-1500)].join("\n").trim());
+        const summary = safeDetail([maskCredentials(replay.stdout).slice(-4000), maskCredentials(replay.stderr).slice(-1500)].join("\n").trim());
         const category = replay.exitCode === ENVIRONMENT_EXIT ? "測試環境問題，" : "";
         const detail = `SQL Server 審查複驗（${category}退出碼 ${replay.exitCode}）\n${summary}`;
         observe({ kind: "command_end", exitCode: replay.exitCode, detail });
