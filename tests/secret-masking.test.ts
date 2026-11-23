@@ -27,7 +27,9 @@ const leaky: [string, string, string[]][] = [
   ["Authorization Basic", `Authorization: Basic ${pass}`, ["Authorization: Basic"]],
   ["Bearer 權杖", `curl -H "Authorization: Bearer ${pass}"`, ["Bearer"]],
   ["查詢參數權杖", `GET /api?access_token=${pass}&page=2`, ["page=2"]],
-  ["JWT", `token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJkZW1vVXNlciJ9.${pass}`, []],
+  ["JSON auth 欄位", `{"auth":"${pass}"}`, []],
+  ["auth 參數", `redis-cli auth=${pass}`, ["redis-cli"]],
+  ["JWT",`token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJkZW1vVXNlciJ9.${pass}`, []],
   ["GitHub 權杖", `ghp_${pass}demoPass123demo`, []],
   ["OpenAI 金鑰", `sk-proj-${pass}${pass}`, []],
   ["AWS 存取金鑰", `AKIA${"DEMOPASS1234567X"}`, []],
@@ -65,6 +67,7 @@ describe("不含機密的訊息不被破壞", () => {
     "示範專案的登入頁：密碼欄位顯示錯誤",
     "Assert.Equal() Failure: Values differ",
     "Demo.Shop.Tests.LoginTests.Password_ShouldBeRequired [FAIL]",
+    "auth: 改用 OAuth 登入",
   ];
   for (const text of plain)
     it(text, () => {
@@ -83,6 +86,9 @@ describe("過長輸入不會因正規表示式回溯而卡住", () => {
     重複私鑰開頭: "-----BEGIN RSA PRIVATE KEY-----".repeat(n / 31),
     重複小數點: "a.".repeat(n / 2),
     重複權杖開頭: "Bearer ".repeat(n / 7),
+    沒有結尾的引號: `password="${"a".repeat(n)}`,
+    重複引號鍵名: `"password":"`.repeat(n / 12),
+    重複網址開頭: "://a:b".repeat(n / 6),
     長網址: `postgres://${"u".repeat(n)}:${pass}@db.demo.test/x`,
   };
   for (const [name, input] of Object.entries(inputs))
