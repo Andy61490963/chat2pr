@@ -989,7 +989,7 @@ export function TaskReviewPanel({
   return (
     <>
       {inWorkbench ? (
-        <div className="lg:sticky lg:top-4 lg:z-10 lg:bg-background">
+        <div className="lg:sticky lg:top-4 lg:z-10 lg:bg-surface">
           {actionNotice}
           {header}
           {actions}

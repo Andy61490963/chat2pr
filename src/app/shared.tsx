@@ -341,7 +341,9 @@ export function StatusBadge({
   return <Badge variant={statusVariant[status]}>{label}</Badge>;
 }
 
+// 空狀態：圖示只是輔助（aria-hidden），標題說明現況，內文說明接下來會發生什麼。
 export function Empty({
+  icon,
   title,
   children,
   compact,
@@ -353,15 +355,33 @@ export function Empty({
 }) {
   if (compact)
     return (
-      <div className="px-5 py-4 text-sm">
-        <p className="text-muted-foreground">{title}</p>
-        {children && (
-          <p className="mt-0.5 text-xs text-muted-foreground">{children}</p>
+      <div className="flex gap-3 px-5 py-4 text-sm">
+        {icon && (
+          <span
+            aria-hidden
+            className="mt-0.5 shrink-0 text-muted-foreground [&_svg]:size-4"
+          >
+            {icon}
+          </span>
         )}
+        <div className="min-w-0">
+          <p className="text-muted-foreground">{title}</p>
+          {children && (
+            <p className="mt-0.5 text-xs text-muted-foreground">{children}</p>
+          )}
+        </div>
       </div>
     );
   return (
     <div className="flex flex-col items-center gap-1 px-4 py-10 text-center">
+      {icon && (
+        <span
+          aria-hidden
+          className="mb-2 grid size-10 place-items-center rounded-full bg-muted text-muted-foreground [&_svg]:size-5"
+        >
+          {icon}
+        </span>
+      )}
       <p className="font-medium">{title}</p>
       {children && (
         <p className="max-w-sm text-sm text-muted-foreground">{children}</p>

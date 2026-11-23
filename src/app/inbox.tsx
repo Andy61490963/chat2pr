@@ -646,7 +646,7 @@ function TaskSectionTitle({
       className={
         subdued
           ? "text-sm font-medium text-muted-foreground"
-          : "text-lg font-semibold"
+          : "heading-section"
       }
     >
       <button
@@ -668,9 +668,9 @@ function TaskSectionTitle({
 
 // 動態依種類給圖示與色調；技術細節留在系統紀錄。
 const activityKinds: Record<string, { icon: typeof Activity; tone: string }> = {
-  ready: { icon: GitPullRequest, tone: "text-good" },
-  answered: { icon: MessageSquareText, tone: "text-good" },
-  merged: { icon: GitMerge, tone: "text-good" },
+  ready: { icon: GitPullRequest, tone: "text-muted-foreground" },
+  answered: { icon: MessageSquareText, tone: "text-muted-foreground" },
+  merged: { icon: GitMerge, tone: "text-muted-foreground" },
   approve: { icon: Check, tone: "text-muted-foreground" },
   adopt: { icon: Check, tone: "text-muted-foreground" },
   started: { icon: Play, tone: "text-muted-foreground" },

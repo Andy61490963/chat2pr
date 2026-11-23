@@ -1,49 +1,62 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
-/* 紙、墨與鋼用於版面。運轉、安燈與停機用於狀態，運轉綠也用於主要按鈕。 */
+/* 紙、墨與鋼用於版面。運轉、安燈與停機用於狀態，運轉綠也是全站唯一的強調色：
+   一個畫面只有一個主要動作用實心強調色，其他動作用外框或文字按鈕。 */
 @custom-variant dark (&:is(.dark *));
 
+/* 三層表面：頁面（紙）→ 卡片 → 浮起（選單、對話框、側欄抽屜）。
+   淺色靠淡邊框加柔和陰影分層；深色靠表面亮度一層比一層亮，陰影只輔助浮起層。 */
 :root {
   --radius: 0.5rem;
-  --background: #f6f7f5;
+  --background: #f3f1eb;
   --foreground: #1b2220;
-  --card: #fff;
-  --muted: #ebefed;
-  --muted-foreground: #5d6a66;
-  --border: #cbd3cf;
-  --primary: #0e7a55;
-  --primary-hover: #0b6949;
+  --card: #fdfcf9;
+  --popover: #fff;
+  --muted: #ece8df;
+  --muted-foreground: #55605d;
+  --border: #e0dbd0;
+  --border-raised: #cfc8ba;
+  --shadow-card-value: 0 1px 2px rgb(56 44 24 / 0.05), 0 1px 1px rgb(56 44 24 / 0.03);
+  --shadow-raised-value: 0 12px 32px -8px rgb(40 30 14 / 0.2), 0 2px 6px rgb(40 30 14 / 0.08);
+  --primary: #0b6d4b;
+  --primary-hover: #095b3f;
+  --primary-soft: #e2eee6;
   --primary-foreground: #fff;
-  --good: #0e7a55;
-  --good-soft: #e6f1eb;
-  --warn: #875709;
+  --good: #0b6d4b;
+  --good-soft: #e2eee6;
+  --warn: #7f5208;
   --warn-marker: #b9790a;
-  --warn-soft: #f8edda;
-  --danger: #bf3f2c;
-  --danger-soft: #fbeeea;
+  --warn-soft: #f5e9d3;
+  --danger: #b33926;
+  --danger-soft: #f8ebe6;
   --danger-foreground: #fff;
-  --danger-hover: #a93323;
+  --danger-hover: #9c3020;
 }
 
 .dark {
-  --background: #151918;
-  --foreground: #e7ecea;
-  --card: #1d2421;
-  --muted: #29322f;
-  --muted-foreground: #9aa7a3;
-  --border: #3c4944;
+  --background: #0e1110;
+  --foreground: #e8ecea;
+  --card: #1a1f1d;
+  --popover: #242a28;
+  --muted: #2c3330;
+  --muted-foreground: #a5b0ac;
+  --border: #313937;
+  --border-raised: #3d4744;
+  --shadow-card-value: 0 0 0 transparent;
+  --shadow-raised-value: 0 16px 40px -12px rgb(0 0 0 / 0.7);
   --primary: #5cc79c;
   --primary-hover: #78d8b2;
-  --primary-foreground: #151918;
+  --primary-soft: #1f342b;
+  --primary-foreground: #0e1110;
   --good: #5cc79c;
-  --good-soft: #22382f;
+  --good-soft: #1f342b;
   --warn: #e6b65c;
   --warn-marker: #e6b65c;
-  --warn-soft: #382e1e;
+  --warn-soft: #342b1b;
   --danger: #f09a8c;
-  --danger-soft: #382724;
-  --danger-foreground: #151918;
+  --danger-soft: #352522;
+  --danger-foreground: #0e1110;
   --danger-hover: #ffb2a6;
 }
 
@@ -52,7 +65,6 @@
   --input: var(--muted-foreground);
   --ring: var(--muted-foreground);
   --card-foreground: var(--foreground);
-  --popover: var(--card);
   --popover-foreground: var(--foreground);
   --secondary: var(--muted);
   --secondary-foreground: var(--foreground);
@@ -91,6 +103,11 @@
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
   --color-popover: var(--popover);
+  --color-border-raised: var(--border-raised);
+  --color-surface: var(--surface, var(--background));
+  --color-primary-soft: var(--primary-soft);
+  --shadow-card: var(--shadow-card-value);
+  --shadow-raised: var(--shadow-raised-value);
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-hover: var(--primary-hover);
@@ -149,12 +166,55 @@
   outline-offset: 2px;
 }
 
+/* 數字（等待時間、筆數、額度、時間、金額）一律 tabular-nums：等寬字對齊欄位。 */
 .tabular-nums {
   font-family: var(--font-numeric);
 }
 
+/* 字級只有四級：頁面標題、區塊標題、內文（text-sm）、輔助文字（text-xs）。
+   小標（heading-label）是輔助文字級的欄位名稱。 */
+@utility heading-page {
+  font-size: 1.5rem;
+  line-height: 1.3;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  @media (width >= 48rem) {
+    font-size: 1.625rem;
+  }
+}
+
+@utility heading-section {
+  font-size: var(--text-lg);
+  line-height: 1.4;
+  font-weight: 600;
+}
+
+@utility heading-label {
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  font-weight: 500;
+  color: var(--muted-foreground);
+}
+
+/* 卡片層：清單與卡片共用同一組背景、淡邊框、圓角與陰影。
+   --surface 讓裡面的元件（例如站別軌道的空心點）知道自己放在哪一層上。 */
 .work-ledger {
-  border-block: 1px solid var(--border);
+  --surface: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--card);
+  box-shadow: var(--shadow-card-value);
+}
+
+/* 不裁切內容（審核面板的標頭要能黏在視窗頂端），改讓第一列與最後一列的底色跟著圓角。 */
+.work-ledger > :first-child {
+  border-start-start-radius: inherit;
+  border-start-end-radius: inherit;
+}
+
+.work-ledger > :last-child {
+  border-end-start-radius: inherit;
+  border-end-end-radius: inherit;
 }
 
 .work-row {
@@ -236,7 +296,7 @@ button.work-row:hover {
   height: 12px;
   border: 1px solid var(--muted-foreground);
   border-radius: 50%;
-  background: var(--background);
+  background: var(--surface, var(--background));
 }
 
 .station-rail--labelled .station-name {
