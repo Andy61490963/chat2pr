@@ -794,3 +794,14 @@ CREATE INDEX IF NOT EXISTS pending_pick_lists ON pick_lists(group_id,created_at)
 -- 判讀依它找出同群組近期「不是給 AI 的工作」「需求還沒定案」的拒絕案例；重新開啟時清除。
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS end_reason text;
 CREATE INDEX IF NOT EXISTS tasks_recent_rejections ON tasks(group_id,updated_at) WHERE status='rejected' AND end_reason IS NOT NULL;
+
+-- 每個專案、每個分支上一次基底測試全部通過的 commit（#248）：基底驗證失敗時告訴使用者是從哪些 commit 之後壞的。
+CREATE TABLE IF NOT EXISTS baseline_passes (
+ project_id uuid NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+ branch text NOT NULL,
+ sha text NOT NULL,
+ passed_at timestamptz NOT NULL DEFAULT now(),
+ PRIMARY KEY (project_id, branch)
+);
+-- 「修復目標分支」任務（#248）：只能從基底驗證失敗的任務建立，可以在基底為紅時開始，結束時的關卡不變。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS baseline_repair boolean NOT NULL DEFAULT false;

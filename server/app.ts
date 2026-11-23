@@ -1,6 +1,7 @@
 import { dashboardAlerts } from "./dashboard-alerts.js";
 import { pickLists, registerPickLists } from "./pick-lists.js";
 import { createFollowup, relinkTask } from "./followup.js";
+import { createBaselineRepair } from "./baseline.js";
 import { probeSystem } from "./system-status.js";
 import { answerFromDashboard } from "./answers.js";
 import { frictionMetrics } from "./friction.js";
@@ -1026,6 +1027,18 @@ export async function buildApp(
         .parse((req.params as { id: string }).id),
       b.version,
       b.parent_id,
+      actor.login,
+    );
+  });
+  // 基底驗證失敗時「請 AI 修好目標分支」：建立一筆待確認的修復任務（#248）。
+  app.post("/api/tasks/:id/baseline-repair", async (req) => {
+    const actor = await requireUser(db, req);
+    return createBaselineRepair(
+      db,
+      z
+        .string()
+        .uuid()
+        .parse((req.params as { id: string }).id),
       actor.login,
     );
   });
