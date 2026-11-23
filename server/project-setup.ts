@@ -69,7 +69,7 @@ function sqlServerExplanation(plan: SqlServerPlan) {
 }
 
 export function assertTestsFound(
-  plan: SetupPlan | null | undefined,
+  plan: Pick<SetupPlan, "verification"> | null | undefined,
   output: string,
 ) {
   if (

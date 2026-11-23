@@ -236,6 +236,42 @@ describe("實際工作容器隔離", () => {
       await c.dispose(id);
     }
   }, 30000);
+  it("審查複驗只改得到用完即刪的工作副本，測試留下候選變更時會被拒絕", async () => {
+    const c = new Containers(), id = randomUUID();
+    const image = process.env.ACCEPTANCE_WORKER_IMAGE ?? "line-agentflow-worker:local";
+    try {
+      await c.prepare(id, image, execFileSync("git", [
+        "archive", "--format=tar", "--prefix=fixture/", "HEAD", "README.md",
+      ]));
+      const replay = (command: string) => c.phase(
+        id, image, ["node", "/opt/agentflow/review-sql.mjs"], "none",
+        JSON.stringify({ command, changeManifest: [] }), 30000, true, true,
+        (event) => {
+          if (event.containerId) {
+            inspection = c.docker.getContainer(event.containerId).inspect()
+              .then((info) => info.Mounts.find((v) => v.Destination === "/workspace")?.Name);
+          }
+        }, { reviewCopy: true },
+      );
+      let inspection: Promise<string | undefined> | undefined;
+      const result = await replay([
+        "set -eu", "cp README.md /tmp/original", "echo probe > README.md",
+        "! cmp -s README.md /candidate/README.md", "cmp /tmp/original /candidate/README.md",
+        "test ! -w /candidate/README.md", "test ! -w /baseline/config", "mv /tmp/original README.md",
+      ].join("\n"));
+      expect(result.exitCode, result.stdout + result.stderr).toBe(0);
+      const volume = await inspection;
+      expect(volume).toBeTruthy();
+      await expect(c.docker.getVolume(volume!).inspect()).rejects.toMatchObject({ statusCode: 404 });
+      const changed = await replay("echo modified > README.md");
+      expect(changed.exitCode).not.toBe(0);
+      expect(changed.stderr).toContain("候選內容與收集紀錄不一致");
+      const original = await c.phase(id, image, ["node", "/opt/agentflow/collect.mjs"]);
+      expect(JSON.parse(original.stdout).manifest).toEqual([]);
+    } finally {
+      await c.dispose(id);
+    }
+  }, 90000);
   it("審查容器即使直接執行命令也不能改寫專案或可信基底", async () => {
     const c = new Containers(),
       id = randomUUID();

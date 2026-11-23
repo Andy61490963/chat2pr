@@ -1,4 +1,4 @@
-import { ObservationBuffer } from "./observation.js";
+import { ObservationBuffer, safeDetail } from "./observation.js";
 import { registerRunnerSecrets } from "./runner-secrets.js";
 import { registerRunnerAuth } from "./runner-auth.js";
 import Fastify from "fastify";
@@ -43,6 +43,8 @@ import {
 } from "../shared/build-output.js";
 import { applyEgress } from "./egress.js";
 import { derivedImage } from "./derived-image.js";
+import { assertTestsFound } from "./project-setup.js";
+import { ENVIRONMENT_EXIT, testEnvironment } from "./sqlserver-test.js";
 import {
   MAX_EGRESS_DOMAINS,
   MAX_INSTALL_COMMANDS,
@@ -441,6 +443,8 @@ app.post("/phase", async (req) => {
   const b = Job.extend({
     phase: z.enum(["install", "test", "code", "review", "collect"]),
     command: z.string().max(8000).optional(),
+    requiresSqlServer: z.boolean().optional(),
+    requiresTests: z.boolean().optional(),
     open: z.boolean().optional(),
     // 完全存取：安裝也走完全開放的網路；env 只接受資料庫連線（AGENTFLOW_DB_*）與 SSH 主機（AGENTFLOW_SSH_HOSTS）。
     full: z.boolean().optional(),
@@ -470,16 +474,49 @@ app.post("/phase", async (req) => {
     : b.phase === "collect"
       ? ["node", "/opt/agentflow/collect.mjs"]
       : ["sh", "-c", b.command ?? "exit 1"];
+  // 把複驗、發出審查授權與 Codex 容器視作一次可取消的審查。
+  const reviewDeadline = b.phase === "review" && b.command
+    ? containers.begin(b.runId, b.timeoutMs, new AppError(408, "執行超過時間限制"))
+    : undefined;
   try {
+    let image = b.image;
+    let aiJob = b.job;
+    if (reviewDeadline && b.command) {
+      // 衍生映像繼承 SQL 能力標記；自管 SQL 的測試命令可完全不含資料庫名稱。
+      const meta = await reviewDeadline.run(() => containers.docker.getImage(image).inspect());
+      image = meta.Id;
+      if (b.requiresSqlServer || meta.Config.Labels?.["io.agentflow.sqlserver-helper"] === "1") {
+        const replay = await containers.phase(
+          b.runId, image, ["node", "/opt/agentflow/review-sql.mjs"], "none",
+          JSON.stringify({
+            command: b.command,
+            changeManifest: b.job?.changeManifest,
+            collectExclude: b.job?.collectExclude,
+          }),
+          reviewDeadline.remaining(), true, true, observe, { reviewCopy: true },
+        );
+        const summary = safeDetail([replay.stdout.slice(-4000), replay.stderr.slice(-1500)].join("\n").trim());
+        const category = replay.exitCode === ENVIRONMENT_EXIT ? "測試環境問題，" : "";
+        const detail = `SQL Server 審查複驗（${category}退出碼 ${replay.exitCode}）\n${summary}`;
+        observe({ kind: "command_end", exitCode: replay.exitCode, detail });
+        if (replay.exitCode !== 0) {
+          return { ...replay, sqlReviewFailure: true, stderr: detail, observations: observations.read(b.runId) };
+        }
+        if (b.requiresSqlServer && testEnvironment(replay.stdout)?.ok !== true)
+          throw new AppError(422, "測試環境問題：SQL Server 審查複驗缺少資料庫啟動成功的紀錄");
+        if (b.requiresTests) assertTestsFound({ verification: "tests" }, replay.stdout + replay.stderr);
+        aiJob = { ...b.job, sqlReviewReport: detail };
+      }
+    }
     const result = await withCapability(
       b.runId,
       b.phase,
-      b.job,
-      b.timeoutMs,
+      aiJob,
+      reviewDeadline?.remaining() ?? b.timeoutMs,
       (job, remaining) =>
         containers.phase(
           b.runId,
-          b.image,
+          image,
           command,
           ai
             ? aiNetwork(b.job)
@@ -491,7 +528,7 @@ app.post("/phase", async (req) => {
                 ? "line-agentflow_open"
                 : "none",
           ai ? JSON.stringify(job) : undefined,
-          remaining,
+          Math.min(remaining, reviewDeadline?.remaining() ?? remaining),
           b.phase === "review",
           true,
           observe,
@@ -528,6 +565,8 @@ app.post("/phase", async (req) => {
       detail: e instanceof Error ? e.message : "執行器階段失敗",
     });
     throw e;
+  } finally {
+    reviewDeadline?.close();
   }
 });
 // 需求辨識：不掛載任何儲存庫的一次性容器。

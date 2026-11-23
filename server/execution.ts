@@ -82,7 +82,7 @@ import {
 import { clip, failureSummary, prReport, reviewVerdict } from "./pr-body.js";
 import { noChangeInstruction, noChangeResult } from "./change-result.js";
 import { threadHistory } from "./followup.js";
-import { environmentFailure, sqlServerTestCommand } from "./sqlserver-test.js";
+import { ENVIRONMENT_EXIT, environmentFailure, sqlServerTestCommand } from "./sqlserver-test.js";
 import { askInGroup } from "./answers.js";
 import { provideSystemInstall, systemInstallNote } from "./system-install.js";
 import { egressDomains, type InstallReport } from "../shared/install-plan.js";
@@ -166,6 +166,8 @@ export function isTransientValidationFailure(error: unknown) {
 }
 export interface PhaseResult {
   observations?: RunEvent[];
+  /** 可信執行器在啟動 Codex 前回報的 SQL 審查複驗失敗。 */
+  sqlReviewFailure?: true;
   exitCode: number;
   stdout: string;
   stderr: string;
@@ -1277,6 +1279,7 @@ export class Execution {
         if (
           subscription &&
           ["code", "review"].includes(name) &&
+          !r.sqlReviewFailure &&
           r.exitCode !== 0 &&
           subscriptionLimited(r.stderr)
         )
@@ -1290,6 +1293,12 @@ export class Execution {
           runId,
         ]);
         await assertCurrent();
+        if (r.sqlReviewFailure) {
+          const reason = r.exitCode === ENVIRONMENT_EXIT
+            ? "測試環境問題：SQL Server 審查複驗無法執行"
+            : "SQL Server 審查複驗未通過";
+          throw new AppError(422, `${reason}（退出碼 ${r.exitCode}）\n${redact(r.stderr).slice(-4000)}`);
+        }
         return r;
       };
       let setup: { plan: SetupPlan; cached: boolean } | undefined;
@@ -1830,6 +1839,13 @@ ${querySummary(answer)}`,
         reviewNotes = [];
         if (test.exitCode === 0) {
           const review = await phase("review", {
+            ...(project.test_command.trim() && setup?.plan.verification !== "build"
+              ? {
+                  command: testCommand,
+                  requiresSqlServer: !!setup?.plan.sqlServer,
+                  requiresTests: setup?.plan.verification === "tests",
+                }
+              : {}),
             job: {
               ...job,
               review: true,

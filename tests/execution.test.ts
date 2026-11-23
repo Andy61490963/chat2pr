@@ -121,6 +121,26 @@ async function scenario() {
     counts: () => ({ published, testCalls, codeCalls }),
   };
 }
+it.each([
+  [86, "環境問題"],
+  [1, "專案問題"],
+] as const)("SQL 複驗退出碼 %i 以可信來源分類，長日誌中的 429 不會耗盡模型額度", async (exitCode, expected) => {
+  const s = await scenario();
+  await db.query(`UPDATE settings SET value=value||'{"ai_mode":"subscription"}'::jsonb WHERE id=1`);
+  s.runner.account = async () => ({ allowed: true, checkedAt: new Date().toISOString() });
+  const original = s.runner.call;
+  s.runner.call = async <T>(path: string, body: unknown): Promise<T> =>
+    path === "phase" && (body as { phase?: string }).phase === "review"
+      ? { sqlReviewFailure: true, exitCode, stdout: "", stderr: "明細\n".repeat(1600) + "HTTP 429 Too Many Requests" } as T
+      : original<T>(path, body);
+  await new Execution(db, s.github, s.line, s.budget, s.runner).execute(s.task.id);
+  const result = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [s.task.id]);
+  expect(result.status).toBe("failed");
+  expect(result.last_error).toContain(expected);
+  expect(result.last_error).not.toContain("AI 額度不足");
+  expect((await db.one<{ ok: boolean }>("SELECT ok FROM service_health WHERE name=$1", [subscriptionGateName])).ok).toBe(true);
+  expect(s.counts()).toMatchObject({ published: 0, codeCalls: 1 });
+});
 it("只發布通過測試與獨立審查的同一份候選內容", async () => {
   const s = await scenario();
   await s.execution.execute(s.task.id);

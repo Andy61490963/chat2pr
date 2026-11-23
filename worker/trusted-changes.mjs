@@ -311,17 +311,27 @@ function previewDiff(current) {
   });
 }
 
-/** 審查前從唯讀快照重算。完整證據留於本階段 tmp，不將大型 patch 疊進成果傳輸。 */
-export async function prepareReviewEvidence(expected, options = {}) {
+async function checkedCandidate(expected, options) {
   if (!Array.isArray(expected))
     throw new Error("缺少可信變更清單，不能僅依差異預覽審查");
   const current = await candidate(options);
+  if (JSON.stringify(current.entries.map((e) => e.manifest)) !== JSON.stringify(expected)) {
+    await current.close();
+    throw new Error("候選內容與收集紀錄不一致，未啟動審查");
+  }
+  return current;
+}
+
+/** 複驗前以同一份唯讀 Git 基底重算副本的全部候選雜湊、長度及模式。 */
+export async function verifyReviewCopy(expected, options = {}) {
+  const current = await checkedCandidate(expected, options);
+  await current.close();
+}
+
+/** 審查前從唯讀快照重算。完整證據留於本階段 tmp，不將大型 patch 疊進成果傳輸。 */
+export async function prepareReviewEvidence(expected, options = {}) {
+  const current = await checkedCandidate(expected, options);
   try {
-    if (
-      JSON.stringify(current.entries.map((e) => e.manifest)) !==
-      JSON.stringify(expected)
-    )
-      throw new Error("候選內容與收集紀錄不一致，未啟動審查");
     const directory = await mkdtemp(
       path.join(options.scratchRoot ?? "/tmp", "agentflow-review-"),
     );

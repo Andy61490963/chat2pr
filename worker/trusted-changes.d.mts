@@ -38,6 +38,10 @@ export function collectCandidate(options?: CandidateOptions): Promise<{
   diffTruncated: boolean;
   excluded: ExcludedSummary;
 }>;
+export function verifyReviewCopy(
+  expected: ChangeEntry[] | undefined,
+  options?: CandidateOptions,
+): Promise<void>;
 export function prepareReviewEvidence(
   expected: ChangeEntry[] | undefined,
   options?: CandidateOptions,

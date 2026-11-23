@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
+import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -18,6 +19,7 @@ import {
   redirectFiles,
   restoreFiles,
   rewriteLocalDb,
+  snapshotFiles,
 } from "../worker/mssql/sqlserver.mjs";
 
 const testProject = (extra = "") => `<Project Sdk="Microsoft.NET.Sdk">
@@ -155,6 +157,34 @@ describe("選用映像與管理者覆寫", () => {
 });
 
 describe("測試命令與環境問題回報", () => {
+  it("指定快照時要求已掛載的 schema.sql，參考資料可省略且按順序套用", () => {
+    const envDir = fs.mkdtempSync(path.join(os.tmpdir(), "sql-snapshot-"));
+    try {
+      const dir = path.join(envDir, "database");
+      fs.mkdirSync(dir);
+      expect(() => snapshotFiles()).toThrow("未掛載");
+      expect(() => snapshotFiles(".")).toThrow("未掛載");
+      const schema = path.join(dir, "schema.sql");
+      const reference = path.join(dir, "reference-data.sql");
+      fs.writeFileSync(reference, "SELECT 1");
+      expect(() => snapshotFiles(envDir)).toThrow("schema.sql");
+      fs.writeFileSync(schema, "CREATE TABLE Example (id int)");
+      expect(snapshotFiles(envDir)).toEqual([schema, reference]);
+      fs.unlinkSync(reference);
+      expect(snapshotFiles(envDir)).toEqual([schema]);
+      // 工作副本裡同名的 database/schema.sql 不能替代擁有者的快照。
+      const env = { ...process.env };
+      delete env.AGENTFLOW_ENV_DIR;
+      const missing = spawnSync(process.execPath, [
+        path.resolve("worker/mssql/sqlserver.mjs"), "run", "--snapshot", "--", "echo", "不應執行",
+      ], { cwd: envDir, env, encoding: "utf8" });
+      expect(missing.status, missing.stderr).toBe(ENVIRONMENT_EXIT);
+      expect(testEnvironment(missing.stdout)).toMatchObject({ ok: false, stage: "snapshot" });
+      expect(missing.stdout).not.toContain("不應執行");
+    } finally {
+      fs.rmSync(envDir, { recursive: true, force: true });
+    }
+  });
   const sqlServer = {
     image: SQLSERVER_WORKER_IMAGE,
     source: "detected" as const,

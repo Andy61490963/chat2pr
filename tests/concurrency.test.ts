@@ -1,10 +1,10 @@
-import { afterAll, afterEach, beforeEach, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { db, reset, fixture, confirmTask, session } from "./helpers.js";
 import { Execution, type Runner } from "../server/execution.js";
 import { GitHub } from "../server/github.js";
 import { Line } from "../server/line.js";
 import { Budget } from "../server/budget.js";
-import { recoverInterrupted } from "../server/jobs.js";
+import { recoverInterrupted, startJobs } from "../server/jobs.js";
 import {
   checkHostResources,
   hostHealthName,
@@ -138,6 +138,7 @@ async function harness(count = 1) {
   releaseAll = release;
   return {
     projects: ids,
+    github,
     runner,
     budget,
     line,
@@ -147,6 +148,41 @@ async function harness(count = 1) {
     release,
   };
 }
+
+it("佇列保留待領工作，調高上限時可先處理另一專案，空位釋出後接續派工", async () => {
+  const h = await harness(2);
+  await db.query("DROP SCHEMA IF EXISTS pgboss CASCADE");
+  await db.query(`UPDATE settings SET value=value||'{"max_runs":1,"daily_budget":100}'::jsonb`);
+  const first = await task(h.projects[0]);
+  const second = await task(h.projects[0]);
+  const third = await task(h.projects[0]);
+  const other = await task(h.projects[1]);
+  const ids = [first.id, second.id, third.id, other.id];
+  vi.stubEnv("DATABASE_URL", db.pool.options.connectionString!);
+  let jobs: Awaited<ReturnType<typeof startJobs>> | undefined;
+  try {
+    jobs = await startJobs(db, { github: h.github, runner: h.runner });
+    await until(() => h.started.length === 1);
+    expect((await activeRuns()).map((r) => r.task_id)).toEqual([first.id]);
+    const pending = () => db.query<{ id: string }>(
+      "SELECT data->>'taskId' AS id FROM pgboss.job WHERE name='execute' AND state='created'",
+    );
+    expect((await pending()).map((j) => j.id).sort()).toEqual(ids.slice(1).sort());
+    await db.query("UPDATE tasks SET updated_at=now()-interval '2 minutes' WHERE id=$1", [second.id]);
+    await db.query(`UPDATE settings SET value=value||'{"max_runs":2}'::jsonb`);
+    await until(() => h.started.length === 2);
+    expect((await activeRuns()).map((r) => r.task_id).sort()).toEqual([first.id, other.id].sort());
+    await until(async () => (await db.query("SELECT 1 FROM notifications WHERE kind='group_waiting' AND task_id=$1", [second.id])).length === 1);
+    h.release();
+    await until(async () => (await db.query("SELECT 1 FROM tasks WHERE id=ANY($1) AND status='ready'", [ids])).length === 4, 6000);
+    expect(await db.query("SELECT 1 FROM runs WHERE task_id=ANY($1)", [ids])).toHaveLength(4);
+    expect(await db.query("SELECT 1 FROM pgboss.job WHERE name='execute'")).toHaveLength(4);
+  } finally {
+    h.release();
+    await jobs?.stop();
+    vi.unstubAllEnvs();
+  }
+}, 35000);
 
 it("上限 2：一張修改與另一個專案的查詢同時執行", async () => {
   const h = await harness(2);

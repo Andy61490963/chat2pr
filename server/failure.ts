@@ -96,6 +96,13 @@ const rules: Rule[] = [
     group: "測試環境沒有啟動成功，請管理者處理專案的測試環境。",
     keep: true,
   },
+  {
+    category: "project",
+    test: matches(/^SQL Server 審查複驗未通過/),
+    plain: "相同候選內容在獨立 SQL Server 測試中未通過",
+    action: "請依審查複驗的輸出檢查測試斷言與資料庫前置條件",
+    group: "獨立 SQL Server 測試沒有通過，請管理者檢查複驗結果。",
+  },
   // 測試在 Linux 容器仍連 LocalDB：系統的導向只能改寫檔案裡的連線字串，程式碼另外組出的 LocalDB 連線改不到。
   // 要排在暫時性規則前：SqlClient 的訊息含「network-related」，不能當成網路問題重試。
   {
