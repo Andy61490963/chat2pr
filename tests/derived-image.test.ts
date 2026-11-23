@@ -215,4 +215,34 @@ describe("真實 Docker：專案衍生映像", () => {
       }),
     ).rejects.toThrow("白名單無效");
   }, 120000);
+
+  it("安裝輸出只留最後 6000 字：截斷點落在帳密中間時，輸出也不含剩下的半段密碼", async () => {
+    // 標準輸出只有這一項的指令印出的內容（安裝進度寫在標準錯誤）：截斷點落在虛構密碼中間。
+    // 固定規則只放行安裝用的指令、不允許非 TLS 網址與分號：用設定檔的「Password=值」寫法，填充字分成多個 printf。
+    const credential = "login failed Password=Fictional-Pass-7731 ";
+    const filler = 6000 - (credential.length - credential.indexOf("ional"));
+    const failed = await derivedImage(
+      c,
+      request([
+        {
+          ...tool,
+          name: "agentflow-leaky",
+          commands: [
+            `printf '%s' '${credential}'`,
+            ...Array.from(
+              { length: Math.ceil(filler / 900) },
+              (_, i) =>
+                `printf '%s' '${"y".repeat(Math.min(900, filler - i * 900))}'`,
+            ),
+            "test -f /opt/agentflow-not-there",
+          ],
+        },
+      ]),
+    );
+    expect(failed.image).toBeNull();
+    expect(failed.exitCode).not.toBe(0);
+    expect(failed.output).toContain("yyyy");
+    expect(failed.output).not.toContain("7731");
+    expect(failed.output).not.toContain("Fictional-Pa");
+  }, 120000);
 });

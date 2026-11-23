@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type Docker from "dockerode";
+import { maskCredentials } from "../shared/credentials.js";
 import { AppError } from "./policy.js";
 import { ContainerDeadline, type Containers } from "./containers.js";
 import { dockerDiskInventory } from "./docker-cleanup.js";
@@ -371,7 +372,9 @@ async function build(
       container.logs({ stdout: true, stderr: true, follow: false }),
     )) as unknown as Buffer;
     const { stdout, stderr } = demux(Buffer.from(raw));
-    const output = `${stdout.slice(-6000)}\n${stderr.slice(-6000)}`.trim();
+    // 先遮蔽再截斷：截斷點落在帳密中間時，剩下的半段遮蔽規則認不出來。
+    const output =
+      `${maskCredentials(stdout).slice(-6000)}\n${maskCredentials(stderr).slice(-6000)}`.trim();
     if (result.StatusCode !== 0)
       return {
         image: null,
