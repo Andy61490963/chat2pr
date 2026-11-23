@@ -198,6 +198,15 @@ const rules: Rule[] = [
   },
   {
     category: "project",
+    // 第一次修改驗證沒過、唯一一次自動修復途中逾時（execution.ts 加上前綴）：重試直接修復，不重做驗證（#241）。
+    test: matches(/^修改與審查意見已保留，/),
+    plain:
+      "時間用完前第一次修改的驗證沒有通過，修改與審查意見已保留，唯一一次自動修復還沒做完",
+    action: "按「重試」會沿用保留的修改與審查意見，直接進行唯一一次自動修復",
+    group: "管理者重試後會接著自動修復。",
+  },
+  {
+    category: "project",
     // 訂閱代理在階段期限到了會回「訂閱階段已超過期限」（runner-main、subscription-broker）。
     test: matches(/超過\s*\d*\s*分鐘限制|超過時間限制|執行超過時間|已超過期限/),
     plain: timeoutPlain,

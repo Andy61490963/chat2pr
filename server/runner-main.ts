@@ -195,8 +195,9 @@ app.post("/apply-candidate", async (req) => {
       )
       .min(1)
       .max(5000),
+    timeoutMs: z.number().int().min(1000).max(1800000),
   }).parse(req.body);
-  await containers.applyCandidate(b.runId, b.image, b.files);
+  await containers.applyCandidate(b.runId, b.image, b.files, b.timeoutMs);
   return { ok: true };
 });
 // 擁有者提供的環境資料（資料庫結構快照）：寫進這次執行專用的唯讀資料卷。
