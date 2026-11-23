@@ -572,6 +572,14 @@ describe("清理規則", () => {
     expect(plan.map((i) => i.target)).toEqual(["c-stopped-job"]);
   });
 
+  it("工作容器摘要以全形逗號連接執行狀態與映像名稱", () => {
+    const items = classifyDisk(inventory(), context());
+    const detail = (target: string) =>
+      items.find((i) => i.target === target)?.detail;
+    expect(detail("c-running-job")).toBe("執行中，line-agentflow-worker:local");
+    expect(detail("c-stopped-job")).toBe("已停止，line-agentflow-worker:local");
+  });
+
   it("同一份盤點裡，定期檢查環境（#19）與專案衍生映像（#18）各自歸屬，互不混淆", () => {
     const inv = inventory();
     inv.images.push(
@@ -659,6 +667,7 @@ describe("清理規則", () => {
     const items = classifyDisk(inv, context());
     const probe = items.find((i) => i.target === "c-check-probe")!;
     expect(probe.owner).toBe("check_container");
+    expect(probe.detail).toBe("已停止，line-agentflow-check:local");
     expect(probe.protected).toContain("定期檢查環境");
     expect(probe.rule).toBeUndefined();
     expect(cleanupPlan(items, allOn, false).map((i) => i.target)).not.toContain(

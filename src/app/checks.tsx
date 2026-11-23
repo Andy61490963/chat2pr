@@ -133,10 +133,15 @@ function RecentRuns({ runs }: { runs: CheckRunView[] }) {
       </div>
       <ol className="flex flex-col gap-1 text-xs" aria-label="最近結果明細">
         {shown.map((r) => (
-          <li key={r.id} className={`break-words ${runTone[r.outcome]}`}>
-            <span className="tabular-nums">{date(r.started_at)}</span>・
-            <span className="font-medium">{trialLabel[r.outcome]}</span>・
-            {r.summary}
+          <li
+            key={r.id}
+            className={`flex flex-wrap gap-x-3 gap-y-1 [overflow-wrap:anywhere] ${runTone[r.outcome]}`}
+          >
+            <time className="tabular-nums" dateTime={r.started_at}>
+              {date(r.started_at)}
+            </time>
+            <span className="font-medium">{trialLabel[r.outcome]}</span>
+            <span>{r.summary}</span>
           </li>
         ))}
       </ol>
@@ -169,7 +174,7 @@ function environmentText(e: CheckEnvironmentView | undefined, c: Listed) {
   if (c.missing_connection) return "缺少資料庫連線，無法建立";
   if (!e) return null;
   if (e.state === "kept")
-    return `保留中・上次使用 ${ago(e.lastUsedAt)}・預計 ${date(e.expiresAt)} 清除`;
+    return `保留中，上次使用 ${ago(e.lastUsedAt)}，預計 ${date(e.expiresAt)} 清除`;
   if (e.state === "failed") return `建立失敗（${date(e.at)}）：${e.message}`;
   if (e.state === "unknown") return `狀態不明：${e.detail}`;
   return "未建立（下次執行時建立）";
@@ -901,14 +906,18 @@ export function ChecksView({
                           {c.system_issue.fix}
                         </p>
                       )}
-                      <p className="text-xs text-muted-foreground">
-                        上次：
-                        {c.last_run_at
-                          ? `${ago(c.last_run_at)}・${c.last_summary ?? ""}`
-                          : "尚未執行"}
-                        {c.next_run_at && `　下次：${date(c.next_run_at)}`}
-                        　第 {c.version} 版
-                        {c.approved_by ? `・${c.approved_by} 核准` : ""}
+                      <p className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                        <span>
+                          上次：{c.last_run_at ? ago(c.last_run_at) : "尚未執行"}
+                        </span>
+                        {c.last_run_at && c.last_summary && (
+                          <span>{c.last_summary}</span>
+                        )}
+                        {c.next_run_at && (
+                          <span>下次：{date(c.next_run_at)}</span>
+                        )}
+                        <span>第 {c.version} 版</span>
+                        {c.approved_by && <span>{c.approved_by} 核准</span>}
                       </p>
                       {(c.environment || c.missing_connection) && (
                         <p
@@ -924,7 +933,7 @@ export function ChecksView({
                           className={`rounded-lg px-3 py-2 ${trialTone[tried.outcome]}`}
                         >
                           試跑結果（{date(tried.at)}）：
-                          {trialLabel[tried.outcome]}・{tried.summary}
+                          {trialLabel[tried.outcome]}，{tried.summary}
                           {c.status === "awaiting_approval" &&
                             (tried.outcome === "ok"
                               ? "　試跑正常，可以核准。"

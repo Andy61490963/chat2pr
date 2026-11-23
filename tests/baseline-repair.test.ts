@@ -184,8 +184,8 @@ it("基底驗證失敗：看板與群組列出失敗的測試名稱與錯誤訊�
   expect(parsed.plain).toBe("還沒修改前，目標分支本身就建置或測試失敗");
   expect(parsed.detail.split("\n").slice(0, 3)).toEqual([
     "失敗的測試（共 2 個）：",
-    "・Demo.Shop.Tests.StockTests.Reserve_ShouldLock(rush: True)：Assert.Equal() Failure: Values differ",
-    "・Demo.Shop.Tests.StockTests.Release_ShouldUnlock：System.InvalidOperationException : 找不到虛構庫存 B-002",
+    "1. Demo.Shop.Tests.StockTests.Reserve_ShouldLock(rush: True)：Assert.Equal() Failure: Values differ",
+    "2. Demo.Shop.Tests.StockTests.Release_ShouldUnlock：System.InvalidOperationException : 找不到虛構庫存 B-002",
   ]);
   expect(parsed.detail).not.toContain("file:///");
   const group = await db.one<{ text: string }>(

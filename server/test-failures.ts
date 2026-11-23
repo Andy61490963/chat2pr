@@ -114,13 +114,13 @@ export function parseTestFailures(output: string): TestFailures | null {
   };
 }
 
-/** 看板與群組看的失敗清單；每個測試一行。 */
+/** 看板與群組看的失敗清單；每個測試一行，用編號不用間隔點。 */
 export function describeTestFailures(failures: TestFailures) {
   const total = failures.tests.length + failures.more;
   return [
     `失敗的測試（共 ${total} 個）：`,
     ...failures.tests.map(
-      (t) => `・${t.name}${t.message ? `：${t.message}` : ""}`,
+      (t, i) => `${i + 1}. ${t.name}${t.message ? `：${t.message}` : ""}`,
     ),
     ...(failures.more
       ? [`另有 ${failures.more} 個失敗的測試，完整清單見執行紀錄。`]

@@ -308,16 +308,18 @@ function QuotaCard({
                           : "bg-primary",
                     )}
                   />
-                  <span className="text-xs text-muted-foreground">
-                    已用 {Math.round(w.usedPercent)}%
-                    {w.resetsAt &&
-                      ` · ${until(w.resetsAt)}（${date(w.resetsAt)}）`}
+                  <span className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                    <span>已用 {Math.round(w.usedPercent)}%</span>
+                    {w.resetsAt && (
+                      <span>{until(w.resetsAt)}（{date(w.resetsAt)}）</span>
+                    )}
                   </span>
                 </div>
               )),
             )}
-            <p className="text-xs text-muted-foreground">
-              方案 {account.plan ?? "未知"} · 更新於 {ago(account.checkedAt)}
+            <p className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+              <span>方案 {account.plan ?? "未知"}</span>
+              <span>更新於 {ago(account.checkedAt)}</span>
             </p>
           </>
         )}

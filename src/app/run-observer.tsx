@@ -157,15 +157,18 @@ export function RunObserver({
             >
               <SelectTrigger
                 aria-labelledby="run-picker"
-                className="w-full min-w-0"
+                className="min-h-9 w-full min-w-0 whitespace-normal data-[size=default]:h-auto"
               >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 {runs.map((r, i) => (
                   <SelectItem key={r.id} value={r.id}>
-                    {i === 0 ? "最新 · " : ""}
-                    {time(r.started_at)} · {outcomeText(r, true)}
+                    <span className="flex flex-wrap gap-x-3 gap-y-1 text-left [overflow-wrap:anywhere]">
+                      {i === 0 && <span>最新</span>}
+                      <time dateTime={r.started_at}>{time(r.started_at)}</time>
+                      <span>{outcomeText(r, true)}</span>
+                    </span>
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -246,13 +249,17 @@ export function RunObserver({
             </p>
           )}
           {received && (
-            <p className="mt-3 text-xs text-muted-foreground">
-              {before
-                ? "歷史紀錄"
-                : run.completed_at
-                  ? "執行已結束"
-                  : "即時更新"}{" "}
-              · 更新於 {time(received)}
+            <p className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+              <span>
+                {before
+                  ? "歷史紀錄"
+                  : run.completed_at
+                    ? "執行已結束"
+                    : "即時更新"}
+              </span>
+              <span>
+                更新於 <time dateTime={received}>{time(received)}</time>
+              </span>
             </p>
           )}
           <div className="mt-3 flex gap-2">
@@ -293,16 +300,16 @@ export function RunObserver({
               .map((e) => (
                 <li key={e.seq} className="min-w-0">
                   <p
-                    className={
+                    className={`flex flex-wrap gap-x-3 gap-y-1 [overflow-wrap:anywhere] ${
                       e.kind === "error" ||
                       (e.exitCode != null && e.exitCode !== 0)
                         ? "text-danger"
                         : "font-medium"
-                    }
+                    }`}
                   >
-                    {phaseLabels[e.phase] ?? e.phase} ·{" "}
-                    {eventLabels[e.kind] ?? e.kind}
-                    {e.exitCode != null && ` · 結束碼 ${e.exitCode}`}
+                    <span>{phaseLabels[e.phase] ?? e.phase}</span>
+                    <span>{eventLabels[e.kind] ?? e.kind}</span>
+                    {e.exitCode != null && <span>結束碼 {e.exitCode}</span>}
                   </p>
                   <p className="text-muted-foreground">{time(e.at)}</p>
                   {e.threadId && (

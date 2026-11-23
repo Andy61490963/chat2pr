@@ -440,7 +440,7 @@ export function classifyDisk(
         name: c.name,
         owner: "check_container",
         size: Math.max(0, c.sizeRw),
-        detail: `${c.state === "running" ? "執行中" : "已停止"} · ${c.image}`,
+        detail: `${c.state === "running" ? "執行中" : "已停止"}，${c.image}`,
         protected: "定期檢查環境，閒置逾時或設定變更時自動清除",
       });
       continue;
@@ -463,7 +463,7 @@ export function classifyDisk(
       name: c.name,
       owner: own ? "job_container" : service ? "service_container" : "unknown",
       size: Math.max(0, c.sizeRw),
-      detail: `${running ? "執行中" : "已停止"} · ${c.image}`,
+      detail: `${running ? "執行中" : "已停止"}，${c.image}`,
       ...(own ? { runId } : {}),
       ...(own && !running && !active ? { rule: "containers" as const } : {}),
       ...(!own && !service

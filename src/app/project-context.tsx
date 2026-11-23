@@ -81,10 +81,14 @@ export function ProjectContextEditor({
           這裡的內容會給 AI 讀。帳密請填在「連線與權限」，那裡會加密保存。
         </p>
         {project.context_updated_at && (
-          <p className="mt-1 text-xs text-muted-foreground">
-            {project.context_updated_by} 更新於{" "}
-            {date(project.context_updated_at)} · 設定版本{" "}
-            {project.config_version}
+          <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+            <span>
+              {project.context_updated_by} 更新於{" "}
+              <time dateTime={project.context_updated_at}>
+                {date(project.context_updated_at)}
+              </time>
+            </span>
+            <span>設定版本 {project.config_version}</span>
           </p>
         )}
       </div>

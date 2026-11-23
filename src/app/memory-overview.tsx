@@ -125,10 +125,12 @@ export function MemoryOverview({
                     <span className="[overflow-wrap:anywhere]">
                       {k.content}
                     </span>
-                    <span className="text-xs text-muted-foreground">
-                      {state.projects.find((p) => p.id === k.project_id)
-                        ?.name ?? "專案"}{" "}
-                      · {ago(k.created_at)}
+                    <span className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                      <span>
+                        {state.projects.find((p) => p.id === k.project_id)
+                          ?.name ?? "專案"}
+                      </span>
+                      <time dateTime={k.created_at}>{ago(k.created_at)}</time>
                     </span>
                   </span>
                   <Badge variant={k.status === "merged" ? "good" : "secondary"}>
