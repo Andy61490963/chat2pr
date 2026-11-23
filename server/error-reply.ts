@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type { FastifyError, FastifyReply, FastifyRequest } from "fastify";
+import { maskCredentials } from "../shared/credentials.js";
 import { redact } from "./policy.js";
 
 /**
@@ -31,4 +32,19 @@ export function replyError(
         : redact(e.message),
   });
   if (status >= 500) req.log.warn(redact(e.message));
+}
+
+/**
+ * 隔離執行器（server/runner-main.ts）的錯誤回應：`{ error }`，訊息最多 2000 字。
+ * 應用程式會把它顯示在看板與執行紀錄。先遮蔽再截斷：截斷點落在帳密中間時，剩下的半段遮蔽規則認不出來。
+ */
+export function replyRunnerError(
+  error: FastifyError | Error,
+  _req: FastifyRequest,
+  reply: FastifyReply,
+) {
+  const e = error as Error & { statusCode?: number };
+  reply
+    .code(e.statusCode ?? 500)
+    .send({ error: maskCredentials(e.message).slice(0, 2000) });
 }
