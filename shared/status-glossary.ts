@@ -392,6 +392,7 @@ export const triageNoTaskLabels = {
   undecided_discussion: "討論尚未定案，系統未建立任務。",
   reusable_memory: "訊息提供了可重複使用的群組規則，系統未建立任務。",
   no_actionable_request: "訊息沒有明確需求，系統未建立任務。",
+  similar_rejected: "訊息與管理者近期拒絕的需求相似，系統未建立任務。",
 } as const;
 
 export const undecidedDiscussionWaiting =
