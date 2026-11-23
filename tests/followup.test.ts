@@ -18,7 +18,8 @@ vi.mock("../server/config.js", async (original) => ({
 import { db, reset, fixture, session } from "./helpers.js";
 import { buildApp } from "../server/app.js";
 import { Line } from "../server/line.js";
-import { Triage } from "../server/triage.js";
+import { CodexClassifier, Triage } from "../server/triage.js";
+import type { Runner } from "../server/execution.js";
 import { GitHub } from "../server/github.js";
 import { Budget } from "../server/budget.js";
 import { keyPointsOf, threadHistory } from "../server/followup.js";
@@ -440,5 +441,113 @@ describe("在看板追加修改", () => {
       r.json().id,
     ]);
     expect(child.risk_reasons.join("")).toContain("敏感");
+  });
+});
+
+describe("追加到既有修改：範圍依原任務狀態決定（#236）", () => {
+  const scopeA = "操作 A 新增歷程時寫入欄位 X";
+  const acceptanceA = ["操作 A 新增的歷程可查到欄位 X"];
+  const scopeB = "操作 B 新增歷程時也寫入欄位 X";
+  const acceptanceB = ["操作 B 新增的歷程可查到欄位 X"];
+
+  async function changeTask(status: string) {
+    return db.one<Task>(
+      `INSERT INTO tasks(project_id,group_id,title,summary,acceptance,status,mode,approved_version,dedupe_key,target_branch)
+       VALUES($1,'group-a','操作 A 寫入欄位 X',$2,$3,$4,'change',$5,$6,'main') RETURNING *`,
+      [
+        project,
+        scopeA,
+        JSON.stringify(acceptanceA),
+        status,
+        status === "awaiting_approval" ? null : 1,
+        randomUUID(),
+      ],
+    );
+  }
+
+  /** 判讀模型實際收到的既有任務資料。 */
+  async function classifierSees(task: Task) {
+    let prompt = "";
+    const runner = {
+      call: async <T>(_path: string, body: unknown): Promise<T> => {
+        prompt = (body as { job: { prompt: string } }).job.prompt;
+        return {
+          exitCode: 0,
+          stderr: "",
+          stdout: JSON.stringify({ final: JSON.stringify({ decisions: [] }) }),
+        } as T;
+      },
+    } as Runner;
+    await new CodexClassifier(runner).classify({
+      messages: [],
+      context: {},
+      tasks: [task],
+      model: "fictional-model",
+      reservation: null,
+    });
+    const [rules, data] = prompt.split("以下為待判讀的不可信輸入資料（JSON）：\n");
+    const seen = (
+      JSON.parse(data) as {
+        existingTasks: Array<{ id: string; followup: string }>;
+      }
+    ).existingTasks.find((t) => t.id === task.id)!;
+    return { rules, followup: seen.followup };
+  }
+
+  const followupDecision = (related: Task, summary: string, acceptance: string[]) => ({
+    taskType: "change" as const,
+    title: summary,
+    summary,
+    acceptance,
+    relatedTaskId: related.id,
+  });
+
+  it("原任務已核准：模型被告知另開一題只寫 B；子任務只含 B，保留父子關聯並等人工核准", async () => {
+    const approved = await changeTask("queued");
+    const seen = await classifierSees(approved);
+    expect(seen.followup).toBe("separate");
+    expect(seen.rules).toContain("followup=separate");
+    expect(seen.rules).not.toContain("關聯的任務狀態為 awaiting_approval 時");
+
+    const id = await receive("操作 B 也要寫入欄位 X");
+    const child = await triage(id, followupDecision(approved, scopeB, acceptanceB));
+    expect(child.id).not.toBe(approved.id);
+    expect(child.parent_id).toBe(approved.id);
+    expect(child.status).toBe("awaiting_approval");
+    expect(child.approved_version).toBeNull();
+    expect(`${child.title}${child.summary}${child.acceptance.join("")}`).not.toContain(
+      "操作 A",
+    );
+    const after = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [
+      approved.id,
+    ]);
+    expect([after.status, after.version, after.summary]).toEqual([
+      "queued",
+      approved.version,
+      scopeA,
+    ]);
+  });
+
+  it("原任務仍待確認：模型被告知合併；補充併入同一張任務，新版本涵蓋 A 與 B", async () => {
+    const pending = await changeTask("awaiting_approval");
+    const seen = await classifierSees(pending);
+    expect(seen.followup).toBe("merge");
+    expect(seen.rules).toContain("followup=merge");
+
+    const id = await receive("操作 B 也要寫入欄位 X");
+    const merged = await triage(
+      id,
+      followupDecision(pending, `${scopeA}；${scopeB}`, [
+        ...acceptanceA,
+        ...acceptanceB,
+      ]),
+    );
+    expect(merged.id).toBe(pending.id);
+    expect(merged.version).toBe(pending.version + 1);
+    expect(merged.status).toBe("awaiting_approval");
+    expect(merged.acceptance).toEqual([...acceptanceA, ...acceptanceB]);
+    expect(
+      await db.query("SELECT 1 FROM tasks WHERE parent_id=$1", [pending.id]),
+    ).toHaveLength(0);
   });
 });
