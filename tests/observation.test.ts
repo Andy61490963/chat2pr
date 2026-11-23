@@ -187,3 +187,33 @@ it("SDK 串流保留 thread 與命令結果，忽略推理，未完成或失敗�
     "額度不足",
   );
 });
+it("撤回或到期時清掉候選修改裡的修改說明與審查意見，並且不再接續；檔案保留", async () => {
+  const { runId } = await fixtureRun();
+  const candidate = {
+    baseSha: "1111111aaaaaaaaa",
+    attempt: 0,
+    codexSummary: "依小林的原話「來源」修改",
+    feedback: "驗證未通過，請修正：引述了「來源」",
+  };
+  await db.query("UPDATE runs SET result=$2 WHERE id=$1", [
+    runId,
+    JSON.stringify({ files: [{ path: "a.ts" }], candidate }),
+  ]);
+  const result = async () =>
+    (await db.one<{ result: Record<string, unknown> }>("SELECT result FROM runs WHERE id=$1", [runId]))!.result;
+  await cleanup(db);
+  expect((await result()).candidate).toEqual(candidate);
+  await db.query("UPDATE messages SET revoked=true,text=NULL WHERE id='source'");
+  expect(await result()).toEqual({
+    files: [{ path: "a.ts" }],
+    candidate: { baseSha: "1111111aaaaaaaaa", attempt: 0, settled: true },
+  });
+  // 到期：觸發器沒有機會執行時，每日清理一樣會清掉。
+  await db.query("UPDATE messages SET revoked=false");
+  await db.query("UPDATE runs SET result=$2,started_at=now()-interval '31 days' WHERE id=$1", [
+    runId,
+    JSON.stringify({ files: [{ path: "a.ts" }], candidate }),
+  ]);
+  await cleanup(db);
+  expect((await result()).candidate).toEqual({ baseSha: "1111111aaaaaaaaa", attempt: 0, settled: true });
+});

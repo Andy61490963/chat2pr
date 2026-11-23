@@ -133,6 +133,8 @@ Discord 討論串共用父頻道的群組設定，但保存來源、判讀上下
 - 更新工作映像的 `iputils-ping` 時，保留安裝後移除 `ping` 檔案能力與 setuid 的步驟。Debian 12 套件可能設定這些屬性，工作容器已移除所有能力，應透過 Docker 的 `ping_group_range` 允許的 ICMP datagram socket 執行 `ping`。
 - 看板鈴鐺與活動清單在伺服器依登入角色取資料。修改通知內容時，一起核對管理者私訊、群組原文的保存期限，以及活動清單與總數的可見範圍，避免同一段管理訊息改從另一個欄位顯示。
 - 新增會等待使用者處理的通知種類時，在 `server/dashboard-alerts.ts` 一起定義何時待處理、何時已處理，並核對通知的需求版本或問題編號。通知歷史會保留，版本更新、補問回答或任務結束後才不會繼續累加未讀。
+- 測試輸出、指令輸出、錯誤訊息與 AI 產出送到看板、群組、通知、稽核、執行紀錄或 AI 提示前，一律經過 `redact`（`server/policy.ts`）或 `safeDetail`（`server/observation.ts`）。新的帳密格式只加在 `shared/credentials.ts` 的 `maskCredentials`，並在 `tests/secret-masking.test.ts` 補「含機密→不含密碼」與「不含機密→不變」兩種案例。要截斷輸出時先遮蔽再截斷。原因：測試失敗訊息常帶 `postgres://帳號:密碼@主機` 或 `Password=…` 連線字串（#252）；先截斷會切掉網址開頭，剩下的半段密碼就認不出來。遮蔽規則以帳密為限，公開識別碼（例如 Discord 應用程式 ID）不遮。
+- `runs.result` 新增可能引述需求原文的欄位時，同步加進 `server/schema.sql` 的 `erase_candidate_quotes`，撤回與到期時才會清掉；觸發器 `erase_run_content` 與 `server/maintenance.ts` 的每日清理共用它。原因：#246 的候選修改說明與審查意見原本會留到 30 天清理。
 - 呼叫 LINE API 時，網路例外只傳遞固定的連線說明。需要辨識額度或限流時，在請求邊界分類 HTTP 回應，避免將權杖、標頭或未經處理的錯誤內容帶進健康狀態與稽核。
 
 | 規則                                                                                                                                                                                                                                            | 原因                                                                               |

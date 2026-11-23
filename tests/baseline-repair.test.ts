@@ -81,7 +81,8 @@ async function autoScenario(
   const queue = [...tests];
   let coded = 0,
     testCalls = 0,
-    prompt = "";
+    prompt = "",
+    feedback = "";
   const runner: Runner = {
     async upload() {},
     account: async () => ({
@@ -89,7 +90,10 @@ async function autoScenario(
       checkedAt: new Date().toISOString(),
     }),
     async call<T>(path: string, raw: unknown): Promise<T> {
-      const body = raw as { phase?: string; job?: { prompt?: string } };
+      const body = raw as {
+        phase?: string;
+        job?: { prompt?: string; feedback?: string };
+      };
       const ok: PhaseResult = { exitCode: 0, stdout: "", stderr: "" };
       if (path === "ai")
         return {
@@ -114,6 +118,7 @@ async function autoScenario(
       if (body.phase === "code") {
         coded++;
         prompt = body.job?.prompt ?? "";
+        feedback = body.job?.feedback ?? "";
       }
       if (body.phase === "collect")
         return {
@@ -164,7 +169,7 @@ async function autoScenario(
     github,
     execution,
     setSha: (next: string) => (sha = next),
-    counts: () => ({ coded, testCalls, published, prompt }),
+    counts: () => ({ coded, testCalls, published, prompt, feedback }),
     reload: (id = task.id) =>
       db.one<Task>("SELECT * FROM tasks WHERE id=$1", [id]),
   };
@@ -436,4 +441,95 @@ it("修復任務照常受每日執行次數限制", async () => {
   await s.execution.execute(repair.id);
   expect((await s.reload(repair.id)).status).toBe("budget_wait");
   expect(s.counts().coded).toBe(0);
+});
+
+// 虛構帳密，只用英數字。
+const leakedPass = "demoPass123";
+const leakyBaseline: PhaseResult = {
+  exitCode: 1,
+  stdout: [
+    "[xUnit.net 00:00:02.10]     Demo.Shop.Tests.OrderTests.Save_ShouldPersist [FAIL]",
+    `[xUnit.net 00:00:02.10]       Npgsql.NpgsqlException : 無法連線 Host=db.demo.test;Database=demo_shop;Username=demoUser;Password=${leakedPass}`,
+    "[xUnit.net 00:00:02.10]       Stack Trace:",
+    "Failed!  - Failed:     1, Passed:    40, Skipped:     0, Total:    41",
+  ].join("\n"),
+  stderr: `Error: connect ECONNREFUSED postgres://demoUser:${leakedPass}@db.demo.test:5432/demo_shop`,
+};
+
+/** 看板、群組通知、執行紀錄、稽核與執行結果裡都不能出現密碼。 */
+async function expectNoLeak(taskId: string) {
+  const app = await buildApp(db);
+  try {
+    const headers = await session();
+    const detail = await app.inject({ url: `/api/tasks/${taskId}`, headers });
+    expect(detail.statusCode).toBe(200);
+    expect(detail.body).not.toContain(leakedPass);
+    const list = await app.inject({ url: "/api/tasks", headers });
+    expect(list.body).not.toContain(leakedPass);
+  } finally {
+    await app.close();
+  }
+  const rows = await db.query<{ text: string }>(
+    `SELECT text FROM notifications
+     UNION ALL SELECT detail FROM audit
+     UNION ALL SELECT detail FROM run_events
+     UNION ALL SELECT result::text FROM runs
+     UNION ALL SELECT concat_ws(' ',last_error,summary,review_note,answer) FROM tasks`,
+  );
+  expect(rows.length).toBeGreaterThan(0);
+  for (const r of rows) expect(r.text ?? "").not.toContain(leakedPass);
+}
+
+it("測試失敗訊息含連線字串：看板、群組、執行紀錄、稽核、修復任務需求與提示都不含密碼，主機與資料庫仍看得到", async () => {
+  const s = await autoScenario([ok, leakyBaseline, leakyBaseline, ok]);
+  await s.execution.execute(s.task.id);
+  const task = await s.reload();
+  expect(task.status).toBe("failed");
+  const detail = parseFailure(task.last_error)!.detail;
+  expect(detail).toContain("Demo.Shop.Tests.OrderTests.Save_ShouldPersist");
+  expect(detail).toContain("Host=db.demo.test;Database=demo_shop");
+  const group = await db.one<{ text: string }>(
+    "SELECT text FROM notifications WHERE task_id=$1 AND kind='group_failed'",
+    [s.task.id],
+  );
+  expect(group!.text).toContain("db.demo.test");
+  await expectNoLeak(s.task.id);
+
+  const repair = await createBaselineRepair(db, s.task.id, "小林");
+  expect(repair.summary).toContain("Host=db.demo.test;Database=demo_shop");
+  expect(repair.summary).not.toContain(leakedPass);
+  await dashboardAction(repair.id, "approve", repair.version);
+  await s.execution.execute(repair.id);
+  expect(s.counts().coded).toBe(1);
+  expect(s.counts().prompt).not.toContain(leakedPass);
+  await expectNoLeak(repair.id);
+});
+
+it("舊版保存、未遮蔽的基底失敗說明，建立修復任務時一樣遮蔽", async () => {
+  const s = await autoScenario([ok, redBaseline]);
+  await s.execution.execute(s.task.id);
+  const raw = (await s.reload()).last_error!.replace(
+    "Demo.Shop.Tests.StockTests.Release_ShouldUnlock",
+    `Demo.Shop.Tests.StockTests.Release_ShouldUnlock postgres://demoUser:${leakedPass}@db.demo.test/demo_shop`,
+  );
+  await db.query("UPDATE tasks SET last_error=$2 WHERE id=$1", [s.task.id, raw]);
+  const repair = await createBaselineRepair(db, s.task.id, "小林");
+  expect(repair.summary).toContain("postgres://demoUser:[已遮蔽]@db.demo.test/demo_shop");
+  expect(repair.summary).not.toContain(leakedPass);
+});
+
+it("獨立審查意見引述連線字串：修復提示、候選的審查意見、稽核與失敗說明都不含密碼", async () => {
+  const s = await autoScenario([], {
+    review: {
+      passed: false,
+      findings: [`測試設定寫死了 postgres://demoUser:${leakedPass}@db.demo.test/demo_shop`],
+    },
+  });
+  await s.execution.execute(s.task.id);
+  expect((await s.reload()).status).toBe("failed");
+  expect(s.counts().coded).toBe(2);
+  expect(s.counts().feedback).toContain("postgres://demoUser:[已遮蔽]@db.demo.test/demo_shop");
+  expect(s.counts().feedback).not.toContain(leakedPass);
+  expect(s.counts().prompt).not.toContain(leakedPass);
+  await expectNoLeak(s.task.id);
 });
