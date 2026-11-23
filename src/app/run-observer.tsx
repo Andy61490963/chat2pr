@@ -1,8 +1,14 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { RunEvent, RunView } from "../../shared/observation.js";
 import { heartbeatStale } from "../../shared/run-progress.js";
 import { InstallReportView } from "./egress";
-import { eventLabels, phaseLabels } from "../../shared/observation.js";
+import {
+  eventLabels,
+  longestPhase,
+  phaseDurations,
+  phaseLabels,
+  phaseMinutes,
+} from "../../shared/observation.js";
 import { statusLabels, type TaskStatus } from "../../shared/types.js";
 import { Button } from "@/components/ui/button";
 import {
@@ -46,6 +52,42 @@ const outcomeText = (run: RunView, brief = false) =>
           ? "結果未保存"
           : "舊紀錄未保存，請參考時間軸"
         : "執行中";
+
+/** 各階段花費時間與距離單次執行上限還剩多少（#256）；執行中的最後一段算到現在。 */
+function PhaseTimes({ run }: { run: RunView }) {
+  if (!run.phases?.length) return null;
+  const end = run.completed_at ?? new Date().toISOString();
+  const spans = phaseDurations(run.phases, end);
+  const top = longestPhase(spans);
+  const limit = Date.parse(run.deadline) - Date.parse(run.started_at);
+  const left = Date.parse(run.deadline) - Date.parse(end);
+  return (
+    <section className="mt-3 text-xs" aria-labelledby={`phase-times-${run.id}`}>
+      <h4 id={`phase-times-${run.id}`} className="font-medium">
+        各階段花費時間
+      </h4>
+      <dl className="mt-1 grid grid-cols-[5rem_minmax(0,1fr)] gap-x-2 gap-y-1">
+        {spans.map((span) => (
+          <Fragment key={span.group}>
+            <dt>{span.label}</dt>
+            <dd className="tabular-nums">
+              {phaseMinutes(span.ms)}
+              {spans.length > 1 && span === top && "（最多）"}
+            </dd>
+          </Fragment>
+        ))}
+      </dl>
+      <p className="mt-1 text-muted-foreground">
+        單次執行上限 {phaseMinutes(limit)}，
+        {left >= 60000
+          ? `距離上限還剩 ${phaseMinutes(left)}`
+          : left > 0
+            ? "距離上限不到 1 分鐘"
+            : "已用完單次執行時間"}
+      </p>
+    </section>
+  );
+}
 
 export function RunObserver({
   taskId,
@@ -214,6 +256,7 @@ export function RunObserver({
               {stale && "（已超過 30 秒，狀態待確認）"}
             </dd>
           </dl>
+          <PhaseTimes run={run} />
           {run.threads?.length > 0 && (
             <div className="mt-3 text-xs">
               <p className="font-medium">Codex thread ID</p>

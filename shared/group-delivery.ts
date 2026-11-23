@@ -290,6 +290,7 @@ export const groupKindLabels: Record<string, string> = {
   group_failed: "失敗說明",
   group_received: "收到需求",
   group_waiting: "等待說明",
+  group_resumed: "自動接續",
   group_check: "定期檢查",
   group_ready: "修改完成",
   group_merged: "已合併",

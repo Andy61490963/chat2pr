@@ -23,6 +23,7 @@ import { discordId } from "../server/chat-platform.js";
 import {
   aiQuotaAck,
   answerAck,
+  autoResumeText,
   answerHeldAck,
   claimPendingGroupReplies,
   claimingNote,
@@ -42,8 +43,11 @@ import { askInGroup } from "../server/answers.js";
 import { approvalNotice } from "../server/project-routing.js";
 import { dueTriageGroups } from "../server/triage-window.js";
 import { GitHub } from "../server/github.js";
-import { quotaExhaustedDetail } from "../shared/line-quota.js";
-import { syncLineQuota } from "../server/line-quota.js";
+import { expiredNote, quotaExhaustedDetail } from "../shared/line-quota.js";
+import {
+  expireStaleNotifications,
+  syncLineQuota,
+} from "../server/line-quota.js";
 import { recordHealth } from "../server/health.js";
 import type { Task } from "../shared/types.js";
 
@@ -1276,6 +1280,39 @@ describe("用 reply token 取回與說實話", () => {
     expect(lastReply()).toHaveLength(1);
   });
 
+  it("自動接續的進度只在接續還沒結束時取回；接續結束後過期，不補送", async () => {
+    await settings();
+    const resumed = await task("範例報表加上日期");
+    await db.query("UPDATE tasks SET status='queued' WHERE id=$1", [resumed]);
+    await notifyGroup(
+      db,
+      resumed,
+      "resumed",
+      `resumed:${resumed}:1`,
+      autoResumeText("verify"),
+    );
+    await send("r1", "/進度");
+    expect(lastReply().join("\n")).toContain("自動接續測試與審查");
+
+    const finished = await task("範例清單排序");
+    await notifyGroup(
+      db,
+      finished,
+      "resumed",
+      `resumed:${finished}:1`,
+      autoResumeText("repair"),
+    );
+    await db.query("UPDATE tasks SET status='failed' WHERE id=$1", [finished]);
+    await send("r2", "/進度");
+    expect(lastReply().join("\n")).not.toContain("自動接續修復");
+    await db.transaction((c) => expireStaleNotifications(c));
+    expect(
+      await db.one<{ last_error: string }>(
+        "SELECT last_error FROM notifications WHERE kind='group_resumed' AND task_id=$1",
+        [finished],
+      ),
+    ).toEqual({ last_error: expiredNote });
+  });
   it("「收到需求」和補問在同一交易排入時，/進度 送的是補問，不會把補問當成已被取代", async () => {
     await settings({ reply_mode: "all" });
     // 判讀建立需要人工確認、又帶補問的任務時，approvalNotice 與 askInGroup 在同一交易，created_at 相同。

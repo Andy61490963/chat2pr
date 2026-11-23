@@ -519,6 +519,7 @@ export const completedRun: RunView = {
   deadline: timestamp,
   observed: false,
   threads: [],
+  phases: [],
   verification_scope: null,
 };
 
