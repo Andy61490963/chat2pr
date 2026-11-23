@@ -1,5 +1,5 @@
 /**
- * 執行中任務的一行進度：「<階段>・已 12 分／期限 14:30」。
+ * 執行中任務的一行進度：「<階段>，已 12 分，期限 14:30」。
  * 看板任務列（`/api/state` 的 run_* 欄位）、任務詳情標頭與執行紀錄共用，
  * 心跳逾時的判斷也只寫在這裡。
  */
@@ -45,9 +45,9 @@ export function runProgress(run: RunProgressInput, now = Date.now()) {
   const label = phaseLabels[run.phase] ?? run.phase;
   const stale = heartbeatStale(run.heartbeatAt, now);
   const spent = elapsed(now - new Date(run.startedAt).getTime());
-  const due = run.deadline ? `／期限 ${clock(run.deadline)}` : "";
+  const due = run.deadline ? `，期限 ${clock(run.deadline)}` : "";
   return {
     stale,
-    text: stale ? `${label}・狀態待確認` : `${label}・${spent}${due}`,
+    text: stale ? `${label}，狀態待確認` : `${label}，${spent}${due}`,
   };
 }

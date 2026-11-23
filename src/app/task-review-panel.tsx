@@ -533,8 +533,13 @@ export function TaskReviewPanel({
             {sources?.length ? (
               <ul>
                 {sources.map((s) => (
-                  <li key={s.repo}>
-                    {s.name}（{s.repo}） · {s.branch} · <code>{s.commit}</code>
+                  <li
+                    key={s.repo}
+                    className="flex flex-wrap gap-x-3 gap-y-1 [overflow-wrap:anywhere]"
+                  >
+                    <span>{s.name}（{s.repo}）</span>
+                    <span>{s.branch}</span>
+                    <code>{s.commit}</code>
                   </li>
                 ))}
               </ul>
@@ -543,7 +548,7 @@ export function TaskReviewPanel({
                 {report.source ??
                   [review?.project_name, t.target_branch, t.base_sha]
                     .filter(Boolean)
-                    .join(" · ")}
+                    .join("，")}
               </p>
             )}
           </details>
@@ -1279,7 +1284,7 @@ export function TaskReviewPanel({
               id="task-suggestions-title"
               className="text-xs font-medium text-muted-foreground"
             >
-              可選方案 · 選一個後在下方派工
+              可選方案，選一個後在下方派工
             </h3>
             <div
               role="radiogroup"
@@ -1502,7 +1507,7 @@ export function TaskReviewPanel({
                   <span className="text-xs text-muted-foreground">
                     {date(a.created_at)}
                     {a.times > 1 &&
-                      `${inWorkbench ? "，" : "・"}之後連續重複，共 ${a.times} 次`}
+                      `，之後連續重複，共 ${a.times} 次`}
                   </span>
                 </li>
               ))}

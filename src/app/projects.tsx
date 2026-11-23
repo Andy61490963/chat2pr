@@ -667,10 +667,12 @@ export function ProjectsView({
                         <summary className="cursor-pointer">
                           查看 AI 設定依據
                         </summary>
-                        <p className="mt-2 break-all">
-                          分支：{open.setup_plan.branch} · 版本：
-                          {open.setup_plan.sha.slice(0, 8)}
-                          {` · 本次參考專案資訊：設定版本 ${open.setup_plan.configVersion}`}
+                        <p className="mt-2 flex flex-wrap gap-x-3 gap-y-1 break-all">
+                          <span>分支：{open.setup_plan.branch}</span>
+                          <span>版本：{open.setup_plan.sha.slice(0, 8)}</span>
+                          <span>
+                            本次參考專案資訊：設定版本 {open.setup_plan.configVersion}
+                          </span>
                         </p>
                         {open.setup_plan.evidence.map((e, i) => (
                           <div key={i} className="mt-2">
@@ -947,8 +949,8 @@ function ProjectKnowledge({
             >
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="text-sm">{k.content}</span>
-                <span className="text-xs text-muted-foreground">
-                  {k.source === "chat" ? "群組對話" : "管理者"} ·{" "}
+                <span className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                  <span>{k.source === "chat" ? "群組對話" : "管理者"}</span>
                   {k.pr_url ? (
                     <a
                       className="underline"
@@ -959,7 +961,7 @@ function ProjectKnowledge({
                       {knowledgeStatus[k.status]}
                     </a>
                   ) : (
-                    knowledgeStatus[k.status]
+                    <span>{knowledgeStatus[k.status]}</span>
                   )}
                 </span>
               </span>

@@ -354,7 +354,7 @@ describe("基底驗證失敗的整理過報告（#248）", () => {
   const tail = "Failed!  - Failed:     1, Passed:     5\n    at command (file:///workspace/scripts/test.mjs:31:34)";
   it("列出失敗測試時，錯誤重點就是那份清單，群組也看得到", () => {
     const report =
-      "失敗的測試（共 1 個）：\n・Demo.Shop.Tests.CartTests.Total_ShouldSum：Assert.Equal() Failure";
+      "失敗的測試（共 1 個）：\n1. Demo.Shop.Tests.CartTests.Total_ShouldSum：Assert.Equal() Failure";
     const f = classifyFailure(
       `目標分支基底驗證失敗：${report}${reportTailMark}${tail}`,
       "test",
@@ -365,7 +365,7 @@ describe("基底驗證失敗的整理過報告（#248）", () => {
     expect(parsed?.detail).toBe(report);
     expect(parsed?.action).toContain("請 AI 修好目標分支");
     expect(groupFailureText(f)).toContain(
-      "\n失敗的測試（共 1 個）：\n・Demo.Shop.Tests.CartTests.Total_ShouldSum",
+      "\n失敗的測試（共 1 個）：\n1. Demo.Shop.Tests.CartTests.Total_ShouldSum",
     );
     expect(groupFailureText(f)).not.toContain("file:///");
   });

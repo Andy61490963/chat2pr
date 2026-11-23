@@ -553,7 +553,7 @@ export class Execution {
       (path, b, timeoutMs) => this.runner.call(path, b, timeoutMs),
       created.id,
     );
-    const result = `${trial.outcome === "ok" ? "目前正常" : trial.outcome === "alert" ? "目前判定異常" : "試跑失敗"}・${trial.summary}`;
+    const result = `${trial.outcome === "ok" ? "目前正常" : trial.outcome === "alert" ? "目前判定異常" : "試跑失敗"}，${trial.summary}`;
     const when = schedule.intervalMinutes
       ? `每 ${schedule.intervalMinutes} 分鐘`
       : `每天 ${schedule.dailyAt}`;

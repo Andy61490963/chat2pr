@@ -164,7 +164,7 @@ describe("parseTestFailures 擷取失敗的測試", () => {
     expect(parsed.more).toBe(3);
     const text = describeTestFailures(parsed);
     expect(text.split("\n")[0]).toBe("失敗的測試（共 13 個）：");
-    expect(text).toContain("・tests/test_many.py::test_case_1：assert False");
+    expect(text).toContain("1. tests/test_many.py::test_case_1：assert False");
     expect(text).not.toContain("test_case_11");
     expect(text.split("\n").at(-1)).toBe(
       "另有 3 個失敗的測試，完整清單見執行紀錄。",

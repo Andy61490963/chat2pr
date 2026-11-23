@@ -25,17 +25,17 @@ describe("runProgress：進行中顯示階段與已跑時間", () => {
   it("顯示階段名稱、已跑分鐘與期限（臺北時間），不寫死 30 分", () => {
     expect(runProgress(run, now)).toEqual({
       stale: false,
-      text: "Codex 修改程式・已 12 分／期限 14:30",
+      text: "Codex 修改程式，已 12 分，期限 14:30",
     });
     expect(
       runProgress({ ...run, deadline: "2026-11-18T07:45:00Z" }, now)?.text,
-    ).toBe("Codex 修改程式・已 12 分／期限 15:45");
+    ).toBe("Codex 修改程式，已 12 分，期限 15:45");
   });
 
   it("剛開始、超過一小時與沒有期限時的寫法", () => {
     expect(
       runProgress({ ...run, startedAt: "2026-11-18T06:19:40Z" }, now)?.text,
-    ).toBe("Codex 修改程式・剛開始／期限 14:30");
+    ).toBe("Codex 修改程式，剛開始，期限 14:30");
     expect(
       runProgress(
         {
@@ -46,7 +46,7 @@ describe("runProgress：進行中顯示階段與已跑時間", () => {
         },
         now,
       )?.text,
-    ).toBe("執行測試・已 1 小時 15 分");
+    ).toBe("執行測試，已 1 小時 15 分");
   });
 
   it("心跳超過 30 秒沒更新時改說狀態待確認", () => {
@@ -56,7 +56,7 @@ describe("runProgress：進行中顯示階段與已跑時間", () => {
     };
     expect(runProgress(stale, now)).toEqual({
       stale: true,
-      text: "Codex 修改程式・狀態待確認",
+      text: "Codex 修改程式，狀態待確認",
     });
     expect(heartbeatStale(stale.heartbeatAt, now)).toBe(true);
     expect(heartbeatStale(run.heartbeatAt, now)).toBe(false);
@@ -72,7 +72,7 @@ describe("runProgress：進行中顯示階段與已跑時間", () => {
 
   it("不認得的階段代號原樣顯示", () => {
     expect(runProgress({ ...run, phase: "custom" }, now)?.text).toMatch(
-      /^custom・/,
+      /^custom，/,
     );
   });
 });

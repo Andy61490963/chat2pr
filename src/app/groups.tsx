@@ -184,26 +184,17 @@ function MemoryItem({
     <li className="flex items-start gap-2 py-2.5 pr-1.5 pl-3">
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="text-sm [overflow-wrap:anywhere]">{m.content}</span>
-        <span className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
+        <span className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
           <span className={m.source === "ai" ? "text-info" : undefined}>
             {memorySource[m.source] ?? "群組要求"}
           </span>
-          {projectLabel && (
-            <>
-              <span aria-hidden>·</span>
-              {projectLabel}
-            </>
-          )}
+          {projectLabel && <span>{projectLabel}</span>}
           {m.project_id && !g.project_ids.includes(m.project_id) && (
-            <>
-              <span aria-hidden>·</span>
-              <span className="text-warn">
-                專案已不在此群組，AI 暫不使用這條記憶
-              </span>
-            </>
+            <span className="text-warn">
+              專案已不在此群組，AI 暫不使用這條記憶
+            </span>
           )}
-          <span aria-hidden>·</span>
-          {date(m.created_at)}
+          <time dateTime={m.created_at}>{date(m.created_at)}</time>
         </span>
       </span>
       <Button
