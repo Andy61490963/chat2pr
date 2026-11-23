@@ -185,6 +185,8 @@ export interface Task {
   end_reason?: EndReason | null;
   /** 草擬定期檢查的查詢任務：記下要求的排程。 */
   check_draft?: CheckSchedule | null;
+  /** 「修復目標分支」任務：可以在基底為紅時開始，結束時完整測試仍必須全部通過（#248）。 */
+  baseline_repair?: boolean;
   question?: import("./clarification.js").ClarificationQuestion | null;
   assumptions?: string[];
   target_branch: string | null;

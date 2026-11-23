@@ -651,6 +651,15 @@ export function App() {
       },
       task.mode === "query" ? "已送出追問" : "已建立新的一題，等待你確認",
     );
+  const repairBaseline = (task: Task) =>
+    run(async () => {
+      const created = await request<{ id: string }>(
+        `/api/tasks/${task.id}/baseline-repair`,
+        "POST",
+        {},
+      );
+      await openTask(created.id);
+    }, "已建立修復目標分支的任務，等待你確認");
   const act = (task: Task, action: Action, body: object = {}, done?: string) =>
     run(async () => {
       const updated = await postTaskAction(task, action, body);
@@ -1360,6 +1369,7 @@ export function App() {
                   go,
                   open: showTask,
                   followup: followupTask,
+                  repairBaseline,
                   act: (task, action, body = {}, done = "任務已更新") =>
                     reviewRun(
                       task.id,
@@ -1533,6 +1543,7 @@ export function App() {
           act={act}
           open={showTask}
           followup={followupTask}
+          repairBaseline={repairBaseline}
           answer={(task, text) =>
             run(async () => {
               await postTaskAnswer(task, text);

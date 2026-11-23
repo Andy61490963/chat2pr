@@ -1,4 +1,5 @@
 import { validateLabel } from "../shared/project-setup.js";
+import { baselineFailurePlain } from "../shared/failure-text.js";
 import { redact } from "./policy.js";
 import { clip } from "./pr-body.js";
 
@@ -29,7 +30,15 @@ export interface FailureExplanation {
   group: string;
   /** 從原始輸出挑出的錯誤重點；已去除堆疊與內部路徑、遮蔽機密。 */
   detail: string;
+  /** 群組也要看到的整理過內容（例如基底驗證失敗的測試名稱）；沒有時不附。 */
+  groupDetail?: string;
 }
+
+/**
+ * 錯誤訊息裡「系統整理過的報告」與「原始輸出結尾」的分隔（基底驗證失敗用，#248）。
+ * 分隔前是已遮蔽的失敗測試清單與上次通過的 commit，整段放進錯誤重點；分隔後照舊只挑錯誤行。
+ */
+export const reportTailMark = "\n輸出結尾：\n";
 
 type Advice = string | ((verify: string) => string);
 
@@ -155,9 +164,11 @@ const rules: Rule[] = [
   {
     category: "project",
     test: matches(/目標分支基底驗證失敗/),
-    plain: "還沒修改前，目標分支本身就建置或測試失敗",
-    action: "先修好目標分支的建置與測試（或改用其他分支），再到看板重試",
-    group: "目標分支本身的建置或測試沒有通過，請管理者先修好專案再重試。",
+    plain: baselineFailurePlain,
+    action:
+      "在看板按「請 AI 修好目標分支」建立修復任務（仍要人工核准），或自行修好目標分支的建置與測試（或改用其他分支）後再到看板重試",
+    group:
+      "目標分支本身的建置或測試沒有通過，請管理者在看板請 AI 修好目標分支，或先修好專案再重試。",
   },
   {
     category: "project",
@@ -391,9 +402,14 @@ export function classifyFailure(
   const body = redact(raw.replace(ansi, ""));
   const rule = rules.find((r) => r.test(body, phase)) ?? fallback;
   // 摘要只放錯誤重點；開頭的「安裝失敗：」這類前綴已經由白話說明表達。
-  const lines = body
+  const stripped = `\n${body
     .replace(/^\s*[\p{Script=Han}A-Za-z ]{1,16}?(?:失敗|未通過驗證)：/u, "")
-    .trim();
+    .trim()}`;
+  const at = stripped.indexOf(reportTailMark);
+  const report = at >= 0 ? stripped.slice(0, at).trim() : "";
+  const lines = (
+    at >= 0 ? stripped.slice(at + reportTailMark.length) : stripped
+  ).trim();
   let detail = rule.keep
     ? clip(stripInternals(lines), 900, "…（完整內容見執行紀錄）")
     : keyErrorLines(
@@ -407,6 +423,11 @@ export function classifyFailure(
       : rule.action;
   const where = rule.locate ? projectSourceLine(body) : null;
   if (where) detail = `位置：${where}\n${detail}`;
+  // 已列出失敗的測試時不再附輸出的錯誤行；只有 commit 說明時兩者都放。
+  if (report)
+    detail = report.startsWith("失敗的測試（")
+      ? clip(report, 4000, "…（完整內容見執行紀錄）")
+      : `${report}${detail ? `\n${detail}` : ""}`;
   return {
     category: rule.category,
     plain: rule.plain,
@@ -416,6 +437,7 @@ export function classifyFailure(
         : advice(project ? `按「${validateLabel(project)}」` : "重新驗證環境"),
     group: rule.group,
     detail,
+    ...(report && { groupDetail: clip(report, 1500, "…（完整內容見看板）") }),
   };
 }
 
@@ -435,7 +457,10 @@ export function failureNotice(
   return `${label}：${failure.plain}${again}。${detail}\n建議：${failure.action}。`;
 }
 
-/** 群組訊息：只用固定的白話句子，不放任何原始錯誤、堆疊或路徑。 */
+/**
+ * 群組訊息：固定的白話句子，不放原始錯誤、堆疊或路徑；
+ * 只附系統整理過、已遮蔽的內容（基底驗證失敗的測試清單與上次通過的 commit）。
+ */
 export function groupFailureText(failure: FailureExplanation, retried = false) {
-  return `這則需求處理時遇到${categoryLabels[failure.category]}：${failure.plain}。${retried ? "系統已自動重試一次，仍未成功。" : ""}${failure.group}`;
+  return `這則需求處理時遇到${categoryLabels[failure.category]}：${failure.plain}。${retried ? "系統已自動重試一次，仍未成功。" : ""}${failure.group}${failure.groupDetail ? `\n${failure.groupDetail}` : ""}`;
 }

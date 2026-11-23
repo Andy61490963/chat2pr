@@ -44,6 +44,7 @@ import {
 import { applyEgress } from "./egress.js";
 import { derivedImage } from "./derived-image.js";
 import { assertTestsFound } from "./project-setup.js";
+import { phaseEndEvents } from "./test-failures.js";
 import { ENVIRONMENT_EXIT, testEnvironment } from "./sqlserver-test.js";
 import {
   MAX_EGRESS_DOMAINS,
@@ -550,14 +551,7 @@ app.post("/phase", async (req) => {
           },
         ),
     );
-    observe({
-      kind: "phase_end",
-      exitCode: result.exitCode,
-      detail:
-        b.phase === "install" || b.phase === "test"
-          ? result.stdout.slice(-4000) + "\n" + result.stderr.slice(-2000)
-          : result.stderr.slice(-4000),
-    });
+    for (const event of phaseEndEvents(b.phase, result)) observe(event);
     return { ...result, observations: observations.read(b.runId) };
   } catch (e) {
     observe({

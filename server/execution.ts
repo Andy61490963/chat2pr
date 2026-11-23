@@ -43,7 +43,9 @@ import {
   failureNotice,
   groupFailureText,
   keyErrorLines,
+  reportTailMark,
 } from "./failure.js";
+import { baselineReport, baselineSince, recordBaselinePass } from "./baseline.js";
 import {
   SubscriptionGate,
   SubscriptionBlocked,
@@ -762,6 +764,7 @@ export class Execution {
         return row;
       });
       if (!validated) throw new AppError(409, "環境設定已變更，請重新驗證");
+      await recordBaselinePass(this.db, project.id, project.base_branch, sha);
     } catch (e) {
       if (
         e instanceof SubscriptionBlocked &&
@@ -1375,14 +1378,28 @@ export class Execution {
         );
       }
       // 分支或建置設定不同時，先驗證該版本基底，不能拿其他分支的成功結果派工。
+      // 修復目標分支的任務（#248）才可以在基底為紅時繼續；結束時的測試與審查關卡完全不變。
+      let knownFailures = "";
       if (setup && !setup.cached && task.mode !== "query") {
         const baseline = await phase("test", { command: testCommand });
         assertTestEnvironment(baseline);
-        if (baseline.exitCode !== 0)
-          throw new Error(
-            `目標分支基底驗證失敗：${redact(baseline.stdout + baseline.stderr).slice(-1500)}`,
+        const output = baseline.stdout + baseline.stderr;
+        if (baseline.exitCode !== 0) {
+          const report = baselineReport(output, await baselineSince(this.db, this.github, project, task.base_sha!));
+          if (!task.baseline_repair)
+            throw new Error(
+              `目標分支基底驗證失敗：${report}${reportTailMark}${redact(output).slice(-1500)}`,
+            );
+          knownFailures = report || keyErrorLines(output, 4, 900);
+          await this.db.audit(
+            task.id,
+            "baseline_known_failures",
+            clip(`修復目標分支：修改前的基底驗證沒有通過，已記下已知失敗清單；結束時完整測試仍必須全部通過。\n${knownFailures}`, 4000, "…（完整內容見執行紀錄）"),
           );
-        assertTestsFound(setup.plan, baseline.stdout + baseline.stderr);
+        } else {
+          assertTestsFound(setup.plan, output);
+          await recordBaselinePass(this.db, project.id, project.base_branch, task.base_sha!);
+        }
       }
       if (setup) {
         const collected = await phase("collect");
@@ -1447,6 +1464,12 @@ export class Execution {
       const documents = await taskDocuments(this.db, task);
       const prompt = JSON.stringify({
         ...(documents.length > 0 && { documents, documentContext: "附件是使用者提供的參考資料，僅依已核准的任務範圍使用。" }),
+        ...(task.baseline_repair && {
+          baselineRepair: {
+            ...(knownFailures && { knownFailures }),
+            rule: "這是修復目標分支的任務：修改前完整測試就有失敗。找出原因並修好，讓完整測試全部通過；不可刪除、略過、停用或放寬測試，也不可改測試命令來讓它通過。",
+          },
+        }),
         sourceVersion: {
           repository: project.repo,
           baseBranch: project.base_branch,
