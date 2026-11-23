@@ -351,4 +351,24 @@ describe("實際工作容器隔離", () => {
       await c.dispose(id);
     }
   }, 60000);
+  it("寫回候選使用這次執行專用、有標籤的資料卷；寫回途中取消回 409，不是 500", async () => {
+    const c = new Containers(),
+      id = randomUUID(),
+      image = process.env.ACCEPTANCE_WORKER_IMAGE ?? "line-agentflow-worker:local";
+    const candidate = [
+      { path: "README.md", content: Buffer.from("# 示範專案\n").toString("base64"), mode: "100644" as const },
+    ];
+    try {
+      await c.applyCandidate(id, image, candidate);
+      const labels = (await c.docker.getVolume(c.volume(id)).inspect()).Labels ?? {};
+      expect(labels["io.agentflow.run"]).toBe(id);
+      expect(labels["io.agentflow.instance"]).toBe(c.instance);
+      const pending = c.applyCandidate(id, image, candidate);
+      const cancelled = c.cancel(id);
+      await expect(pending).rejects.toMatchObject({ statusCode: 409 });
+      await cancelled;
+    } finally {
+      await c.dispose(id);
+    }
+  }, 60000);
 });

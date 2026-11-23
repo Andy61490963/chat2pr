@@ -168,6 +168,14 @@ describe("primaryFix：失敗主按鈕依原因調整", () => {
     expect(primaryFix(parsed)).toEqual({ kind: "retry" });
   });
 
+  it("修復途中逾時：說明保留的是修改與審查意見，重試直接修復", () => {
+    const parsed = notice("修改與審查意見已保留，執行超過時間限制", "code");
+    expect(parsed?.plain).toContain("驗證沒有通過");
+    expect(parsed?.action).toContain("自動修復");
+    expect(parsed?.action).not.toContain("從測試與獨立審查接續");
+    expect(primaryFix(parsed)).toEqual({ kind: "retry" });
+  });
+
   it("缺少連線：前往專案設定", () => {
     expect(
       primaryFix(notice("尚未登記資料庫連線：虛構專案 demo-shop")),
