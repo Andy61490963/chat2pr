@@ -5,6 +5,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deployPlan } from "./lib/deploy-plan.mjs";
+import {
+  bringHostBack,
+  hostStateAdvice,
+  startupTaskCheck,
+} from "./lib/host-start.mjs";
 import { publicHealth } from "./lib/public-health.mjs";
 import { opensConsoleWindow } from "./lib/startup-task.mjs";
 
@@ -109,20 +114,44 @@ function stopHost() {
       "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }",
   );
 }
-function startHost() {
-  if (!windows) return;
-  const started = powershell(
-    "if (Get-ScheduledTask -TaskName 'LINE-AgentFlow' -ErrorAction SilentlyContinue) " +
-      "{ Start-ScheduledTask -TaskName 'LINE-AgentFlow'; 'task' }",
-  );
-  if (started?.includes("task")) return;
-  // 沒有註冊排程工作（尚未執行 npm run install:startup）：直接在背景啟動監督程序。
-  spawn(process.execPath, ["scripts/start-windows.mjs"], {
-    cwd: root,
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
-  }).unref();
+/** 排程工作的狀態（Ready、Running、Disabled…）；沒有這個排程工作時是 undefined。 */
+const startupTaskState = () =>
+  powershell(
+    "(Get-ScheduledTask -TaskName 'LINE-AgentFlow' -ErrorAction SilentlyContinue).State",
+  ) || undefined;
+const supervisorRunning = () =>
+  Number(
+    powershell(
+      "@(Get-CimInstance Win32_Process -Filter \"Name='node.exe'\" | " +
+        "Where-Object { $_.CommandLine -match 'start-windows\\.mjs' }).Count",
+    ),
+  ) > 0;
+/** 帶回監督程序：排程工作啟動後確認程序真的出現，否則直接在背景啟動（#250）。 */
+async function startHost() {
+  if (!windows) return true;
+  const result = await bringHostBack({
+    taskState: startupTaskState,
+    startTask: () =>
+      powershell(
+        "Start-ScheduledTask -TaskName 'LINE-AgentFlow' -ErrorAction Stop; 'ok'",
+      ) === "ok",
+    startDirect: () =>
+      spawn(process.execPath, ["scripts/start-windows.mjs"], {
+        cwd: root,
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true,
+      }).unref(),
+    supervisorRunning,
+    wait,
+  });
+  if (result.route === "task")
+    console.log("  已由排程工作 LINE-AgentFlow 啟動。");
+  else
+    console.log(
+      `  ⚠ ${result.reason}。\n  改為直接在背景啟動監督程序：${result.running ? "已啟動" : "沒有啟動"}。`,
+    );
+  return result.running;
 }
 /** 只結束執行器；監督程序會在 30 秒內用新程式重新啟動它。 */
 function stopRunner() {
@@ -193,6 +222,11 @@ async function smoke() {
         ? `HTTP ${runnerState.status}`
         : "沒有回應；請確認排程工作 LINE-AgentFlow 正在執行",
   );
+
+  if (windows) {
+    const startup = startupTaskCheck(startupTaskState());
+    add("開機自動啟動", startup.usable, startup.detail, true);
+  }
 
   const { publicUrl } = localSecrets();
   if (publicUrl?.startsWith("https://")) {
@@ -309,9 +343,16 @@ async function apply(before) {
   if (startupVisible) plan.host = "all";
 
   let hostStopped = false;
+  let hostBack = true;
   try {
     if (plan.host === "all") {
       step("停止主機程序（監督程序、執行器、通道）");
+      // 停之前先知道帶不帶得回來：排程工作無效時改走直接啟動，不會停在半路。
+      const startup = startupTaskCheck(windows ? startupTaskState() : "Ready");
+      if (!startup.usable)
+        console.log(
+          `  ⚠ ${startup.detail}。\n  這次會改為直接在背景啟動監督程序。`,
+        );
       stopHost();
       hostStopped = true;
     }
@@ -383,9 +424,10 @@ async function apply(before) {
   } finally {
     if (hostStopped) {
       step("啟動主機程序");
-      startHost();
+      hostBack = await startHost();
     }
   }
+  if (!hostBack) stop("監督程序沒有啟動");
   if (plan.host === "runner") {
     step("重啟主機執行器");
     stopRunner();
@@ -463,5 +505,16 @@ try {
 } catch (error) {
   if (!(error instanceof Stop)) throw error;
   console.error(`\n✘ ${error.message}`);
+  // 第二階段已經動到服務：失敗時說清楚目前哪些東西停著、怎麼恢復（#250）。
+  if (windows && args.includes("--after")) {
+    console.error("\n目前狀態：");
+    const advice = hostStateAdvice({
+      supervisor: supervisorRunning(),
+      runner: (await runnerHealth()).status === 200,
+      app: (await request(`${app}/health`)).status === 200,
+      taskState: startupTaskState(),
+    });
+    for (const line of advice) console.error(`  ${line}`);
+  }
   process.exit(1);
 }
