@@ -466,6 +466,15 @@ function attachedTo(message: Message, source: Message) {
 
 /** 一則 Discord 訊息及其所有附件同輪判讀。後面的獨立指令留在佇列，不占用這輪的文件額度。 */
 function documentBatch(pending: Message[], referenced: Message[]) {
+  // 待判讀查詢有筆數上限。落在邊界外的同訊息新附件仍須跟父訊息一起結算。
+  const pendingIds = new Set(pending.map((m) => m.id));
+  const siblings = referenced.filter((m) => !m.processed && m.type === "document" &&
+    m.discord_message_id && pendingIds.has(m.discord_message_id));
+  if (siblings.length) {
+    const siblingIds = new Set(siblings.map((m) => m.id));
+    pending = [...pending, ...siblings];
+    referenced = referenced.filter((m) => !siblingIds.has(m.id));
+  }
   const candidates = [...pending, ...referenced];
   const documents = candidates.filter((m) => m.type === "document");
   if (documents.length <= documentsPerTask) return { roots: pending, attachments: referenced };
