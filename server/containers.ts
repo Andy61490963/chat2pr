@@ -489,6 +489,9 @@ export class Containers {
           : undefined;
       if (nugetFeed)
         env.push(`RestoreAdditionalProjectSources=${nugetFeedPath}`);
+      const mounts: Docker.MountSettings[] = nugetFeed ? [nugetFeed] : [];
+      if (mount && options?.reviewCopy)
+        mounts.push({ Type: "volume", Source: "", Target: "/workspace" });
       const environment = mount && this.provided.has(runId);
       if (environment) env.push(`AGENTFLOW_ENV_DIR=${environmentPath}`);
       for (const item of options?.env ?? []) {
@@ -520,12 +523,12 @@ export class Containers {
             ...(options?.sensitive
               ? { LogConfig: { Type: "none", Config: {} } }
               : {}),
-            ...(nugetFeed ? { Mounts: [nugetFeed] } : {}),
+            ...(mounts.length ? { Mounts: mounts } : {}),
             Binds: mount
               ? [
-                  ...(options?.reviewCopy
-                    ? [`${volume}:/candidate:ro`, "/workspace"]
-                    : [`${volume}:/workspace${readonly ? ":ro" : ""}`]),
+                  options?.reviewCopy
+                    ? `${volume}:/candidate:ro`
+                    : `${volume}:/workspace${readonly ? ":ro" : ""}`,
                   `${volume}-baseline:/baseline:ro`,
                   ...(environment
                     ? [`${volume}-env:${environmentPath}:ro`]
