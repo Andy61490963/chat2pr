@@ -1830,6 +1830,13 @@ ${querySummary(answer)}`,
         reviewNotes = [];
         if (test.exitCode === 0) {
           const review = await phase("review", {
+            ...(project.test_command.trim()
+              ? {
+                  command: testCommand,
+                  requiresSqlServer: !!setup?.plan.sqlServer,
+                  requiresTests: setup?.plan.verification === "tests",
+                }
+              : {}),
             job: {
               ...job,
               review: true,

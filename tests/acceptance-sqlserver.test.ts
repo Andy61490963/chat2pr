@@ -27,6 +27,19 @@ const sqlServer = {
 describe.skipIf(!image)(
   "測試階段的 SQL Server 與 LocalDB 導向（實際容器）",
   () => {
+    it("SQL Server 工作目錄唯讀時回報環境錯誤並略過測試命令", async () => {
+      const c = new Containers(), id = randomUUID();
+      try {
+        const result = await c.phase(id, image!, [
+          "agentflow-sqlserver", "run", "--", "echo", "專案測試已啟動",
+        ], "none", undefined, 15000, true);
+        expect(result.exitCode, result.stdout + result.stderr).toBe(ENVIRONMENT_EXIT);
+        expect(testEnvironment(result.stdout)).toMatchObject({ ok: false, stage: "workspace" });
+        expect(result.stdout).not.toContain("專案測試已啟動");
+      } finally {
+        await c.dispose(id);
+      }
+    }, 30000);
     it("寫死 LocalDB 的虛構整合測試在無網路容器內連上 SQL Server 並通過，結束後專案檔案不變", async () => {
       const c = new Containers(),
         id = randomUUID();

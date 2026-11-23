@@ -84,7 +84,7 @@ export class ContainerDeadline {
   }
 }
 /** 執行器接受的最低工作映像版本；與 worker/Dockerfile 的 io.agentflow.worker-rev 同步。 */
-export const WORKER_REV = "2026-11-21.1";
+export const WORKER_REV = "2026-11-23.1";
 /** 完全存取時唯一允許傳進工作容器的環境變數：專案登記的資料庫連線與 SSH 主機。 */
 export const FULL_ACCESS_ENV = /^AGENTFLOW_(DB_[A-Z]+|SSH_HOSTS)=/;
 export const containerPolicy = (
@@ -377,7 +377,8 @@ export class Containers {
           )
             throw new AppError(409, "拒絕清除不屬於此執行環境的容器");
           try {
-            await deadline.run(() => container.remove({ force: true }));
+            // 僅回收此容器的匿名卷；有名稱的候選、基底與環境卷保留給後續階段。
+            await deadline.run(() => container.remove({ force: true, v: true }));
           } catch (error) {
             const code = (error as { statusCode?: number }).statusCode;
             if (code === 404) return;
@@ -424,6 +425,8 @@ export class Containers {
     observe?: (event: Partial<RunEvent> & { kind: string }) => void,
     options?: {
       output?: "collect";
+      /** SQL 審查複驗在全新匿名卷工作，候選原稿只掛載在 /candidate。 */
+      reviewCopy?: boolean;
       /** 連線資料整理的輸出可能含有憑證，只交給即時附接的讀取端。 */
       sensitive?: boolean;
       extraNetworks?: string[];
@@ -520,7 +523,9 @@ export class Containers {
             ...(nugetFeed ? { Mounts: [nugetFeed] } : {}),
             Binds: mount
               ? [
-                  `${volume}:/workspace${readonly ? ":ro" : ""}`,
+                  ...(options?.reviewCopy
+                    ? [`${volume}:/candidate:ro`, "/workspace"]
+                    : [`${volume}:/workspace${readonly ? ":ro" : ""}`]),
                   `${volume}-baseline:/baseline:ro`,
                   ...(environment
                     ? [`${volume}-env:${environmentPath}:ro`]
@@ -574,7 +579,7 @@ export class Containers {
         if (output.length < 12 * 1024 * 1024) output += b.toString();
       });
       err.on("data", (b) => {
-        if (!observe || !input) {
+        if (!observe || !input || options?.reviewCopy) {
           if (error.length < 100000) error += b.toString();
           return;
         }

@@ -197,7 +197,9 @@ export function environmentFailure(
   const report = testEnvironment(result.stdout);
   if (!report || report.ok) return null;
   const what =
-    report.stage === "database"
+    report.stage === "workspace"
+      ? "無法建立或還原 SQL Server 的測試工作目錄"
+      : report.stage === "database"
       ? "容器內的 SQL Server 已啟動，但建立測試資料庫失敗"
       : report.stage === "image"
         ? "工作映像缺少 SQL Server 測試工具"

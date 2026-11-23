@@ -256,7 +256,7 @@ async function startServer(password, log, timeoutMs) {
     if (sqlcmd(password, ["-b", "-Q", "SET NOCOUNT ON; SELECT 1"], 10000).ok)
       return server;
   }
-  stopServer(server);
+  await stopServer(server);
   throw new Error(
     exited
       ? `SQL Server 程序啟動後結束。${tail(log)}`
@@ -265,7 +265,7 @@ async function startServer(password, log, timeoutMs) {
 }
 
 function stopServer(server) {
-  if (!server || server.exitCode !== null) return Promise.resolve();
+  if (!server || server.exitCode !== null || server.signalCode !== null) return Promise.resolve();
   return new Promise((resolve) => {
     const force = setTimeout(() => server.kill("SIGKILL"), 15000);
     server.once("exit", () => {
@@ -317,8 +317,14 @@ async function run(argv) {
   const timeoutMs =
     Number(process.env.AGENTFLOW_SQLSERVER_TIMEOUT_SECONDS ?? 150) * 1000;
   // 上一次在測試途中被強制結束時，先把改寫過的檔案還原。
-  const leftover = restoreFiles(root, STATE);
-  fs.mkdirSync(STATE, { recursive: true });
+  let leftover;
+  try {
+    leftover = restoreFiles(root, STATE);
+    fs.mkdirSync(STATE, { recursive: true });
+  } catch (e) {
+    report({ ok: false, stage: "workspace", reason: `SQL Server 無法準備工作目錄 ${STATE}：${e.message}` });
+    return ENVIRONMENT_EXIT;
+  }
   const password = `Af1!${randomBytes(18).toString("hex")}`;
   const log = path.join(STATE, "sqlserver.log");
   let server, redirected;
