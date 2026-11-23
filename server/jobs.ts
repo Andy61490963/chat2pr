@@ -39,7 +39,9 @@ import {
   RECOVER_LOCK,
   RUN_LOCK,
   checkHostResources,
+  hostHold,
 } from "./capacity.js";
+import { tunnelReading } from "./tunnel-provider.js";
 import { diskMaintenance } from "./docker-disk.js";
 import type { Project, Settings, Task } from "../shared/types.js";
 export async function recoverInterrupted(
@@ -350,26 +352,14 @@ export async function startJobs(
       // 新群組第一次收到訊息後很快換成 LINE 上的名稱；之後每小時最多查一次。
       await syncGroupNames(db);
       await announceNewGroups(db);
-      let tunnel = { ok: false, detail: "尚未啟動 HTTPS 隧道" };
-      try {
-        const state = JSON.parse(
-          await readFile(
-            join(dirname(secretsPath), "tunnel-status.json"),
-            "utf8",
-          ),
-        );
-        const ok =
-          !!state.ok && Date.now() - Date.parse(state.checked_at) < 180000;
-        tunnel = {
-          ok,
-          detail: ok
-            ? "固定 HTTPS 入口已連線"
-            : String(state.detail ?? "隧道狀態過期，請檢查網路與免費額度"),
-        };
-      } catch {
-        // 讀不到狀態檔：隧道尚未啟動，或檔案正在改寫。
-      }
-      // 每分鐘檢查一次，確認的中斷持續滿五分鐘才發異常通知。
+      // 讀不到狀態檔：隧道尚未啟動。
+      const tunnel = tunnelReading(
+        await readFile(
+          join(dirname(secretsPath), "tunnel-status.json"),
+          "utf8",
+        ).catch(() => null),
+      );
+      // 每 10 秒讀一次，連續兩次讀數確認、中斷持續滿五分鐘才發異常通知。
       await recordHealth(db, "tunnel", tunnel.ok, tunnel.detail, {
         confirm: true,
       });
@@ -495,12 +485,13 @@ export async function startJobs(
          ORDER BY pending,t.created_at,t.id LIMIT 20`,
         [waitNotificationBucket(), s.group_replies !== false],
       );
-      // 有工作要派時才讀主機資源：可用記憶體不足就暫停派新工作（執行中的不受影響），原因顯示在系統頁。
-      const tasks =
-        queued.length &&
-        (await checkHostResources(db, () => runner.call("resources", {}, 5000)))
-          ? []
-          : queued;
+      // 有工作要派、或正在暫停派工時讀主機資源：可用記憶體不足就暫停派新工作（執行中的不受影響），
+      // 原因顯示在系統頁。暫停中佇列清空也繼續讀，回升的穩定期與異常通知的計時才不會中斷。
+      const hold =
+        queued.length || (await hostHold(db.pool))
+          ? await checkHostResources(db, () => runner.call("resources", {}, 5000))
+          : null;
+      const tasks = hold ? [] : queued;
       for (const t of tasks) {
         if (t.pending) continue;
         // 去重只涵蓋仍待領的交付。舊程序留下的 active 工作不能擋住中斷後重試。

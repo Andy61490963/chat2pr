@@ -353,42 +353,40 @@ it("回收中斷執行只處理沒有程序持有的紀錄，執行中的任務�
   expect(await status(live.id)).toBe("ready");
 });
 
-it("主機可用記憶體不足時暫停派新工作，恢復後照常派工", async () => {
+it("主機可用記憶體不足時暫停派新工作，回升並穩定後照常派工", async () => {
   const h = await harness(1);
   const t = await task(h.projects[0], "query");
-  const low = await checkHostResources(db, async () => ({
-    cpus: 8,
-    memTotalMb: 16384,
-    memFreeMb: 1024,
-  }));
-  expect(low).toContain("暫停派新工作");
-  await h.execution.execute(t.id);
-  expect(await status(t.id)).toBe("queued");
-  expect(await activeRuns()).toHaveLength(0);
-  // 讀不到資源不擋派工（每個容器仍有自己的上限）。
-  expect(
-    await checkHostResources(db, async () => {
-      throw new Error("執行器暫時無回應");
-    }),
-  ).toBeNull();
-  expect(
-    await checkHostResources(db, async () => ({
-      cpus: 8,
-      memTotalMb: 16384,
-      memFreeMb: 8192,
-    })),
-  ).toBeNull();
-  expect(
-    (
-      await db.one<{ ok: boolean }>(
-        "SELECT ok FROM service_health WHERE name=$1",
-        [hostHealthName],
-      )
-    ).ok,
-  ).toBe(true);
-  h.release();
-  await h.execution.execute(t.id);
-  expect(await status(t.id)).toBe("answered");
+  await clearHostHealth();
+  try {
+    const low = await hostReading(1024);
+    expect(low).toContain("暫停派新工作");
+    await h.execution.execute(t.id);
+    expect(await status(t.id)).toBe("queued");
+    expect(await activeRuns()).toHaveLength(0);
+    // 讀不到資源不擋派工（每個容器仍有自己的上限）。
+    expect(
+      await checkHostResources(db, async () => {
+        throw new Error("執行器暫時無回應");
+      }),
+    ).toBeNull();
+    // 回升後仍要穩定 5 分鐘才恢復派工。
+    expect(await hostReading(8192)).toContain("穩定 5 分鐘後恢復派新工作");
+    await elapse(5);
+    expect(await hostReading(8192)).toBeNull();
+    expect(
+      (
+        await db.one<{ ok: boolean }>(
+          "SELECT ok FROM service_health WHERE name=$1",
+          [hostHealthName],
+        )
+      ).ok,
+    ).toBe(true);
+    h.release();
+    await h.execution.execute(t.id);
+    expect(await status(t.id)).toBe("answered");
+  } finally {
+    await clearHostHealth();
+  }
 });
 
 const hostReading = (memFreeMb: number) =>
@@ -403,21 +401,41 @@ const notices = (kind: string) =>
   ]);
 const clearHostHealth = () =>
   db.query("DELETE FROM service_health WHERE name=$1", [hostHealthName]);
+/** 把主機資源列上的時間往前推，等同經過 minutes 分鐘。 */
+const elapse = (minutes: number) =>
+  db.query(
+    `UPDATE service_health SET checked_at=checked_at-make_interval(mins=>$2),
+     outage_started_at=outage_started_at-make_interval(mins=>$2),
+     recovering_since=recovering_since-make_interval(mins=>$2) WHERE name=$1`,
+    [hostHealthName, minutes],
+  );
 
-it("記憶體暫停判斷有遲滯：低於 2 GB 才暫停，暫停中要回升到 2.5 GB 以上才恢復", () => {
+it("記憶體暫停判斷有遲滯：低於 2 GB 才暫停，暫停中要回升到 2.5 GB 以上並穩定 5 分鐘才恢復", () => {
   const r = (memFreeMb: number) => ({ cpus: 8, memTotalMb: 16384, memFreeMb });
-  expect(memoryHold(r(1900))).toBe(
-    "Windows 主機可用記憶體只剩 1.9 GB（低於 2 GB），暫停派新工作，回升到 2.5 GB 以上才恢復；執行中的工作不受影響",
+  const now = new Date(Date.UTC(2026, 0, 1));
+  const paused = { recoveringSince: null };
+  expect(memoryHold(r(1900))?.detail).toBe(
+    "Windows 主機可用記憶體只剩 1.9 GB（低於 2 GB），暫停派新工作，回升到 2.5 GB 以上並穩定 5 分鐘才恢復；執行中的工作不受影響",
   );
   expect(memoryHold(r(2100))).toBeNull();
-  expect(memoryHold(r(2100), true)).toBe(
+  expect(memoryHold(r(2100), paused)?.detail).toBe(
     "Windows 主機可用記憶體 2.1 GB，尚未回升到 2.5 GB，仍暫停派新工作；執行中的工作不受影響",
   );
-  expect(memoryHold(r(2559), true)).not.toBeNull();
-  expect(memoryHold(r(2560), true)).toBeNull();
+  expect(memoryHold(r(2559), paused)).not.toBeNull();
+  expect(memoryHold(r(2560), paused, now)).toEqual({
+    detail:
+      "Windows 主機可用記憶體 2.5 GB，已回升到 2.5 GB 以上，穩定 5 分鐘後恢復派新工作（約剩 5 分鐘）；執行中的工作不受影響",
+    recoveringSince: now,
+  });
+  const since = new Date(now.getTime() - 5 * 60_000);
+  expect(memoryHold(r(2560), { recoveringSince: since }, now)).toBeNull();
+  // 穩定期中又掉回遲滯區間就重新計算。
+  expect(memoryHold(r(2400), { recoveringSince: since }, now)).toMatchObject({
+    recoveringSince: null,
+  });
 });
 
-it("主機記憶體在 2 GB 上下徘徊時只通知一次異常；回升到 2.5 GB 以上連續兩次才通知恢復", async () => {
+it("主機記憶體在 2 GB 上下徘徊：暫停滿 10 分鐘才通知一次異常，回升穩定後才恢復派工並通知一次", async () => {
   const h = await harness(1);
   const t = await task(h.projects[0], "query");
   await clearHostHealth();
@@ -425,15 +443,22 @@ it("主機記憶體在 2 GB 上下徘徊時只通知一次異常；回升到 2.5
     expect(await hostReading(8192)).toBeNull();
     for (const mb of [1900, 2100, 1900, 2100, 2200])
       expect(await hostReading(mb)).toContain("暫停派新工作");
+    // 短暫低點只暫停派工，不通知。
+    expect(await notices("service_down")).toHaveLength(0);
+    await elapse(10);
+    expect(await hostReading(2100)).toContain("尚未回升到 2.5 GB");
     const down = await notices("service_down");
     expect(down).toHaveLength(1);
     expect(down[0].text).toContain("主機資源");
-    expect(await notices("service_up")).toHaveLength(0);
-    // 2.1、2.2 GB 仍在遲滯區間，派工維持暫停。
+    // 2.1 GB 仍在遲滯區間，派工維持暫停。
     expect(await hostHold(db.pool)).toContain("尚未回升到 2.5 GB");
     await h.execution.execute(t.id);
     expect(await status(t.id)).toBe("queued");
     expect(await activeRuns()).toHaveLength(0);
+    expect(await hostReading(2600)).toContain("穩定 5 分鐘後恢復");
+    expect(await hostReading(2600)).toContain("穩定 5 分鐘後恢復");
+    expect(await notices("service_up")).toHaveLength(0);
+    await elapse(5);
     expect(await hostReading(2600)).toBeNull();
     expect(await hostReading(2600)).toBeNull();
     expect(await notices("service_up")).toHaveLength(1);
@@ -452,6 +477,8 @@ it("低記憶體時暫時讀不到資源不擋派工，也不算恢復、不通�
     await hostReading(8192);
     await hostReading(1900);
     await hostReading(1900);
+    await elapse(10);
+    await hostReading(1900);
     expect(await notices("service_down")).toHaveLength(1);
     expect(
       await checkHostResources(db, async () => {
@@ -468,8 +495,8 @@ it("低記憶體時暫時讀不到資源不擋派工，也不算恢復、不通�
   }
 });
 
-// 項目 21：讀不到資源的 silent 會把 ok 寫成正常；連續判斷要比對上一次真實讀數，不能被它湊成第二次。
-it("已通知異常後中間讀不到一次，下一次單一的正常讀數不算恢復，再一次才通知", async () => {
+// 項目 21：讀不到資源的 silent 會把 ok 寫成正常；暫停與連續判斷要看上一次真實讀數，不能被它湊成正常。
+it("暫停中讀不到資源不會跳過回升穩定期，也不算一次正常讀數", async () => {
   const unreadable = () =>
     checkHostResources(db, async () => {
       throw new Error("執行器暫時無回應");
@@ -478,8 +505,15 @@ it("已通知異常後中間讀不到一次，下一次單一的正常讀數不�
   try {
     await hostReading(8192);
     await hostReading(1900);
+    expect(await unreadable()).toBeNull();
+    // silent 不算一次正常讀數：前後兩次低讀數仍是連續兩次。
+    await hostReading(1900);
+    await elapse(10);
     await hostReading(1900);
     expect(await notices("service_down")).toHaveLength(1);
+    expect(await unreadable()).toBeNull();
+    expect(await hostReading(2600)).toContain("穩定 5 分鐘後恢復");
+    await elapse(5);
     expect(await unreadable()).toBeNull();
     expect(await hostReading(2600)).toBeNull();
     expect(await notices("service_up")).toHaveLength(0);
@@ -487,19 +521,7 @@ it("已通知異常後中間讀不到一次，下一次單一的正常讀數不�
     const up = await notices("service_up");
     expect(up).toHaveLength(1);
     expect(up[0].text).toBe("服務已恢復：主機資源");
-
-    // 轉異常同樣要連續兩次真實讀數：單一次低讀數不通知，中間夾一次正常讀數就重新計算。
-    expect(await hostReading(1900)).toContain("暫停派新工作");
     expect(await notices("service_down")).toHaveLength(1);
-    expect(await hostReading(8192)).toBeNull();
-    expect(await hostReading(1900)).toContain("暫停派新工作");
-    expect(await notices("service_down")).toHaveLength(1);
-    // silent 不算一次正常讀數：前後兩次低讀數仍是連續兩次。
-    expect(await unreadable()).toBeNull();
-    expect(await notices("service_down")).toHaveLength(1);
-    expect(await hostReading(1900)).toContain("暫停派新工作");
-    expect(await notices("service_down")).toHaveLength(2);
-    expect(await notices("service_up")).toHaveLength(1);
   } finally {
     await clearHostHealth();
   }
@@ -523,13 +545,15 @@ it("只有真實讀數會更新 reading_ok，silent 只改目前狀態", async (
 });
 
 // 欄位新增前的舊列沒有 reading_ok，ok 可能正是 silent 寫的「正常」：部署後第一次正常讀數也不能直接算恢復。
-it("沒有 reading_ok 的舊列：已通知異常時，單一次正常讀數不通知，再一次才通知", async () => {
+it("沒有 reading_ok 的舊列：已通知異常時，回升穩定後還要連續兩次正常讀數才通知恢復", async () => {
   await clearHostHealth();
   try {
     await db.query(
       "INSERT INTO service_health(name,ok,detail,notified_ok) VALUES($1,true,'暫時讀不到主機資源',false)",
       [hostHealthName],
     );
+    expect(await hostReading(2600)).toContain("穩定 5 分鐘後恢復");
+    await elapse(5);
     expect(await hostReading(2600)).toBeNull();
     expect(await notices("service_up")).toHaveLength(0);
     expect(await hostReading(2600)).toBeNull();
@@ -565,7 +589,7 @@ it("主機記憶體不足暫停時，系統頁回傳 holdKind 與排隊原因，
     ).json<Capacity>();
     expect(view.holdKind).toBe("memory");
     expect(view.hold).toContain("Windows 主機可用記憶體只剩 1.5 GB");
-    expect(view.hold).toContain("回升到 2.5 GB 以上才恢復");
+    expect(view.hold).toContain("回升到 2.5 GB 以上並穩定 5 分鐘才恢復");
     expect(view.queued.map((q) => [q.id, q.code, q.reason])).toEqual([
       [t.id, "memory", "主機記憶體不足，暫停派工中"],
     ]);

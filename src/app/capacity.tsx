@@ -131,7 +131,7 @@ export function CapacityCard({ request }: { request: Request }) {
                     ? `可用 ${gb(host.memFreeMb)}／共 ${gb(host.memTotalMb)}`
                     : "暫時讀不到"}
                   （低於 {gb(data.memoryFloorMb)} 時暫停派新工作，回升到{" "}
-                  {gb(data.memoryResumeMb)} 才恢復）
+                  {gb(data.memoryResumeMb)} 以上並穩定 5 分鐘才恢復）
                 </dd>
               </div>
               <div>

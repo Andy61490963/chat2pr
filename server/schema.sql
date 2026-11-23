@@ -702,6 +702,8 @@ ALTER TABLE service_health ADD COLUMN IF NOT EXISTS outage_started_at timestampt
 ALTER TABLE service_health ALTER COLUMN outage_started_at TYPE timestamptz(3);
 ALTER TABLE notifications ALTER COLUMN line_outage_started_at TYPE timestamptz(3);
 ALTER TABLE service_health ADD COLUMN IF NOT EXISTS line_outage_confirmed boolean NOT NULL DEFAULT false;
+-- 主機記憶體暫停派工後，這一段連續回升到恢復門檻以上的起點；穩定滿 5 分鐘才恢復派工（#243）。
+ALTER TABLE service_health ADD COLUMN IF NOT EXISTS recovering_since timestamptz(3);
 -- 機器人送出的 LINE 訊息 ID：群組成員用「回覆」引用機器人的回答時，據此判斷是在接續哪一題。
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS sent_message_id text;
 CREATE INDEX IF NOT EXISTS notifications_sent_message ON notifications(sent_message_id) WHERE sent_message_id IS NOT NULL;

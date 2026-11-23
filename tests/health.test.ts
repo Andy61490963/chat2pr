@@ -164,14 +164,15 @@ describe("服務異常白話說明", () => {
       "請到設定頁查看服務狀態",
     ],
   ])("把探測結果換成可處理的說明（樣本 %#）", (name, detail, cause, action) => {
+    // 異常已持續一小時，有通知門檻的服務也已達門檻。
     const { notice } = healthTransition(
       name,
       {
-        ok: true,
-        reading_ok: true,
+        ok: false,
+        reading_ok: false,
         notified_ok: true,
         checked_at: new Date(startedAt),
-        outage_started_at: null,
+        outage_started_at: new Date(startedAt - 60 * 60_000),
       },
       false,
       detail,
