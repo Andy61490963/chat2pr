@@ -35,6 +35,7 @@ import {
   ChevronRight,
   Circle,
   CircleAlert,
+  CircleCheck,
   GitMerge,
   GitPullRequest,
   Loader2,
@@ -388,13 +389,21 @@ export function InboxView({
           resolvePickList={resolvePickList}
           empty={
             clear ? (
-              <Card className="gap-1 px-5 py-4">
-                <h2 id="inbox-todo" className="font-semibold">
-                  {inboxStatusLabels.clear}
-                </h2>
-                <p className="text-sm text-muted-foreground">
-                  {inboxStatusLabels.clearDescription}
-                </p>
+              <Card className="flex-row items-center gap-4 px-5 py-5">
+                <span
+                  aria-hidden
+                  className="grid size-10 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground"
+                >
+                  <CircleCheck className="size-5" />
+                </span>
+                <div className="min-w-0">
+                  <h2 id="inbox-todo" className="font-semibold">
+                    {inboxStatusLabels.clear}
+                  </h2>
+                  <p className="text-sm text-muted-foreground">
+                    {inboxStatusLabels.clearDescription}
+                  </p>
+                </div>
               </Card>
             ) : undefined
           }

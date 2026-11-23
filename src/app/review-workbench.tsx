@@ -7,6 +7,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
+import { CircleCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Tabs,
@@ -115,7 +116,7 @@ export function ReviewQueue({
           {items.map((item, index) => (
             <li
               key={item.id}
-              className="flex min-w-0 items-center gap-0.5 px-0.5"
+              className="flex min-w-0 items-stretch"
             >
               {checkbox(item)}
               <button
@@ -123,7 +124,7 @@ export function ReviewQueue({
                 data-review-row={item.id}
                 aria-current={selected === item.id ? "true" : undefined}
                 tabIndex={tabbable === item.id ? 0 : -1}
-                className="flex min-h-11 min-w-0 flex-1 flex-col gap-0.5 rounded-md px-2.5 py-1.5 text-left hover:bg-muted focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-foreground aria-[current=true]:bg-muted aria-[current=true]:shadow-[inset_2px_0_var(--foreground)]"
+                className="grid min-h-11 min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-3 gap-y-0.5 rounded-[inherit] px-3.5 py-2.5 text-left hover:bg-muted/60 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-foreground aria-[current=true]:bg-muted aria-[current=true]:shadow-[inset_3px_0_var(--primary)]"
                 onClick={() => choose(item.id, "click")}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") {
@@ -143,10 +144,11 @@ export function ReviewQueue({
                   if (next) setTimeout(() => choose(next.id, "move"), 0);
                 }}
               >
-                <span className="max-w-full truncate text-sm font-semibold">
+                {/* 固定欄位：左欄標題與來源，右欄等待時間與狀態；讀屏順序維持標題、來源、狀態、等待時間。 */}
+                <span className="col-start-1 row-start-1 truncate text-sm font-semibold">
                   {item.title}
                 </span>
-                <span className="flex w-full min-w-0 gap-x-2 text-xs text-muted-foreground">
+                <span className="col-start-1 row-start-2 flex min-w-0 gap-x-2 text-xs text-muted-foreground">
                   <span className="truncate">{item.group}</span>
                   <span className="shrink-0">
                     {item.platform
@@ -154,13 +156,17 @@ export function ReviewQueue({
                       : "平台未記錄"}
                   </span>
                 </span>
-                <span className="flex flex-wrap items-baseline gap-x-2 text-xs">
-                  <span data-review-status className="font-medium">
-                    {item.status}
-                  </span>
-                  <span className="text-muted-foreground">
-                    {waitingLabel(item.waitingSince)}
-                  </span>
+                <span
+                  data-review-status
+                  className="col-start-2 row-start-2 justify-self-end text-xs font-medium whitespace-nowrap"
+                >
+                  {item.status}
+                </span>
+                <span
+                  data-review-waiting
+                  className="col-start-2 row-start-1 justify-self-end text-xs whitespace-nowrap text-muted-foreground tabular-nums"
+                >
+                  {waitingLabel(item.waitingSince)}
                 </span>
               </button>
             </li>
@@ -500,7 +506,7 @@ export function ReviewWorkbench({
       ) : (
         (empty ?? (
           <div className="work-ledger">
-            <Empty title={inboxStatusLabels.clear} compact />
+            <Empty icon={<CircleCheck />} title={inboxStatusLabels.clear} />
           </div>
         ))
       )}
