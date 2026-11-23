@@ -1,9 +1,27 @@
-import { useId, useState } from "react";
+import { useId, useRef, useState, type Ref } from "react";
 import { ChevronRight, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Checkbox, Label } from "@/components/ui/form-controls";
+import { Checkbox, Label, Textarea } from "@/components/ui/form-controls";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
 import { maxRelatedProjects } from "../../shared/project-routing.js";
-import { projectLabels, taskProjectLabels } from "../../shared/status-glossary.js";
+import {
+  endReasonLabels,
+  endReasonText,
+  endReasons,
+  projectLabels,
+  taskProjectLabels,
+  type EndReason,
+} from "../../shared/status-glossary.js";
 import type { Project, Task } from "../../shared/types.js";
 import { ConfirmButton } from "./confirm";
 import type { Act, State, View } from "./shared";
@@ -312,6 +330,77 @@ export function AssignProject({
   );
 }
 
+/** 拒絕原因的單選清單與補充欄；審核面板的拒絕與收件匣的批次結束共用。 */
+export function EndReasonFields({
+  value,
+  onChange,
+  note,
+  onNote,
+  error,
+  firstRef,
+}: {
+  value: EndReason | null;
+  onChange: (value: EndReason) => void;
+  note: string;
+  onNote: (note: string) => void;
+  error?: boolean;
+  firstRef?: Ref<HTMLInputElement>;
+}) {
+  const id = useId();
+  return (
+    <div className="grid gap-4">
+      <fieldset
+        className="grid gap-2"
+        aria-describedby={error ? `${id}-error` : undefined}
+      >
+        <legend className="mb-2 text-sm font-medium">
+          {endReasonText.legend}
+        </legend>
+        <div className="grid gap-2 sm:grid-cols-2">
+          {endReasons.map((reason, index) => (
+            <label
+              key={reason}
+              className={cn(
+                "flex min-h-11 cursor-pointer items-center gap-3 rounded-md border px-3 py-2 text-sm has-focus-visible:outline-2 has-focus-visible:outline-offset-2 has-focus-visible:outline-ring",
+                value === reason
+                  ? "border-primary bg-primary/5"
+                  : "border-muted-foreground/40",
+              )}
+            >
+              <input
+                ref={index === 0 ? firstRef : undefined}
+                type="radio"
+                name={`${id}-reason`}
+                value={reason}
+                checked={value === reason}
+                onChange={() => onChange(reason)}
+                className="size-4 shrink-0 accent-primary"
+              />
+              {endReasonLabels[reason]}
+            </label>
+          ))}
+        </div>
+        {error && (
+          <p id={`${id}-error`} role="alert" className="text-sm text-danger">
+            {endReasonText.required}
+          </p>
+        )}
+      </fieldset>
+      <div className="grid gap-2">
+        <Label htmlFor={`${id}-note`}>{endReasonText.note}</Label>
+        <Textarea
+          id={`${id}-note`}
+          value={note}
+          maxLength={500}
+          rows={2}
+          onChange={(event) => onNote(event.target.value)}
+          className="min-h-16 border-muted-foreground motion-reduce:transition-none"
+        />
+      </div>
+    </div>
+  );
+}
+
 export function EndTaskButton({
   task: t,
   busy,
@@ -324,23 +413,107 @@ export function EndTaskButton({
   const label = ["running", "reviewing"].includes(t.status)
     ? "停止並結束"
     : "結束任務";
+  const description = "結束後不會派工，你之後可在任務詳情按「重新開啟」。";
+  if (t.status === "awaiting_approval")
+    return (
+      <RejectTaskButton task={t} busy={busy} act={act} description={description} />
+    );
   return (
     <ConfirmButton
       variant="outline"
       disabled={busy}
       title={label + "？"}
-      description="結束後不會派工，你之後可在任務詳情按「重新開啟」。"
+      description={description}
       confirm={label}
-      onConfirm={() =>
-        act(
-          t,
-          t.status === "awaiting_approval" ? "reject" : "cancel",
-          {},
-          "已結束任務",
-        )
-      }
+      onConfirm={() => act(t, "cancel", {}, "已結束任務")}
     >
       {label}
     </ConfirmButton>
+  );
+}
+
+// 待審核的任務結束就是拒絕：先選原因，判讀才能少建立同類任務。
+function RejectTaskButton({
+  task: t,
+  busy,
+  act,
+  description,
+}: {
+  task: Task;
+  busy: boolean;
+  act: Act;
+  description: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState<EndReason | null>(null);
+  const [note, setNote] = useState("");
+  const [missing, setMissing] = useState(false);
+  const first = useRef<HTMLInputElement>(null);
+  const reset = (next: boolean) => {
+    setOpen(next);
+    if (!next) {
+      setReason(null);
+      setNote("");
+      setMissing(false);
+    }
+  };
+  const submit = () => {
+    if (!reason) {
+      setMissing(true);
+      first.current?.focus();
+      return;
+    }
+    reset(false);
+    void act(
+      t,
+      "reject",
+      { end_reason: reason, reason: note.trim() || undefined },
+      "已結束任務",
+    );
+  };
+  return (
+    <Dialog open={open} onOpenChange={reset}>
+      <DialogTrigger asChild>
+        <Button type="button" variant="outline" disabled={busy}>
+          結束任務
+        </Button>
+      </DialogTrigger>
+      <DialogContent
+        showCloseButton={false}
+        className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg motion-reduce:animate-none"
+      >
+        <DialogHeader className="text-left">
+          <DialogTitle>結束任務？</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
+        </DialogHeader>
+        <EndReasonFields
+          value={reason}
+          onChange={(value) => {
+            setReason(value);
+            setMissing(false);
+          }}
+          note={note}
+          onNote={setNote}
+          error={missing}
+          firstRef={first}
+        />
+        <DialogFooter>
+          <DialogClose asChild>
+            <Button type="button" variant="outline" className="min-h-11">
+              先不要
+            </Button>
+          </DialogClose>
+          <Button
+            type="button"
+            variant="destructive"
+            className="min-h-11"
+            disabled={busy}
+            onClick={submit}
+          >
+            結束任務
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

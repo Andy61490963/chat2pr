@@ -61,6 +61,7 @@ for (const width of [1280, 375]) {
           status,
           version,
         })),
+        end_reason: "duplicate",
         reason: "範例工作已另外處理",
         notify: false,
       });
@@ -115,8 +116,27 @@ for (const width of [1280, 375]) {
     await expect(trigger).toBeFocused();
     await expect(inbox.getByRole("checkbox", { checked: true })).toHaveCount(3);
     await trigger.press("Enter");
+    // 選取裡有待審核的任務：沒選原因就送出時提示並把焦點帶到第一個原因。
     await dialog
-      .getByRole("textbox", { name: /結束原因/ })
+      .getByRole("button", { name: "結束任務", exact: true })
+      .press("Enter");
+    await expect(dialog.getByRole("alert")).toHaveText("請選一個拒絕原因");
+    const reasons = dialog.getByRole("group", { name: "拒絕原因" });
+    await expect(reasons.getByRole("radio")).toHaveCount(6);
+    await expect(
+      reasons.getByRole("radio", { name: "不是給 AI 的工作（同事會自己處理）" }),
+    ).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await expect(reasons.getByRole("radio", { name: "重複" })).toBeChecked();
+    await expect(dialog.getByRole("alert")).toHaveCount(0);
+    if (width === 375)
+      for (const option of await reasons.locator("label").all())
+        expect((await option.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await dialog
+      .getByRole("textbox", { name: "補充（選填）" })
       .fill("範例工作已另外處理");
     await dialog
       .getByRole("checkbox", { name: "依群組回覆設定通知" })
