@@ -56,6 +56,10 @@ describe("遮蔽各種格式的帳密：密碼不出現，主機與資料庫仍�
 
 describe("不含機密的訊息不被破壞", () => {
   const plain = [
+    // 講解驗證方式的說明文字不是憑證（正式環境的查詢回答曾被誤遮）。
+    "使用 Bearer token 呼叫示範 API",
+    "從 `Authorization: Bearer …` 取得 Token",
+    "採用 Bearer authentication 驗證",
     "https://github.com/demo/shop/pull/2",
     "http://localhost:5173/projects?tab=2",
     "ssh://git@github.com/demo/shop.git",

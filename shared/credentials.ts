@@ -69,8 +69,10 @@ const tokenPatterns: [RegExp, string][] = [
 export const maskCredentials = (text: string) =>
   tokenPatterns
     .reduce((t, [pattern, label]) => t.replace(pattern, label), redactDiscordToken(text))
-    .replace(/\b(Authorization\s*[:=]\s*)(?:(Bearer|Basic|Token|Digest)\s+)?[^\s"',;]+/gi, (_a, k: string, scheme?: string) => `${k}${scheme ? `${scheme} ` : ""}${MASK}`)
-    .replace(/\bBearer\s+(?!\[已遮蔽\])[^\s"']+/gi, `Bearer ${MASK}`)
+    // 憑證至少 8 個字而且含數字或符號；「使用 Bearer token 呼叫」「Authorization: Bearer …」這類
+    // 純英文單字或佔位符是說明文字，不遮，查詢回答與 PR 說明才讀得懂（正式環境 68 則回答中有 2 則曾被誤遮）。
+    .replace(/\b(Authorization\s*[:=]\s*)(?:(Bearer|Basic|Token|Digest)\s+)?(?=[A-Za-z]*[0-9._~+/=-])[A-Za-z0-9._~+/=-]{8,}/gi, (_a, k: string, scheme?: string) => `${k}${scheme ? `${scheme} ` : ""}${MASK}`)
+    .replace(/\bBearer\s+(?=[A-Za-z]*[0-9._~+/=-])[A-Za-z0-9._~+/=-]{8,}/gi, `Bearer ${MASK}`)
     .replace(urlAuthority, maskUrlUserinfo)
     .replace(keyEquals, maskValue)
     .replace(keyColon, maskValue);
