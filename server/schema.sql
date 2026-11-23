@@ -803,3 +803,5 @@ CREATE TABLE IF NOT EXISTS baseline_passes (
  passed_at timestamptz NOT NULL DEFAULT now(),
  PRIMARY KEY (project_id, branch)
 );
+-- 「修復目標分支」任務（#248）：只能從基底驗證失敗的任務建立，可以在基底為紅時開始，結束時的關卡不變。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS baseline_repair boolean NOT NULL DEFAULT false;
