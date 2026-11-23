@@ -526,6 +526,7 @@ export const meetingPickList: PickList = {
   id: "example-meeting-risks",
   groupId: group.id,
   version: 1,
+  createdAt: timestamp,
   items: [
     {
       id: "example-home",
@@ -720,6 +721,7 @@ export function reviewWorkbenchFixture() {
     id: `demo-review-list-${index + 1}`,
     groupId: group.id,
     version: 1,
+    createdAt: new Date(now - (45 - index * 5) * 60_000).toISOString(),
     items: [
       { id: `demo-pick-${index + 1}`, title: `整理範例清單 ${index + 1}`, summary: "彙整範例待辦。", riskReasons: [] },
     ],
