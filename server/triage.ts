@@ -459,6 +459,39 @@ export class ModeClassifier implements Classifier {
     }
   }
 }
+function attachedTo(message: Message, source: Message) {
+  return !!(message.quoted_id && (message.quoted_id === source.id || message.quoted_id === source.discord_message_id)) ||
+    (source.type === "document" && source.discord_message_id === message.id);
+}
+
+/** 一則 Discord 訊息及其所有附件同輪判讀。後面的獨立指令留在佇列，不占用這輪的文件額度。 */
+function documentBatch(pending: Message[], referenced: Message[]) {
+  const candidates = [...pending, ...referenced];
+  const documents = candidates.filter((m) => m.type === "document");
+  if (documents.length <= documentsPerTask) return { roots: pending, attachments: referenced };
+
+  const units = new Map<string, Message[]>();
+  for (const m of pending) {
+    const key = m.discord_message_id ?? m.id;
+    const unit = units.get(key);
+    if (unit) unit.push(m);
+    else units.set(key, [m]);
+  }
+  const roots: Message[] = [];
+  let selected = new Set<string>();
+  for (const unit of units.values()) {
+    const next = new Set(selected);
+    for (const doc of documents) {
+      if (unit.some((m) => m.id === doc.id || attachedTo(m, doc))) next.add(doc.id);
+    }
+    if (selected.size && next.size > documentsPerTask) break;
+    roots.push(...unit);
+    selected = next;
+  }
+  const ids = new Set(roots.map((m) => m.id));
+  return { roots, attachments: candidates.filter((a) => !ids.has(a.id) && roots.some((m) => attachedTo(m, a))) };
+}
+
 export class Triage {
   constructor(
     private db: Database,
@@ -496,23 +529,24 @@ export class Triage {
       if (scheduled && !(await dueTriageGroups(this.db, groupId)).length)
         return;
       const followupBatch = await isFollowupBatch(this.db, groupId);
-      const messages = await pendingTriageMessages(this.db, groupId, scheduled);
-      if (!messages.length) return;
+      const pending = await pendingTriageMessages(this.db, groupId, scheduled);
+      if (!pending.length) return;
       // 各討論串可能開放給不同成員，判讀來源需與回覆目的地一致。
-      const threadId = messages[0].discord_thread_id ?? null;
+      const threadId = pending[0].discord_thread_id ?? null;
       // 只有明確引用的同群組訊息才能跟隨指令，不能把附近閒聊或其他群組的圖派工。
-      const attachments = await this.db.query<Message>(
+      const referenced = await this.db.query<Message>(
         `SELECT * FROM messages WHERE group_id=$1 AND (id=ANY($2) OR discord_message_id=ANY($2)
            OR (type='document' AND discord_message_id=ANY($3)))
            AND NOT(id=ANY($3)) AND NOT revoked AND received_at>message_retention_cutoff()
            AND discord_thread_id IS NOT DISTINCT FROM $4::text`,
         [
           groupId,
-          messages.map((m) => m.quoted_id).filter(Boolean),
-          messages.map((m) => m.id),
+          pending.map((m) => m.quoted_id).filter(Boolean),
+          pending.map((m) => m.id),
           threadId,
         ],
       );
+      const { roots: messages, attachments } = documentBatch(pending, referenced);
       messages.push(
         ...attachments.map((m) => ({
           ...m,
@@ -525,7 +559,7 @@ export class Triage {
         if (message.type !== "document") continue;
         if (++documentCount > documentsPerTask) {
           message.text = null;
-          message.document_error = "同批最多讀取四份文件，請拆分需求";
+            message.document_error = "同一需求最多讀取四份文件，請拆分需求";
         } else {
           await loadChatDocument(this.db, this.line, message);
           if (!message.text && !message.document_error) return;
@@ -960,10 +994,7 @@ export class Triage {
               "指令引用的訊息無法讀取，可能尚未收到、已撤回或到期，請重新提供",
             );
           }
-          const quoted = messages.filter((a) => commands.some((m) =>
-            (m.quoted_id && (m.quoted_id === a.id || m.quoted_id === a.discord_message_id)) ||
-            (a.type === "document" && a.discord_message_id === m.id),
-          ));
+          const quoted = messages.filter((a) => commands.some((m) => attachedTo(m, a)));
           for (const attachment of quoted)
             if (!d.sourceIds.includes(attachment.id)) d.sourceIds.push(attachment.id);
           const requested = d.imageSourceIds ?? [];
