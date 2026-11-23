@@ -43,7 +43,7 @@ async function autoScenario(tests: PhaseResult[]) {
     "UPDATE projects SET setup_mode='auto',validated_at=NULL,enabled=false,install_command='',test_command=''",
   );
   const github = new GitHub();
-  let sha = "base-sha-0001";
+  let sha = "1111111aaaaaaaaa";
   github.base = async () => sha;
   github.archive = async () => new Blob(["archive"]).stream();
   github.ensureIssue = async () => ({
@@ -158,4 +158,72 @@ it("基底驗證失敗：看板與群組列出失敗的測試名稱與錯誤訊�
   );
   expect(group!.text).toContain("Demo.Shop.Tests.StockTests.Release_ShouldUnlock");
   expect(group!.text).toContain("請 AI 修好目標分支");
+});
+
+it("有上次通過的紀錄：說明上次通過的短 SHA、之後的新 commit 數與比較連結", async () => {
+  const s = await autoScenario([{ exitCode: 0, stdout: "", stderr: "" }, redBaseline]);
+  s.setSha("2222222bbbbbbbbb");
+  const compared: string[] = [];
+  s.github.compareCommits = async (_p, base, head) => {
+    compared.push(`${base}...${head}`);
+    return {
+      aheadBy: 3,
+      url: "https://github.com/test/repo/compare/1111111aaaaaaaaa...2222222bbbbbbbbb",
+    };
+  };
+  await s.execution.execute(s.task.id);
+  expect(compared).toEqual(["1111111aaaaaaaaa...2222222bbbbbbbbb"]);
+  const detail = parseFailure((await s.reload()).last_error)!.detail;
+  expect(detail.split("\n").at(-1)).toBe(
+    "上次通過是 1111111，之後目標分支有 3 個新 commit：https://github.com/test/repo/compare/1111111aaaaaaaaa...2222222bbbbbbbbb",
+  );
+  const group = await db.one<{ text: string }>(
+    "SELECT text FROM notifications WHERE task_id=$1 AND kind='group_failed'",
+    [s.task.id],
+  );
+  expect(group!.text).toContain("上次通過是 1111111，之後目標分支有 3 個新 commit");
+});
+
+it("GitHub 比較失敗時仍說明上次通過的 commit 並附比較連結，只是不寫數量", async () => {
+  const s = await autoScenario([{ exitCode: 0, stdout: "", stderr: "" }, redBaseline]);
+  s.setSha("2222222bbbbbbbbb");
+  s.github.compareCommits = async () => {
+    throw new Error("HttpError: Not Found");
+  };
+  await s.execution.execute(s.task.id);
+  const detail = parseFailure((await s.reload()).last_error)!.detail;
+  expect(detail).toContain(
+    "上次通過是 1111111，之後目標分支有新 commit：https://github.com/test/repo/compare/1111111aaaaaaaaa...2222222bbbbbbbbb",
+  );
+});
+
+it("在同一個 commit 上次通過、這次失敗：提示可能是測試不穩定", async () => {
+  const s = await autoScenario([{ exitCode: 0, stdout: "", stderr: "" }, redBaseline]);
+  await s.execution.execute(s.task.id);
+  expect(parseFailure((await s.reload()).last_error)!.detail).toContain(
+    "上次在同一個 commit（1111111）通過",
+  );
+});
+
+it("沒有上次通過的紀錄就不顯示這一段", async () => {
+  const s = await autoScenario([{ exitCode: 0, stdout: "", stderr: "" }, redBaseline]);
+  await db.query("DELETE FROM baseline_passes");
+  await db.query(
+    "UPDATE projects SET setup_plan=jsonb_set(setup_plan,'{branch}','\"release\"')",
+  );
+  s.setSha("2222222bbbbbbbbb");
+  await s.execution.execute(s.task.id);
+  const detail = parseFailure((await s.reload()).last_error)!.detail;
+  expect(detail).toContain("失敗的測試（共 2 個）");
+  expect(detail).not.toContain("上次");
+});
+
+it("派工前的基底驗證通過時記下這個 commit，之後的失敗以它為起點", async () => {
+  const s = await autoScenario([]);
+  s.setSha("2222222bbbbbbbbb");
+  await s.execution.execute(s.task.id);
+  expect((await s.reload()).status).toBe("ready");
+  expect(
+    await db.query("SELECT branch,sha FROM baseline_passes"),
+  ).toEqual([{ branch: "main", sha: "2222222bbbbbbbbb" }]);
 });

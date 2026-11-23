@@ -45,7 +45,7 @@ import {
   keyErrorLines,
   reportTailMark,
 } from "./failure.js";
-import { baselineReport } from "./baseline.js";
+import { baselineReport, baselineSince, recordBaselinePass } from "./baseline.js";
 import {
   SubscriptionGate,
   SubscriptionBlocked,
@@ -764,6 +764,7 @@ export class Execution {
         return row;
       });
       if (!validated) throw new AppError(409, "環境設定已變更，請重新驗證");
+      await recordBaselinePass(this.db, project.id, project.base_branch, sha);
     } catch (e) {
       if (
         e instanceof SubscriptionBlocked &&
@@ -1383,9 +1384,10 @@ export class Execution {
         const output = baseline.stdout + baseline.stderr;
         if (baseline.exitCode !== 0)
           throw new Error(
-            `目標分支基底驗證失敗：${baselineReport(output)}${reportTailMark}${redact(output).slice(-1500)}`,
+            `目標分支基底驗證失敗：${baselineReport(output, await baselineSince(this.db, this.github, project, task.base_sha!))}${reportTailMark}${redact(output).slice(-1500)}`,
           );
         assertTestsFound(setup.plan, output);
+        await recordBaselinePass(this.db, project.id, project.base_branch, task.base_sha!);
       }
       if (setup) {
         const collected = await phase("collect");
