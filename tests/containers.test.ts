@@ -309,4 +309,46 @@ describe("實際工作容器隔離", () => {
       await c.dispose(id);
     }
   }, 30000);
+  it("接續時把上一次收集的修改寫回新的工作副本，收集結果與原候選相同", async () => {
+    const c = new Containers(),
+      id = randomUUID(),
+      image = process.env.ACCEPTANCE_WORKER_IMAGE ?? "line-agentflow-worker:local";
+    try {
+      await c.prepare(
+        id,
+        image,
+        execFileSync("git", [
+          "archive",
+          "--format=tar",
+          "--prefix=fixture/",
+          "HEAD",
+          "README.md",
+          "package.json",
+        ]),
+      );
+      const candidate = [
+        { path: "README.md", content: Buffer.from("# 示範專案\n").toString("base64"), mode: "100644" as const },
+        { path: "package.json", content: null, mode: "100644" as const },
+        { path: "scripts/示範.sh", content: Buffer.from("echo 小林\n").toString("base64"), mode: "100755" as const },
+      ];
+      await expect(
+        c.applyCandidate(id, image, [{ ...candidate[0], path: "../外面.txt" }]),
+      ).rejects.toThrow("路徑無效");
+      await expect(
+        c.applyCandidate(id, image, [{ ...candidate[0], path: ".git/config" }]),
+      ).rejects.toThrow("路徑無效");
+      await c.applyCandidate(id, image, candidate);
+      const collected = await c.phase(id, image, ["node", "/opt/agentflow/collect.mjs"]);
+      expect(collected.exitCode, collected.stderr).toBe(0);
+      const files = JSON.parse(collected.stdout).files as typeof candidate;
+      expect(files.map(({ path, content, mode }) => ({ path, content, mode }))).toEqual(
+        [...candidate].sort((a, b) => (a.path < b.path ? -1 : 1)),
+      );
+      // 工作使用者仍能修改寫回的檔案。
+      const writable = await c.phase(id, image, ["sh", "-c", "printf x >> scripts/示範.sh"]);
+      expect(writable.exitCode, writable.stderr).toBe(0);
+    } finally {
+      await c.dispose(id);
+    }
+  }, 60000);
 });

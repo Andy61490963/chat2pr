@@ -33,6 +33,9 @@ export interface FailureExplanation {
 
 type Advice = string | ((verify: string) => string);
 
+/** 單次執行時間用完的白話說明。 */
+export const timeoutPlain = "工作沒有在單次執行的時間限制內完成";
+
 interface Rule {
   category: FailureCategory;
   test: (body: string, phase: string) => boolean;
@@ -187,9 +190,17 @@ const rules: Rule[] = [
   },
   {
     category: "project",
+    // 逾時前已收集到修改（execution.ts 加上前綴）：重試會從測試與獨立審查接續，縮小需求範圍不是對的處理（#241）。
+    test: matches(/^修改已保留，/),
+    plain: "時間用完前修改已完成，修改已保留，但測試或獨立審查還沒做完",
+    action: "按「重試」會沿用保留的修改，從測試與獨立審查接續",
+    group: "管理者重試後會從驗證接續。",
+  },
+  {
+    category: "project",
     // 訂閱代理在階段期限到了會回「訂閱階段已超過期限」（runner-main、subscription-broker）。
     test: matches(/超過\s*\d*\s*分鐘限制|超過時間限制|執行超過時間|已超過期限/),
-    plain: "工作沒有在單次執行的時間限制內完成",
+    plain: timeoutPlain,
     // 單次執行時間上限是 30 分鐘；已經設成 30 的管理者調不上去，先建議縮小範圍。
     action:
       "縮小需求範圍或拆成較小的需求後重試；單次執行時間可在「設定」調整（上限 30 分鐘）",

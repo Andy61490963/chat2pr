@@ -160,6 +160,14 @@ describe("primaryFix：失敗主按鈕依原因調整", () => {
     }
   });
 
+  it("逾時前修改已保留：主按鈕是重試，不建議縮小需求範圍", () => {
+    const parsed = notice("修改已保留，執行超過時間限制", "review");
+    expect(parsed?.plain).toContain("修改已保留");
+    expect(parsed?.action).toContain("從測試與獨立審查接續");
+    expect(parsed?.action).not.toContain("縮小需求範圍");
+    expect(primaryFix(parsed)).toEqual({ kind: "retry" });
+  });
+
   it("缺少連線：前往專案設定", () => {
     expect(
       primaryFix(notice("尚未登記資料庫連線：虛構專案 demo-shop")),
