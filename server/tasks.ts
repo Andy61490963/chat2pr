@@ -1,6 +1,7 @@
 import { createFollowupInTransaction, threadOf } from "./followup.js";
 import { withAssumptions } from "../shared/clarification.js";
 import { fullTaskTitle } from "../shared/task-title.js";
+import { displayMessageText } from "./message-sources.js";
 import { taskEndLabels } from "../shared/status-glossary.js";
 import {
   maxRelatedProjects,
@@ -658,11 +659,11 @@ export class Tasks {
             ELSE 'expired'
           END AS availability,
           (revoked OR received_at<=message_retention_cutoff()) AS revoked,
-          CASE WHEN NOT revoked AND received_at>message_retention_cutoff() THEN text END AS text,
+          CASE WHEN NOT revoked AND received_at>message_retention_cutoff() THEN ${displayMessageText("m")} END AS text,
           (image IS NOT NULL AND NOT revoked AND received_at>message_retention_cutoff()) AS has_image,
           CASE WHEN NOT revoked AND received_at>message_retention_cutoff() AND user_id IS NOT NULL THEN '成員 '||left(md5(group_id||':'||user_id),6) END AS sender,
           CASE WHEN NOT revoked AND received_at>message_retention_cutoff() THEN user_id END AS user_id
-          FROM messages WHERE group_id=$1 AND id=ANY($2) ORDER BY received_at`,
+          FROM messages m WHERE group_id=$1 AND id=ANY($2) ORDER BY received_at`,
         [task.group_id, task.source_ids],
       ),
       this.db.query(

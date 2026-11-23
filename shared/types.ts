@@ -274,6 +274,10 @@ export interface Message {
   discord_message_id?: string | null;
   discord_thread_id?: string | null;
   image_source_url?: string | null;
+  document_name?: string | null;
+  document_size?: number | string | null;
+  document_url?: string | null;
+  document_error?: string | null;
   trigger_mode?: "auto" | "command" | "chat";
   contextOnly?: boolean;
   id: string;

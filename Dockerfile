@@ -5,6 +5,7 @@ RUN npm ci
 COPY . .
 RUN npm run build
 FROM node:24-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends poppler-utils poppler-data util-linux && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./

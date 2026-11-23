@@ -454,7 +454,7 @@ function Timeline({
                                 : "圖片下載中…"}
                             </p>
                           ) : (
-                            m.type !== "text" && (
+                            m.type !== "text" && m.type !== "document" && (
                               <p className="text-sm text-muted-foreground">
                                 {m.type === "sticker"
                                   ? "貼圖（不提供預覽）"

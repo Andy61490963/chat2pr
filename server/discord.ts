@@ -1,6 +1,7 @@
 import type { Database, DbClient } from "./db.js";
 import { discordId } from "./chat-platform.js";
 import { discordImageUrl } from "./chat-image.js";
+import { documentName } from "./document-text.js";
 import { invalidateMessageSources } from "./message-sources.js";
 import { isProgressCommand, isTaskCommand } from "../shared/chat.js";
 import { containsCredential, redact } from "./policy.js";
@@ -24,6 +25,7 @@ import {
 import type { DiscordChatPlatform } from "./discord-platform.js";
 
 type Source = { id: string; channel: string };
+export type DiscordDocument = { name: string; size: number; url: string };
 export type DiscordMessageEvent =
   | (Source & {
       type: "create";
@@ -31,6 +33,7 @@ export type DiscordMessageEvent =
       author: { id: string; name: string; bot?: boolean };
       text: string;
       images: readonly string[];
+      documents?: readonly DiscordDocument[];
       quotedId?: string;
       parentChannel?: string;
       /** 斜線指令以互動識別碼保存，另記下可供群組回覆的原始互動訊息。 */
@@ -42,6 +45,7 @@ export type DiscordMessageEvent =
       editedAt: string;
       text?: string;
       images?: readonly string[];
+      documents?: readonly DiscordDocument[];
       botId: string;
     })
   | (Source & { type: "delete" });
@@ -53,6 +57,9 @@ type ExistingMessage = {
   text: string | null;
   quoted_id: string | null;
   image_source_url: string | null;
+  document_url: string | null;
+  document_name: string | null;
+  document_size: number | null;
   discord_edited_at: Date | null;
   revoked: boolean;
   processed: boolean;
@@ -68,7 +75,12 @@ type Group = {
   replies: boolean;
 };
 
-function messageRows(id: string, text: string, urls: readonly string[]) {
+function messageRows(
+  id: string,
+  text: string,
+  urls: readonly string[],
+  documents: readonly DiscordDocument[],
+) {
   const images = urls.flatMap((raw) => {
     const url = discordImageUrl(raw);
     return url
@@ -77,17 +89,42 @@ function messageRows(id: string, text: string, urls: readonly string[]) {
             id: `${id}:image:${new URL(url).pathname.split("/")[3]}`,
             text: null,
             url,
+            document: null,
           },
         ]
       : [];
   });
-  // 只有圖片時，第一張沿用原訊息識別碼，讓引用仍能找到它。
-  const first = text ? undefined : images.shift();
-  return [{ id, text: text || null, url: first?.url ?? null }, ...images];
+  const files = documents.flatMap((file) => {
+    const url = discordImageUrl(file.url);
+    if (!url) return [];
+    const name = redact(documentName(file.name)) || "未命名文件";
+    return [
+      {
+        id: `${id}:document:${new URL(url).pathname.split("/")[3]}`,
+        text: null,
+        url: null,
+        document: { url, name, size: file.size },
+      },
+    ];
+  });
+  // 只有附件時，第一份沿用原訊息識別碼，讓引用仍能找到它。
+  const attachments = [...images, ...files];
+  const first = text ? undefined : attachments.shift();
+  return [
+    { id, text: text || null, url: first?.url ?? null, document: first?.document ?? null },
+    ...attachments,
+  ];
 }
 
 const attachmentKey = (url: string | null) =>
   url ? new URL(url).pathname : null;
+
+function sameDocument(old: ExistingMessage, doc: DiscordDocument | null) {
+  return doc
+    ? attachmentKey(old.document_url) === attachmentKey(doc.url) &&
+        old.document_name === doc.name && Number(old.document_size) === doc.size
+    : old.document_url === null;
+}
 
 export async function ingestDiscord(db: Database, event: DiscordMessageEvent) {
   if (
@@ -131,7 +168,7 @@ export async function ingestDiscord(db: Database, event: DiscordMessageEvent) {
     if (!group) return;
     const existing = (
       await c.query<ExistingMessage>(
-        `SELECT id,user_id,sender_name,text,quoted_id,image_source_url,discord_edited_at,revoked,processed,trigger_mode,needs_source_review,
+        `SELECT id,user_id,sender_name,text,quoted_id,image_source_url,document_name,document_size,document_url,discord_edited_at,revoked,processed,trigger_mode,needs_source_review,
          received_at<=message_retention_cutoff() AS expired
        FROM messages WHERE (id=$1 OR discord_message_id=$1) AND group_id=$2 ORDER BY id FOR UPDATE`,
         [id, groupId],
@@ -194,14 +231,17 @@ export async function ingestDiscord(db: Database, event: DiscordMessageEvent) {
     const text = sensitive
       ? "[已略過含憑證的回答]"
       : event.text === undefined
-        ? (original?.text ?? "")
+        ? (original?.document_name ? "" : original?.text ?? "")
         : redact(event.text);
+    const active = existing.filter((row) => !row.revoked);
     const urls =
-      event.images ?? existing.flatMap((row) => row.image_source_url ?? []);
-    const rows = messageRows(id, text, urls);
-    const previous = new Map(
-      existing.filter((row) => !row.revoked).map((row) => [row.id, row]),
-    );
+      event.images ?? active.flatMap((row) => row.image_source_url ?? []);
+    const documents = event.documents ?? active.flatMap((row) =>
+      row.document_url && row.document_name
+        ? [{ url: row.document_url, name: row.document_name, size: Number(row.document_size) }]
+        : []);
+    const rows = messageRows(id, text, urls, documents);
+    const previous = new Map(active.map((row) => [row.id, row]));
     if (event.type === "update") {
       const changed =
         rows.length !== previous.size ||
@@ -209,11 +249,16 @@ export async function ingestDiscord(db: Database, event: DiscordMessageEvent) {
           const old = previous.get(row.id);
           return (
             !old ||
-            old.text !== row.text ||
-            attachmentKey(old.image_source_url) !== attachmentKey(row.url)
+            (!old.document_name && old.text !== row.text) ||
+            attachmentKey(old.image_source_url) !== attachmentKey(row.url) ||
+            !sameDocument(old, row.document)
           );
         });
       if (!changed) {
+        for (const row of rows) {
+          if (row.document && previous.get(row.id)?.document_url !== row.document.url)
+            await c.query("UPDATE messages SET document_url=$2 WHERE id=$1", [row.id, row.document.url]);
+        }
         await c.query("UPDATE messages SET discord_edited_at=$2 WHERE id=$1", [
           id,
           editedAt,
@@ -278,27 +323,34 @@ export async function ingestDiscord(db: Database, event: DiscordMessageEvent) {
       !detail &&
       (group.trigger_mode === "auto" || command || botReply);
     for (const row of rows) {
+      const old = previous.get(row.id);
       await c.query(
         `INSERT INTO messages(id,group_id,discord_message_id,discord_edited_at,user_id,sender_name,type,text,quoted_id,
-          image_source_url,trigger_mode,processed,needs_source_review,received_at,bot_reply,discord_reply_message_id,discord_thread_id)
-         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,COALESCE((SELECT received_at FROM messages WHERE id=$3),now()),$14,$15,$16)
+          image_source_url,trigger_mode,processed,needs_source_review,received_at,bot_reply,discord_reply_message_id,discord_thread_id,
+          document_url,document_name,document_size)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,COALESCE((SELECT received_at FROM messages WHERE id=$3),now()),$14,$15,$16,$17,$18,$19)
          ON CONFLICT(id) DO UPDATE SET discord_edited_at=EXCLUDED.discord_edited_at,user_id=EXCLUDED.user_id,
-          sender_name=EXCLUDED.sender_name,type=EXCLUDED.type,text=EXCLUDED.text,quoted_id=EXCLUDED.quoted_id,
+          sender_name=EXCLUDED.sender_name,type=EXCLUDED.type,quoted_id=EXCLUDED.quoted_id,
+          text=CASE WHEN $20 THEN messages.text ELSE EXCLUDED.text END,
+          document_error=CASE WHEN $20 THEN messages.document_error END,
+          document_url=EXCLUDED.document_url,document_name=EXCLUDED.document_name,document_size=EXCLUDED.document_size,
           image=CASE WHEN messages.image_source_url=EXCLUDED.image_source_url THEN messages.image END,
           image_mime=CASE WHEN messages.image_source_url=EXCLUDED.image_source_url THEN messages.image_mime END,
-          image_source_url=EXCLUDED.image_source_url,content_attempts=0,trigger_mode=EXCLUDED.trigger_mode,processed=EXCLUDED.processed,
+          image_source_url=EXCLUDED.image_source_url,
+          content_attempts=CASE WHEN $20 AND (messages.text IS NOT NULL OR messages.document_error IS NOT NULL) THEN messages.content_attempts ELSE 0 END,
+          trigger_mode=EXCLUDED.trigger_mode,processed=EXCLUDED.processed,
           revoked=false,batch_id=NULL,triage_defer=NULL,needs_source_review=EXCLUDED.needs_source_review,bot_reply=EXCLUDED.bot_reply,
           content_revision=messages.content_revision+1`,
         [
           row.id,
           groupId,
-          event.type === "create" && event.interactionReplyId !== undefined
+          event.type === "create" && event.interactionReplyId !== undefined && row.id === id
             ? null
             : id,
           editedAt,
           user,
           sender,
-          row.url ? "image" : row.text ? "text" : "attachment",
+          row.document ? "document" : row.url ? "image" : row.text ? "text" : "attachment",
           row.text,
           row.id === id ? (quote ?? null) : null,
           row.url,
@@ -310,6 +362,10 @@ export async function ingestDiscord(db: Database, event: DiscordMessageEvent) {
             ? discordId(event.interactionReplyId)
             : null,
           channelId === groupId ? null : channelId,
+          row.document?.url ?? null,
+          row.document?.name ?? null,
+          row.document?.size ?? null,
+          !!(row.document && old && sameDocument(old, row.document)),
         ],
       );
     }
@@ -347,7 +403,7 @@ export async function ingestDiscord(db: Database, event: DiscordMessageEvent) {
 async function clearDiscordMessages(c: DbClient, ids: string[]) {
   if (ids.length)
     await c.query(
-      `UPDATE messages SET text=NULL,image=NULL,image_mime=NULL,image_source_url=NULL,user_id=NULL,sender_name=NULL,
+      `UPDATE messages SET text=NULL,image=NULL,image_mime=NULL,image_source_url=NULL,document_url=NULL,document_name=NULL,document_size=NULL,document_error=NULL,user_id=NULL,sender_name=NULL,
      quoted_id=NULL,revoked=true,processed=true,content_revision=content_revision+1 WHERE id=ANY($1::text[])`,
       [ids],
     );

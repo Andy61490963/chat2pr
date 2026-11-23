@@ -63,6 +63,7 @@ async function receive(
   type = "text",
   quotedMessageId?: string,
   groupId = "group-a",
+  file?: { fileName: string; fileSize: number },
 ) {
   const payload = JSON.stringify({
     events: [
@@ -70,7 +71,7 @@ async function receive(
         webhookEventId: `event-${id}`,
         type: "message",
         source: { type: "group", groupId, userId: "private-member-id" },
-        message: { id, type, text, quotedMessageId },
+        message: { id, type, text, quotedMessageId, ...file },
       },
     ],
   });
@@ -125,6 +126,127 @@ async function page(before?: string): Promise<ChatPage> {
 }
 
 describe("聊天室與明確指令派工", () => {
+  it("LINE 文件重送只收一次，回覆文件的派工會帶入內文；撤回時清除文件資料", async () => {
+    const spec = "清冊匯出時要附上最後更新日期";
+    const file = { fileName: "規格.txt", fileSize: Buffer.byteLength(spec) };
+    await receive("doc", undefined, "file", undefined, "group-a", file);
+    await receive("doc", undefined, "file", undefined, "group-a", file);
+    expect(
+      await db.query(
+        "SELECT type,text,document_name,document_size::int,trigger_mode FROM messages",
+      ),
+    ).toEqual([
+      {
+        type: "document",
+        text: null,
+        document_name: "規格.txt",
+        document_size: file.fileSize,
+        trigger_mode: "chat",
+      },
+    ]);
+    line.token = "fixture-document-only";
+    const download = vi.fn(
+      async () =>
+        new Response(spec, {
+          headers: { "content-type": "application/octet-stream" },
+        }),
+    );
+    vi.stubGlobal("fetch", download);
+    await receive("cmd-doc", "/任務 依照這份文件修改", "text", "doc");
+    await triage(async (input) => {
+      expect(input.messages.find((m) => m.id === "doc")?.text).toContain(spec);
+      return [decision(["cmd-doc"])];
+    }).process("group-a");
+    expect(download).toHaveBeenCalledWith(
+      "https://api-data.line.me/v2/bot/message/doc/content",
+      expect.objectContaining({
+        redirect: "error",
+        headers: { Authorization: "Bearer fixture-document-only" },
+      }),
+    );
+    const task = await db.one<{ id: string; source_ids: string[] }>(
+      "SELECT id,source_ids FROM tasks",
+    );
+    expect(task.source_ids.sort()).toEqual(["cmd-doc", "doc"]);
+    line.token = undefined;
+    const preview = `規格.txt\n${spec}`;
+    expect((await page()).messages.find((m) => m.id === "doc")?.text).toBe(preview);
+    const detail = await app.inject({ url: `/api/tasks/${task.id}`, headers });
+    expect(detail.json().sources).toContainEqual(expect.objectContaining({id: "doc", text: preview}));
+
+    await new Line(db).ingest({
+      events: [
+        {
+          webhookEventId: "撤回文件",
+          type: "unsend",
+          source: { type: "group", groupId: "group-a" },
+          unsend: { messageId: "doc" },
+        },
+      ],
+    });
+    expect(
+      await db.one(
+        "SELECT text,document_name,document_size,revoked FROM messages WHERE id='doc'",
+      ),
+    ).toEqual({
+      text: null,
+      document_name: null,
+      document_size: null,
+      revoked: true,
+    });
+    expect((await page()).messages.find((m) => m.id === "doc")?.text).toBeNull();
+  });
+  it("文件暫時無法下載時保留派工，重試成功才保存並判讀已遮蔽的文字", async () => {
+    const token = "sk-" + "fixture-document-token";
+    const content = `報表需求\n測試金鑰 ${token}\n列出作廢原因`;
+    await receive("spec", undefined, "file", undefined, "group-a", {
+      fileName: "報表規格.md",
+      fileSize: Buffer.byteLength(content),
+    });
+    await receive("command", "/任務 修改報表", "text", "spec");
+    line.token = "fixture-content-only";
+    const download = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(new Response(content));
+    vi.stubGlobal("fetch", download);
+    const classify = vi.fn<Classifier["classify"]>(async (input) => {
+      const doc = input.messages.find((m) => m.id === "spec");
+      expect(doc?.text).toContain("[已遮蔽金鑰]");
+      expect(doc?.text).toContain("列出作廢原因");
+      expect(doc?.text).not.toContain(token);
+      return [decision(["command"])];
+    });
+    const workflow = triage(classify);
+    await workflow.process("group-a");
+    expect(classify).not.toHaveBeenCalled();
+    expect(await db.query("SELECT id FROM tasks")).toHaveLength(0);
+    expect(await db.one("SELECT processed FROM messages WHERE id='command'")).toEqual({ processed: false });
+    expect(await db.one("SELECT text,document_error,content_attempts FROM messages WHERE id='spec'"))
+      .toEqual({ text: null, document_error: null, content_attempts: 1 });
+
+    await workflow.process("group-a");
+    expect(download).toHaveBeenCalledTimes(2);
+    expect(classify).toHaveBeenCalledOnce();
+    expect(await db.query("SELECT id FROM tasks")).toHaveLength(1);
+    const stored = await db.one<{ text: string; document_error: string | null; content_attempts: number }>(
+      "SELECT text,document_error,content_attempts FROM messages WHERE id='spec'",
+    );
+    expect(stored.text).toContain("[已遮蔽金鑰]");
+    expect(stored.text).not.toContain(token);
+    expect(stored).toMatchObject({ document_error: null, content_attempts: 2 });
+  });
+  it("讀不到的文件在聊天室說明原因，到期後隱藏檔名及錯誤", async () => {
+    await receive("file", undefined, "file", undefined, "group-a", {
+      fileName: "掃描件.pdf",
+      fileSize: 512,
+    });
+    await db.query("UPDATE messages SET document_error=$1 WHERE id='file'", [
+      "PDF 前 120 頁沒有可擷取的文字，請提供文字版或頁面圖片。",
+    ]);
+    expect((await page()).messages[0].text).toContain("掃描件.pdf\nPDF 前 120 頁");
+    await db.query("UPDATE messages SET received_at=message_retention_cutoff() WHERE id='file'");
+    expect((await page()).messages[0]).toMatchObject({ text: null, availability: "expired" });
+  });
   it("冒號與換行指令可以觸發；缺少圖片時只建立一張待審核任務", async () => {
     await receive("pic", undefined, "image");
     await receive("cmd-colon", "/任務：照圖改按鈕", "text", "pic");

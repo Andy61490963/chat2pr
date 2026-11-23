@@ -14,7 +14,7 @@ import {
   deferDiscordNotices,
   discordDeliveryError,
 } from "./discord-notifications.js";
-import { ingestDiscord, type DiscordMessageEvent } from "./discord.js";
+import { ingestDiscord, type DiscordDocument, type DiscordMessageEvent } from "./discord.js";
 import { answerByPostback, answerPostback } from "./answers.js";
 import { pairAdmin } from "./admin-pairing.js";
 import { splitQueryAnswer } from "../shared/query-answer.js";
@@ -44,7 +44,7 @@ export type DiscordInteraction = {
   member: { id: string; name: string };
   botId: string;
 } & (
-  | { kind: "task"; text: string }
+  | { kind: "task"; text: string; images?: readonly string[]; documents?: readonly DiscordDocument[] }
   | { kind: "progress" }
   | { kind: "answer"; data: string }
 );
@@ -74,6 +74,7 @@ export async function registerDiscordCommands(
             required: true,
             max_length: 1900,
           },
+          { type: 11, name: "附件", description: "附上需求文件或圖片" },
         ],
       },
       {
@@ -352,7 +353,8 @@ export async function handleDiscordInteraction(
       interactionReplyId: anchor ? rawDiscordId(anchor) : null,
       author: event.member,
       text: `/任務 ${event.text.trim()}`,
-      images: [],
+      images: event.images ?? [],
+      documents: event.documents,
       botId: event.botId,
     });
     await edit(

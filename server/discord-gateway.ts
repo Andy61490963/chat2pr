@@ -14,12 +14,20 @@ import {
 } from "discord.js";
 import type { DiscordGateway, DiscordMessageEvent } from "./discord.js";
 
-function imageUrls(
-  attachments: ReadonlyArray<{ url: string; content_type?: string }>,
-) {
-  return attachments
-    .filter((attachment) => attachment.content_type?.startsWith("image/"))
-    .map((attachment) => attachment.url);
+function messageAttachments(attachments: ReadonlyArray<{
+  url: string;
+  content_type?: string;
+  filename: string;
+  size: number;
+}>) {
+  return {
+    images: attachments
+      .filter((a) => a.content_type?.startsWith("image/"))
+      .map((a) => a.url),
+    documents: attachments
+      .filter((a) => a.filename && !/^(?:image|audio|video)\//i.test(a.content_type ?? ""))
+      .map((a) => ({ url: a.url, name: a.filename, size: a.size })),
+  };
 }
 
 function textChannel(client: Client, id: string) {
@@ -95,7 +103,7 @@ function receive(
             message.author.username,
         },
         text: message.content,
-        images: imageUrls(message.attachments),
+        ...messageAttachments(message.attachments),
         quotedId:
           message.type === MessageType.Reply &&
           (!reference?.channel_id ||
@@ -156,12 +164,17 @@ function receive(
           const input = interaction.data.options?.find(
             (option) => option.name === "需求",
           );
-          if (input?.type === ApplicationCommandOptionType.String)
+          if (input?.type === ApplicationCommandOptionType.String) {
+            const option = interaction.data.options?.find((o) => o.name === "附件");
+            const file = option?.type === ApplicationCommandOptionType.Attachment
+              ? interaction.data.resolved?.attachments?.[option.value] : undefined;
             void callbacks.interaction?.({
               ...common,
               kind: "task",
               text: input.value,
+              ...(file && messageAttachments([file])),
             });
+          }
         }
       }
       break;
@@ -182,7 +195,7 @@ function receive(
         editedAt: message.edited_timestamp,
         botId: client.user.id,
         text: message.content,
-        images: message.attachments && imageUrls(message.attachments),
+        ...(message.attachments && messageAttachments(message.attachments)),
       });
       break;
     }
