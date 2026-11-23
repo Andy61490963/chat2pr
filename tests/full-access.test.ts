@@ -1,5 +1,12 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { db, reset, fixture, confirmTask, session } from "./helpers.js";
+import {
+  db,
+  reset,
+  fixture,
+  confirmTask,
+  session,
+  dashboardAction,
+} from "./helpers.js";
 import {
   Execution,
   type Runner,
@@ -56,8 +63,12 @@ async function scenario(opts: { full: boolean; leak?: boolean }) {
     } as Awaited<ReturnType<GitHub["publish"]>>;
   };
   const calls: Array<Record<string, unknown>> = [];
+  const applied: unknown[] = [];
   const runner: Runner = {
     async upload() {},
+    async applyCandidate(_runId, _image, files) {
+      applied.push(files);
+    },
     async call<T>(path: string, raw: unknown): Promise<T> {
       const body = raw as Record<string, unknown> & { phase: string };
       const result: PhaseResult = { exitCode: 0, stdout: "", stderr: "" };
@@ -100,7 +111,7 @@ async function scenario(opts: { full: boolean; leak?: boolean }) {
     new Budget(db),
     runner,
   );
-  return { task, execution, calls, published: () => published };
+  return { task, execution, calls, applied, published: () => published };
 }
 
 describe("專案的完全存取", () => {
@@ -188,6 +199,20 @@ describe("專案的完全存取", () => {
     ]);
     expect(task.last_error).toContain("變更內容包含資料庫密碼");
     expect(task.last_error).not.toContain(password);
+  });
+
+  it("機密檢查擋下的修改不再接續：重試從目標分支重新修改，不重複測試與審查同一份內容", async () => {
+    const s = await scenario({ full: true, leak: true });
+    await s.execution.execute(s.task.id).catch(() => {});
+    const failed = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [
+      s.task.id,
+    ]);
+    expect(failed.last_error).toContain("變更內容包含資料庫密碼");
+    await dashboardAction(s.task.id, "retry", failed.version);
+    await s.execution.execute(s.task.id).catch(() => {});
+    expect(s.applied).toHaveLength(0);
+    expect(s.calls.filter((c) => c.phase === "code")).toHaveLength(2);
+    expect(s.published()).toBe(0);
   });
 
   it("只有管理者能開關，並寫進活動紀錄", async () => {

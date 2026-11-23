@@ -11,6 +11,18 @@ export const COLLECT_OUTPUT_BYTES = 16 * 1024 * 1024;
 const nugetFeedPath = "/opt/agentflow/nuget-feed";
 /** 擁有者提供的環境資料（例如資料庫結構快照）；所有階段唯讀掛載。 */
 export const environmentPath = "/agentflow/env";
+/** 候選檔案只能是工作副本內的相對路徑，不能碰 git 紀錄、跳出目錄或夾帶換行。 */
+export const candidatePath = (path: string) => {
+  const parts = path.split("/");
+  return (
+    path.length > 0 &&
+    path.length <= 4096 &&
+    !/[\0\n\r\\]/.test(path) &&
+    parts.every(
+      (p) => p !== "" && p !== "." && p !== ".." && p.toLowerCase() !== ".git",
+    )
+  );
+};
 // 單一截止時間涵蓋整個生命週期；晚到的 create/attach 結果只能清理，不能續跑。
 export class ContainerDeadline {
   private readonly ends: number;
@@ -779,6 +791,80 @@ export class Containers {
       throw error;
     } finally {
       await this.finishContainer(snapshot.id, runId, prepareFailure);
+    }
+  }
+  /**
+   * 把上一次執行收集的候選修改寫回已記錄基底的工作副本（#241）。
+   * 基底 commit 不動，之後的收集照常把這些檔案算成修改，再經過測試與獨立審查。
+   * 和 phase 一樣經過 begin：取消或暫停回 409、逾時回 408，執行端才會放回排隊而不是判定失敗。
+   */
+  async applyCandidate(
+    runId: string,
+    image: string,
+    files: { path: string; content: string | null; mode: "100644" | "100755" }[],
+    timeoutMs = 120000,
+  ) {
+    for (const f of files)
+      if (!candidatePath(f.path))
+        throw new AppError(400, "候選檔案路徑無效");
+    const volume = this.volume(runId);
+    const deadline = this.begin(
+      runId,
+      Math.max(1000, timeoutMs),
+      new AppError(408, "執行超過時間限制"),
+    );
+    let helper: Docker.Container | undefined, failure: unknown;
+    try {
+      await deadline.run(() => this.ready(image));
+      // 確認是這次執行、有標籤的資料卷；不讓 Docker 隱含建立清理認不得的無標籤卷。
+      await this.ensureVolume(volume, runId, false, deadline);
+      const archive = pack();
+      for (const f of files)
+        if (f.content !== null)
+          archive.entry(
+            {
+              name: `incoming/files/${f.path}`,
+              mode: f.mode === "100755" ? 0o755 : 0o644,
+            },
+            Buffer.from(f.content, "base64"),
+          );
+      const deleted = files.filter((f) => f.content === null).map((f) => f.path);
+      archive.entry({ name: "incoming/deleted" }, deleted.join("\n"));
+      archive.finalize();
+      const tar = await buffer(archive as unknown as AsyncIterable<Buffer>);
+      const created = await this.createOwnedContainer(
+        runId,
+        {
+          Image: image,
+          User: "0:0",
+          Entrypoint: [
+            "sh",
+            "-c",
+            'set -eu; if [ -d /tmp/incoming/files ]; then cp -a /tmp/incoming/files/. /workspace/; fi; while IFS= read -r p || [ -n "$p" ]; do rm -f -- "/workspace/$p"; done < /tmp/incoming/deleted; chown -R 1000:1000 /workspace',
+          ],
+          Cmd: [],
+          Labels: this.labels(runId),
+          HostConfig: {
+            NetworkMode: "none",
+            Binds: [`${volume}:/workspace`],
+            CapDrop: ["ALL"],
+            CapAdd: ["CHOWN", "DAC_OVERRIDE", "FOWNER"],
+            SecurityOpt: ["no-new-privileges:true"],
+          },
+        },
+        deadline,
+      );
+      helper = created;
+      await deadline.run(() => created.putArchive(tar, { path: "/tmp" }));
+      await deadline.run(() => created.start());
+      if ((await deadline.run(() => created.wait())).StatusCode !== 0)
+        throw new AppError(500, "無法把上一次的修改寫回工作副本");
+    } catch (error) {
+      failure = error;
+      throw error;
+    } finally {
+      deadline.close();
+      if (helper) await this.finishContainer(helper.id, runId, failure);
     }
   }
   /** 把環境資料寫進這次執行專用的資料卷；之後每個階段唯讀掛載在 environmentPath。 */

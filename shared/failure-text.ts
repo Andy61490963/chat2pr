@@ -143,10 +143,13 @@ export type PrimaryFix =
 const changedDuringRun = /執行期間.*設定被變更/;
 /** 「工作沒有在單次執行的時間限制內完成」：建議首要是縮小需求範圍，不是去改設定。 */
 const timedOut = /時間限制/;
+/** 逾時前修改（與審查意見）已保留：重試會接續驗證或自動修復，重試就是主要動作（#241）。 */
+const resumable = /修改(?:與審查意見)?已保留/;
 
 export function primaryFix(parsed: ParsedFailure | null): PrimaryFix {
   if (!parsed) return { kind: "retry" };
-  if (changedDuringRun.test(parsed.plain)) return { kind: "retry" };
+  if (changedDuringRun.test(parsed.plain) || resumable.test(parsed.plain))
+    return { kind: "retry" };
   if (timedOut.test(parsed.plain)) return { kind: "amend" };
   if (parsed.plain === baselineFailurePlain) return { kind: "repair" };
   if (!fixFirst(parsed.category)) return { kind: "retry" };
