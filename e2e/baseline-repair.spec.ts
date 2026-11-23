@@ -14,8 +14,8 @@ const failed: Task = {
   last_error: [
     "專案問題（執行測試階段）：還沒修改前，目標分支本身就建置或測試失敗。",
     "錯誤重點：失敗的測試（共 2 個）：",
-    "・Demo.Shop.Tests.StockTests.Reserve_ShouldLock：Assert.Equal() Failure: Values differ",
-    "・Demo.Shop.Tests.StockTests.Release_ShouldUnlock：找不到虛構庫存 B-002",
+    "1. Demo.Shop.Tests.StockTests.Reserve_ShouldLock：Assert.Equal() Failure: Values differ",
+    "2. Demo.Shop.Tests.StockTests.Release_ShouldUnlock：找不到虛構庫存 B-002",
     "上次通過是 1111111，之後目標分支有 3 個新 commit：https://github.com/demo/shop/compare/1111111...2222222",
     "建議：在看板按「請 AI 修好目標分支」建立修復任務（仍要人工核准），或自行修好目標分支的建置與測試（或改用其他分支）後再到看板重試。",
   ].join("\n"),

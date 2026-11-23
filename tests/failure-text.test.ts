@@ -179,7 +179,7 @@ describe("primaryFix：失敗主按鈕依原因調整", () => {
   it("目標分支基底本身沒過：主按鈕是請 AI 修好目標分支（#248）", () => {
     for (const raw of [
       "目標分支基底驗證失敗：npm test 退出碼 1",
-      "目標分支基底驗證失敗：失敗的測試（共 1 個）：\n・tests/cart.test.ts > 購物車 > 總價\n輸出結尾：\nTest Files  1 failed",
+      "目標分支基底驗證失敗：失敗的測試（共 1 個）：\n1. tests/cart.test.ts > 購物車 > 總價\n輸出結尾：\nTest Files  1 failed",
     ])
       expect(primaryFix(notice(raw, "test"))).toEqual({ kind: "repair" });
   });
