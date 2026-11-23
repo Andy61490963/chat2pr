@@ -92,13 +92,14 @@ export function pickRoots(
 const pending = "closed_at IS NULL";
 
 export async function pickLists(db: Database): Promise<PickList[]> {
-  const rows = await db.query<StoredList>(
-    `SELECT id,group_id,version,items FROM pick_lists WHERE ${pending} ORDER BY created_at,id`,
+  const rows = await db.query<StoredList & { created_at: Date }>(
+    `SELECT id,group_id,version,items,created_at FROM pick_lists WHERE ${pending} ORDER BY created_at,id`,
   );
-  return rows.map(({ id, group_id, version, items }) => ({
+  return rows.map(({ id, group_id, version, items, created_at }) => ({
     id,
     groupId: group_id,
     version,
+    createdAt: created_at.toISOString(),
     items: items.map(({ id, title, summary, risk_reasons }) => ({
       id,
       title,

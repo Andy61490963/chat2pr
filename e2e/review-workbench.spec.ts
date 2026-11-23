@@ -2,6 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import {
   assignmentWorkbenchFixture,
+  meetingPickList,
   mockDashboard,
   project,
   reviewWorkbenchFixture,
@@ -177,6 +178,31 @@ test("桌面佇列依等待時間排序，每列只有一個狀態，審核面�
   await expect(reviewHeader.locator("..").getByRole("button", {
     name: "確認專案與分支並核准修改",
   })).toBeVisible();
+});
+
+test("桌面佇列將等最久的待挑選清單排第一、顯示等待時間並自動開啟", async ({
+  page,
+}) => {
+  const fixture = reviewWorkbenchFixture();
+  const list = {
+    ...meetingPickList,
+    createdAt: new Date(Date.now() - 12 * 60 * 60_000).toISOString(),
+  };
+  fixture.pickLists.push(list);
+  await openFixture(page, fixture);
+  await page.goto("/");
+
+  const rows = queue(page).getByRole("listitem");
+  const title = list.items[0].title;
+  await expect(rows.first()).toContainText(title);
+  await expect(rows.first()).toContainText("等了 12 小時");
+  await expect(row(page, title)).toHaveAttribute("aria-current", "true");
+  await expect(page).toHaveURL(`/?review=list-${list.id}`);
+  await expect(panel(page).getByRole("checkbox", { name: title })).toBeVisible();
+
+  await page.getByRole("tab", { name: "最新" }).click();
+  await expect(rows.first()).toContainText(fixture.tasks.at(-1)!.title);
+  await expect(rows.last()).toContainText(title);
 });
 
 test("方向鍵移動選取，Enter 只把焦點移到主動作，下一個 Tab 到次要動作", async ({
