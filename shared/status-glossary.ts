@@ -387,6 +387,14 @@ export const systemStatusLabels = {
   },
 } as const;
 
+export const groupChangeStatsText = {
+  heading: "近 30 天的修改需求",
+  counts: { created: "建立", approved: "核准", rejected: "拒絕" },
+  unit: "筆",
+  hint: (commandLabel: string) =>
+    `近 30 天建立的修改需求多半被拒絕。如果這些工作多由同事自己處理，可以把上方的需求觸發方式改成「${commandLabel}」，只在有人明確交給機器人時建立任務。`,
+} as const;
+
 export const triageNoTaskLabels = {
   coworker_assignment: "訊息屬於同事之間的分工，系統未建立任務。",
   undecided_discussion: "討論尚未定案，系統未建立任務。",

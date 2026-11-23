@@ -2,9 +2,11 @@ import {
   groupLabels,
   groupPageText,
   groupPlatformLabels,
+  groupChangeStatsText,
   groupStatus,
   isUnnamedLineGroup,
 } from "../../shared/status-glossary.js";
+import { mostlyRejected } from "../../shared/group-stats.js";
 import { groupReplyStatus } from "../../shared/group-reply-status.js";
 import { useEffect, useState } from "react";
 import {
@@ -506,7 +508,7 @@ function GroupCard({
   openSettings,
   bindingProjectId,
 }: {
-  group: Group;
+  group: DashboardGroup;
   state: State;
   busy: boolean;
   run: Run;
@@ -643,6 +645,32 @@ function GroupCard({
           </div>
         </details>
       </div>
+      {g.change_stats && (
+        <div className="grid gap-2">
+          <h3 className="text-sm font-medium">{groupChangeStatsText.heading}</h3>
+          <dl className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
+            {(["created", "approved", "rejected"] as const).map((key) => (
+              <div key={key} className="flex items-baseline gap-1.5">
+                <dt className="text-muted-foreground">
+                  {groupChangeStatsText.counts[key]}
+                </dt>
+                <dd className="font-medium tabular-nums">
+                  {g.change_stats![key]} {groupChangeStatsText.unit}
+                </dd>
+              </div>
+            ))}
+          </dl>
+          {g.trigger_mode === "auto" &&
+            triggerMode === "auto" &&
+            mostlyRejected(g.change_stats) && (
+              <p className="rounded-lg bg-warn-soft px-3 py-2 text-xs leading-relaxed text-warn">
+                {groupChangeStatsText.hint(
+                  g.platform === "discord" ? "指令或提及機器人" : "指令與引用追問",
+                )}
+              </p>
+            )}
+        </div>
+      )}
       <div className="grid gap-2">
         <p role="status" className="text-sm font-medium">
           目前：{groupReplyStatus(g, state.settings, state.health).text}

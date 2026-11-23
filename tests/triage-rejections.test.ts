@@ -61,7 +61,7 @@ async function contextFor(triggerMode: "auto" | "command") {
   });
   let seen: Record<string, unknown> | null = null;
   const classify: Classifier["classify"] = async ({ context }) => {
-    seen = context;
+    seen = context as Record<string, unknown>;
     return [
       {
         kind: "ignore",
