@@ -29,6 +29,12 @@ export const failureLabels: Record<FailureCategory, string> = {
   system: "系統問題",
 };
 
+/**
+ * 基底驗證失敗的白話說明；`server/failure.ts` 的規則直接用這個常數。
+ * 看板靠它在失敗卡片提供「請 AI 修好目標分支」（#248）。
+ */
+export const baselineFailurePlain = "還沒修改前，目標分支本身就建置或測試失敗";
+
 export interface ParsedFailure {
   category: FailureCategory;
   /** 第一行去掉句號：「設定問題（測試階段）：缺少必要的連線或憑證設定」。 */

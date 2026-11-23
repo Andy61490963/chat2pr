@@ -43,7 +43,9 @@ import {
   failureNotice,
   groupFailureText,
   keyErrorLines,
+  reportTailMark,
 } from "./failure.js";
+import { baselineReport } from "./baseline.js";
 import {
   SubscriptionGate,
   SubscriptionBlocked,
@@ -1378,11 +1380,12 @@ export class Execution {
       if (setup && !setup.cached && task.mode !== "query") {
         const baseline = await phase("test", { command: testCommand });
         assertTestEnvironment(baseline);
+        const output = baseline.stdout + baseline.stderr;
         if (baseline.exitCode !== 0)
           throw new Error(
-            `目標分支基底驗證失敗：${redact(baseline.stdout + baseline.stderr).slice(-1500)}`,
+            `目標分支基底驗證失敗：${baselineReport(output)}${reportTailMark}${redact(output).slice(-1500)}`,
           );
-        assertTestsFound(setup.plan, baseline.stdout + baseline.stderr);
+        assertTestsFound(setup.plan, output);
       }
       if (setup) {
         const collected = await phase("collect");
