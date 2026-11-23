@@ -12,6 +12,10 @@
 
 ## Agent skills
 
+### 開發方式（pstack）
+
+Claude Code 與 Codex 都以 pstack（poteto 的 Agent skill）為開發基準：跨檔案、需要設計、原因不明的工作從 `/pstack:poteto-mode`（Codex 用 `$pstack:poteto-mode`）開始。本檔與 `docs/conventions.md` 優先於 pstack；對應的 skill、本專案的例外與版本鎖定見 `docs/agents/pstack.md`。派工給 Codex 時附上 `docs/agents/codex-dispatch.md` 全文。
+
 ### 任務追蹤
 
 規格及開發任務使用本儲存庫 GitHub Issues，規則見 `docs/agents/issue-tracker.md`。Issue、留言與 PR 一律用本機 `gh` 建立，不用 AI 工具內建的 GitHub 連線（可能是別人的帳號）。
