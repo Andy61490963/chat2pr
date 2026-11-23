@@ -1,3 +1,4 @@
+import type { EndReason } from "./status-glossary.js";
 import type { LinePrivateMode } from "./line-private.js";
 
 export type TaskStatus =
@@ -177,6 +178,8 @@ export interface Task {
   discord_thread_id?: string | null;
   /** 看板讀取任務時提供；進行中的任務為 null。 */
   end_summary?: TaskEndSummary | null;
+  /** 管理者拒絕或結束時選的原因；舊任務與未選原因為 null。 */
+  end_reason?: EndReason | null;
   /** 草擬定期檢查的查詢任務：記下要求的排程。 */
   check_draft?: CheckSchedule | null;
   question?: import("./clarification.js").ClarificationQuestion | null;

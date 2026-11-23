@@ -789,3 +789,8 @@ CREATE TABLE IF NOT EXISTS pick_lists (
  UNIQUE (group_id, root_id)
 );
 CREATE INDEX IF NOT EXISTS pending_pick_lists ON pick_lists(group_id,created_at) WHERE closed_at IS NULL;
+
+-- 管理者拒絕或結束任務時選的原因（代碼見 shared/status-glossary.ts 的 endReasonLabels）。
+-- 判讀依它找出同群組近期「不是給 AI 的工作」「需求還沒定案」的拒絕案例；重新開啟時清除。
+ALTER TABLE tasks ADD COLUMN IF NOT EXISTS end_reason text;
+CREATE INDEX IF NOT EXISTS tasks_recent_rejections ON tasks(group_id,updated_at) WHERE status='rejected' AND end_reason IS NOT NULL;

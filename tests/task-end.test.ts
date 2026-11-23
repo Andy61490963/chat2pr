@@ -101,6 +101,22 @@ describe("任務結束摘要", () => {
     });
   });
 
+  it("取出拒絕時選的原因與補充", () => {
+    expect(
+      taskEndSummary(
+        { ...task, status: "rejected" },
+        audit(
+          "reject",
+          "小林 拒絕（需求版本 1；目標分支 待選擇），原因：需求還沒定案；範例群組還在討論",
+        ),
+      ),
+    ).toMatchObject({
+      kind: "reject",
+      actor: "小林",
+      reason: "需求還沒定案；範例群組還在討論",
+    });
+  });
+
   it("略過無法辨識的稽核文字與含憑證格式的舊說明", () => {
     expect(
       taskEndSummary(task, audit("cancel", "小林傳來了範例訊息")),

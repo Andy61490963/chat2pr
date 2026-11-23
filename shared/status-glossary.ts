@@ -217,6 +217,31 @@ export const taskEndLabels = {
   other: { badge: taskListLabels.ended, event: "結束" },
 } as const;
 
+/** 管理者拒絕或結束任務時選的原因；判讀會參考同群組近期的拒絕原因。 */
+export const endReasonLabels = {
+  not_for_ai: "不是給 AI 的工作（同事會自己處理）",
+  not_settled: "需求還沒定案",
+  unclear: "需求不清楚",
+  no_project: "選不出專案",
+  duplicate: "重複",
+  other: "其他",
+} as const;
+export type EndReason = keyof typeof endReasonLabels;
+export const endReasons = Object.keys(endReasonLabels) as [
+  EndReason,
+  ...EndReason[],
+];
+/** 這兩種原因代表「同類訊息不該建立任務」，判讀時當成負面範例。 */
+export const triageLearnedEndReasons = [
+  "not_for_ai",
+  "not_settled",
+] as const satisfies readonly EndReason[];
+export const endReasonText = {
+  legend: "拒絕原因",
+  note: "補充（選填）",
+  required: "請選一個拒絕原因",
+} as const;
+
 export const taskEndSystemActor = "系統";
 export const taskCompletionEvents = {
   merged: "合併",

@@ -2,7 +2,11 @@ import { createFollowupInTransaction, threadOf } from "./followup.js";
 import { withAssumptions } from "../shared/clarification.js";
 import { fullTaskTitle } from "../shared/task-title.js";
 import { displayMessageText } from "./message-sources.js";
-import { taskEndLabels } from "../shared/status-glossary.js";
+import {
+  endReasonLabels,
+  endReasons,
+  taskEndLabels,
+} from "../shared/status-glossary.js";
 import {
   maxRelatedProjects,
   type ProjectRouting,
@@ -66,7 +70,17 @@ export const Amendment = z.object({
   summary: z.string().min(5).max(15000),
   acceptance: z.array(z.string().min(1).max(1000)).min(1).max(30),
 });
-export const BatchEnd = z.object({
+/** 拒絕或結束時選的原因與補充；都不帶時與舊版看板相同，只記下誰結束。 */
+const EndChoice = z.object({
+  end_reason: z.enum(endReasons, "請選擇有效的拒絕原因").optional(),
+  reason: z
+    .string("請用文字填寫結束原因")
+    .trim()
+    .max(500, "結束原因最多 500 字")
+    .optional(),
+});
+type EndChoice = z.infer<typeof EndChoice>;
+export const BatchEnd = EndChoice.extend({
   tasks: z
     .array(
       z.object({
@@ -87,11 +101,6 @@ export const BatchEnd = z.object({
     .refine((tasks) => new Set(tasks.map(({ id }) => id)).size === tasks.length, {
       message: "請移除重複選取的任務",
     }),
-  reason: z
-    .string("請用文字填寫結束原因")
-    .trim()
-    .max(500, "結束原因最多 500 字")
-    .optional(),
   notify: z.boolean("請選擇是否依群組設定通知").default(true),
 });
 // 時間軸寫明做了什麼，不只寫「操作」。
@@ -109,6 +118,13 @@ export const actionLabels: Record<string, string> = {
   target: "更換目標分支",
   reopen: "重新開啟",
 };
+function assertEndNote({ reason }: EndChoice) {
+  if (reason && containsCredential(reason))
+    throw new AppError(
+      422,
+      "結束原因含有憑證，請移除密碼、金鑰或驗證碼後再送出",
+    );
+}
 export class Tasks {
   constructor(private db: Database) {}
 
@@ -118,13 +134,17 @@ export class Tasks {
     action: "reject" | "cancel",
     actor: string,
     notify = true,
-    reason?: string,
+    { end_reason, reason }: EndChoice = {},
   ) {
     const { id, title, version, target_branch } = task;
     const { rows } = await c.query<Task>(
-      "UPDATE tasks SET status=$2,updated_at=now() WHERE id=$1 RETURNING *",
-      [id, action === "reject" ? "rejected" : "cancelled"],
+      "UPDATE tasks SET status=$2,end_reason=$3,updated_at=now() WHERE id=$1 RETURNING *",
+      [id, action === "reject" ? "rejected" : "cancelled", end_reason ?? null],
     );
+    // 稽核寫原因的顯示文字，時間軸與結束摘要直接讀得懂；補充接在後面。
+    const why = [end_reason && endReasonLabels[end_reason], reason]
+      .filter(Boolean)
+      .join("；");
     if (notify)
       await notifyGroup(
         c,
@@ -136,21 +156,17 @@ export class Tasks {
     await this.db.audit(
       id,
       action,
-      `${actor} ${actionLabels[action]}（需求版本 ${version}；目標分支 ${target_branch ?? "待選擇"}）${reason ? `，原因：${reason}` : ""}`,
+      `${actor} ${actionLabels[action]}（需求版本 ${version}；目標分支 ${target_branch ?? "待選擇"}）${why ? `，原因：${why}` : ""}`,
       c,
     );
     return rows[0];
   }
 
   async batchEnd(
-    { tasks, reason, notify }: z.infer<typeof BatchEnd>,
+    { tasks, notify, ...choice }: z.infer<typeof BatchEnd>,
     actor: string,
   ): Promise<EndTasksResult> {
-    if (reason && containsCredential(reason))
-      throw new AppError(
-        422,
-        "結束原因含有憑證，請移除密碼、金鑰或驗證碼後再送出",
-      );
+    assertEndNote(choice);
     const selections = new Map<string, EndTaskSelection>(
       tasks.map((task) => [task.id, task]),
     );
@@ -180,7 +196,7 @@ export class Tasks {
           expected.status === "awaiting_approval" ? "reject" : "cancel",
           actor,
           notify,
-          reason,
+          choice,
         );
         ended++;
       }
@@ -210,6 +226,9 @@ export class Tasks {
     channel: "dashboard" | "internal" = "internal",
   ) {
     const binding = action === "bind_assign" ? BindAssignment.parse(body) : null;
+    const endChoice =
+      action === "reject" || action === "cancel" ? EndChoice.parse(body) : null;
+    if (endChoice) assertEndNote(endChoice);
     const assignment = action === "assign" ? Assignment.safeParse(body) : null;
     const relatedIds = assignment?.data?.related_project_ids;
     // 更換分支要先問 GitHub 分支在不在。這一步放在交易之外，
@@ -532,7 +551,7 @@ export class Tasks {
       } else if (action === "reopen") {
         // 重新開啟是新需求版本：先前的核准與專案確認都不沿用，一律重新審核。
         await c.query(
-          "UPDATE tasks SET version=version+1,approved_version=NULL,approved_paths='{}',pending_paths='{}',base_sha=NULL,branch=NULL,status='awaiting_approval',last_error=NULL,updated_at=now() WHERE id=$1",
+          "UPDATE tasks SET version=version+1,end_reason=NULL,approved_version=NULL,approved_paths='{}',pending_paths='{}',base_sha=NULL,branch=NULL,status='awaiting_approval',last_error=NULL,updated_at=now() WHERE id=$1",
           [id],
         );
       } else if (action === "retry") {
@@ -553,7 +572,7 @@ export class Tasks {
           [id],
         );
       } else if (action === "reject" || action === "cancel") {
-        return this.endTask(c, t, action, actor);
+        return this.endTask(c, t, action, actor, true, endChoice!);
       }
       // 分支功能上線前就結束的任務沒有記錄目標分支。回到待審核時帶入專案預設分支並標成待確認，
       // 不會停在「尚未選擇」。待審核中分支消失的任務不在此列，仍要由人重新選。

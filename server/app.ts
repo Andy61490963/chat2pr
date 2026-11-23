@@ -964,6 +964,9 @@ export async function buildApp(
         related_project_ids: z.unknown().optional(),
         index: z.number().int().optional(),
         value: z.string().trim().min(1).max(500).optional(),
+        // 拒絕與結束的原因由 Tasks 驗證；舊看板不帶時照舊。
+        end_reason: z.unknown().optional(),
+        reason: z.unknown().optional(),
       })
       .parse(req.body);
     if (b.action === "bind_assign" && actor.role !== "admin")
