@@ -25,7 +25,15 @@ type HealthReading = {
 };
 
 const minute = 60_000;
-const tunnelNoticeDelay = 5 * minute;
+/**
+ * 異常要持續這麼久才通知；更短的中斷只留在看板（入口另記一筆系統紀錄）。
+ * 入口：部署重啟與 Cloudflare 短暫 502 約一分鐘內恢復。
+ * 主機資源：記憶體暫停派工至少維持 5 分鐘穩定期（見 capacity.ts），短暫低點不值得通知。
+ */
+const noticeDelay: Partial<Record<string, number>> = {
+  tunnel: 5 * minute,
+  host_resources: 10 * minute,
+};
 
 export function healthTransition(
   name: string,
@@ -55,37 +63,32 @@ export function healthTransition(
   if (!ok && confirmed && elapsed >= lineServiceOutageMinutes * minute)
     lineOutageConfirmed = true;
 
+  const delay = noticeDelay[name] ?? 0;
   if (ok && confirmed) {
-    if (name === "tunnel" && outageStartedAt) {
-      // 用首次正常讀數計算中斷時間，第二次讀數只用來確認恢復。
-      const recoveredAt = confirm ? before.checked_at : observedAt;
-      const duration = recoveredAt.getTime() - outageStartedAt.getTime();
-      const minutes = Math.max(1, Math.round(duration / minute));
-      if (duration < tunnelNoticeDelay) {
-        briefOutage = `${label}中斷約 ${minutes} 分鐘後恢復`;
-      } else {
-        notice = {
-          kind: "service_up",
-          text: baseline
-            ? `${label}曾中斷約 ${minutes} 分鐘，已恢復。`
-            : `${notificationLabels.serviceUp}：${label}`,
-        };
-      }
-    } else if (!baseline) {
+    // 用首次正常讀數計算中斷時間，第二次讀數只用來確認恢復。
+    const recoveredAt = confirm ? before.checked_at : observedAt;
+    const duration = outageStartedAt
+      ? recoveredAt.getTime() - outageStartedAt.getTime()
+      : 0;
+    const minutes = Math.max(1, Math.round(duration / minute));
+    if (!baseline) {
       notice = {
         kind: "service_up",
         text: `${notificationLabels.serviceUp}：${label}`,
       };
+    } else if (delay && outageStartedAt && duration >= delay) {
+      // 異常通知前就恢復，但中斷已達門檻：補一則說明中斷多久。
+      notice = {
+        kind: "service_up",
+        text: `${label}曾中斷約 ${minutes} 分鐘，已恢復。`,
+      };
+    } else if (name === "tunnel" && outageStartedAt) {
+      briefOutage = `${label}中斷約 ${minutes} 分鐘後恢復`;
     }
     notifiedOk = true;
     outageStartedAt = null;
     lineOutageConfirmed = false;
-  } else if (
-    !ok &&
-    baseline &&
-    confirmed &&
-    (name !== "tunnel" || elapsed >= tunnelNoticeDelay)
-  ) {
+  } else if (!ok && baseline && confirmed && elapsed >= delay) {
     notice = {
       kind: "service_down",
       text: serviceDownText(name, label, detail),
@@ -135,11 +138,11 @@ export async function recordHealth(
 
   // 同一服務的探測依資料列鎖序列化，狀態與通知一起提交。
   await db.transaction(async (c) => {
-    // 入口剛啟動時也要等中斷確認並達門檻，才改變通知基準。
+    // 有通知門檻的項目剛啟動時也要等中斷確認並達門檻，才改變通知基準。
     const inserted = await c.query(
       `INSERT INTO service_health(name,ok,detail,reading_ok,notified_ok)
        VALUES($1,$2,$3,$2,$4) ON CONFLICT(name) DO NOTHING RETURNING name`,
-      [name, ok, detail, name === "tunnel" || ok],
+      [name, ok, detail, Object.hasOwn(noticeDelay, name) || ok],
     );
     if (inserted.rowCount) return;
     const {

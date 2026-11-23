@@ -91,12 +91,18 @@ describe("記憶體暫停判斷不變", () => {
 
   it("只看 Windows 可用量：VM 可用量很低也不暫停，VM 很充足也照樣暫停", () => {
     expect(memoryHold(r(8192, 100))).toBeNull();
-    expect(memoryHold(r(1900, 10000))).toBe(
-      "Windows 主機可用記憶體只剩 1.9 GB（低於 2 GB），暫停派新工作，回升到 2.5 GB 以上才恢復；執行中的工作不受影響",
+    expect(memoryHold(r(1900, 10000))?.detail).toBe(
+      "Windows 主機可用記憶體只剩 1.9 GB（低於 2 GB），暫停派新工作，回升到 2.5 GB 以上並穩定 5 分鐘才恢復；執行中的工作不受影響",
     );
-    expect(memoryHold(r(2100, 10000), true)).toBe(
+    expect(memoryHold(r(2100, 10000), { recoveringSince: null })?.detail).toBe(
       "Windows 主機可用記憶體 2.1 GB，尚未回升到 2.5 GB，仍暫停派新工作；執行中的工作不受影響",
     );
-    expect(memoryHold(r(2560, 100), true)).toBeNull();
+    expect(
+      memoryHold(
+        r(2560, 100),
+        { recoveringSince: new Date(Date.UTC(2026, 0, 1)) },
+        new Date(Date.UTC(2026, 0, 1, 0, 5)),
+      ),
+    ).toBeNull();
   });
 });

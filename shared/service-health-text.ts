@@ -3,6 +3,11 @@ import { notificationLabels } from "./status-glossary.js";
 // 探測原文只用於比對，通知一律採用表內的說明。新增對照時請補上測試樣本。
 const failureDescriptions = [
   {
+    matches: /可用記憶體.*已回升/,
+    explanation:
+      "主機記憶體不足，系統已暫停派新工作；記憶體目前已回升，穩定 5 分鐘後會自動恢復派工。",
+  },
+  {
     matches: /可用記憶體.*(?:低於|尚未回升)/,
     explanation:
       "主機記憶體不足，系統已暫停派新工作。請到系統頁查看記憶體用量，並關閉暫時用不到的程式。",

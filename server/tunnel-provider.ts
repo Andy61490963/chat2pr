@@ -96,3 +96,34 @@ export async function currentEntry(
   }
   return entryKind(tunnelProvider(s), detail);
 }
+
+/** 通道程序每 30 秒寫一次狀態檔；超過這個時間沒更新就當成入口程序停了。 */
+export const TUNNEL_STALE_MS = 180_000;
+
+/**
+ * 把 `tunnel-status.json` 的內容換成一次讀數（純函式）。text 為 null 代表沒有狀態檔。
+ * 過期時不沿用檔案裡的說明：檔案最後寫的可能是「已連線」，看板會出現「異常：已連線」。
+ */
+export function tunnelReading(
+  text: string | null,
+  now = Date.now(),
+): { ok: boolean; detail: string } {
+  if (text === null) return { ok: false, detail: "尚未啟動 HTTPS 隧道" };
+  let state: { ok?: unknown; detail?: unknown; checked_at?: unknown };
+  try {
+    state = JSON.parse(text);
+  } catch {
+    return { ok: false, detail: "通道狀態檔格式錯誤，請檢查維持入口的程序" };
+  }
+  const age = now - Date.parse(String(state.checked_at));
+  if (!(age < TUNNEL_STALE_MS))
+    return {
+      ok: false,
+      detail: Number.isFinite(age)
+        ? `通道狀態檔已 ${Math.round(age / 60_000)} 分鐘沒有更新，維持入口的程序可能已停止`
+        : "通道狀態檔沒有檢查時間，請檢查維持入口的程序",
+    };
+  return state.ok
+    ? { ok: true, detail: "固定 HTTPS 入口已連線" }
+    : { ok: false, detail: String(state.detail ?? "HTTPS 入口異常") };
+}

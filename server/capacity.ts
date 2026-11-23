@@ -32,6 +32,11 @@ export const RECOVER_LOCK = 73469;
 export const MEMORY_FLOOR_MB = 2048;
 /** 暫停後要回升到這個值以上才恢復派工（遲滯區間 512 MB）。 */
 export const MEMORY_RESUME_MB = MEMORY_FLOOR_MB + 512;
+/**
+ * 回升到恢復門檻後還要穩定這麼久才恢復派工。執行中的工作會讓 Windows 可用記憶體
+ * 在一兩分鐘內上下擺動超過 512 MB，只靠門檻遲滯會每隔幾分鐘暫停又恢復（#243）。
+ */
+export const MEMORY_STEADY_MS = 5 * 60_000;
 export const hostHealthName = "host_resources";
 
 export const maxRuns = (s: Pick<Settings, "max_runs">) => {
@@ -97,20 +102,41 @@ export function suggestedMaxRuns(r: HostResources) {
   return Math.max(1, Math.min(MAX_RUNS_CAP, byCpu, byMem));
 }
 const gbText = (mb: number) => `${Number((mb / 1024).toFixed(1))} GB`;
+/** 暫停派工中的狀態；recoveringSince 是這一段連續回升到恢復門檻以上的起點。 */
+export type MemoryPause = { recoveringSince: Date | null };
+/** 暫停派工的原因與要保存的回升起點。 */
+export type MemoryHold = { detail: string; recoveringSince: Date | null };
 /**
  * 記憶體暫停派工的判斷（純函式）：量的是執行器所在 Windows 主機的可用實體記憶體。
- * 有遲滯：原本正常時低於 `MEMORY_FLOOR_MB` 才暫停；已暫停時要回升到 `MEMORY_RESUME_MB` 以上才恢復。
- * 暫停派工會讓記憶體回升，沒有遲滯時會在門檻上下反覆暫停／恢復。
+ * 原本正常時低於 `MEMORY_FLOOR_MB` 立刻暫停；暫停中要回升到 `MEMORY_RESUME_MB` 以上
+ * 並連續維持 `MEMORY_STEADY_MS` 才恢復，中途再掉下去就重新計算。
  */
-export function memoryHold(r: HostResources, paused = false): string | null {
+export function memoryHold(
+  r: HostResources,
+  pause: MemoryPause | null = null,
+  now = new Date(),
+): MemoryHold | null {
   const floor = gbText(MEMORY_FLOOR_MB),
     resume = gbText(MEMORY_RESUME_MB),
     free = gbText(r.memFreeMb);
   if (r.memFreeMb < MEMORY_FLOOR_MB)
-    return `Windows 主機可用記憶體只剩 ${free}（低於 ${floor}），暫停派新工作，回升到 ${resume} 以上才恢復；執行中的工作不受影響`;
-  if (paused && r.memFreeMb < MEMORY_RESUME_MB)
-    return `Windows 主機可用記憶體 ${free}，尚未回升到 ${resume}，仍暫停派新工作；執行中的工作不受影響`;
-  return null;
+    return {
+      detail: `Windows 主機可用記憶體只剩 ${free}（低於 ${floor}），暫停派新工作，回升到 ${resume} 以上並穩定 5 分鐘才恢復；執行中的工作不受影響`,
+      recoveringSince: null,
+    };
+  if (!pause) return null;
+  if (r.memFreeMb < MEMORY_RESUME_MB)
+    return {
+      detail: `Windows 主機可用記憶體 ${free}，尚未回升到 ${resume}，仍暫停派新工作；執行中的工作不受影響`,
+      recoveringSince: null,
+    };
+  const since = pause.recoveringSince ?? now;
+  const left = MEMORY_STEADY_MS - (now.getTime() - since.getTime());
+  if (left <= 0) return null;
+  return {
+    detail: `Windows 主機可用記憶體 ${free}，已回升到 ${resume} 以上，穩定 5 分鐘後恢復派新工作（約剩 ${Math.max(1, Math.ceil(left / 60_000))} 分鐘）；執行中的工作不受影響`,
+    recoveringSince: since,
+  };
 }
 
 /**
@@ -185,24 +211,39 @@ export async function checkHostResources(
     return null;
   }
   resources = await withVmMemory(resources, readMeminfo);
-  // 目前是否在暫停中：上一次讀數要求暫停，或管理者最後收到的是「異常」（中間讀不到資源時
-  // 狀態會被靜默改成正常，仍要沿用恢復門檻，避免剛過 2 GB 就恢復又暫停）。
-  const previous = await db.one<{ ok: boolean; notified_ok: boolean | null }>(
-    "SELECT ok,notified_ok FROM service_health WHERE name=$1",
+  // 是否在暫停中看上一次真實讀數：讀不到資源時 ok 會被靜默改成正常，reading_ok 不會；
+  // 通知基準要等連續兩次讀數才改，不能拿來判斷。沒有 reading_ok 的舊列才沿用 ok 與通知基準。
+  const previous = await db.one<{
+    ok: boolean;
+    reading_ok: boolean | null;
+    notified_ok: boolean | null;
+    recovering_since: Date | null;
+  }>(
+    "SELECT ok,reading_ok,notified_ok,recovering_since FROM service_health WHERE name=$1",
     [hostHealthName],
   );
   const paused =
-    !!previous && (previous.ok === false || previous.notified_ok === false);
-  const hold = memoryHold(resources, paused);
+    !!previous &&
+    (previous.reading_ok === null
+      ? previous.ok === false || previous.notified_ok === false
+      : previous.reading_ok === false);
+  const hold = memoryHold(
+    resources,
+    paused ? { recoveringSince: previous.recovering_since } : null,
+  );
   await recordHealth(
     db,
     hostHealthName,
     !hold,
-    hold ??
+    hold?.detail ??
       `Windows 主機可用記憶體 ${gbText(resources.memFreeMb)}／共 ${gbText(resources.memTotalMb)}${vmText(resources)}`,
     { confirm: true },
   );
-  return hold;
+  await db.query(
+    "UPDATE service_health SET recovering_since=$2 WHERE name=$1",
+    [hostHealthName, hold?.recoveringSince ?? null],
+  );
+  return hold?.detail ?? null;
 }
 
 /** 派工前確認最近一次主機資源檢查沒有要求暫停；兩分鐘前的結果視為過期。 */
