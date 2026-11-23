@@ -120,3 +120,73 @@ export function describeTestFailures(failures: TestFailures) {
       : []),
   ].join("\n");
 }
+
+// 錯誤區塊到這裡結束：其他測試的結果行、統計行、下一段分隔。
+const blockEnd =
+  /\[(?:SKIP|PASS)\]\s*$|^\s*(?:Passed|Skipped)\s+\S|^(?:Failed|Passed)!\s+-|^\s*✓\s|^\s*(?:Test Files|Tests:)\s|^={5,}|^\s*(?:FAIL|PASS)\s+\S+\s*$/;
+const pytestBlock = /^_{3,} .+ _{3,}$/;
+const BLOCK_LIMIT = 1200;
+const BLOCK_LINES = 40;
+
+/**
+ * 每個失敗測試從標題起的錯誤區塊（斷言、例外與堆疊），供執行紀錄保存（#248）。
+ * 只留輸出結尾時，排在前面的失敗測試訊息會被後面的日誌擠掉；這裡逐個測試保留，總長有上限。
+ */
+export function failureBlocks(output: string, limit = 5000) {
+  const blocks: string[] = [];
+  let current: string[] | null = null;
+  const close = () => {
+    if (current) blocks.push(clip(current.join("\n"), BLOCK_LIMIT));
+    current = null;
+  };
+  for (const line of output.replace(ansi, "").split(/\r?\n/)) {
+    if (headers.some(([, p]) => p.test(line)) || pytestBlock.test(line)) {
+      close();
+      current = [line];
+    } else if (pytest.test(line)) {
+      close();
+      blocks.push(clip(line, BLOCK_LIMIT));
+    } else if (current) {
+      if (blockEnd.test(line)) close();
+      else if ((current as string[]).push(line) >= BLOCK_LINES) close();
+    }
+  }
+  close();
+  let text = "";
+  for (const block of blocks) {
+    const next = text ? `${text}\n\n${block}` : block;
+    if (next.length > limit) {
+      text = `${text}\n\n…另有 ${blocks.length - blocks.indexOf(block)} 段錯誤區塊沒有保存`;
+      break;
+    }
+    text = next;
+  }
+  return safeDetail(text.trim());
+}
+
+/**
+ * 執行器在階段結束時留下的事件。安裝與測試保留輸出結尾；測試失敗時另外保留失敗測試的錯誤區塊，
+ * 兩者分成兩筆，各自在單筆長度上限內。
+ */
+export function phaseEndEvents(
+  phase: string,
+  result: { exitCode: number; stdout: string; stderr: string },
+) {
+  const blocks =
+    phase === "test" && result.exitCode !== 0
+      ? failureBlocks(`${result.stdout}\n${result.stderr}`)
+      : "";
+  return [
+    ...(blocks
+      ? [{ kind: "message", detail: `失敗測試的錯誤區塊：\n${blocks}` }]
+      : []),
+    {
+      kind: "phase_end",
+      exitCode: result.exitCode,
+      detail:
+        phase === "install" || phase === "test"
+          ? result.stdout.slice(-4000) + "\n" + result.stderr.slice(-2000)
+          : result.stderr.slice(-4000),
+    },
+  ];
+}

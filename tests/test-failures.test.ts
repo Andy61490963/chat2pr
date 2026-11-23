@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   describeTestFailures,
   parseTestFailures,
+  phaseEndEvents,
 } from "../server/test-failures.js";
+import { ObservationBuffer } from "../server/observation.js";
 
 // 樣本都是虛構的專案與測試名稱，格式照各工具的實際輸出。
 const xunit = [
@@ -180,5 +182,70 @@ describe("parseTestFailures 擷取失敗的測試", () => {
     expect(text).not.toContain("fake-bearer-456");
     expect(parsed.tests[1].name.length).toBeLessThanOrEqual(200);
     expect(parsed.tests[1].message.length).toBeLessThanOrEqual(300);
+  });
+});
+
+describe("測試階段失敗時保留失敗測試的錯誤區塊（執行紀錄）", () => {
+  const secret = "ghp_" + "B".repeat(36);
+  const failing = [
+    "[xUnit.net 00:00:01.20]     Demo.Shop.Tests.CartTests.Total_ShouldSum [FAIL]",
+    "[xUnit.net 00:00:01.20]       Assert.Equal() Failure: 虛構總價應為 300",
+    "[xUnit.net 00:00:01.20]       Stack Trace:",
+    "[xUnit.net 00:00:01.20]         /workspace/tests/CartTests.cs(12,0): at Demo.Shop.Tests.CartTests.Total_ShouldSum()",
+    `[xUnit.net 00:00:01.21]       連線字串 password=fake-db-password token ${secret}`,
+    "[xUnit.net 00:00:01.30]     Demo.Shop.Tests.CartTests.Other [SKIP]",
+  ].join("\n");
+  // 失敗訊息在前，後面是大量通過的日誌：只留結尾時斷言訊息會被擠掉。
+  const noise = Array.from(
+    { length: 800 },
+    (_, i) => `  Passed Demo.Shop.Tests.Bulk.Case_${i} [1 ms]`,
+  ).join("\n");
+  const result = {
+    exitCode: 1,
+    stdout: `${failing}\n${noise}\nFailed!  - Failed:     1, Passed:   800`,
+    stderr: "Node.js v24.0.0",
+  };
+
+  it("失敗時另存一筆錯誤區塊，結尾照舊保存在階段結束", () => {
+    const events = phaseEndEvents("test", result);
+    expect(events.map((e) => e.kind)).toEqual(["message", "phase_end"]);
+    expect(events[0].detail).toContain("Assert.Equal() Failure: 虛構總價應為 300");
+    expect(events[0].detail).toContain("CartTests.cs(12,0)");
+    expect(events[0].detail).not.toContain("Case_1 ");
+    expect(events[1].detail).not.toContain("虛構總價應為 300");
+    expect(events[1].detail).toContain("Failed!  - Failed:     1");
+  });
+
+  it("經過執行器的事件緩衝後遮蔽機密，單筆在長度上限內", () => {
+    const buffer = new ObservationBuffer();
+    for (const event of phaseEndEvents("test", result))
+      buffer.add("00000000-0000-4000-8000-000000000001", "test", event);
+    const saved = buffer.read("00000000-0000-4000-8000-000000000001");
+    expect(saved).toHaveLength(2);
+    const text = saved.map((e) => e.detail).join("\n");
+    expect(text).toContain("虛構總價應為 300");
+    expect(text).not.toContain(secret);
+    expect(text).not.toContain("fake-db-password");
+    for (const e of saved) expect(e.detail!.length).toBeLessThanOrEqual(6000);
+  });
+
+  it("很多失敗測試時總長有上限，並註明有幾段沒保存", () => {
+    const many = Array.from(
+      { length: 30 },
+      (_, i) =>
+        `FAILED tests/test_many.py::test_case_${i} - AssertionError: ${"虛構".repeat(150)}`,
+    ).join("\n");
+    const [message] = phaseEndEvents("test", { exitCode: 1, stdout: many, stderr: "" });
+    expect(message.kind).toBe("message");
+    expect(message.detail!.length).toBeLessThanOrEqual(5100);
+    expect(message.detail).toMatch(/另有 \d+ 段錯誤區塊沒有保存/);
+  });
+
+  it("測試通過、其他階段或認不出格式時只有原本的階段結束", () => {
+    expect(phaseEndEvents("test", { ...result, exitCode: 0 }).map((e) => e.kind)).toEqual(["phase_end"]);
+    expect(phaseEndEvents("install", result).map((e) => e.kind)).toEqual(["phase_end"]);
+    expect(
+      phaseEndEvents("test", { exitCode: 1, stdout: "error CS1002: ; expected", stderr: "" }).map((e) => e.kind),
+    ).toEqual(["phase_end"]);
   });
 });
