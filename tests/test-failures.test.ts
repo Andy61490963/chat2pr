@@ -81,7 +81,8 @@ describe("parseTestFailures 擷取失敗的測試", () => {
       tests: [
         {
           name: "Demo.Shop.Tests.CartTests.Total_ShouldSum(withCoupon: True)",
-          message: "Assert.Equal() Failure: Values differ Expected: 3 Actual:   2",
+          message:
+            "Assert.Equal() Failure: Values differ Expected: 3 Actual:   2",
         },
         {
           name: "Demo.Shop.Tests.OrderTests.Submit_ShouldSave",
@@ -96,7 +97,9 @@ describe("parseTestFailures 擷取失敗的測試", () => {
     const output =
       "[xUnit.net 00:00:13.98]     Demo.Shop.Tests.StockTests.Reserve_ShouldLock [FAIL]\n    at command (file:///workspace/scripts/test.mjs:31:34)";
     expect(parseTestFailures(output)).toEqual({
-      tests: [{ name: "Demo.Shop.Tests.StockTests.Reserve_ShouldLock", message: "" }],
+      tests: [
+        { name: "Demo.Shop.Tests.StockTests.Reserve_ShouldLock", message: "" },
+      ],
       more: 0,
     });
   });
@@ -144,7 +147,9 @@ describe("parseTestFailures 擷取失敗的測試", () => {
       ),
     ).toBeNull();
     expect(parseTestFailures(" ✓ tests/cart.test.ts (2 tests) 5ms")).toBeNull();
-    expect(parseTestFailures("error CS1002: ; expected\nBuild FAILED.")).toBeNull();
+    expect(
+      parseTestFailures("error CS1002: ; expected\nBuild FAILED."),
+    ).toBeNull();
     expect(parseTestFailures("")).toBeNull();
   });
 
@@ -209,7 +214,9 @@ describe("測試階段失敗時保留失敗測試的錯誤區塊（執行紀錄�
   it("失敗時另存一筆錯誤區塊，結尾照舊保存在階段結束", () => {
     const events = phaseEndEvents("test", result);
     expect(events.map((e) => e.kind)).toEqual(["message", "phase_end"]);
-    expect(events[0].detail).toContain("Assert.Equal() Failure: 虛構總價應為 300");
+    expect(events[0].detail).toContain(
+      "Assert.Equal() Failure: 虛構總價應為 300",
+    );
     expect(events[0].detail).toContain("CartTests.cs(12,0)");
     expect(events[0].detail).not.toContain("Case_1 ");
     expect(events[1].detail).not.toContain("虛構總價應為 300");
@@ -235,17 +242,29 @@ describe("測試階段失敗時保留失敗測試的錯誤區塊（執行紀錄�
       (_, i) =>
         `FAILED tests/test_many.py::test_case_${i} - AssertionError: ${"虛構".repeat(150)}`,
     ).join("\n");
-    const [message] = phaseEndEvents("test", { exitCode: 1, stdout: many, stderr: "" });
+    const [message] = phaseEndEvents("test", {
+      exitCode: 1,
+      stdout: many,
+      stderr: "",
+    });
     expect(message.kind).toBe("message");
     expect(message.detail!.length).toBeLessThanOrEqual(5100);
     expect(message.detail).toMatch(/另有 \d+ 段錯誤區塊沒有保存/);
   });
 
   it("測試通過、其他階段或認不出格式時只有原本的階段結束", () => {
-    expect(phaseEndEvents("test", { ...result, exitCode: 0 }).map((e) => e.kind)).toEqual(["phase_end"]);
-    expect(phaseEndEvents("install", result).map((e) => e.kind)).toEqual(["phase_end"]);
     expect(
-      phaseEndEvents("test", { exitCode: 1, stdout: "error CS1002: ; expected", stderr: "" }).map((e) => e.kind),
+      phaseEndEvents("test", { ...result, exitCode: 0 }).map((e) => e.kind),
+    ).toEqual(["phase_end"]);
+    expect(phaseEndEvents("install", result).map((e) => e.kind)).toEqual([
+      "phase_end",
+    ]);
+    expect(
+      phaseEndEvents("test", {
+        exitCode: 1,
+        stdout: "error CS1002: ; expected",
+        stderr: "",
+      }).map((e) => e.kind),
     ).toEqual(["phase_end"]);
   });
 });

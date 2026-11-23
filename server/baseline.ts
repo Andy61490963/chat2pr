@@ -72,7 +72,10 @@ function sinceLine(since: BaselineSince) {
  * 目標分支基底驗證失敗時的說明（#248）：哪些測試失敗、各自的第一段錯誤訊息，以及上次通過的 commit。
  * 認不出測試格式、也沒有通過紀錄時回傳空字串，失敗說明照舊只挑輸出的錯誤行。
  */
-export function baselineReport(output: string, since: BaselineSince | null = null) {
+export function baselineReport(
+  output: string,
+  since: BaselineSince | null = null,
+) {
   const failures = parseTestFailures(output);
   return [
     ...(failures ? [describeTestFailures(failures)] : []),
@@ -80,13 +83,23 @@ export function baselineReport(output: string, since: BaselineSince | null = nul
   ].join("\n");
 }
 
-const openStatuses = ["awaiting_approval", "queued", "running", "reviewing", "budget_wait"];
+const openStatuses = [
+  "awaiting_approval",
+  "queued",
+  "running",
+  "reviewing",
+  "budget_wait",
+];
 
 /**
  * 從基底驗證失敗的任務建立「修復目標分支」任務（#248）。需求自動帶入失敗的測試與錯誤訊息；
  * 一樣要等人工確認專案、分支並核准才會開始。同一專案、同一分支已有未結束的修復任務時直接回傳那一筆。
  */
-export async function createBaselineRepair(db: Database, id: string, actor: string) {
+export async function createBaselineRepair(
+  db: Database,
+  id: string,
+  actor: string,
+) {
   return db.transaction(async (c) => {
     const parent = (
       await c.query<Task>("SELECT * FROM tasks WHERE id=$1 FOR UPDATE", [id])
@@ -99,7 +112,10 @@ export async function createBaselineRepair(db: Database, id: string, actor: stri
       failure?.plain !== baselineFailurePlain ||
       !parent.target_branch
     )
-      throw new AppError(409, "只有因目標分支基底驗證失敗而停下的修改，才能請 AI 修好目標分支");
+      throw new AppError(
+        409,
+        "只有因目標分支基底驗證失敗而停下的修改，才能請 AI 修好目標分支",
+      );
     const usable = (
       await c.query<{ binding_version: number }>(
         `SELECT g.binding_version FROM projects p JOIN group_projects gp ON gp.project_id=p.id JOIN groups g ON g.id=gp.group_id
@@ -166,7 +182,9 @@ export async function createBaselineRepair(db: Database, id: string, actor: stri
       `${actor} 從「${parent.title}」請 AI 修好目標分支 ${branch}，等待確認`,
       c,
     );
-    const created = (await c.query<Task>("SELECT * FROM tasks WHERE id=$1", [t.id])).rows[0];
+    const created = (
+      await c.query<Task>("SELECT * FROM tasks WHERE id=$1", [t.id])
+    ).rows[0];
     await approvalNotice(c, created);
     return created;
   });

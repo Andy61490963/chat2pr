@@ -1,6 +1,10 @@
 import { afterAll, beforeEach, expect, it } from "vitest";
 import { db, reset, fixture, confirmTask } from "./helpers.js";
-import { Execution, type PhaseResult, type Runner } from "../server/execution.js";
+import {
+  Execution,
+  type PhaseResult,
+  type Runner,
+} from "../server/execution.js";
 import { GitHub } from "../server/github.js";
 import { Line } from "../server/line.js";
 import { Budget } from "../server/budget.js";
@@ -26,13 +30,17 @@ export const redBaseline: PhaseResult = {
     "[xUnit.net 00:00:02.20]       System.InvalidOperationException : 找不到虛構庫存 B-002",
     "Failed!  - Failed:     2, Passed:    40, Skipped:     0, Total:    42",
   ].join("\n"),
-  stderr: "    at command (file:///workspace/scripts/test.mjs:31:34)\n\nNode.js v24.0.0",
+  stderr:
+    "    at command (file:///workspace/scripts/test.mjs:31:34)\n\nNode.js v24.0.0",
 };
 
 /** 自動設定的專案：驗證通過後派一筆修改；每次測試階段依序取 tests 的結果，用完後一律通過。 */
 async function autoScenario(
   tests: PhaseResult[],
-  opts: { path?: string; review?: { passed: boolean; findings: string[] } } = {},
+  opts: {
+    path?: string;
+    review?: { passed: boolean; findings: string[] };
+  } = {},
 ) {
   const projectId = await fixture();
   const task = await db.one<Task>(
@@ -76,7 +84,10 @@ async function autoScenario(
     prompt = "";
   const runner: Runner = {
     async upload() {},
-    account: async () => ({ allowed: true, checkedAt: new Date().toISOString() }),
+    account: async () => ({
+      allowed: true,
+      checkedAt: new Date().toISOString(),
+    }),
     async call<T>(path: string, raw: unknown): Promise<T> {
       const body = raw as { phase?: string; job?: { prompt?: string } };
       const ok: PhaseResult = { exitCode: 0, stdout: "", stderr: "" };
@@ -89,7 +100,9 @@ async function autoScenario(
               test: "npm test",
               verification: "tests",
               explanation: "依實際套件設定執行測試",
-              evidence: [{ path: "package.json", quote: '"test":"vitest run"' }],
+              evidence: [
+                { path: "package.json", quote: '"test":"vitest run"' },
+              ],
             }),
           }),
         } as T;
@@ -107,7 +120,13 @@ async function autoScenario(
           ...ok,
           stdout: JSON.stringify({
             files: coded
-              ? [{ path: opts.path ?? "src/stock.ts", content: "YQ==", mode: "100644" }]
+              ? [
+                  {
+                    path: opts.path ?? "src/stock.ts",
+                    content: "YQ==",
+                    mode: "100644",
+                  },
+                ]
               : [],
           }),
         } as T;
@@ -115,13 +134,21 @@ async function autoScenario(
         return {
           ...ok,
           stdout: JSON.stringify({
-            final: JSON.stringify(opts.review ?? { passed: true, findings: [] }),
+            final: JSON.stringify(
+              opts.review ?? { passed: true, findings: [] },
+            ),
           }),
         } as T;
       return ok as T;
     },
   };
-  const execution = new Execution(db, github, new Line(db), new Budget(db), runner);
+  const execution = new Execution(
+    db,
+    github,
+    new Line(db),
+    new Budget(db),
+    runner,
+  );
   await execution.validate(await db.one<Project>("SELECT * FROM projects"));
   // 驗證之後換了建置設定：派工不能沿用驗證結果，要先驗證新基底。
   github.setupContext = async () => ({
@@ -145,7 +172,10 @@ async function autoScenario(
 
 it("基底驗證失敗：看板與群組列出失敗的測試名稱與錯誤訊息，不再只有統計數字", async () => {
   // 第一次是專案驗證（通過），第二次是派工的基底驗證（失敗）。
-  const s = await autoScenario([{ exitCode: 0, stdout: "", stderr: "" }, redBaseline]);
+  const s = await autoScenario([
+    { exitCode: 0, stdout: "", stderr: "" },
+    redBaseline,
+  ]);
   await s.execution.execute(s.task.id);
   const task = await s.reload();
   expect(task.status).toBe("failed");
@@ -162,12 +192,17 @@ it("基底驗證失敗：看板與群組列出失敗的測試名稱與錯誤訊�
     "SELECT text FROM notifications WHERE task_id=$1 AND kind='group_failed'",
     [s.task.id],
   );
-  expect(group!.text).toContain("Demo.Shop.Tests.StockTests.Release_ShouldUnlock");
+  expect(group!.text).toContain(
+    "Demo.Shop.Tests.StockTests.Release_ShouldUnlock",
+  );
   expect(group!.text).toContain("請 AI 修好目標分支");
 });
 
 it("有上次通過的紀錄：說明上次通過的短 SHA、之後的新 commit 數與比較連結", async () => {
-  const s = await autoScenario([{ exitCode: 0, stdout: "", stderr: "" }, redBaseline]);
+  const s = await autoScenario([
+    { exitCode: 0, stdout: "", stderr: "" },
+    redBaseline,
+  ]);
   s.setSha("2222222bbbbbbbbb");
   const compared: string[] = [];
   s.github.compareCommits = async (_p, base, head) => {
@@ -187,11 +222,16 @@ it("有上次通過的紀錄：說明上次通過的短 SHA、之後的新 commi
     "SELECT text FROM notifications WHERE task_id=$1 AND kind='group_failed'",
     [s.task.id],
   );
-  expect(group!.text).toContain("上次通過是 1111111，之後目標分支有 3 個新 commit");
+  expect(group!.text).toContain(
+    "上次通過是 1111111，之後目標分支有 3 個新 commit",
+  );
 });
 
 it("GitHub 比較失敗時仍說明上次通過的 commit 並附比較連結，只是不寫數量", async () => {
-  const s = await autoScenario([{ exitCode: 0, stdout: "", stderr: "" }, redBaseline]);
+  const s = await autoScenario([
+    { exitCode: 0, stdout: "", stderr: "" },
+    redBaseline,
+  ]);
   s.setSha("2222222bbbbbbbbb");
   s.github.compareCommits = async () => {
     throw new Error("HttpError: Not Found");
@@ -204,7 +244,10 @@ it("GitHub 比較失敗時仍說明上次通過的 commit 並附比較連結，�
 });
 
 it("在同一個 commit 上次通過、這次失敗：提示可能是測試不穩定", async () => {
-  const s = await autoScenario([{ exitCode: 0, stdout: "", stderr: "" }, redBaseline]);
+  const s = await autoScenario([
+    { exitCode: 0, stdout: "", stderr: "" },
+    redBaseline,
+  ]);
   await s.execution.execute(s.task.id);
   expect(parseFailure((await s.reload()).last_error)!.detail).toContain(
     "上次在同一個 commit（1111111）通過",
@@ -212,7 +255,10 @@ it("在同一個 commit 上次通過、這次失敗：提示可能是測試不�
 });
 
 it("沒有上次通過的紀錄就不顯示這一段", async () => {
-  const s = await autoScenario([{ exitCode: 0, stdout: "", stderr: "" }, redBaseline]);
+  const s = await autoScenario([
+    { exitCode: 0, stdout: "", stderr: "" },
+    redBaseline,
+  ]);
   await db.query("DELETE FROM baseline_passes");
   await db.query(
     "UPDATE projects SET setup_plan=jsonb_set(setup_plan,'{branch}','\"release\"')",
@@ -229,9 +275,9 @@ it("派工前的基底驗證通過時記下這個 commit，之後的失敗以它
   s.setSha("2222222bbbbbbbbb");
   await s.execution.execute(s.task.id);
   expect((await s.reload()).status).toBe("ready");
-  expect(
-    await db.query("SELECT branch,sha FROM baseline_passes"),
-  ).toEqual([{ branch: "main", sha: "2222222bbbbbbbbb" }]);
+  expect(await db.query("SELECT branch,sha FROM baseline_passes")).toEqual([
+    { branch: "main", sha: "2222222bbbbbbbbb" },
+  ]);
 });
 
 const ok: PhaseResult = { exitCode: 0, stdout: "", stderr: "" };
@@ -279,8 +325,12 @@ it("從基底失敗的任務建立修復任務：帶入失敗的測試，等人�
       approved_version: null,
       title: "修復目標分支 main",
     });
-    expect(repair.summary).toContain("Demo.Shop.Tests.StockTests.Release_ShouldUnlock");
-    expect(repair.acceptance[0]).toBe("完整測試全部通過，包含修改前就失敗的測試");
+    expect(repair.summary).toContain(
+      "Demo.Shop.Tests.StockTests.Release_ShouldUnlock",
+    );
+    expect(repair.acceptance[0]).toBe(
+      "完整測試全部通過，包含修改前就失敗的測試",
+    );
     const again = await app.inject({
       method: "POST",
       url: `/api/tasks/${s.task.id}/baseline-repair`,
@@ -288,7 +338,10 @@ it("從基底失敗的任務建立修復任務：帶入失敗的測試，等人�
     });
     expect(again.json().id).toBe(repair.id);
     expect(
-      await db.query("SELECT kind FROM notifications WHERE task_id=$1 AND kind='approval'", [repair.id]),
+      await db.query(
+        "SELECT kind FROM notifications WHERE task_id=$1 AND kind='approval'",
+        [repair.id],
+      ),
     ).toHaveLength(1);
     // 未核准前執行不會開始。
     await s.execution.execute(repair.id);
@@ -300,10 +353,10 @@ it("從基底失敗的任務建立修復任務：帶入失敗的測試，等人�
 
 it("不是基底驗證失敗的任務不能建立修復任務", async () => {
   const s = await autoScenario([ok, redBaseline]);
-  await db.query(
-    "UPDATE tasks SET status='failed',last_error=$2 WHERE id=$1",
-    [s.task.id, "專案問題：建置或測試失敗。\n建議：到執行紀錄查看測試輸出，修好專案的建置或測試後重試。"],
-  );
+  await db.query("UPDATE tasks SET status='failed',last_error=$2 WHERE id=$1", [
+    s.task.id,
+    "專案問題：建置或測試失敗。\n建議：到執行紀錄查看測試輸出，修好專案的建置或測試後重試。",
+  ]);
   await expect(createBaselineRepair(db, s.task.id, "小林")).rejects.toThrow(
     "只有因目標分支基底驗證失敗而停下的修改",
   );
@@ -320,7 +373,9 @@ it("修復任務可在紅基底開始，記下已知失敗清單；完整測試�
   expect(prompt.baselineRepair.knownFailures).toContain(
     "Demo.Shop.Tests.StockTests.Release_ShouldUnlock",
   );
-  expect(prompt.baselineRepair.rule).toContain("不可刪除、略過、停用或放寬測試");
+  expect(prompt.baselineRepair.rule).toContain(
+    "不可刪除、略過、停用或放寬測試",
+  );
   const known = await db.one<{ detail: string }>(
     "SELECT detail FROM audit WHERE task_id=$1 AND kind='baseline_known_failures'",
     [repair.id],
@@ -329,12 +384,20 @@ it("修復任務可在紅基底開始，記下已知失敗清單；完整測試�
 });
 
 it("修復任務結束時仍有測試失敗（包含原本就失敗的）：自動修復一次後仍失敗，不發布", async () => {
-  const s = await autoScenario([ok, redBaseline, redBaseline, redAfter, redAfter]);
+  const s = await autoScenario([
+    ok,
+    redBaseline,
+    redBaseline,
+    redAfter,
+    redAfter,
+  ]);
   const repair = await repairFrom(s);
   await s.execution.execute(repair.id);
   const done = await s.reload(repair.id);
   expect(done.status).toBe("failed");
-  expect(parseFailure(done.last_error)!.plain).toBe("AI 修改後，測試或獨立審查仍沒有通過");
+  expect(parseFailure(done.last_error)!.plain).toBe(
+    "AI 修改後，測試或獨立審查仍沒有通過",
+  );
   expect(s.counts()).toMatchObject({ coded: 2, published: 0 });
 });
 
@@ -346,12 +409,16 @@ it("修復任務的獨立審查照常：審查不通過就不發布", async () =
   await s.execution.execute(repair.id);
   const done = await s.reload(repair.id);
   expect(done.status).toBe("failed");
-  expect(parseFailure(done.last_error)!.plain).toBe("AI 修改後，測試或獨立審查仍沒有通過");
+  expect(parseFailure(done.last_error)!.plain).toBe(
+    "AI 修改後，測試或獨立審查仍沒有通過",
+  );
   expect(s.counts()).toMatchObject({ coded: 2, published: 0 });
 });
 
 it("修復任務改到敏感路徑照常要人工核准", async () => {
-  const s = await autoScenario([ok, redBaseline, redBaseline], { path: "server/auth.ts" });
+  const s = await autoScenario([ok, redBaseline, redBaseline], {
+    path: "server/auth.ts",
+  });
   const repair = await repairFrom(s);
   await s.execution.execute(repair.id);
   const t = await s.reload(repair.id);

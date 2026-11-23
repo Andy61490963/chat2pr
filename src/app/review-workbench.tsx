@@ -173,7 +173,7 @@ export function ReviewQueue({
 
 export type ReviewActions = Pick<
   TaskReviewPanelProps,
-  "act" | "answer" | "followup" | "go" | "open" | "relink"
+  "act" | "answer" | "followup" | "go" | "open" | "relink" | "repairBaseline"
 >;
 
 type DetailResult = { id: string; detail?: Detail; error?: string };

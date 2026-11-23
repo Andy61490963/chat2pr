@@ -130,12 +130,14 @@ export const fixPageLabels: Record<FixPage, string> = {
  * - amend：主按鈕「縮小需求範圍」，打開補充需求編輯；重試留作次要。
  * - page：主按鈕前往建議指向的頁面（只有管理者看得到，成員改用「詳情」）。
  * - detail：要先處理，但建議沒有指向任何頁面，主按鈕是「詳情」。
+ * - repair：目標分支基底本身就沒過，主按鈕「請 AI 修好目標分支」（#248）。
  */
 export type PrimaryFix =
   | { kind: "retry" }
   | { kind: "amend" }
   | { kind: "page"; page: FixPage }
-  | { kind: "detail" };
+  | { kind: "detail" }
+  | { kind: "repair" };
 
 /** 「執行期間任務、群組或專案的設定被變更」：確認後直接重試就是主要動作。 */
 const changedDuringRun = /執行期間.*設定被變更/;
@@ -146,6 +148,7 @@ export function primaryFix(parsed: ParsedFailure | null): PrimaryFix {
   if (!parsed) return { kind: "retry" };
   if (changedDuringRun.test(parsed.plain)) return { kind: "retry" };
   if (timedOut.test(parsed.plain)) return { kind: "amend" };
+  if (parsed.plain === baselineFailurePlain) return { kind: "repair" };
   if (!fixFirst(parsed.category)) return { kind: "retry" };
   const page = fixPage(parsed.action);
   return page ? { kind: "page", page } : { kind: "detail" };

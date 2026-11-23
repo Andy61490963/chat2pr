@@ -72,7 +72,11 @@ export function parseTestFailures(output: string): TestFailures | null {
       finish();
       continue;
     }
-    const c = current as { kind: Kind; lines: string[]; started: boolean } | null;
+    const c = current as {
+      kind: Kind;
+      lines: string[];
+      started: boolean;
+    } | null;
     if (!c) continue;
     let line = raw;
     if (c.kind === "xunit") {
@@ -104,7 +108,10 @@ export function parseTestFailures(output: string): TestFailures | null {
     name,
     message: clip(safeDetail(lines.join(" ")), MESSAGE_LIMIT),
   }));
-  return { tests: all.slice(0, MAX_LISTED), more: Math.max(0, all.length - MAX_LISTED) };
+  return {
+    tests: all.slice(0, MAX_LISTED),
+    more: Math.max(0, all.length - MAX_LISTED),
+  };
 }
 
 /** 看板與群組看的失敗清單；每個測試一行。 */
