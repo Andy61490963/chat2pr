@@ -51,6 +51,10 @@ CREATE TABLE IF NOT EXISTS messages (
 );
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS sender_name text;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS image_source_url text;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS document_name text;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS document_size bigint;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS document_url text;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS document_error text;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS content_revision integer NOT NULL DEFAULT 0;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS needs_source_review boolean NOT NULL DEFAULT false;
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS discord_message_id text;

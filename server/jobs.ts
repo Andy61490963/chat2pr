@@ -23,7 +23,7 @@ import {
   ModeClassifier,
 } from "./triage.js";
 import { Execution, HttpRunner, type Runner } from "./execution.js";
-import { cleanup, backup, downloadPendingImages } from "./maintenance.js";
+import { cleanup, backup, downloadPendingImages, downloadPendingDocuments } from "./maintenance.js";
 import { runDueChecks, syncCheckEnvironments } from "./checks.js";
 import { announceNewGroups, syncGroupNames } from "./line-groups.js";
 import { recordHealth } from "./health.js";
@@ -310,7 +310,10 @@ export async function startJobs(
   await work("notifications", async () => {
     await line.flushNotifications();
   });
-  await work("images", () => downloadPendingImages(db, line));
+  await work("images", async () => {
+    await downloadPendingImages(db, line);
+    await downloadPendingDocuments(db, line);
+  });
   await work<{ taskId: string }>("issues", async (jobs) => {
     for (const j of jobs) await execution.syncIssue(j.data.taskId);
   });

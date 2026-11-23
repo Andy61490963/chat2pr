@@ -121,6 +121,24 @@ async function scenario() {
     counts: () => ({ published, testCalls, codeCalls }),
   };
 }
+it("派工只把這筆任務採用的文件文字交給開發執行器", async () => {
+  const s = await scenario();
+  await db.query(`INSERT INTO messages(id,group_id,type,document_name,text) VALUES
+    ('doc-used','group-a','document','規格.txt','出貨報表排除作廢單'),
+    ('doc-other','group-a','document','草案.txt','未採用的內容')`);
+  await db.query("UPDATE tasks SET source_ids=ARRAY['doc-used'] WHERE id=$1", [s.task.id]);
+  let documents: unknown;
+  const original = s.runner.call;
+  s.runner.call = async <T>(path: string, raw: unknown): Promise<T> => {
+    const body = raw as { phase?: string; job?: { prompt: string } };
+    if (path === "phase" && body.phase === "code") {
+      documents = JSON.parse(body.job!.prompt).documents;
+    }
+    return original<T>(path, raw);
+  };
+  await s.execution.execute(s.task.id);
+  expect(documents).toEqual([{ name: "規格.txt", text: "出貨報表排除作廢單" }]);
+});
 it.each([
   [86, "環境問題"],
   [1, "專案問題"],

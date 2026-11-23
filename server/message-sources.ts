@@ -1,6 +1,14 @@
 import type { Database, DbClient } from "./db.js";
 import { revokePickSource } from "./pick-lists.js";
 
+/** 聊天室及任務來源共用同一份文件預覽；呼叫端先檢查來源可見性。 */
+export function displayMessageText(alias: "m" | "q") {
+  return `CASE WHEN ${alias}.type='document' THEN
+    concat_ws(chr(10), coalesce(${alias}.document_name,'文件'),
+      coalesce(${alias}.text,${alias}.document_error,'等待讀取文件'))
+    ELSE ${alias}.text END`;
+}
+
 export async function invalidateMessageSources(
   db: Database,
   c: DbClient,

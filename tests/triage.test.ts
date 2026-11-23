@@ -67,6 +67,52 @@ async function setup(type = "text") {
   };
 }
 describe("需求判斷後的確定性關卡", () => {
+  it("同頻道兩筆各帶三份文件的指令分輪判讀，各自保留三份完整來源", async () => {
+    await fixture();
+    const github = new GitHub();
+    github.context = async () => ({ sha: "base", paths: [], files: {}, truncated: false,
+      branches: { names: ["main"], defaultBranch: "main", truncated: false }, branchError: null });
+    for (const id of ["a", "b"]) {
+      await db.query(`INSERT INTO messages(id,group_id,type,text,discord_message_id,trigger_mode,received_at)
+        VALUES($1,'group-a','text','/任務 依附件更新規格',$1,'command',now()-interval '3 minutes')`, [id]);
+      await db.query(`INSERT INTO messages(id,group_id,type,text,document_name,discord_message_id,trigger_mode,received_at)
+        SELECT $1||'-'||n,'group-a','document',$1||' 規格 '||n,n||'.txt',$1,'command',
+          (SELECT received_at FROM messages WHERE id=$1) FROM generate_series(1,3) n`, [id]);
+    }
+    const seen: string[][] = [];
+    const classify: Classifier["classify"] = async ({ messages }) => {
+      const root = messages.find((m) => m.type === "text")!;
+      seen.push(messages.filter((m) => m.type === "document").map((m) => m.text!));
+      return [decision({ title: "規格 " + root.id, sourceIds: [root.id] })];
+    };
+    const service = new Triage(db, { classify }, github, new Line(db), new Budget(db));
+    await service.process("group-a");
+    expect((await db.query("SELECT id FROM messages WHERE NOT processed"))).toHaveLength(4);
+    await service.process("group-a");
+    expect(seen).toEqual([["a 規格 1", "a 規格 2", "a 規格 3"], ["b 規格 1", "b 規格 2", "b 規格 3"]]);
+    const tasks = await db.query<{source_ids: string[]; missing: string[]}>("SELECT source_ids,missing FROM tasks ORDER BY title");
+    expect(tasks.map((t) => t.source_ids.sort())).toEqual([["a", "a-1", "a-2", "a-3"], ["b", "b-1", "b-2", "b-3"]]);
+    expect(tasks.flatMap((t) => t.missing).join(" ")).not.toContain("四份");
+  });
+  it("指令落在百筆收件邊界時，文件會隨指令處理一次", async () => {
+    await fixture();
+    const github = new GitHub();
+    github.context = async () => ({ sha: "base", paths: [], files: {}, truncated: false,
+      branches: { names: ["main"], defaultBranch: "main", truncated: false }, branchError: null });
+    await db.query(`INSERT INTO messages(id,group_id,type,text,received_at)
+      SELECT 'chat-'||n,'group-a','text','閒聊',now()-interval '3 minutes' FROM generate_series(1,99) n`);
+    await db.query(`INSERT INTO messages(id,group_id,type,text,discord_message_id,trigger_mode)
+      VALUES ('cmd','group-a','text','/任務 依規格修改','cmd','command'),
+             ('cmd-doc','group-a','document','規格本文','cmd','command')`);
+    const classify: Classifier["classify"] = async ({ messages }) => [
+      ...messages.filter((m) => m.id.startsWith("chat-")).map((m) =>
+        decision({ kind: "ignore", noTaskReason: "no_actionable_request", sourceIds: [m.id] })),
+      decision({ sourceIds: ["cmd"] }),
+    ];
+    await new Triage(db, { classify }, github, new Line(db), new Budget(db)).process("group-a");
+    expect(await db.query("SELECT id FROM messages WHERE NOT processed")).toEqual([]);
+    expect(await db.one("SELECT source_ids FROM tasks")).toEqual({ source_ids: ["cmd", "cmd-doc"] });
+  });
   it.each(["ignore", "memory"] as const)(
     "替身判讀回傳 %s 與同事分工原因時，管理者能在看板查到原因",
     async (kind) => {

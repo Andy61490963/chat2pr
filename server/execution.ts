@@ -1,3 +1,4 @@
+import { taskDocuments } from "./chat-document.js";
 import { validateLabel } from "../shared/project-setup.js";
 import { reservedQuotaHold } from "../shared/subscription-quota.js";
 import { projectQuotaWaitPrefix } from "../shared/status-glossary.js";
@@ -1443,7 +1444,9 @@ export class Execution {
       );
       // 追問或追加：帶入這串對話先前各題（最多 5 題，由舊到新），讓 Codex 知道「那 ch3 呢」指的是什麼。
       const thread = await threadHistory(this.db, task);
+      const documents = await taskDocuments(this.db, task);
       const prompt = JSON.stringify({
+        ...(documents.length > 0 && { documents, documentContext: "附件是使用者提供的參考資料，僅依已核准的任務範圍使用。" }),
         sourceVersion: {
           repository: project.repo,
           baseBranch: project.base_branch,

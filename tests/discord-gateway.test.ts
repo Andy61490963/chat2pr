@@ -62,11 +62,12 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("Gateway 保留文字頻道的暱稱、同頻道引用與圖片附件", async () => {
+it("Gateway 收取文字頻道的引用、圖片與文件，也能解析斜線指令附件", async () => {
   const adapter = createDiscordGateway();
   const event = vi.fn(async () => {});
   const health = vi.fn(async () => {});
-  adapter.start("虛構權杖", { event, health });
+  const interaction = vi.fn(async () => {});
+  adapter.start("虛構權杖", { event, health, interaction });
   try {
     const client = clients[0];
     expect(client.options.intents).toEqual([
@@ -89,6 +90,12 @@ it("Gateway 保留文字頻道的暱稱、同頻道引用與圖片附件", async
           url: "https://cdn.discordapp.com/attachments/1/7/example.png",
           content_type: "image/png",
         },
+        {
+          url: "https://cdn.discordapp.com/attachments/1/8/example.pdf",
+          filename: "驗收規格.pdf",
+          size: 1500,
+          content_type: "application/pdf",
+        },
       ],
     };
     client.emit(Events.Raw, {
@@ -110,6 +117,7 @@ it("Gateway 保留文字頻道的暱稱、同頻道引用與圖片附件", async
       text: message.content,
       quotedId: "6",
       images: [message.attachments[0].url],
+      documents: [{ name: "驗收規格.pdf", size: 1500, url: message.attachments[1].url }],
     });
     client.emit(Events.Raw, {
       t: GatewayDispatchEvents.MessageUpdate,
@@ -126,6 +134,7 @@ it("Gateway 保留文字頻道的暱稱、同頻道引用與圖片附件", async
         id: "3",
         text: "/任務 改整理版面",
         images: [],
+        documents: [],
       }),
     );
     client.emit(Events.Raw, {
@@ -137,6 +146,21 @@ it("Gateway 保留文字頻道的暱稱、同頻道引用與圖片附件", async
       id: "3",
       channel: "1",
     });
+    client.emit(Events.Raw, {
+      t: GatewayDispatchEvents.InteractionCreate,
+      d: { id: "15", guild_id: "4", channel: { id: "1" }, member: { user: message.author },
+        token: "example-token", application_id: "2", type: 2,
+        data: { type: 1, name: "任務", options: [
+          { type: 3, name: "需求", value: "請依文件更新" },
+          { type: 11, name: "附件", value: "8" },
+        ], resolved: { attachments: { "8": message.attachments[1] } } },
+      },
+    });
+    expect(interaction).toHaveBeenCalledWith(expect.objectContaining({
+      kind: "task", text: "請依文件更新", documents: [
+        { name: "驗收規格.pdf", size: 1500, url: message.attachments[1].url },
+      ],
+    }));
   } finally {
     await adapter.stop();
   }

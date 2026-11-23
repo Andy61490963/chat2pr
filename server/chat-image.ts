@@ -35,7 +35,7 @@ export function discordImageUrl(raw: string) {
     !url.port &&
     !url.username &&
     !url.password &&
-    /^\/attachments\/\d+\/\d+\//.test(url.pathname)
+    /^\/(?:ephemeral-)?attachments\/\d+\/\d+\//.test(url.pathname)
     ? url.href
     : null;
 }

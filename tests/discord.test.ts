@@ -12,7 +12,7 @@ import {
   handleDiscordInteraction,
   replyDiscordText,
 } from "../server/discord-interactions.js";
-import { cleanup, downloadPendingImages } from "../server/maintenance.js";
+import { cleanup, downloadPendingDocuments, downloadPendingImages } from "../server/maintenance.js";
 import { Line } from "../server/line.js";
 import { dueTriageGroups } from "../server/triage-window.js";
 import { Triage } from "../server/triage.js";
@@ -43,6 +43,10 @@ const imageUrl =
   "https://cdn.discordapp.com/attachments/100000000000000001/100000000000000004/example.png";
 const secondImageUrl =
   "https://cdn.discordapp.com/attachments/100000000000000001/100000000000000005/example.png";
+const document = {
+  name: "需求.txt", size: 48,
+  url: "https://cdn.discordapp.com/attachments/100000000000000001/100000000000000006/example.txt",
+};
 
 function create(
   id: string,
@@ -488,7 +492,9 @@ it("Discord 註冊斜線指令，進度透過互動取回補問，任務指令�
     `/applications/${applicationId}/commands`,
     {
       body: [
-        expect.objectContaining({ name: "任務" }),
+        expect.objectContaining({ name: "任務", options: expect.arrayContaining([
+          expect.objectContaining({ type: 11, name: "附件" }),
+        ]) }),
         expect.objectContaining({ name: "進度" }),
       ],
     },
@@ -521,11 +527,19 @@ it("Discord 註冊斜線指令，進度透過互動取回補問，任務指令�
   });
 
   const requestId = "100000000000000019";
+  const slashFile = { ...document, url: document.url.replace("/attachments/", "/ephemeral-attachments/") };
   await gateway.interaction?.({
     ...interaction,
     id: requestId,
     kind: "task",
     text: "請查詢示範專案",
+    documents: [slashFile],
+  });
+  expect(await db.one("SELECT document_name,document_url,discord_message_id,discord_reply_message_id,processed FROM messages WHERE id=$1", [
+    `${discordId(requestId)}:document:100000000000000006`,
+  ])).toEqual({
+    document_name: document.name, document_url: slashFile.url, discord_message_id: discordId(requestId),
+    discord_reply_message_id: discordId(interactionReplyId), processed: false,
   });
   await gateway.event({
     type: "update",
@@ -1157,6 +1171,48 @@ it("忽略機器人訊息，新頻道停用且保留文字、附圖、發言者�
       "SELECT id FROM messages WHERE sender_name IS NOT NULL OR image_source_url IS NOT NULL OR image IS NOT NULL",
     ),
   ).toEqual([]);
+});
+
+it("Discord 在允許的附件網址擷取文件；文字編輯保留相同文件，移除附件會清除正文", async () => {
+  const { event } = fakeGateway();
+  await event(create("311"));
+  await db.query("UPDATE groups SET enabled=true,trigger_mode='command' WHERE id=$1", [group]);
+  const unsafe = { ...document, url: "https://example.com/attachments/1/9/document.txt" };
+  await event(create("312", { text: "/任務 請依附件修改。", documents: [document, unsafe] }));
+  const id = `${discordId("312")}:document:100000000000000006`;
+  expect(await db.query("SELECT id,processed,trigger_mode,document_name FROM messages WHERE type='document'"))
+    .toEqual([{ id, processed: false, trigger_mode: "command", document_name: document.name }]);
+  const fetch = vi.fn(async () => new Response("修正報表加總結果", { headers: { "content-type": "text/plain" } }));
+  vi.stubGlobal("fetch", fetch);
+  const line = { content: vi.fn() };
+  await downloadPendingDocuments(db, line);
+  expect(line.content).not.toHaveBeenCalled();
+  expect(fetch).toHaveBeenCalledExactlyOnceWith(document.url, expect.objectContaining({ redirect: "error" }));
+  const edit = { type: "update", id: "312", channel, botId } as const;
+  const renewed = document.url + "?ex=future";
+  await event({ ...edit, documents: [{ ...document, url: renewed }], editedAt: "2026-11-23T00:00:00Z" });
+  await event({ ...edit, text: "/任務 請增加驗收步驟。", editedAt: "2026-11-23T00:00:01Z" });
+  expect(await db.one("SELECT text,document_url FROM messages WHERE id=$1", [id]))
+    .toEqual({ text: expect.stringContaining("修正報表加總結果"), document_url: renewed });
+  await event({ ...edit, documents: [], editedAt: "2026-11-23T00:00:02Z" });
+  expect(await db.one("SELECT text,document_url,document_name,document_size,document_error,revoked FROM messages WHERE id=$1", [id]))
+    .toEqual({ text: null, document_url: null, document_name: null, document_size: null, document_error: null, revoked: true });
+});
+
+it("只有文件時沿用 Discord 訊息識別碼，下載途中撤回後不再寫回正文", async () => {
+  const { event } = fakeGateway();
+  await event(create("313", { text: "", documents: [document] }));
+  await db.query("UPDATE groups SET enabled=true WHERE id=$1", [group]);
+  const id = discordId("313");
+  expect(await db.one("SELECT type,document_name FROM messages WHERE id=$1", [id]))
+    .toEqual({ type: "document", document_name: document.name });
+  vi.stubGlobal("fetch", vi.fn(async () => {
+    await event({ type: "delete", id: "313", channel });
+    return new Response("原規格", { headers: { "content-type": "text/plain" } });
+  }));
+  await downloadPendingDocuments(db, { content: vi.fn() });
+  expect(await db.one("SELECT revoked,text,document_name,document_url,document_error FROM messages WHERE id=$1", [id]))
+    .toEqual({ revoked: true, text: null, document_name: null, document_url: null, document_error: null });
 });
 
 it("指令觸發可用任務前綴或提及機器人，排程同時選出 LINE 和 Discord", async () => {

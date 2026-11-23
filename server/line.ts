@@ -18,6 +18,7 @@ import {
 } from "../shared/line-private.js";
 import { invalidateMessageSources } from "./message-sources.js";
 import { readChatImage } from "./chat-image.js";
+import { documentName } from "./document-text.js";
 import {
   commandAck,
   disabledAck,
@@ -92,6 +93,8 @@ const Event = z
         id: z.string(),
         type: z.string(),
         text: z.string().optional(),
+        fileName: z.string().optional(),
+        fileSize: z.number().int().nonnegative().optional(),
         quotedMessageId: z.string().optional(),
         // 指令模式下 @機器人 也算提出需求；isSelf 表示提及的是本機器人。
         mention: z
@@ -231,7 +234,7 @@ export class Line {
         }
         if (e.type === "unsend" && e.unsend) {
           await c.query(
-            "INSERT INTO messages(id,group_id,type,revoked,processed) VALUES($1,$2,'unsend',true,true) ON CONFLICT(id) DO UPDATE SET text=NULL,image=NULL,image_mime=NULL,user_id=NULL,revoked=true,processed=true",
+            "INSERT INTO messages(id,group_id,type,revoked,processed) VALUES($1,$2,'unsend',true,true) ON CONFLICT(id) DO UPDATE SET text=NULL,image=NULL,image_mime=NULL,document_name=NULL,document_size=NULL,document_url=NULL,document_error=NULL,user_id=NULL,revoked=true,processed=true",
             [e.unsend.messageId, group],
           );
           await invalidateMessageSources(this.db, c, group, [e.unsend.messageId], e.webhookEventId, "撤回");
@@ -402,18 +405,22 @@ export class Line {
           const eligible =
             settings.enabled &&
             (settings.trigger_mode === "auto" || command || botReply);
+          const isFile = e.message.type === "file";
           const saved = await c.query(
-            "INSERT INTO messages(id,group_id,user_id,type,text,quoted_id,trigger_mode,processed,bot_reply) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT DO NOTHING RETURNING id",
+            `INSERT INTO messages(id,group_id,user_id,type,text,quoted_id,trigger_mode,processed,bot_reply,document_name,document_size)
+             VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT DO NOTHING RETURNING id`,
             [
               e.message.id,
               group,
               e.source?.userId ?? null,
-              e.message.type,
-              e.message.text ?? null,
+              isFile ? "document" : e.message.type,
+              isFile ? null : e.message.text ?? null,
               e.message.quotedMessageId ?? null,
               eligible ? (command || botReply ? "command" : "auto") : "chat",
               !eligible,
               botReply,
+              isFile ? redact(documentName(e.message.fileName ?? "")) || "未命名檔案" : null,
+              isFile ? e.message.fileSize ?? null : null,
             ],
           );
           if ((command || botReply) && saved.rowCount && replyOn)
@@ -454,17 +461,20 @@ export class Line {
       );
     }
   }
-  async image(id: string) {
+  async content(id: string): Promise<Response> {
     const access = secrets().lineToken;
     if (!access) throw new AppError(503, "LINE Access Token 尚未設定");
-    const response = await fetchLine(
+    return fetchLine(
       `https://api-data.line.me/v2/bot/message/${encodeURIComponent(id)}/content`,
       {
         headers: { Authorization: `Bearer ${access}` },
         signal: AbortSignal.timeout(20000),
+        redirect: "error",
       },
     );
-    return readChatImage(response);
+  }
+  async image(id: string) {
+    return readChatImage(await this.content(id));
   }
   async notify(taskId: string | null, kind: string, key: string, text: string) {
     // 同一任務 30 分鐘內只通知一次失敗；錯誤仍完整寫進稽核紀錄。

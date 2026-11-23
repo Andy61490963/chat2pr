@@ -9,6 +9,8 @@ import {
 import { Database } from "./db.js";
 import type { Line } from "./line.js";
 import { loadChatImage } from "./chat-image.js";
+import { loadChatDocument } from "./chat-document.js";
+import type { Message } from "../shared/types.js";
 import { config, secrets } from "./config.js";
 export const backupTables = [
   "settings",
@@ -39,7 +41,7 @@ export async function cleanup(db: Database) {
     "UPDATE run_events SET detail=NULL WHERE detail IS NOT NULL AND NOT run_content_visible(run_id)",
   );
   await db.query(
-    "UPDATE messages SET text=NULL,image=NULL,image_mime=NULL,user_id=NULL,sender_name=NULL,image_source_url=NULL,processed=true WHERE received_at<=message_retention_cutoff() AND (text IS NOT NULL OR image IS NOT NULL OR image_mime IS NOT NULL OR user_id IS NOT NULL OR sender_name IS NOT NULL OR image_source_url IS NOT NULL OR NOT processed)",
+    "UPDATE messages SET text=NULL,image=NULL,image_mime=NULL,user_id=NULL,sender_name=NULL,image_source_url=NULL,document_name=NULL,document_url=NULL,document_size=NULL,document_error=NULL,processed=true WHERE received_at<=message_retention_cutoff() AND (text IS NOT NULL OR image IS NOT NULL OR image_mime IS NOT NULL OR user_id IS NOT NULL OR sender_name IS NOT NULL OR image_source_url IS NOT NULL OR document_name IS NOT NULL OR document_url IS NOT NULL OR document_error IS NOT NULL OR document_size IS NOT NULL OR NOT processed)",
   );
   // 成員名稱只隨仍可讀的訊息保留；發話者清除後名稱一併刪除。
   await db.query(
@@ -51,6 +53,13 @@ export async function cleanup(db: Database) {
   await db.query(
     "DELETE FROM events WHERE received_at<now()-interval '90 days'",
   );
+}
+export async function downloadPendingDocuments(db: Database, line: Pick<Line, "content">) {
+  const rows = await db.query<Message>(`SELECT m.* FROM messages m JOIN groups g ON g.id=m.group_id
+    WHERE m.type='document' AND m.text IS NULL AND m.document_error IS NULL AND NOT m.revoked
+    AND g.enabled AND m.content_attempts<3 AND m.received_at>message_retention_cutoff()
+    ORDER BY m.content_attempts,m.received_at LIMIT 4`);
+  for (const row of rows) await loadChatDocument(db, line, row);
 }
 export async function downloadPendingImages(
   db: Database,

@@ -27,6 +27,10 @@ jobs:
           cache: npm
       - name: 安裝依賴與準備隔離環境
         run: |
+          if ! command -v pdftotext >/dev/null || ! command -v pdfinfo >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y poppler-utils poppler-data
+          fi
           npm ci
           npm run init
           docker build -f worker/Dockerfile -t line-agentflow-worker:local .

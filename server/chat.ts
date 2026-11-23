@@ -4,6 +4,7 @@ import type { Database } from "./db.js";
 import { requireUser } from "./auth.js";
 import { AppError } from "./policy.js";
 import { memberNames } from "./line-members.js";
+import { displayMessageText } from "./message-sources.js";
 import type { ChatMessage, ChatPage } from "../shared/chat.js";
 import type { Group } from "../shared/types.js";
 import { type BotMessage, deliveryState } from "../shared/group-delivery.js";
@@ -133,7 +134,7 @@ export function registerChat(app: FastifyInstance, db: Database) {
           WHEN m.received_at>message_retention_cutoff() THEN 'readable'
           ELSE 'expired'
         END AS availability,
-        coalesce(CASE WHEN q.id IS NOT NULL THEN left(coalesce(nullif(q.text,''),
+        coalesce(CASE WHEN q.id IS NOT NULL THEN left(coalesce(nullif(${displayMessageText("q")},''),
           CASE q.type WHEN 'image' THEN '圖片' WHEN 'sticker' THEN '貼圖' ELSE '附件' END),200) END,
           left(bn.text,200)) AS quoted_text,
         CASE WHEN q.user_id IS NOT NULL THEN coalesce(q.sender_name,'成員 '||left(md5(q.group_id||':'||q.user_id),6))
@@ -141,7 +142,7 @@ export function registerChat(app: FastifyInstance, db: Database) {
         CASE WHEN q.id IS NULL THEN bn.id END AS quoted_bot_id,
         q.user_id AS quoted_user_id,
         m.received_at<=message_retention_cutoff() AS expired,
-        CASE WHEN NOT m.revoked AND m.received_at>message_retention_cutoff() THEN m.text END AS text,
+        CASE WHEN NOT m.revoked AND m.received_at>message_retention_cutoff() THEN ${displayMessageText("m")} END AS text,
         CASE WHEN NOT m.revoked AND m.received_at>message_retention_cutoff() AND m.user_id IS NOT NULL
           THEN coalesce(m.sender_name,'成員 '||left(md5(m.group_id||':'||m.user_id),6)) END AS sender,
         CASE WHEN NOT m.revoked AND m.received_at>message_retention_cutoff() THEN m.user_id END AS user_id,

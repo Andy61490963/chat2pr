@@ -4,11 +4,12 @@ const discordBotToken =
 export const redactDiscordToken = (text: string) =>
   text.replace(discordBotToken, "[已遮蔽 Discord 權杖]");
 
-export const redact = (value: string) =>
+export const maskCredentials = (value: string) =>
   redactDiscordToken(value)
     .replace(/sk-[\w-]{12,}/g, "[已遮蔽金鑰]")
-    .replace(/(gh[pousr]_[\w]{10,}|github_pat_[\w]{10,})/g, "[已遮蔽憑證]")
-    .slice(0, 10000);
+    .replace(/(gh[pousr]_[\w]{10,}|github_pat_[\w]{10,})/g, "[已遮蔽憑證]");
+
+export const redact = (value: string) => maskCredentials(value).slice(0, 10000);
 
 /** 補問與專案資訊共用同一套拒收規則，避免把無法局部遮蔽的內容保存或送出。 */
 export const containsCredential = (text: string) =>
