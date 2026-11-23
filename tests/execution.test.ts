@@ -21,6 +21,7 @@ import sharp from "sharp";
 import { saveTaskImageRefs, imageHash } from "../server/image-context.js";
 import { recordContextEvidence } from "../server/task-context.js";
 import { subscriptionGateName } from "../server/subscription-gate.js";
+import { parseFailure, primaryFix } from "../shared/failure-text.js";
 beforeEach(reset);
 afterAll(() => db.close());
 async function scenario() {
@@ -34,7 +35,11 @@ async function scenario() {
   let published = 0,
     testCalls = 0,
     codeCalls = 0,
-    collectCalls = 0;
+    collectCalls = 0,
+    reviewCalls = 0,
+    failReviews = 0;
+  const applied: unknown[] = [];
+  const publishedFiles: unknown[] = [];
   let failTests = false,
     mutateCandidate = false,
     cancelDuringPublish = false,
@@ -47,9 +52,10 @@ async function scenario() {
     url: "https://github.com/test/repo/issues/1",
   });
   github.findPr = async () => undefined!;
-  github.publish = async (_p, _t, _files, _report, guard) => {
+  github.publish = async (_p, _t, files, _report, guard) => {
     await guard?.();
     published++;
+    publishedFiles.push(files);
     if (cancelDuringPublish)
       await new Tasks(db).action(task.id, "cancel", 1, "管理者");
     return {
@@ -59,6 +65,9 @@ async function scenario() {
   };
   const runner: Runner = {
     async upload() {},
+    async applyCandidate(_runId, _image, files) {
+      applied.push(files);
+    },
     async call<T>(path: string, raw: unknown): Promise<T> {
       const body = raw as { phase: string };
       let result: PhaseResult = { exitCode: 0, stdout: "", stderr: "" };
@@ -88,10 +97,16 @@ async function scenario() {
                   ],
           });
         }
-        if (body.phase === "review")
+        if (body.phase === "review") {
+          const passed = ++reviewCalls > failReviews;
           result.stdout = JSON.stringify({
-            final: JSON.stringify({ passed: true, findings: [] }),
+            final: JSON.stringify(
+              passed
+                ? { passed: true, findings: [] }
+                : { passed: false, findings: ["範例按鈕在深色主題仍是灰色"] },
+            ),
           });
+        }
       }
       return result as T;
     },
@@ -111,7 +126,9 @@ async function scenario() {
       cancelDuringPublish?: boolean;
       sensitive?: boolean;
       emptyResult?: string;
+      failReviews?: number;
     }) => {
+      failReviews = o.failReviews ?? 0;
       failTests = !!o.failTests;
       mutateCandidate = !!o.mutateCandidate;
       cancelDuringPublish = !!o.cancelDuringPublish;
@@ -119,6 +136,9 @@ async function scenario() {
       emptyResult = o.emptyResult;
     },
     counts: () => ({ published, testCalls, codeCalls }),
+    reviews: () => reviewCalls,
+    applied,
+    publishedFiles,
   };
 }
 it("派工只把這筆任務採用的文件文字交給開發執行器", async () => {
@@ -1316,6 +1336,369 @@ it("逾時訊息寫出設定的單次執行時間", async () => {
   expect(task.last_error).toContain("任務超過 5 分鐘限制");
   expect(task.last_error).not.toContain("30 分鐘限制");
   expect(task.last_error).toContain("縮小需求範圍");
+});
+/** 第 n 次進入指定階段時先做 before，再讓執行器丟出 error（模擬取消或逾時）。 */
+const failPhase = (
+  s: Awaited<ReturnType<typeof scenario>>,
+  phase: string,
+  nth: number,
+  error: () => Error,
+  before: () => Promise<unknown> = async () => {},
+) => {
+  const call = s.runner.call.bind(s.runner);
+  let seen = 0;
+  const jobs: Array<{ feedback?: string }> = [];
+  s.runner.call = async <T>(path: string, raw: unknown): Promise<T> => {
+    const body = raw as { phase?: string; job?: { feedback?: string } };
+    if (path === "phase" && body.phase === "code") jobs.push(body.job ?? {});
+    if (path === "phase" && body.phase === phase && ++seen === nth) {
+      await before();
+      throw error();
+    }
+    return call<T>(path, raw);
+  };
+  return jobs;
+};
+const timeout = () => new AppError(408, "執行超過時間限制");
+const attempts = async () =>
+  (
+    await db.query<{ detail: string }>(
+      "SELECT detail FROM audit WHERE kind='attempt' ORDER BY id",
+    )
+  ).map((a) => a.detail);
+it("獨立審查時系統暫停：恢復後沿用已收集的修改，從測試與審查接續，不重新修改", async () => {
+  const s = await scenario();
+  failPhase(
+    s,
+    "review",
+    1,
+    () => new AppError(409, "工作已取消"),
+    () =>
+      db.query("UPDATE settings SET value=jsonb_set(value,'{paused}','true')"),
+  );
+  await s.execution.execute(s.task.id);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("queued");
+  await db.query(
+    "UPDATE settings SET value=jsonb_set(value,'{paused}','false')",
+  );
+  await s.execution.execute(s.task.id);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("ready");
+  expect(s.counts()).toEqual({ published: 1, testCalls: 2, codeCalls: 1 });
+  expect(s.applied).toEqual([
+    [{ path: "src/button.ts", content: "YQ==", mode: "100644" }],
+  ]);
+  expect(await attempts()).toEqual([
+    "開始程式修改",
+    "沿用上一次已收集的修改，從測試與獨立審查接續",
+  ]);
+});
+it("修復後的審查逾時：說明修改已保留、主要處理是重試；重試沿用修復結果接續審查，不再多修一次", async () => {
+  const s = await scenario();
+  s.change({ failReviews: 1 });
+  failPhase(s, "review", 2, timeout);
+  await s.execution.execute(s.task.id);
+  const failed = await db.one<Task>("SELECT * FROM tasks");
+  expect(failed.status).toBe("failed");
+  expect(failed.last_error).toContain("修改已保留");
+  expect(failed.last_error).not.toContain("縮小需求範圍");
+  expect(primaryFix(parseFailure(failed.last_error))).toEqual({
+    kind: "retry",
+  });
+  await dashboardAction(s.task.id, "retry", failed.version);
+  await s.execution.execute(s.task.id);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("ready");
+  expect(s.counts()).toEqual({ published: 1, testCalls: 3, codeCalls: 2 });
+  expect(s.applied).toHaveLength(1);
+  expect((await attempts()).at(-1)).toBe(
+    "沿用上一次已收集的修改，從測試與獨立審查接續",
+  );
+});
+it("接續的修復結果仍未通過審查：不再多修一次，照常失敗", async () => {
+  const s = await scenario();
+  s.change({ failReviews: 3 });
+  failPhase(s, "review", 2, timeout);
+  await s.execution.execute(s.task.id);
+  await dashboardAction(
+    s.task.id,
+    "retry",
+    (await db.one<Task>("SELECT * FROM tasks")).version,
+  );
+  await s.execution.execute(s.task.id);
+  const task = await db.one<Task>("SELECT * FROM tasks");
+  expect(task.status).toBe("failed");
+  expect(task.last_error).toContain("仍沒有通過");
+  expect(s.counts()).toEqual({ published: 0, testCalls: 3, codeCalls: 2 });
+});
+it("修復中逾時：重試沿用第一次的修改與審查意見直接修復，不重做第一次修改與審查", async () => {
+  const s = await scenario();
+  s.change({ failReviews: 1 });
+  const jobs = failPhase(s, "code", 2, timeout);
+  await s.execution.execute(s.task.id);
+  const failed = await db.one<Task>("SELECT * FROM tasks");
+  // 第一次修改已驗證且沒過：如實說明保留的是修改與審查意見，重試直接修復，而不是「從測試與審查接續」。
+  expect(failed.last_error).toContain("修改與審查意見已保留");
+  expect(failed.last_error).toContain("自動修復");
+  expect(failed.last_error).not.toContain("從測試與獨立審查接續");
+  expect(failed.last_error).not.toContain("縮小需求範圍");
+  expect(primaryFix(parseFailure(failed.last_error))).toEqual({
+    kind: "retry",
+  });
+  await dashboardAction(s.task.id, "retry", failed.version);
+  await s.execution.execute(s.task.id);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("ready");
+  expect(s.reviews()).toBe(2);
+  expect(s.applied).toHaveLength(1);
+  expect(jobs).toHaveLength(3);
+  expect(jobs[2].feedback).toContain("範例按鈕在深色主題仍是灰色");
+  expect((await attempts()).at(-1)).toBe(
+    "沿用上一次已收集的修改與審查意見，開始唯一一次自動修復",
+  );
+});
+it("實際修改碰到敏感路徑：核准後沿用同一份修改接續測試與審查，不從基底重新修改", async () => {
+  const s = await scenario();
+  s.change({ sensitive: true });
+  await s.execution.execute(s.task.id);
+  const pending = await db.one<Task>("SELECT * FROM tasks");
+  expect(pending.status).toBe("awaiting_approval");
+  expect(pending.last_error).toContain("沿用這次的修改");
+  await dashboardAction(s.task.id, "approve", pending.version);
+  await s.execution.execute(s.task.id);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("ready");
+  expect(s.counts()).toEqual({ published: 1, testCalls: 1, codeCalls: 1 });
+  expect(s.applied).toEqual([
+    [{ path: "server/auth.ts", content: "YQ==", mode: "100644" }],
+  ]);
+  expect(s.publishedFiles).toEqual(s.applied);
+});
+it("修復後仍未通過的修改不沿用：重試從目標分支重新修改", async () => {
+  const s = await scenario();
+  s.change({ failTests: true });
+  await s.execution.execute(s.task.id);
+  s.change({});
+  await dashboardAction(
+    s.task.id,
+    "retry",
+    (await db.one<Task>("SELECT * FROM tasks")).version,
+  );
+  await s.execution.execute(s.task.id);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("ready");
+  expect(s.counts().codeCalls).toBe(3);
+  expect(s.applied).toHaveLength(0);
+});
+it("需求換版後不沿用舊版收集的修改", async () => {
+  const s = await scenario();
+  failPhase(
+    s,
+    "review",
+    1,
+    () => new AppError(409, "工作已取消"),
+    () =>
+      db.query("UPDATE settings SET value=jsonb_set(value,'{paused}','true')"),
+  );
+  await s.execution.execute(s.task.id);
+  await db.query(
+    "UPDATE settings SET value=jsonb_set(value,'{paused}','false')",
+  );
+  await db.query(
+    "UPDATE tasks SET version=version+1,approved_version=version+1",
+  );
+  await confirmTask(s.task.id);
+  await s.execution.execute(s.task.id);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("ready");
+  expect(s.counts().codeCalls).toBe(2);
+  expect(s.applied).toHaveLength(0);
+});
+/** 第一次執行在獨立審查時遇到系統暫停，再恢復派工：留下一份尚未判定的候選。 */
+const pauseAtFirstReview = (s: Awaited<ReturnType<typeof scenario>>) =>
+  failPhase(
+    s,
+    "review",
+    1,
+    () => new AppError(409, "工作已取消"),
+    () =>
+      db.query("UPDATE settings SET value=jsonb_set(value,'{paused}','true')"),
+  );
+const unpause = () =>
+  db.query("UPDATE settings SET value=jsonb_set(value,'{paused}','false')");
+it("寫回上一次的修改失敗：這份修改不再接續，重試從目標分支重新修改", async () => {
+  const s = await scenario();
+  pauseAtFirstReview(s);
+  await s.execution.execute(s.task.id);
+  await unpause();
+  const apply = s.runner.applyCandidate!;
+  let rejected = 0;
+  s.runner.applyCandidate = async () => {
+    rejected++;
+    throw new AppError(400, "候選檔案路徑無效");
+  };
+  await s.execution.execute(s.task.id);
+  const failed = await db.one<Task>("SELECT * FROM tasks");
+  expect(failed.status).toBe("failed");
+  s.runner.applyCandidate = apply;
+  await dashboardAction(s.task.id, "retry", failed.version);
+  await s.execution.execute(s.task.id);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("ready");
+  expect(rejected).toBe(1);
+  expect(s.applied).toHaveLength(0);
+  expect(s.counts().codeCalls).toBe(2);
+});
+it("寫回途中系統暫停：放回排隊，恢復後仍沿用同一份修改", async () => {
+  const s = await scenario();
+  pauseAtFirstReview(s);
+  await s.execution.execute(s.task.id);
+  await unpause();
+  const apply = s.runner.applyCandidate!;
+  s.runner.applyCandidate = async () => {
+    s.runner.applyCandidate = apply;
+    await db.query(
+      "UPDATE settings SET value=jsonb_set(value,'{paused}','true')",
+    );
+    throw new AppError(409, "工作已取消");
+  };
+  await s.execution.execute(s.task.id);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("queued");
+  await unpause();
+  await s.execution.execute(s.task.id);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("ready");
+  expect(s.applied).toHaveLength(1);
+  expect(s.counts().codeCalls).toBe(1);
+});
+it("送審敏感路徑前需求被其他來源改版：舊修改不會被新版本沿用", async () => {
+  const s = await scenario();
+  s.change({ sensitive: true });
+  // 收集結果寫入後、送審之前，來源訊息被編輯（與 message-sources.ts 相同的改版）。
+  const query = db.query.bind(db);
+  const spy = vi.spyOn(db, "query").mockImplementation((async (
+    sql: string,
+    params?: unknown[],
+  ) => {
+    const rows = await query(sql, params);
+    if (
+      sql.startsWith("UPDATE runs SET result=$2") &&
+      String(params?.[1]).includes('"candidate"')
+    ) {
+      spy.mockRestore();
+      await query(
+        "UPDATE tasks SET status='awaiting_approval',approved_version=NULL,version=version+1,base_sha=NULL,branch=NULL,approved_paths='{}' WHERE id=$1",
+        [s.task.id],
+      );
+    }
+    return rows;
+  }) as typeof db.query);
+  await s.execution.execute(s.task.id);
+  spy.mockRestore();
+  const edited = await db.one<Task>("SELECT * FROM tasks");
+  expect(edited.version).toBe(2);
+  expect(edited.pending_paths).toEqual([]);
+  await db.query(
+    "UPDATE tasks SET status='queued',approved_version=version,approved_paths='{server/auth.ts}'",
+  );
+  await confirmTask(s.task.id);
+  await s.execution.execute(s.task.id);
+  expect(s.applied).toHaveLength(0);
+  expect(s.counts().codeCalls).toBe(2);
+});
+it("寫回上一次的修改後重新安裝依賴，修改新增的套件在測試時可用", async () => {
+  const s = await scenario();
+  pauseAtFirstReview(s);
+  await s.execution.execute(s.task.id);
+  await unpause();
+  // 上一次的修改新增了套件：寫回後沒有重新安裝，測試就找不到它。
+  let missing = false;
+  const apply = s.runner.applyCandidate!;
+  s.runner.applyCandidate = async (...args) => {
+    missing = true;
+    return apply(...args);
+  };
+  const call = s.runner.call.bind(s.runner);
+  s.runner.call = async <T>(path: string, raw: unknown): Promise<T> => {
+    const body = raw as { phase?: string };
+    if (path === "phase" && body.phase === "install") missing = false;
+    if (path === "phase" && body.phase === "test" && missing)
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: "Cannot find module '範例套件'",
+      } as T;
+    return call<T>(path, raw);
+  };
+  await s.execution.execute(s.task.id);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("ready");
+  expect(s.counts()).toEqual({ published: 1, testCalls: 2, codeCalls: 1 });
+});
+it("接續的執行在重新收集前逾時：說明修改仍保留、重試會接續，不建議縮小範圍", async () => {
+  const s = await scenario();
+  pauseAtFirstReview(s);
+  failPhase(s, "install", 2, timeout);
+  await s.execution.execute(s.task.id);
+  await unpause();
+  await s.execution.execute(s.task.id);
+  const failed = await db.one<Task>("SELECT * FROM tasks");
+  expect(failed.status).toBe("failed");
+  expect(failed.last_error).toContain("修改已保留");
+  expect(failed.last_error).not.toContain("縮小需求範圍");
+  await dashboardAction(s.task.id, "retry", failed.version);
+  await s.execution.execute(s.task.id);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("ready");
+  expect(s.counts().codeCalls).toBe(1);
+  expect(s.applied).toHaveLength(1);
+});
+it("修復後仍未通過、記錄結論前中斷：這份修改不再接續", async () => {
+  const s = await scenario();
+  s.change({ failTests: true });
+  const query = db.query.bind(db);
+  let verifies = 0;
+  const spy = vi.spyOn(db, "query").mockImplementation((async (
+    sql: string,
+    params?: unknown[],
+  ) => {
+    if (
+      sql === "UPDATE runs SET status=$2 WHERE id=$1" &&
+      params?.[1] === "verify" &&
+      ++verifies === 2
+    )
+      throw new Error("範例：執行紀錄寫入中斷");
+    return query(sql, params);
+  }) as typeof db.query);
+  await s.execution.execute(s.task.id);
+  spy.mockRestore();
+  s.change({});
+  await dashboardAction(
+    s.task.id,
+    "retry",
+    (await db.one<Task>("SELECT * FROM tasks")).version,
+  );
+  await s.execution.execute(s.task.id);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("ready");
+  expect(s.applied).toHaveLength(0);
+  expect(s.counts().codeCalls).toBe(3);
+});
+it("SQL Server 複驗未通過時剛好暫停：恢復後不沿用沒通過複驗的修改", async () => {
+  const s = await scenario();
+  const call = s.runner.call.bind(s.runner);
+  let reviews = 0;
+  s.runner.call = async <T>(path: string, raw: unknown): Promise<T> => {
+    const body = raw as { phase?: string };
+    if (path === "phase" && body.phase === "review" && ++reviews === 1) {
+      await db.query(
+        "UPDATE settings SET value=jsonb_set(value,'{paused}','true')",
+      );
+      return {
+        exitCode: 1,
+        stdout: "",
+        stderr: "範例資料表缺少欄位",
+        sqlReviewFailure: true,
+      } as T;
+    }
+    return call<T>(path, raw);
+  };
+  await s.execution.execute(s.task.id);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("queued");
+  await unpause();
+  await s.execution.execute(s.task.id);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("ready");
+  expect(s.applied).toHaveLength(0);
+  expect(s.counts().codeCalls).toBe(2);
 });
 it("核對遠端 PR 時取消，不會被舊結果覆蓋", async () => {
   const s = await scenario();
