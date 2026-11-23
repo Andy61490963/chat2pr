@@ -18,8 +18,12 @@ export function TaskContextEvidence({ detail }: { detail: Detail }) {
           {detail.images.map((image) => (
             <details key={image.id} className="rounded-lg border p-3 text-sm">
               <summary className="cursor-pointer">
-                {image.origin === "rag" ? "向量檢索找回" : "直接引用"} ·{" "}
-                {image.valid ? "有效圖片" : image.reason}
+                <span className="inline-flex max-w-full flex-wrap gap-x-3 gap-y-1 [overflow-wrap:anywhere]">
+                  <span>
+                    {image.origin === "rag" ? "向量檢索找回" : "直接引用"}
+                  </span>
+                  <span>{image.valid ? "有效圖片" : image.reason}</span>
+                </span>
               </summary>
               <p className="mt-2 break-all text-xs text-muted-foreground">
                 來源 ID：{image.id}
@@ -74,15 +78,17 @@ export function TaskContextEvidence({ detail }: { detail: Detail }) {
           <ul className="mt-3 space-y-3">
             {detail.contextEvidence.map((e) => (
               <li key={e.id} className="min-w-0 break-all">
-                <p>
-                  {contextMechanismLabels[e.mechanism]} ·{" "}
-                  {contextSourceLabels[e.source_kind]}
-                  {detail.task.version > 1 && ` · 版本 ${e.version}`} ·{" "}
-                  {e.phase === "triage-selected"
-                    ? "需求辨識選用的來源"
-                    : e.phase === "triage"
-                      ? "需求辨識候選資料"
-                      : "開發與審查"}
+                <p className="flex flex-wrap gap-x-3 gap-y-1">
+                  <span>{contextMechanismLabels[e.mechanism]}</span>
+                  <span>{contextSourceLabels[e.source_kind]}</span>
+                  {detail.task.version > 1 && <span>版本 {e.version}</span>}
+                  <span>
+                    {e.phase === "triage-selected"
+                      ? "需求辨識選用的來源"
+                      : e.phase === "triage"
+                        ? "需求辨識候選資料"
+                        : "開發與審查"}
+                  </span>
                 </p>
                 <p className="text-xs text-muted-foreground">
                   來源 ID：{e.source_id}
@@ -104,8 +110,12 @@ export function TaskContextEvidence({ detail }: { detail: Detail }) {
                 )}
                 <p className="text-xs text-muted-foreground">
                   記錄時間：{date(e.observed_at)}
-                  {!e.valid && " · 來源已失效或不在目前可用範圍"}
                 </p>
+                {!e.valid && (
+                  <p className="text-xs text-muted-foreground">
+                    來源已失效或不在目前可用範圍
+                  </p>
+                )}
               </li>
             ))}
           </ul>

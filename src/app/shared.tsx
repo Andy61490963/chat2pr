@@ -244,7 +244,7 @@ export function useNow(ms = 30000) {
   return now;
 }
 
-/** 進行中執行的一行進度（階段・已跑時間／期限）；心跳逾時改說「狀態待確認」。 */
+/** 進行中執行的一行進度（階段，已跑時間，期限）；心跳逾時改說「狀態待確認」。 */
 export function RunProgressLine({
   run,
   className,

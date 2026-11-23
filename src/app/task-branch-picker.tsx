@@ -66,9 +66,9 @@ export function TaskBranchPicker({
         <p role="status">正在從 GitHub 取得分支…</p>
       ) : (
         <>
-          <p className="break-all text-xs text-muted-foreground">
-            專案預設：{catalog.configuredBranch} · GitHub 預設：
-            {catalog.defaultBranch}
+          <p className="flex flex-wrap gap-x-3 gap-y-1 break-all text-xs text-muted-foreground">
+            <span>專案預設：{catalog.configuredBranch}</span>
+            <span>GitHub 預設：{catalog.defaultBranch}</span>
           </p>
           <Label htmlFor="task-branch-options">GitHub 分支</Label>
           <select

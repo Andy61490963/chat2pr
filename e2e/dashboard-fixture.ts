@@ -1,7 +1,7 @@
 import type { Page } from "@playwright/test";
 import type { listChecks } from "../server/checks";
 import type { Member } from "../server/members";
-import type { Detail, State } from "../src/app/shared";
+import type { Account, Detail, State } from "../src/app/shared";
 import type { DashboardGroup, Project, Task } from "../shared/types";
 import { endedStatuses } from "../shared/types";
 import {
@@ -14,7 +14,7 @@ import {
   mergedWeekBounds,
   mergedWeekDay,
 } from "../shared/task-list";
-import type { RunView } from "../shared/observation";
+import type { RunEvent, RunView } from "../shared/observation";
 import {
   checkEnvironmentLimits,
   defaultCheckEnvironmentPolicy,
@@ -521,6 +521,133 @@ export const completedRun: RunView = {
   threads: [],
   verification_scope: null,
 };
+
+export const dashboardSeparatorsTime = "2026-01-01T00:12:00Z";
+
+export async function mockDashboardSeparators(page: Page) {
+  const progressTask: Task = {
+    ...task,
+    id: "11111111-1111-4111-8111-111111111112",
+    title: "整理示範報表",
+    status: "running",
+    run_phase: "code",
+    run_started_at: timestamp,
+    run_heartbeat_at: dashboardSeparatorsTime,
+    run_deadline: "2026-01-01T00:30:00Z",
+  };
+  const taskDetail: Detail = {
+    ...detail,
+    task: { ...task, version: 2 },
+    contextEvidence: [
+      {
+        id: "demo-context",
+        version: 2,
+        phase: "triage-selected",
+        mechanism: "direct",
+        source_kind: "message",
+        source_id: "demo-message",
+        observed_at: timestamp,
+        valid: false,
+      },
+    ],
+    images: [
+      {
+        id: "demo-evidence-image",
+        mime: "image/png",
+        sha256: "a".repeat(64),
+        origin: "direct",
+        valid: false,
+        reason: "來源圖片已到期",
+        observation: null,
+      },
+    ],
+    runs: [{ ...completedRun, version: 2 }],
+  };
+  const runEvents: RunEvent[] = [
+    {
+      seq: 1,
+      at: timestamp,
+      phase: "test",
+      kind: "command_end",
+      exitCode: 1,
+    },
+  ];
+  const exampleProject: Project = {
+    ...project,
+    context_updated_at: timestamp,
+    context_updated_by: "小林",
+    setup_mode: "auto",
+    setup_plan: {
+      branch: project.base_branch,
+      sha: "a".repeat(40),
+      fingerprint: "demo-plan",
+      configVersion: project.config_version,
+      install: "",
+      test: "",
+      verification: "tests",
+      explanation: "沿用示範專案的測試設定。",
+      evidence: [],
+    },
+  };
+  const knowledge: State["knowledge"][number] = {
+    id: "demo-knowledge",
+    project_id: project.id,
+    group_id: null,
+    source: "admin",
+    content: "範例日期使用民國年。",
+    status: "pending",
+    pr_url: null,
+    created_at: timestamp,
+  };
+  const account: Account = {
+    plan: "範例方案",
+    allowed: true,
+    models: [],
+    checkedAt: timestamp,
+    limits: [
+      {
+        id: "demo-limit",
+        name: null,
+        reached: null,
+        windows: [
+          { usedPercent: 25, minutes: 300, resetsAt: "2026-01-01T05:00:00Z" },
+        ],
+      },
+    ],
+  };
+  const check: CheckListEntry = {
+    ...alertCheck,
+    environment: {
+      state: "kept",
+      createdAt: timestamp,
+      lastUsedAt: timestamp,
+      expiresAt: "2026-01-01T00:30:00Z",
+    },
+  };
+  await mockDashboard(page, {
+    state: {
+      tasks: [taskDetail.task, progressTask],
+      projects: [exampleProject],
+      memories: [{ ...groupMemory, project_id: project.id }],
+      knowledge: [knowledge],
+    },
+    routes: {
+      [`/api/tasks/${task.id}`]: taskDetail,
+      [`/api/tasks/${task.id}/runs/${completedRun.id}/events`]: {
+        events: runEvents,
+        hasOlder: false,
+        nextBefore: null,
+      },
+      "/api/codex/account": account,
+      "/api/checks": [check],
+      [`/api/checks/${check.id}`]:
+        checkAttentionRoutes[`/api/checks/${check.id}`],
+    },
+  });
+  await page.route(`**/api/checks/${check.id}/test`, (route) =>
+    route.fulfill({ json: { outcome: "ok", summary: "示範設備試跑正常" } }),
+  );
+}
 
 export const meetingPickList: PickList = {
   id: "example-meeting-risks",
