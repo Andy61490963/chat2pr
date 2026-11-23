@@ -500,7 +500,7 @@ app.post("/phase", async (req) => {
         const detail = `SQL Server 審查複驗（${category}退出碼 ${replay.exitCode}）\n${summary}`;
         observe({ kind: "command_end", exitCode: replay.exitCode, detail });
         if (replay.exitCode !== 0) {
-          return { ...replay, stderr: detail, observations: observations.read(b.runId) };
+          return { ...replay, sqlReviewFailure: true, stderr: detail, observations: observations.read(b.runId) };
         }
         if (b.requiresSqlServer && testEnvironment(replay.stdout)?.ok !== true)
           throw new AppError(422, "測試環境問題：SQL Server 審查複驗缺少資料庫啟動成功的紀錄");

@@ -1,6 +1,7 @@
 export const ENVIRONMENT_MARK: string;
 export const ENVIRONMENT_EXIT: number;
 export const SERVER: string;
+export function snapshotFiles(envDir?: string): string[];
 export function rewriteLocalDb(
   text: string,
   password: string,

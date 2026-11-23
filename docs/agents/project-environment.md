@@ -31,7 +31,7 @@ AI 自動設定的專案不必手動選這個映像。系統從固定版本的�
 
 1. 在同一個測試容器啟動 SQL Server（只聽 `127.0.0.1,1433`，記憶體上限 1 GiB，最多等 150 秒；第一次失敗會清掉資料檔重試一次）。sa 密碼每次隨機產生，只放在這個容器的環境變數 `MSSQL_SA_PASSWORD`、`SQLCMDPASSWORD`、`AGENTFLOW_SQLSERVER_CONNECTION`。
 2. 掃描工作目錄中的文字檔（`.cs`、`.json`、`.config`、`.runsettings` 等設定檔，以及 CI 會跑的 `.ps1`、`.sh`、`.cmd`、`.py`、`.sql` 腳本，略過 `bin`、`obj`、`node_modules`、`.git`），把 LocalDB 連線（`(localdb)\執行個體`）改成連到容器內 SQL Server 的 sa 帳號，Windows 整合驗證改為關閉；`AttachDbFilename` 改用同名資料庫。字串只有伺服器名稱時（例如 C# 的 `new SqlConnectionStringBuilder { DataSource = @"(localdb)\MSSQLLocalDB", IntegratedSecurity = true }`），只把伺服器換成 `127.0.0.1,1433`，同一個檔案以屬性寫的 `IntegratedSecurity = true` 改成 sa 帳號（沒有設定 `TrustServerCertificate` 時一併信任容器內的自簽憑證）。改寫前先把原檔備份到 `/workspace/obj/agentflow-sqlserver`。
-3. 建立連線字串提到的空白資料庫；規劃的資料來源是結構快照時，再依序套用 `schema.sql`、`reference-data.sql`。沒有快照時由專案自己的遷移或建庫腳本建立資料表（在測試命令中執行）。
+3. 建立連線字串提到的空白資料庫。若規劃指定使用擁有者快照，必須掛載 `schema.sql`，有 `reference-data.sql` 時接著套用。掛載或結構腳本缺失時回報環境錯誤並略過測試命令。其他資料來源可由專案自己的遷移或建庫腳本建立資料表。
 4. 執行測試命令，結束後把檔案還原成原本的位元組、停止 SQL Server、刪除資料檔。上一次在測試途中被強制結束時，下一次執行會先還原。
 
 同時執行多個任務時，每個測試容器有自己的網路命名空間與工作卷，SQL Server 的連接埠、資料檔與資料庫名稱不會互相衝突；SQL Server 只聽本機，即使管理者選「完全開放」讓測試容器接上共用網路，其他容器也連不進來。
@@ -52,7 +52,7 @@ ACCEPTANCE_MSSQL_IMAGE=<臨時標籤> npx vitest run tests/acceptance-sqlserver.
 
 它用虛構的 C# 專案（`tests/fixtures/localdb-project`，整合測試寫死 LocalDB）確認：不導向時失敗、導向後在無網路容器內實際連上 SQL Server 並通過、結束後追蹤檔案不變；兩個工作在共用網路上同時執行時各自通過、SQL Server 只聽 `127.0.0.1`；以及 SQL Server 沒有就緒時標示為測試環境問題。
 
-有測試命令且使用 SQL Server 工作映像（含繼承該能力的衍生映像），或由系統提供 SQL Server 的修改任務，在獨立審查前會重新執行同一測試命令。執行器將唯讀候選複製至新的工作卷，在複驗前後以原始基底核對候選 SHA-256、長度及檔案模式。複驗容器沒有外部網路，執行結束即回收工作卷。複驗失敗會阻止發布。複驗成功後才啟動唯讀的 Codex 審查，將這次的實際輸出與變更清單交給審查員。專案腳本若自行啟動資料庫，兩次都使用原命令。
+有測試命令且使用 SQL Server 工作映像（含繼承該能力的衍生映像），或由系統提供 SQL Server 的修改任務，在獨立審查前會重新執行同一測試命令。自動設定明確標示為「僅建置」時，直接交給唯讀程式審查。執行器將唯讀候選複製至新的工作卷，在複驗前後以原始基底核對候選 SHA-256、長度及檔案模式。複驗容器沒有外部網路，執行結束即回收工作卷。複驗失敗會阻止發布。複驗成功後才啟動唯讀的 Codex 審查，將這次的實際輸出與變更清單交給審查員。專案腳本若自行啟動資料庫，兩次都使用原命令。
 
 其他服務（例如 Redis），或沒有由系統提供 SQL Server 時，專案測試腳本需在同一個測試階段啟動本機服務，使用虛構資料與臨時憑證，設定啟動期限並在結束時清理。安裝階段與測試階段的程序不共用。測試容器仍使用無網路、非 root、唯讀根目錄、能力全移除、2 GiB 記憶體與程序數限制，不連正式資料庫、不提供 Docker socket。
 

@@ -276,14 +276,25 @@ function stopServer(server) {
   });
 }
 
-/** 有結構快照時，為連線字串提到的資料庫建立空白資料庫並依 README 順序套用。 */
-function prepareDatabases(password, databases, snapshot) {
-  const dir = path.join(process.env.AGENTFLOW_ENV_DIR ?? "", "database");
-  const files = snapshot
-    ? ["schema.sql", "reference-data.sql"].filter((f) =>
-        fs.existsSync(path.join(dir, f)),
-      )
-    : [];
+/** 擁有者快照必須有結構腳本，參考資料腳本只在擁有者選擇時產生。 */
+export function snapshotFiles(envDir) {
+  if (!envDir || !path.isAbsolute(envDir))
+    throw new Error("未掛載擁有者的資料庫快照，請確認工作環境資料卷");
+  const dir = path.join(envDir, "database");
+  const schema = path.join(dir, "schema.sql");
+  const reference = path.join(dir, "reference-data.sql");
+  const files = [schema];
+  if (fs.existsSync(reference)) files.push(reference);
+  for (const file of files) {
+    if (!fs.lstatSync(file, { throwIfNoEntry: false })?.isFile())
+      throw new Error(`擁有者的資料庫快照缺少可讀的 ${path.basename(file)}`);
+    fs.accessSync(file, fs.constants.R_OK);
+  }
+  return files;
+}
+
+/** 為連線字串提到的資料庫建立空白資料庫並依 README 順序套用快照。 */
+function prepareDatabases(password, databases, files) {
   for (const db of databases) {
     const quoted = db.replace(/]/g, "]]");
     const created = sqlcmd(password, [
@@ -297,9 +308,9 @@ function prepareDatabases(password, databases, snapshot) {
       );
     // 不加 -b：個別物件失敗時仍繼續套用其餘批次（見 docs/agents/project-environment.md）。
     for (const file of files)
-      sqlcmd(password, ["-d", db, "-i", path.join(dir, file)], 600000);
+      sqlcmd(password, ["-d", db, "-i", file], 600000);
   }
-  return files;
+  return databases.length ? files.map((file) => path.basename(file)) : [];
 }
 
 async function run(argv) {
@@ -313,7 +324,13 @@ async function run(argv) {
     return 2;
   }
   const root = process.cwd();
-  const snapshot = options.includes("--snapshot");
+  let scripts;
+  try {
+    scripts = options.includes("--snapshot") ? snapshotFiles(process.env.AGENTFLOW_ENV_DIR) : [];
+  } catch (e) {
+    report({ ok: false, stage: "snapshot", reason: e.message });
+    return ENVIRONMENT_EXIT;
+  }
   const timeoutMs =
     Number(process.env.AGENTFLOW_SQLSERVER_TIMEOUT_SECONDS ?? 150) * 1000;
   // 上一次在測試途中被強制結束時，先把改寫過的檔案還原。
@@ -343,7 +360,7 @@ async function run(argv) {
   try {
     redirected = redirectFiles(root, STATE, password);
     // 連線字串提到的資料庫先建成空白資料庫；有快照時再套用結構，沒有時交給專案自己的遷移或建庫腳本。
-    const applied = prepareDatabases(password, redirected.databases, snapshot);
+    const applied = prepareDatabases(password, redirected.databases, scripts);
     report({
       ok: true,
       server: SERVER,
