@@ -292,6 +292,7 @@ test("核准、回答、指定專案與結束成功後前進並聚焦下一筆�
     expect(route.request().postDataJSON()).toEqual({
       action: "reject",
       version: ending.version,
+      end_reason: "unclear",
     });
     remove(ending.id);
     return route.fulfill({ json: { ...ending, status: "rejected" } });
@@ -324,8 +325,9 @@ test("核准、回答、指定專案與結束成功後前進並聚焦下一筆�
   await panel(page)
     .getByRole("button", { name: "結束任務", exact: true })
     .click();
-  await page
-    .getByRole("dialog", { name: "結束任務？" })
+  const endDialog = page.getByRole("dialog", { name: "結束任務？" });
+  await endDialog.getByRole("radio", { name: "需求不清楚" }).check();
+  await endDialog
     .getByRole("button", { name: "結束任務", exact: true })
     .press("Enter");
   await expect(answerAction).toBeFocused();
@@ -602,8 +604,9 @@ test("載入失敗顯示伺服器原因並可重新載入，完成最後一筆�
   await panel(page)
     .getByRole("button", { name: "結束任務", exact: true })
     .click();
-  await page
-    .getByRole("dialog", { name: "結束任務？" })
+  const endDialog = page.getByRole("dialog", { name: "結束任務？" });
+  await endDialog.getByRole("radio", { name: "其他" }).check();
+  await endDialog
     .getByRole("button", { name: "結束任務", exact: true })
     .click();
   await expect(page.getByRole("heading", { name: "都處理完了" })).toBeVisible();

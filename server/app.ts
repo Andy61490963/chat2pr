@@ -66,6 +66,7 @@ import {
   quotaRetryBlocked,
 } from "../shared/line-quota.js";
 import { BatchEnd, Tasks } from "./tasks.js";
+import { groupChangeStatsDays } from "../shared/group-stats.js";
 import { Budget } from "./budget.js";
 import { ProjectSetup } from "./project-setup.js";
 import {
@@ -566,6 +567,11 @@ export async function buildApp(
         `SELECT g.*,
            COALESCE((SELECT array_agg(gp.project_id ORDER BY gp.created_at) FROM group_projects gp WHERE gp.group_id=g.id),'{}') AS project_ids,
            (SELECT count(*)::int FROM tasks t WHERE t.group_id=g.id AND t.status IN ('queued','budget_wait','failed','running','reviewing')) AS affected_tasks,
+           -- 修改任務一律人工核准，有核准者的需求版本就代表管理者核准過。
+           (SELECT json_build_object('created',count(*),
+              'approved',count(*) FILTER (WHERE EXISTS (SELECT 1 FROM task_versions v WHERE v.task_id=t.id AND v.approved_by IS NOT NULL)),
+              'rejected',count(*) FILTER (WHERE t.status='rejected'))
+             FROM tasks t WHERE t.group_id=g.id AND t.mode='change' AND t.created_at>now()-interval '${groupChangeStatsDays} days') AS change_stats,
            (SELECT m.received_at FROM messages m
              WHERE m.group_id=g.id AND NOT m.revoked AND m.received_at>message_retention_cutoff()
              ORDER BY m.received_at DESC LIMIT 1) AS last_message_at
@@ -964,6 +970,9 @@ export async function buildApp(
         related_project_ids: z.unknown().optional(),
         index: z.number().int().optional(),
         value: z.string().trim().min(1).max(500).optional(),
+        // 拒絕與結束的原因由 Tasks 驗證；舊看板不帶時照舊。
+        end_reason: z.unknown().optional(),
+        reason: z.unknown().optional(),
       })
       .parse(req.body);
     if (b.action === "bind_assign" && actor.role !== "admin")

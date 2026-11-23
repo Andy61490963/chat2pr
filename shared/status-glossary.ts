@@ -217,6 +217,31 @@ export const taskEndLabels = {
   other: { badge: taskListLabels.ended, event: "結束" },
 } as const;
 
+/** 管理者拒絕或結束任務時選的原因；判讀會參考同群組近期的拒絕原因。 */
+export const endReasonLabels = {
+  not_for_ai: "不是給 AI 的工作（同事會自己處理）",
+  not_settled: "需求還沒定案",
+  unclear: "需求不清楚",
+  no_project: "選不出專案",
+  duplicate: "重複",
+  other: "其他",
+} as const;
+export type EndReason = keyof typeof endReasonLabels;
+export const endReasons = Object.keys(endReasonLabels) as [
+  EndReason,
+  ...EndReason[],
+];
+/** 這兩種原因代表「同類訊息不該建立任務」，判讀時當成負面範例。 */
+export const triageLearnedEndReasons = [
+  "not_for_ai",
+  "not_settled",
+] as const satisfies readonly EndReason[];
+export const endReasonText = {
+  legend: "拒絕原因",
+  note: "補充（選填）",
+  required: "請選一個拒絕原因",
+} as const;
+
 export const taskEndSystemActor = "系統";
 export const taskCompletionEvents = {
   merged: "合併",
@@ -362,11 +387,20 @@ export const systemStatusLabels = {
   },
 } as const;
 
+export const groupChangeStatsText = {
+  heading: "近 30 天的修改需求",
+  counts: { created: "建立", approved: "核准", rejected: "拒絕" },
+  unit: "筆",
+  hint: (commandLabel: string) =>
+    `近 30 天建立的修改需求多半被拒絕。如果這些工作多由同事自己處理，可以把上方的需求觸發方式改成「${commandLabel}」，只在有人明確交給機器人時建立任務。`,
+} as const;
+
 export const triageNoTaskLabels = {
   coworker_assignment: "訊息屬於同事之間的分工，系統未建立任務。",
   undecided_discussion: "討論尚未定案，系統未建立任務。",
   reusable_memory: "訊息提供了可重複使用的群組規則，系統未建立任務。",
   no_actionable_request: "訊息沒有明確需求，系統未建立任務。",
+  similar_rejected: "訊息與管理者近期拒絕的需求相似，系統未建立任務。",
 } as const;
 
 export const undecidedDiscussionWaiting =

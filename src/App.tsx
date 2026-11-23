@@ -1379,12 +1379,12 @@ export function App() {
                       "已更新這一題接續的位置",
                     ),
                 }}
-                endTasks={(tasks, reason, notify) =>
+                endTasks={(tasks, choice, notify) =>
                   run(
                     () =>
                       request<EndTasksResult>("/api/tasks/batch-end", "POST", {
                         tasks,
-                        reason,
+                        ...choice,
                         notify,
                       }),
                     ({ ended, skipped }) =>

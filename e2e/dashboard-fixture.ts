@@ -159,6 +159,7 @@ export const group: DashboardGroup = {
   last_pending_at: null,
   created_at: timestamp,
   last_message_at: null,
+  change_stats: { created: 3, approved: 2, rejected: 1 },
 };
 
 export const groupMemory = {

@@ -1,3 +1,5 @@
+import type { EndReason } from "./status-glossary.js";
+import type { GroupChangeStats } from "./group-stats.js";
 import type { LinePrivateMode } from "./line-private.js";
 
 export type TaskStatus =
@@ -151,6 +153,8 @@ export interface Group {
 }
 export interface DashboardGroup extends Group {
   created_at: string;
+  /** 近 30 天建立的修改需求與其中核准、拒絕的數量；舊伺服器沒有這個欄位。 */
+  change_stats?: GroupChangeStats;
   /** 最近一則仍保留且未撤回的群組訊息收取時間。 */
   last_message_at: string | null;
 }
@@ -177,6 +181,8 @@ export interface Task {
   discord_thread_id?: string | null;
   /** 看板讀取任務時提供；進行中的任務為 null。 */
   end_summary?: TaskEndSummary | null;
+  /** 管理者拒絕或結束時選的原因；舊任務與未選原因為 null。 */
+  end_reason?: EndReason | null;
   /** 草擬定期檢查的查詢任務：記下要求的排程。 */
   check_draft?: CheckSchedule | null;
   question?: import("./clarification.js").ClarificationQuestion | null;

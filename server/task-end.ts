@@ -55,7 +55,7 @@ export function taskEndSummary(
     const actor = match?.[1].trim();
     const reason = match?.[2]?.trim();
     if (actor && !containsCredential(actor)) summary.actor = actor;
-    if (audit.kind === "cancel" && reason && !containsCredential(reason)) {
+    if (reason && !containsCredential(reason)) {
       summary.reason = reason.replace(/\s+/g, " ").slice(0, 500);
     }
     return summary;

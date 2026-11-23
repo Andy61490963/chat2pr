@@ -25,12 +25,16 @@ test("關閉任務詳情與內層的拒絕確認時，焦點逐層回到原按�
   await expect(reject).toBeFocused();
   await page.keyboard.press("Enter");
   const confirm = page.getByRole("dialog", { name: "結束任務？" });
-  const cancel = confirm.getByRole("button", { name: "先不要" });
-  await expect(cancel).toBeFocused();
+  // 拒絕要先選原因，焦點從第一個原因開始；沒選原因前「結束任務」不會送出。
+  const firstReason = confirm.getByRole("radio", {
+    name: "不是給 AI 的工作（同事會自己處理）",
+  });
+  await expect(firstReason).toBeFocused();
   await page.keyboard.press("Shift+Tab");
   await expect(confirm.getByRole("button", { name: "結束任務" })).toBeFocused();
-  await page.keyboard.press("Tab");
-  await expect(cancel).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(confirm.getByRole("alert")).toHaveText("請選一個拒絕原因");
+  await expect(firstReason).toBeFocused();
   await page.keyboard.press("Escape");
   await expect(confirm).toBeHidden();
   await expect(reject).toBeFocused();

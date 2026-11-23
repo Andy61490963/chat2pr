@@ -4,6 +4,7 @@ import {
   notificationLabels,
   taskListLabels,
   taskStatusFilterLabels,
+  type EndReason,
 } from "../../shared/status-glossary.js";
 import {
   isMergedInWeek,
@@ -24,7 +25,7 @@ import {
 import { useId, useRef, useState } from "react";
 import type { PickList } from "../../shared/pick-list.js";
 import { ReviewWorkbench, type ReviewActions } from "./review-workbench";
-import { BudgetRetry } from "./task-actions";
+import { BudgetRetry, EndReasonFields } from "./task-actions";
 import {
   Activity,
   Archive,
@@ -55,7 +56,6 @@ import { failureBrief, waitHint } from "../../shared/failure-text.js";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Label, Textarea } from "@/components/ui/form-controls";
 import {
   Dialog,
   DialogClose,
@@ -177,7 +177,7 @@ export function InboxView({
   act: Act;
   endTasks: (
     tasks: EndTaskSelection[],
-    reason: string,
+    choice: { end_reason?: EndReason; reason: string },
     notify: boolean,
   ) => Promise<boolean>;
   resolvePickList: (list: PickList, ids: string[]) => Promise<boolean>;
@@ -191,9 +191,11 @@ export function InboxView({
 }) {
   const [selected, setSelected] = useState(new Map<string, EndTaskSelection>());
   const [confirmEnd, setConfirmEnd] = useState(false);
+  const [endReason, setEndReason] = useState<EndReason | null>(null);
+  const [missingReason, setMissingReason] = useState(false);
+  const firstReason = useRef<HTMLInputElement>(null);
   const [reason, setReason] = useState("");
   const [notify, setNotify] = useState(true);
-  const reasonId = useId();
   const decisionSection = useRef<HTMLElement>(null);
   const endButton = useRef<HTMLButtonElement>(null);
   const eligible = new Map<string, EndTaskSelection>();
@@ -212,9 +214,24 @@ export function InboxView({
       return next;
     });
   };
+  // 選取裡有待審核的任務就是拒絕：要選原因，判讀才能少建立同類任務。
+  const rejecting = [...selected.values()].some(
+    (task) => task.status === "awaiting_approval",
+  );
   const submitEnd = async () => {
+    if (rejecting && !endReason) {
+      setMissingReason(true);
+      firstReason.current?.focus();
+      return;
+    }
     setConfirmEnd(false);
-    if (!(await endTasks([...selected.values()], reason.trim(), notify)))
+    if (
+      !(await endTasks(
+        [...selected.values()],
+        { end_reason: endReason ?? undefined, reason: reason.trim() },
+        notify,
+      ))
+    )
       return;
     if (
       document.activeElement === endButton.current ||
@@ -222,6 +239,8 @@ export function InboxView({
     )
       decisionSection.current?.focus();
     setSelected(new Map());
+    setEndReason(null);
+    setMissingReason(false);
     setReason("");
     setNotify(true);
   };
@@ -419,21 +438,17 @@ export function InboxView({
                   {!notify && "你這次不會通知群組。"}
                 </DialogDescription>
               </DialogHeader>
-              <div className="grid gap-2">
-                <Label htmlFor={reasonId}>
-                  結束原因（選填，僅記在任務活動）
-                </Label>
-                <Textarea
-                  id={reasonId}
-                  value={reason}
-                  maxLength={500}
-                  onChange={(event) => setReason(event.target.value)}
-                  className={cn(
-                    batchFocus,
-                    "border-muted-foreground motion-reduce:transition-none",
-                  )}
-                />
-              </div>
+              <EndReasonFields
+                value={endReason}
+                onChange={(value) => {
+                  setEndReason(value);
+                  setMissingReason(false);
+                }}
+                note={reason}
+                onNote={setReason}
+                error={missingReason}
+                firstRef={firstReason}
+              />
               <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm">
                 <input
                   type="checkbox"
