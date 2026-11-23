@@ -22,6 +22,7 @@ $pstack:poteto-mode
 ## 限制
 
 - 只改檔，不要 commit、不要切分支、不要執行 docker compose。
+- 這台機器同時是正式主機，也有其他代理在平行開發：記憶體、專屬測試資料庫、正式環境只能唯讀、Git 操作的規則見 `docs/agents/parallel-development.md`，照做。
 - 沙箱跑不了 vitest／playwright（spawn EPERM）、沒有網路與測試資料庫：不要嘗試安裝套件；可以執行 `npm run typecheck`（tsc）確認型別。測試由審查者跑，但你要把需要的單元測試與 e2e 測試寫好（e2e 用 `e2e/dashboard-fixture.ts` 的虛構資料，新增 API 欄位要補進 fixture）。
 - 所有使用者看得到的文字、註解、測試名稱用繁體中文；只用虛構的群組、專案、人名（例如「範例群組」「示範專案」「小林」）。**絕不可**寫入真實客戶、群組、專案或人名。
 - 狀態詞彙先加在 `shared/status-glossary.ts` 再由看板引用。
