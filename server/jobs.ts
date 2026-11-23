@@ -14,7 +14,7 @@ import { Budget } from "./budget.js";
 import { GitHub } from "./github.js";
 import { Line } from "./line.js";
 import type { DiscordChatPlatform } from "./discord-platform.js";
-import { tellGroupWaiting } from "./group-replies.js";
+import { tellGroupWaiting, waitNotificationBucket, waitNotificationKey } from "./group-replies.js";
 import { dueTriageGroups } from "./triage-window.js";
 import {
   Triage,
@@ -33,7 +33,9 @@ import { redact } from "./policy.js";
 import { SubscriptionGate, SubscriptionBlocked } from "./subscription-gate.js";
 import { dailyDockerCleanup } from "./docker-cleanup.js";
 import {
-  MAX_RUNS_CAP,
+  maxRuns,
+  queueEstimate,
+  queueSnapshot,
   RECOVER_LOCK,
   RUN_LOCK,
   checkHostResources,
@@ -170,6 +172,7 @@ export async function startJobs(
     handler: WorkHandler<T>,
     options: {
       localConcurrency?: number;
+      localGroupConcurrency?: number;
       pollingIntervalSeconds?: number;
     } = {},
   ) => boss.work<T>(name, options, safeQueueHandler(handler));
@@ -218,14 +221,23 @@ export async function startJobs(
     },
     { localConcurrency: 1, pollingIntervalSeconds: 1 },
   );
-  await work<{ taskId: string }>(
-    "execute",
-    async (jobs) => {
-      for (const j of jobs) await execution.execute(j.data.taskId);
-    },
-    // 實際同時執行數由派工時的資料庫計數控制（系統頁可調）；這裡只要不少於可設定的上限。
-    { localConcurrency: MAX_RUNS_CAP },
-  );
+  const executeWorkers: string[] = [];
+  async function resizeExecuteWorkers(limit: number) {
+    while (executeWorkers.length > limit)
+      await boss.offWork("execute", { id: executeWorkers.pop()!, wait: false });
+    while (executeWorkers.length < limit) {
+      const id: string = await work<{ taskId: string }>(
+        "execute",
+        async (jobs) => {
+          for (const j of jobs) await execution.execute(j.data.taskId);
+          // 完成才喚醒自己的下一次取件。取不到工作時回到正常輪詢。
+          boss.notifyWorker(id);
+        },
+        { localGroupConcurrency: 1 },
+      );
+      executeWorkers.push(id);
+    }
+  }
   const validationQueue = new ValidationQueue(db, boss);
   await boss.work(
     "validate",
@@ -372,6 +384,8 @@ export async function startJobs(
         "SELECT value,revision FROM settings WHERE id=1",
       );
       const s = snapshot.value;
+      const limit = maxRuns(s);
+      await resizeExecuteWorkers(limit);
       await db.query(
         "INSERT INTO service_health(name,ok,detail) VALUES('queue',true,'持久化佇列運作中') ON CONFLICT(name) DO UPDATE SET ok=true,checked_at=now()",
       );
@@ -464,8 +478,19 @@ export async function startJobs(
           { taskId: t.id },
           { singletonKey: t.id, singletonSeconds: 300 },
         );
-      const queued = await db.query<{ id: string }>(
-        "SELECT id FROM tasks WHERE status='queued' AND (retry_at IS NULL OR retry_at<=now()) ORDER BY created_at LIMIT 20",
+      const queued = await db.query<Pick<Task, "id" | "project_id" | "mode"> & { pending: boolean; notify: string | null }>(
+        `SELECT t.id,t.project_id,t.mode,
+           EXISTS (SELECT 1 FROM pgboss.job j WHERE j.name='execute' AND j.singleton_key=t.id::text
+             AND (j.state<'active' OR (j.state='active' AND j.started_on>=t.updated_at
+               AND j.started_on>now()-interval '10 seconds'))) AS pending,
+           CASE WHEN $2 AND t.updated_at<now()-interval '1 minute' AND t.approved_version=t.version
+             AND g.left_at IS NULL AND g.reply_mode IN ('results','all') AND task_project_confirmed(t.id)
+             AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.dedupe_key=${waitNotificationKey})
+             THEN COALESCE(t.discord_thread_id,t.group_id) END AS notify
+         FROM tasks t JOIN groups g ON g.id=t.group_id
+         WHERE t.status='queued' AND (t.retry_at IS NULL OR t.retry_at<=now())
+         ORDER BY pending,t.created_at,t.id LIMIT 20`,
+        [waitNotificationBucket(), s.group_replies !== false],
       );
       // 有工作要派時才讀主機資源：可用記憶體不足就暫停派新工作（執行中的不受影響），原因顯示在系統頁。
       const tasks =
@@ -473,12 +498,29 @@ export async function startJobs(
         (await checkHostResources(db, () => runner.call("resources", {}, 5000)))
           ? []
           : queued;
-      for (const t of tasks)
-        await boss.send(
-          "execute",
-          { taskId: t.id },
-          { singletonKey: t.id, singletonSeconds: 60 },
-        );
+      for (const t of tasks) {
+        if (t.pending) continue;
+        // 去重只涵蓋仍待領的交付。舊程序留下的 active 工作不能擋住中斷後重試。
+        await boss.upsert("execute", { taskId: t.id }, {
+          singletonKey: t.id,
+          group: t.mode !== "query" && t.project_id ? { id: t.project_id } : undefined,
+        });
+      }
+      if (tasks.some((t) => !t.pending))
+        for (const id of executeWorkers) boss.notifyWorker(id);
+      // 等待中的修改仍由 pg-boss 保管，尚未領件的任務也要能收到原有的排隊提醒。
+      if (tasks.some((t) => t.notify)) {
+        const snapshot = await queueSnapshot(db);
+        const destinations = new Map(tasks.map((t) => [t.id, t.notify]));
+        const told = new Set<string>();
+        for (const t of snapshot.queued) {
+          const destination = destinations.get(t.id);
+          if (destination && !told.has(destination) && (t.code === "changing" || (t.code === "waiting" && snapshot.running.length >= limit))) {
+            await tellGroupWaiting(db, t.id, "busy", await queueEstimate(db.pool, t.id, limit));
+            told.add(destination);
+          }
+        }
+      }
       if (s.ai_mode === "api")
         await db.query(
           "UPDATE tasks SET status='queued',last_error=NULL WHERE status='budget_wait' AND (updated_at AT TIME ZONE 'Asia/Taipei')::date<((now() AT TIME ZONE 'Asia/Taipei')::date)",

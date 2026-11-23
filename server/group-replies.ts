@@ -409,21 +409,24 @@ const waitText: Record<WaitReason, string> = {
     "系統目前暫停中，這件事已經保留，恢復後會自動繼續處理，不用重新提出。",
 };
 /** 工作被保留時告訴成員一聲，同一群組或討論串每 6 小時最多一則。 */
+// 派工提醒查詢與寫入使用同一個目的地與六小時時段。
+export const waitNotificationKey = "'group:waiting:'||COALESCE(t.discord_thread_id,t.group_id)||':'||$1::text";
+export const waitNotificationBucket = () => String(Math.floor(Date.now() / (6 * 3600 * 1000)));
+
 export async function tellGroupWaiting(
   c: Queryable,
   taskId: string,
   reason: WaitReason,
   place?: QueuePlace,
 ) {
-  const bucket = Math.floor(Date.now() / (6 * 3600 * 1000));
   const text =
     reason === "busy" && place ? queuedText(place) : waitText[reason];
   await c.query(
     `INSERT INTO notifications(task_id,kind,dedupe_key,text,group_id)
-     SELECT t.id,'group_waiting','group:waiting:'||COALESCE(t.discord_thread_id,g.id)||':'||$3::text,$2,g.id FROM tasks t JOIN groups g ON g.id=t.group_id
-     WHERE t.id=$1 AND g.left_at IS NULL AND ${groupRepliesOn} AND g.reply_mode IN ('results','all')
+     SELECT t.id,'group_waiting',${waitNotificationKey},$2,g.id FROM tasks t JOIN groups g ON g.id=t.group_id
+     WHERE t.id=$3 AND g.left_at IS NULL AND ${groupRepliesOn} AND g.reply_mode IN ('results','all')
      ON CONFLICT DO NOTHING`,
-    [taskId, text, String(bucket)],
+    [waitNotificationBucket(), text, taskId],
   );
 }
 
