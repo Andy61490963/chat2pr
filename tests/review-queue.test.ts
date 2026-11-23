@@ -138,6 +138,55 @@ test("待審用建立時間，失敗用更新時間，未提供時間的清單�
   expect(items[0].id).toBe("failed");
 });
 
+test("清單比任務等得久時，在等最久排序排第一", () => {
+  const items = reviewItems(
+    [{ ...base, created_at: middle }],
+    [{ ...list, createdAt: oldest }],
+    groups,
+    true,
+  );
+  expect(sortReviewItems(items, "oldest").map(({ id }) => id)).toEqual([
+    "list-first",
+    "change",
+  ]);
+});
+
+test("最新排序將較晚建立的任務排在等得更久的清單之前", () => {
+  const items = reviewItems(
+    [
+      { ...base, id: "newer-task", created_at: newest },
+      { ...base, id: "older-task" },
+    ],
+    [{ ...list, createdAt: middle }],
+    groups,
+    true,
+  );
+  expect(sortReviewItems(items, "newest").map(({ id }) => id)).toEqual([
+    "newer-task",
+    "list-first",
+    "older-task",
+  ]);
+});
+
+test("缺少建立時間的清單在兩種排序都排在有時間的清單和任務之後", () => {
+  const items = reviewItems(
+    [{ ...base, created_at: middle }],
+    [list, { ...list, id: "dated", createdAt: oldest }],
+    groups,
+    true,
+  );
+  expect(sortReviewItems(items, "oldest").map(({ id }) => id)).toEqual([
+    "list-dated",
+    "change",
+    "list-first",
+  ]);
+  expect(sortReviewItems(items, "newest").map(({ id }) => id)).toEqual([
+    "change",
+    "list-dated",
+    "list-first",
+  ]);
+});
+
 test("處理完成後選下一筆，已在最後則選前一筆，沒有相鄰案件時回傳空值", () => {
   const items = reviewItems(
     [base, { ...base, id: "second" }],

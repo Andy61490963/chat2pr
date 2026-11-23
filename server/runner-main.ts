@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { z } from "zod";
-import { Containers } from "./containers.js";
+import { Containers, candidatePath } from "./containers.js";
 import { FULL_ACCESS_ENV } from "./containers.js";
 import { ProbeTargets, probeTargets } from "./network-probe.js";
 import { SshLoginInput, testSshLogin } from "./ssh-login.js";
@@ -44,6 +44,7 @@ import {
 import { applyEgress } from "./egress.js";
 import { derivedImage } from "./derived-image.js";
 import { assertTestsFound } from "./project-setup.js";
+import { phaseEndEvents } from "./test-failures.js";
 import { ENVIRONMENT_EXIT, testEnvironment } from "./sqlserver-test.js";
 import {
   MAX_EGRESS_DOMAINS,
@@ -181,6 +182,24 @@ app.post("/prepare-source", async (req) => {
     detail: `專案快取：${{ cold: "首次下載", hit: "命中", updated: "增量更新" }[report.cache]}；抓取 ${(report.fetchMs / 1000).toFixed(1)} 秒、快照 ${(report.snapshotMs / 1000).toFixed(1)} 秒、獨立副本 ${(report.copyMs / 1000).toFixed(1)} 秒`,
   });
   return report;
+});
+// 接續上一次執行：把伺服器保存的候選修改寫回剛準備好的工作副本（#241）。
+app.post("/apply-candidate", async (req) => {
+  const b = Job.extend({
+    files: z
+      .array(
+        z.object({
+          path: z.string().refine(candidatePath, "候選檔案路徑無效"),
+          content: z.string().base64().nullable(),
+          mode: z.enum(["100644", "100755"]),
+        }),
+      )
+      .min(1)
+      .max(5000),
+    timeoutMs: z.number().int().min(1000).max(1800000),
+  }).parse(req.body);
+  await containers.applyCandidate(b.runId, b.image, b.files, b.timeoutMs);
+  return { ok: true };
 });
 // 擁有者提供的環境資料（資料庫結構快照）：寫進這次執行專用的唯讀資料卷。
 app.post("/environment-files", async (req) => {
@@ -550,14 +569,7 @@ app.post("/phase", async (req) => {
           },
         ),
     );
-    observe({
-      kind: "phase_end",
-      exitCode: result.exitCode,
-      detail:
-        b.phase === "install" || b.phase === "test"
-          ? result.stdout.slice(-4000) + "\n" + result.stderr.slice(-2000)
-          : result.stderr.slice(-4000),
-    });
+    for (const event of phaseEndEvents(b.phase, result)) observe(event);
     return { ...result, observations: observations.read(b.runId) };
   } catch (e) {
     observe({

@@ -22,6 +22,7 @@ import {
   ExternalLink,
   RefreshCw,
   RotateCcw,
+  Wrench,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -166,6 +167,8 @@ export type TaskReviewPanelProps = {
   open: (id: string) => void;
   /** 對已回答的查詢追問，建立新的一題。 */
   followup: (t: Detail["task"], text: string) => Promise<boolean>;
+  /** 基底驗證失敗時建立「修復目標分支」任務並打開它（#248）。 */
+  repairBaseline: (t: Detail["task"]) => unknown;
   /** 直接回答補問；成功才回傳 true，失敗時呼叫端保留輸入。 */
   answer: (t: Detail["task"], text: string) => Promise<boolean>;
   /** 接錯題時改接到另一題，或改成新話題（null）。 */
@@ -184,6 +187,7 @@ export function TaskReviewPanel({
   act,
   open,
   followup,
+  repairBaseline,
   answer,
   relink,
 }: TaskReviewPanelProps) {
@@ -369,6 +373,7 @@ export function TaskReviewPanel({
     !fixTarget &&
     (fix.kind === "detail" || fix.kind === "page");
   const amendFirst = t.status === "failed" && fix.kind === "amend";
+  const repairFirst = t.status === "failed" && t.mode === "change" && fix.kind === "repair";
   // 執行中的那一次（最新且未完成）：標頭顯示階段、已跑時間與期限。
   const live =
     ["running", "reviewing"].includes(t.status) &&
@@ -881,6 +886,15 @@ export function TaskReviewPanel({
               {inboxStatusLabels.viewFailure}
             </Button>
           )}
+          {repairFirst && (
+            <Button
+              ref={onPrimaryMount}
+              disabled={busy}
+              onClick={() => void repairBaseline(t)}
+            >
+              <Wrench /> 請 AI 修好目標分支
+            </Button>
+          )}
           {inWorkbench &&
             t.status === "failed" &&
             fix.kind === "retry" &&
@@ -946,6 +960,14 @@ export function TaskReviewPanel({
       >
         {taskListTitle(t, title)}
       </Title>
+      {t.baseline_repair && (
+        <p>
+          <Badge variant="info">修復目標分支</Badge>
+          <span className="ml-2 text-xs text-muted-foreground">
+            修改前就沒過的測試也必須在結束時全部通過
+          </span>
+        </p>
+      )}
       {inWorkbench ? metadata : (
         <SheetDescription asChild>{metadata}</SheetDescription>
       )}

@@ -89,8 +89,7 @@ export function reviewItems(
         ? `${pickListLabels.pending}：${list.items[0].title}`
         : pickListLabels.pending,
       ...groupFields(list.groupId),
-      // 看板未收到清單建立時間，清單之間沿用伺服器的建立順序。
-      waitingSince: null,
+      waitingSince: list.createdAt ?? null,
       status: inboxStatusLabels.chooseTasks,
     })),
   ];

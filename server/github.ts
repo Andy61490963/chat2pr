@@ -628,6 +628,18 @@ export class GitHub {
       token,
     );
   }
+  /** 基底驗證失敗時用（#248）：`head` 比 `base` 多幾個 commit，以及 GitHub 的比較頁。 */
+  async compareCommits(project: Project, base: string, head: string) {
+    const api = await this.client(project.repo);
+    const data = (
+      await api.repos.compareCommitsWithBasehead({
+        ...this.parts(project.repo),
+        basehead: `${base}...${head}`,
+        per_page: 1,
+      })
+    ).data;
+    return { aheadBy: data.ahead_by, url: data.html_url };
+  }
   async findPr(project: Project, branch: string) {
     const p = this.parts(project.repo);
     return (

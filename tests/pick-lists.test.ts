@@ -104,6 +104,18 @@ async function dashboard(
 }
 
 describe("待挑選清單和任務建立", () => {
+  it("看板狀態以 ISO 字串回傳待挑選清單的建立時間", async () => {
+    await meeting();
+    await db.query("UPDATE pick_lists SET created_at=$1 WHERE root_id=$2", [
+      "2026-11-21T13:45:00.123+08:00",
+      root,
+    ]);
+    await dashboard(async (state) => {
+      const [list] = (await state()).pickLists;
+      expect(list.createdAt).toBe("2026-11-21T05:45:00.123Z");
+    });
+  });
+
   it("會議紀錄只有修改登入功能的項目顯示敏感提醒", async () => {
     const items = [
       "首頁看板顯示今日待辦數量",
