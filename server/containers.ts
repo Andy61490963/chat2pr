@@ -1,4 +1,5 @@
 import Docker from "dockerode";
+import { maskCredentials } from "../shared/credentials.js";
 import type { RunEvent } from "../shared/observation.js";
 import { PassThrough, type Duplex } from "node:stream";
 import { request, type ClientRequest } from "node:http";
@@ -761,7 +762,11 @@ export class Containers {
       'set -eu; git -c core.hooksPath=/dev/null init -q; git -c core.hooksPath=/dev/null add -A; git -c core.hooksPath=/dev/null -c user.name=LINE-AgentFlow -c user.email=agentflow@localhost commit -qm "記錄工作基底"',
     ]);
     if (result.exitCode !== 0)
-      throw new AppError(500, `專案準備失敗：${result.stderr.slice(-1000)}`);
+      // 先遮蔽再截斷：截斷點落在帳密中間時，剩下的半段遮蔽規則認不出來。
+      throw new AppError(
+        500,
+        `專案準備失敗：${maskCredentials(result.stderr).slice(-1000)}`,
+      );
     const snapshot = await this.docker.createContainer({
       Image: image,
       User: "0:0",

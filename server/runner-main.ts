@@ -19,6 +19,7 @@ import {
   validateRunnerEnvironment,
   subscriptionBrokerPort,
 } from "./config.js";
+import { replyRunnerError } from "./error-reply.js";
 import { AppError } from "./policy.js";
 import { SubscriptionBroker } from "./subscription-broker.js";
 import { subscriptionIdentity } from "./subscription-identity.js";
@@ -121,10 +122,7 @@ registerRunnerAuth(app);
 app.addContentTypeParser("application/octet-stream", (_req, payload, done) =>
   done(null, payload),
 );
-app.setErrorHandler((err, _req, reply) => {
-  const e = err as Error & { statusCode?: number };
-  reply.code(e.statusCode ?? 500).send({ error: e.message.slice(0, 2000) });
-});
+app.setErrorHandler(replyRunnerError);
 registerRunnerSecrets(app);
 app.get("/health", async () => {
   await containers.docker.ping();

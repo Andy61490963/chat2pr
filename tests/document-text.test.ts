@@ -1,6 +1,8 @@
 import { expect, it } from "vitest";
 import { ZipFile } from "yazl";
 import { buffer } from "node:stream/consumers";
+import { existsSync } from "node:fs";
+import { delimiter, join } from "node:path";
 import {
   documentName,
   extractDocumentText,
@@ -18,6 +20,34 @@ async function office(parts: Record<string, string>) {
   zip.end();
   return result;
 }
+
+/**
+ * PDF 由 poppler 的 pdfinfo 與 pdftotext 讀取；正式環境的映像（Dockerfile）有安裝，Linux 上再經 prlimit 限制資源。
+ * Windows 開發機的 Git for Windows 只附 xpdf 版 pdftotext、沒有 pdfinfo，程式會回「PDF 讀取工具無法啟動」。
+ * 這是本機缺工具，不是程式錯誤：缺工具時略過並印出原因；工具都在卻讀不到時照常失敗。
+ */
+function installed(tool: string) {
+  const names =
+    process.platform === "win32"
+      ? (process.env.PATHEXT ?? ".EXE").split(";").map((ext) => tool + ext)
+      : [tool];
+  const dirs = (process.env.PATH ?? "").split(delimiter).filter(Boolean);
+  if (process.platform === "win32")
+    dirs.push(
+      join(
+        process.env.ProgramFiles ?? "C:\\Program Files",
+        "Git",
+        "mingw64",
+        "bin",
+      ),
+    );
+  return dirs.some((dir) => names.some((name) => existsSync(join(dir, name))));
+}
+const missingPdfTools = [
+  "pdfinfo",
+  "pdftotext",
+  ...(process.platform === "linux" ? ["prlimit"] : []),
+].filter((tool) => !installed(tool));
 
 // 建立含字型與交叉參照表的單頁 PDF；空字串代表沒有可讀文字的一頁。
 function pdf(text: string) {
@@ -119,7 +149,13 @@ it("依簡報編排順序擷取投影片標題與段落", async () => {
   );
 });
 
-it("從真正的 PDF 文字層讀取內容，沒有文字的頁面提供可行提示", async () => {
+it("從真正的 PDF 文字層讀取內容，沒有文字的頁面提供可行提示", async (ctx) => {
+  if (missingPdfTools.length) {
+    const reason = `這台機器找不到 ${missingPdfTools.join("、")}，略過 PDF 文字層測試；安裝 poppler 後即可執行，正式映像已安裝`;
+    // 預設報告器不顯示通過或略過項目的 console 輸出，直接寫到 stderr 才看得到原因。
+    process.stderr.write(`${reason}\n`);
+    ctx.skip(reason);
+  }
   expect(await extractDocumentText("出貨.pdf", pdf("BOXES 7"))).toBe("BOXES 7");
   await expect(extractDocumentText("掃描.pdf", pdf(""))).rejects.toThrow(
     "沒有可擷取的文字",
