@@ -1,8 +1,20 @@
 import { beforeEach, afterAll, it, expect, vi } from "vitest";
 import { reviewVerdict } from "../server/pr-body.js";
-import { transientFailure } from "../server/execution.js";
+import { transientFailure, claimAutoResume } from "../server/execution.js";
 import { codexSdkCrash } from "./failure-samples.js";
-import { db, reset, fixture, confirmTask, dashboardAction } from "./helpers.js";
+import {
+  db,
+  reset,
+  fixture,
+  confirmTask,
+  dashboardAction,
+  session,
+} from "./helpers.js";
+import {
+  phaseDurations,
+  repairPhaseDetail,
+  type RunView,
+} from "../shared/observation.js";
 import {
   Execution,
   noConnectionHint,
@@ -1336,6 +1348,9 @@ it("逾時訊息寫出設定的單次執行時間", async () => {
   expect(task.last_error).toContain("任務超過 5 分鐘限制");
   expect(task.last_error).not.toContain("30 分鐘限制");
   expect(task.last_error).toContain("縮小需求範圍");
+  // 還沒收集到修改就逾時：沒有可接續的修改，不自動接續（#256）。
+  expect(await autoResumes()).toEqual([]);
+  expect(task.last_error).toContain("用掉最多時間的是");
 });
 /** 第 n 次進入指定階段時先做 before，再讓執行器丟出 error（模擬取消或逾時）。 */
 const failPhase = (
@@ -1360,6 +1375,24 @@ const failPhase = (
   return jobs;
 };
 const timeout = () => new AppError(408, "執行超過時間限制");
+/** 可控制的時鐘：把現在撥到這次執行的期限之後，再讓執行器回報逾時。 */
+const pastDeadline = async () => {
+  const run = await db.one<{ deadline: Date }>(
+    "SELECT deadline FROM runs ORDER BY started_at DESC LIMIT 1",
+  );
+  vi.spyOn(Date, "now").mockReturnValue(run.deadline.getTime() + 1000);
+};
+const realClock = () => vi.restoreAllMocks();
+const autoResumes = async () =>
+  (
+    await db.query<{ detail: string }>(
+      "SELECT detail FROM audit WHERE kind='auto_resume' ORDER BY id",
+    )
+  ).map((a) => a.detail);
+const failureNotices = () =>
+  db.query(
+    "SELECT kind FROM notifications WHERE kind IN ('failed','group_failed')",
+  );
 const attempts = async () =>
   (
     await db.query<{ detail: string }>(
@@ -1392,19 +1425,13 @@ it("獨立審查時系統暫停：恢復後沿用已收集的修改，從測試�
     "沿用上一次已收集的修改，從測試與獨立審查接續",
   ]);
 });
-it("修復後的審查逾時：說明修改已保留、主要處理是重試；重試沿用修復結果接續審查，不再多修一次", async () => {
+it("修復後的審查逾時：自動接續一次，沿用修復結果接續審查，不再多修一次", async () => {
   const s = await scenario();
   s.change({ failReviews: 1 });
   failPhase(s, "review", 2, timeout);
   await s.execution.execute(s.task.id);
-  const failed = await db.one<Task>("SELECT * FROM tasks");
-  expect(failed.status).toBe("failed");
-  expect(failed.last_error).toContain("修改已保留");
-  expect(failed.last_error).not.toContain("縮小需求範圍");
-  expect(primaryFix(parseFailure(failed.last_error))).toEqual({
-    kind: "retry",
-  });
-  await dashboardAction(s.task.id, "retry", failed.version);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("queued");
+  expect(await failureNotices()).toEqual([]);
   await s.execution.execute(s.task.id);
   expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("ready");
   expect(s.counts()).toEqual({ published: 1, testCalls: 3, codeCalls: 2 });
@@ -1418,32 +1445,25 @@ it("接續的修復結果仍未通過審查：不再多修一次，照常失敗"
   s.change({ failReviews: 3 });
   failPhase(s, "review", 2, timeout);
   await s.execution.execute(s.task.id);
-  await dashboardAction(
-    s.task.id,
-    "retry",
-    (await db.one<Task>("SELECT * FROM tasks")).version,
-  );
+  expect(await autoResumes()).toHaveLength(1);
   await s.execution.execute(s.task.id);
   const task = await db.one<Task>("SELECT * FROM tasks");
   expect(task.status).toBe("failed");
   expect(task.last_error).toContain("仍沒有通過");
   expect(s.counts()).toEqual({ published: 0, testCalls: 3, codeCalls: 2 });
 });
-it("修復中逾時：重試沿用第一次的修改與審查意見直接修復，不重做第一次修改與審查", async () => {
+it("修復中逾時：自動接續時沿用第一次的修改與審查意見直接修復，不重做第一次修改與審查", async () => {
   const s = await scenario();
   s.change({ failReviews: 1 });
   const jobs = failPhase(s, "code", 2, timeout);
   await s.execution.execute(s.task.id);
-  const failed = await db.one<Task>("SELECT * FROM tasks");
-  // 第一次修改已驗證且沒過：如實說明保留的是修改與審查意見，重試直接修復，而不是「從測試與審查接續」。
-  expect(failed.last_error).toContain("修改與審查意見已保留");
-  expect(failed.last_error).toContain("自動修復");
-  expect(failed.last_error).not.toContain("從測試與獨立審查接續");
-  expect(failed.last_error).not.toContain("縮小需求範圍");
-  expect(primaryFix(parseFailure(failed.last_error))).toEqual({
-    kind: "retry",
-  });
-  await dashboardAction(s.task.id, "retry", failed.version);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("queued");
+  // 群組收到的進度如實說明接下來是修復，而不是「接續測試與審查」。
+  const progress = await db.one<{ text: string }>(
+    "SELECT text FROM notifications WHERE kind='group_resumed'",
+  );
+  expect(progress.text).toContain("修復");
+  expect(progress.text).not.toContain("測試與審查");
   await s.execution.execute(s.task.id);
   expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("ready");
   expect(s.reviews()).toBe(2);
@@ -1496,14 +1516,14 @@ it("安裝失敗後目標分支前進：重試改用目標分支最新的 commit
   expect(task.base_sha).toBe("fixed-sha");
   expect(await startedBases()).toEqual(["base-sha", "fixed-sh"]);
 });
-it("有保留的修改時目標分支前進：重試仍用原基底接續，不換成新 commit", async () => {
+it("有保留的修改時目標分支前進：接續仍用原基底，不換成新 commit", async () => {
   const s = await scenario();
   failPhase(s, "review", 1, timeout);
   await s.execution.execute(s.task.id);
-  const failed = await db.one<Task>("SELECT * FROM tasks");
-  expect(failed.last_error).toContain("修改已保留");
+  // 逾時且修改已保留：系統自動接續（#256），任務回到排隊，不用人按重試。
+  const resumed = await db.one<Task>("SELECT * FROM tasks");
+  expect(resumed.status).toBe("queued");
   s.github.base = async () => "moved-sha";
-  await dashboardAction(s.task.id, "retry", failed.version);
   await s.execution.execute(s.task.id);
   const task = await db.one<Task>("SELECT * FROM tasks");
   expect(task.status).toBe("ready");
@@ -1683,22 +1703,286 @@ it("寫回上一次的修改後重新安裝依賴，修改新增的套件在測�
   expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("ready");
   expect(s.counts()).toEqual({ published: 1, testCalls: 2, codeCalls: 1 });
 });
-it("接續的執行在重新收集前逾時：說明修改仍保留、重試會接續，不建議縮小範圍", async () => {
+it("接續的執行在重新收集前逾時：修改仍保留，自動接續一次", async () => {
   const s = await scenario();
   pauseAtFirstReview(s);
   failPhase(s, "install", 2, timeout);
   await s.execution.execute(s.task.id);
   await unpause();
   await s.execution.execute(s.task.id);
-  const failed = await db.one<Task>("SELECT * FROM tasks");
-  expect(failed.status).toBe("failed");
-  expect(failed.last_error).toContain("修改已保留");
-  expect(failed.last_error).not.toContain("縮小需求範圍");
-  await dashboardAction(s.task.id, "retry", failed.version);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("queued");
+  expect(await autoResumes()).toHaveLength(1);
   await s.execution.execute(s.task.id);
   expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("ready");
   expect(s.counts().codeCalls).toBe(1);
   expect(s.applied).toHaveLength(1);
+});
+it("逾時且修改已保留：自動接續一次、不通知失敗，群組與管理者收到進度，時間軸看得到自動接續", async () => {
+  const s = await scenario();
+  failPhase(s, "review", 1, timeout, pastDeadline);
+  try {
+    await s.execution.execute(s.task.id);
+  } finally {
+    realClock();
+  }
+  const resumed = await db.one<Task & { retry_at: Date | null }>(
+    "SELECT * FROM tasks",
+  );
+  expect(resumed.status).toBe("queued");
+  expect(resumed.retry_at).toBeNull();
+  expect(await failureNotices()).toEqual([]);
+  const progress = await db.query<{ kind: string; text: string }>(
+    "SELECT kind,text FROM notifications WHERE kind IN ('group_resumed','auto_resume') ORDER BY kind",
+  );
+  expect(progress.map((p) => p.kind)).toEqual(["auto_resume", "group_resumed"]);
+  expect(progress[1].text).toContain("已保留目前的修改");
+  expect(progress[1].text).toContain("自動接續測試與審查");
+  const [history] = await autoResumes();
+  expect(history).toContain("自動接續");
+  expect(history).toContain("需求版本 1，");
+  expect(history).toContain("用掉最多時間的是");
+  // 程序重啟（新的 Execution）後照資料庫的紀錄接續：不重新修改，測試與獨立審查照常再跑。
+  await new Execution(db, s.github, s.line, s.budget, s.runner).execute(
+    s.task.id,
+  );
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("ready");
+  expect(s.counts()).toEqual({ published: 1, testCalls: 2, codeCalls: 1 });
+  expect(s.reviews()).toBe(1);
+  expect(s.applied).toHaveLength(1);
+  expect((await attempts()).at(-1)).toBe(
+    "沿用上一次已收集的修改，從測試與獨立審查接續",
+  );
+});
+it.each([
+  {
+    name: "測試與審查",
+    setup: (s: Awaited<ReturnType<typeof scenario>>) =>
+      failPhase(s, "review", 1, timeout),
+    again: (s: Awaited<ReturnType<typeof scenario>>) =>
+      failPhase(s, "review", 1, timeout),
+    kept: "修改已保留",
+    next: "從測試與獨立審查接續",
+  },
+  {
+    name: "自動修復",
+    setup: (s: Awaited<ReturnType<typeof scenario>>) => {
+      s.change({ failReviews: 1 });
+      return failPhase(s, "code", 2, timeout);
+    },
+    again: (s: Awaited<ReturnType<typeof scenario>>) =>
+      failPhase(s, "code", 1, timeout),
+    kept: "修改與審查意見已保留",
+    next: "自動修復",
+  },
+])(
+  "自動接續$name後又逾時：照 #246 的說明失敗，同一需求版本不再接續，重試仍沿用保留的修改",
+  async ({ setup, again, kept, next }) => {
+    const s = await scenario();
+    setup(s);
+    await s.execution.execute(s.task.id);
+    expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("queued");
+    again(s);
+    await s.execution.execute(s.task.id);
+    const failed = await db.one<Task>("SELECT * FROM tasks");
+    expect(failed.status).toBe("failed");
+    expect(failed.last_error).toContain(kept);
+    expect(failed.last_error).toContain(next);
+    expect(failed.last_error).not.toContain("縮小需求範圍");
+    expect(primaryFix(parseFailure(failed.last_error))).toEqual({
+      kind: "retry",
+    });
+    expect(
+      (await failureNotices()).map((n) => (n as { kind: string }).kind).sort(),
+    ).toEqual(["failed", "group_failed"]);
+    expect(await autoResumes()).toHaveLength(1);
+    await dashboardAction(s.task.id, "retry", failed.version);
+    await s.execution.execute(s.task.id);
+    expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("ready");
+    expect(s.applied).toHaveLength(2);
+    expect(s.counts().codeCalls).toBe(next === "自動修復" ? 2 : 1);
+  },
+);
+it.each([
+  {
+    mode: "訂閱模式每日執行次數",
+    reason: "今日執行次數已用完",
+    prepare: async (s: Awaited<ReturnType<typeof scenario>>) => {
+      await db.query(
+        `UPDATE settings SET value=value||'{"ai_mode":"subscription","daily_runs":1}'::jsonb WHERE id=1`,
+      );
+      s.runner.account = async () => ({
+        allowed: true,
+        checkedAt: new Date().toISOString(),
+      });
+      return async () => {};
+    },
+  },
+  {
+    mode: "API 模式每日預算",
+    reason: "今日預估額度不足",
+    prepare: async () => () =>
+      db.query(
+        "INSERT INTO usage(model,input_tokens,cached_tokens,output_tokens,cost) VALUES('gpt-6.1-sol',0,0,0,13)",
+      ),
+  },
+])(
+  "$mode用完：不自動接續，照 #246 的說明失敗並寫出原因",
+  async ({ prepare, reason }) => {
+    const s = await scenario();
+    const spend = await prepare(s);
+    failPhase(s, "review", 1, timeout, spend);
+    await new Execution(db, s.github, s.line, s.budget, s.runner).execute(
+      s.task.id,
+    );
+    const failed = await db.one<Task>("SELECT * FROM tasks");
+    expect(failed.status).toBe("failed");
+    expect(failed.last_error).toContain("修改已保留");
+    expect(failed.last_error).toContain(reason);
+    expect(failed.last_error).toContain("沒有自動接續");
+    expect(primaryFix(parseFailure(failed.last_error))).toEqual({
+      kind: "retry",
+    });
+    const group = await db.one<{ text: string }>(
+      "SELECT text FROM notifications WHERE kind='group_failed'",
+    );
+    expect(group.text).toContain(reason);
+    expect(await autoResumes()).toEqual([]);
+  },
+);
+it("失敗後重試、逾時自動接續、接續後又失敗：群組依序收到失敗、自動接續、新的失敗說明，每次失敗只一則", async () => {
+  const s = await scenario();
+  const groupMessages = async () =>
+    (
+      await db.query<{ kind: string; text: string }>(
+        "SELECT kind,text FROM notifications WHERE task_id=$1 AND kind IN ('group_failed','group_resumed') ORDER BY created_at,id",
+        [s.task.id],
+      )
+    ).map((n) => n.kind);
+  // 1. 逾時時今日預算用完：沒有自動接續，任務失敗，群組收到失敗說明。
+  failPhase(s, "review", 1, timeout, () =>
+    db.query(
+      "INSERT INTO usage(model,input_tokens,cached_tokens,output_tokens,cost) VALUES('gpt-6.1-sol',0,0,0,13)",
+    ),
+  );
+  await s.execution.execute(s.task.id);
+  const first = await db.one<Task>("SELECT * FROM tasks");
+  expect(first.status).toBe("failed");
+  expect(await groupMessages()).toEqual(["group_failed"]);
+  // 2. 隔天（預算恢復）管理者重試，又逾時：這個版本還沒接續過，自動接續一次。
+  await db.query("DELETE FROM usage");
+  await dashboardAction(s.task.id, "retry", first.version);
+  failPhase(s, "review", 1, timeout);
+  await s.execution.execute(s.task.id);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("queued");
+  expect(await groupMessages()).toEqual(["group_failed", "group_resumed"]);
+  // 3. 接續的執行又逾時：已接續過，照常失敗，群組要收到新的失敗說明，不能停在「系統會自動接續」。
+  failPhase(s, "review", 1, timeout);
+  await s.execution.execute(s.task.id);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("failed");
+  expect(await groupMessages()).toEqual([
+    "group_failed",
+    "group_resumed",
+    "group_failed",
+  ]);
+  // 同一次失敗再處理一次（例如重複派工）不會多發一則。
+  await s.execution.execute(s.task.id);
+  expect(await groupMessages()).toHaveLength(3);
+});
+it.each([
+  {
+    change: "需求版本改變",
+    apply: (id: string) =>
+      db.query(
+        "UPDATE tasks SET status='awaiting_approval',version=version+1,approved_version=NULL WHERE id=$1",
+        [id],
+      ),
+    status: "awaiting_approval",
+  },
+  {
+    change: "任務被取消",
+    apply: (id: string) => new Tasks(db).action(id, "cancel", 1, "管理者"),
+    status: "cancelled",
+  },
+])("逾時前$change：不自動接續", async ({ apply, status }) => {
+  const s = await scenario();
+  failPhase(s, "review", 1, timeout, () => apply(s.task.id));
+  await s.execution.execute(s.task.id);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe(status);
+  expect(await autoResumes()).toEqual([]);
+  expect(
+    await db.query("SELECT 1 FROM notifications WHERE kind='group_resumed'"),
+  ).toHaveLength(0);
+});
+it("任務詳情的執行紀錄帶各階段的進入時間，分得出修改與自動修復", async () => {
+  const s = await scenario();
+  s.change({ failReviews: 1 });
+  await s.execution.execute(s.task.id);
+  const { buildApp } = await import("../server/app.js");
+  const app = await buildApp(db);
+  try {
+    const detail = (
+      await app.inject({
+        url: `/api/tasks/${s.task.id}`,
+        headers: await session(),
+      })
+    ).json();
+    const [run] = detail.runs as RunView[];
+    expect(
+      phaseDurations(run.phases!, run.completed_at!).map((p) => p.label),
+    ).toEqual(["準備", "測試", "修改", "審查", "修復", "建立 PR"]);
+    expect(
+      run.phases!.filter((p) => p.detail === repairPhaseDetail),
+    ).toMatchObject([{ phase: "code" }]);
+  } finally {
+    await app.close();
+  }
+});
+it("被自動接續的那次執行，執行紀錄的結果是「逾時，已自動接續」而不是排隊中", async () => {
+  const s = await scenario();
+  failPhase(s, "review", 1, timeout);
+  await s.execution.execute(s.task.id);
+  await s.execution.execute(s.task.id);
+  const { buildApp } = await import("../server/app.js");
+  const app = await buildApp(db);
+  try {
+    const detail = (
+      await app.inject({
+        url: `/api/tasks/${s.task.id}`,
+        headers: await session(),
+      })
+    ).json();
+    const outcomes = (detail.runs as RunView[])
+      .sort((a, b) => a.started_at.localeCompare(b.started_at))
+      .map((r) => r.outcome);
+    expect(outcomes).toEqual(["auto_resumed", "ready"]);
+  } finally {
+    await app.close();
+  }
+});
+it("同一次逾時被重複處理：只接續一次", async () => {
+  const s = await scenario();
+  const run = await db.one<{ id: string }>(
+    "INSERT INTO runs(task_id,version,model,deadline) VALUES($1,1,'測試模型',now()) RETURNING id",
+    [s.task.id],
+  );
+  await db.query("UPDATE tasks SET status='reviewing' WHERE id=$1", [
+    s.task.id,
+  ]);
+  const claim = () =>
+    claimAutoResume(db, s.task.id, run.id, {
+      lastError: "修改已保留，系統已自動接續",
+      detail: (v) => `自動接續（需求版本 ${v}，每個版本一次）`,
+      shortfall: async () => "",
+    });
+  const claims = await Promise.all([claim(), claim(), claim()]);
+  expect(claims.filter((c) => c.claimed)).toHaveLength(1);
+  expect(await autoResumes()).toHaveLength(1);
+  // 接續的執行又回到執行中：同一需求版本已接續過，不再排第二次。
+  await db.query("UPDATE tasks SET status='reviewing' WHERE id=$1", [
+    s.task.id,
+  ]);
+  expect(await claim()).toEqual({ claimed: false, used: true });
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("reviewing");
 });
 it("修復後仍未通過、記錄結論前中斷：這份修改不再接續", async () => {
   const s = await scenario();

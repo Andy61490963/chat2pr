@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   afterAll,
   afterEach,
@@ -23,6 +24,7 @@ import { discordId } from "../server/chat-platform.js";
 import {
   aiQuotaAck,
   answerAck,
+  autoResumeText,
   answerHeldAck,
   claimPendingGroupReplies,
   claimingNote,
@@ -42,8 +44,11 @@ import { askInGroup } from "../server/answers.js";
 import { approvalNotice } from "../server/project-routing.js";
 import { dueTriageGroups } from "../server/triage-window.js";
 import { GitHub } from "../server/github.js";
-import { quotaExhaustedDetail } from "../shared/line-quota.js";
-import { syncLineQuota } from "../server/line-quota.js";
+import { expiredNote, quotaExhaustedDetail } from "../shared/line-quota.js";
+import {
+  expireStaleNotifications,
+  syncLineQuota,
+} from "../server/line-quota.js";
 import { recordHealth } from "../server/health.js";
 import type { Task } from "../shared/types.js";
 
@@ -1276,6 +1281,87 @@ describe("用 reply token 取回與說實話", () => {
     expect(lastReply()).toHaveLength(1);
   });
 
+  it("自動接續的進度只在接續還沒結束時取回；接續結束後過期，不補送", async () => {
+    await settings();
+    const resumed = await task("範例報表加上日期");
+    await db.query("UPDATE tasks SET status='queued' WHERE id=$1", [resumed]);
+    await notifyGroup(
+      db,
+      resumed,
+      "resumed",
+      `resumed:${resumed}:1`,
+      autoResumeText("verify"),
+    );
+    await send("r1", "/進度");
+    expect(lastReply().join("\n")).toContain("自動接續測試與審查");
+
+    const finished = await task("範例清單排序");
+    await notifyGroup(
+      db,
+      finished,
+      "resumed",
+      `resumed:${finished}:1`,
+      autoResumeText("repair"),
+    );
+    await db.query("UPDATE tasks SET status='failed' WHERE id=$1", [finished]);
+    await send("r2", "/進度");
+    expect(lastReply().join("\n")).not.toContain("自動接續修復");
+    await db.transaction((c) => expireStaleNotifications(c));
+    expect(
+      await db.one<{ last_error: string }>(
+        "SELECT last_error FROM notifications WHERE kind='group_resumed' AND task_id=$1",
+        [finished],
+      ),
+    ).toEqual({ last_error: expiredNote });
+  });
+  it("自動接續的進度只屬於當時的需求版本：任務改成新版本再排隊時不取回、過期不補送", async () => {
+    await settings();
+    const id = await task("範例報表加上日期");
+    await notifyGroup(
+      db,
+      id,
+      "resumed",
+      `resumed:${id}:1`,
+      autoResumeText("verify"),
+    );
+    // 新版本核准後回到排隊：「已保留目前的修改」對新版本不成立。
+    await db.query(
+      "UPDATE tasks SET status='queued',version=2,approved_version=2 WHERE id=$1",
+      [id],
+    );
+    await send("r1", "/進度");
+    expect(lastReply().join("\n")).not.toContain("自動接續");
+    await db.transaction((c) => expireStaleNotifications(c));
+    expect(
+      await db.one<{ last_error: string }>(
+        "SELECT last_error FROM notifications WHERE kind='group_resumed' AND task_id=$1",
+        [id],
+      ),
+    ).toEqual({ last_error: expiredNote });
+  });
+  it("同一任務再次失敗：舊的失敗說明過期不補送，群組只收到最新一次失敗", async () => {
+    await settings();
+    const id = await task("範例清單排序");
+    await db.query("UPDATE tasks SET status='failed' WHERE id=$1", [id]);
+    await notifyGroup(db, id, "failed", `failed:${id}`, "第一次失敗：沒有自動接續");
+    await db.query(
+      "UPDATE notifications SET created_at=now()-interval '1 day' WHERE task_id=$1",
+      [id],
+    );
+    await notifyGroup(db, id, "failed", `failed:${randomUUID()}`, "第二次失敗：已接續過");
+    await db.transaction((c) => expireStaleNotifications(c));
+    const rows = await db.query<{ text: string; last_error: string | null }>(
+      "SELECT text,last_error FROM notifications WHERE kind='group_failed' AND task_id=$1 ORDER BY created_at",
+      [id],
+    );
+    expect(rows).toEqual([
+      { text: "第一次失敗：沒有自動接續", last_error: expiredNote },
+      { text: "第二次失敗：已接續過", last_error: null },
+    ]);
+    await send("r1", "/進度");
+    expect(lastReply().join("\n")).toContain("第二次失敗");
+    expect(lastReply().join("\n")).not.toContain("第一次失敗");
+  });
   it("「收到需求」和補問在同一交易排入時，/進度 送的是補問，不會把補問當成已被取代", async () => {
     await settings({ reply_mode: "all" });
     // 判讀建立需要人工確認、又帶補問的任務時，approvalNotice 與 askInGroup 在同一交易，created_at 相同。

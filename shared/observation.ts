@@ -32,6 +32,8 @@ export interface RunView {
   deadline: string;
   observed: boolean;
   threads: { phase: string; threadId: string }[];
+  /** 進入各階段的時間，用來算各階段花費時間（#256）；舊紀錄沒有時為空陣列。 */
+  phases?: PhaseMark[];
   /** 這次執行使用的系統套件與專案衍生映像（#18）；沒有安裝計畫時為 null。 */
   install_report?: InstallReport | null;
 }
@@ -64,3 +66,71 @@ export const eventLabels: Record<string, string> = {
   observer_error: "進度連線中斷",
   observer_restored: "進度連線恢復",
 };
+
+/** 自動修復那次「Codex 修改程式」的階段說明；舊紀錄沒有時，以之前出現過「評估驗證結果」判斷。 */
+export const repairPhaseDetail = "自動修復";
+/** 執行紀錄的「各階段花費時間」分組；收集差異與評估驗證結果算進前一個階段（#256）。 */
+export const phaseGroups = [
+  "prepare",
+  "test",
+  "code",
+  "review",
+  "repair",
+  "publish",
+] as const;
+export type PhaseGroup = (typeof phaseGroups)[number];
+export const phaseGroupLabels: Record<PhaseGroup, string> = {
+  prepare: "準備",
+  test: "測試",
+  code: "修改",
+  review: "審查",
+  repair: "修復",
+  publish: "建立 PR",
+};
+/** 執行器每次進入新階段時寫下的事件（run_events 的 source='app'、kind='phase'）。 */
+export interface PhaseMark {
+  phase: string;
+  at: string;
+  detail?: string | null;
+}
+export interface PhaseSpan {
+  group: PhaseGroup;
+  label: string;
+  ms: number;
+}
+const ownGroup: Record<string, PhaseGroup> = {
+  test: "test",
+  review: "review",
+  publish: "publish",
+};
+/** 每個階段從進入到下一個階段（最後一個到 end）為止的時間，依分組加總。 */
+export function phaseDurations(marks: PhaseMark[], end: string): PhaseSpan[] {
+  const sorted = [...marks].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  const totals = new Map<PhaseGroup, number>();
+  let group: PhaseGroup = "prepare",
+    verified = false;
+  sorted.forEach((mark, i) => {
+    if (mark.phase === "verify") verified = true;
+    if (mark.phase === "code")
+      group = mark.detail === repairPhaseDetail || verified ? "repair" : "code";
+    else if (ownGroup[mark.phase]) group = ownGroup[mark.phase];
+    else if (mark.phase !== "collect" && mark.phase !== "verify")
+      group = "prepare";
+    const until = Date.parse(sorted[i + 1]?.at ?? end);
+    totals.set(
+      group,
+      (totals.get(group) ?? 0) + Math.max(0, until - Date.parse(mark.at)),
+    );
+  });
+  return phaseGroups
+    .filter((g) => totals.has(g))
+    .map((g) => ({ group: g, label: phaseGroupLabels[g], ms: totals.get(g)! }));
+}
+export const longestPhase = (spans: PhaseSpan[]) =>
+  spans.reduce<PhaseSpan | undefined>(
+    (top, span) => (!top || span.ms > top.ms ? span : top),
+    undefined,
+  );
+/** 「10.6 分鐘」；不到一分鐘時不寫 0.x。 */
+export const phaseMinutes = (ms: number) =>
+  ms < 60000 ? "不到 1 分鐘" : `${Number((ms / 60000).toFixed(1))} 分鐘`;
