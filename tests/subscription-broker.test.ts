@@ -447,3 +447,142 @@ describe("訂閱主憑證隔離與有限階段能力", () => {
     resolve(identity);
   });
 });
+
+describe("上游失敗只留下固定類別與狀態碼（#264）", () => {
+  const upstreamText = "虛構上游錯誤：內部節點 node-7 回應 overloaded";
+  const failing = (
+    upstreamFetch: typeof fetch,
+    credentials: ConstructorParameters<typeof SubscriptionBroker>[0]["credentials"] = async () => identity,
+  ) => fixture({ credentials, upstreamFetch });
+  const body = (text: string, status: number, type = "application/json") =>
+    new Response(JSON.stringify({ error: { message: text, code: "server_error" } }), {
+      status,
+      headers: { "Content-Type": type, "X-Upstream-Node": "node-7" },
+    });
+  const frames = (...events: unknown[]) => sse(events);
+  it.each([
+    ["上游 503", async () => body(upstreamText, 503), { kind: "server_error", status: 503 }],
+    ["上游 500", async () => body(upstreamText, 500), { kind: "server_error", status: 500 }],
+    ["上游 400 拒絕", async () => body(upstreamText, 400), { kind: "rejected", status: 400 }],
+    ["上游 404", async () => body(upstreamText, 404), { kind: "rejected", status: 404 }],
+    ["上游 429", async () => body(upstreamText, 429), { kind: "quota", status: 429 }],
+    [
+      "連線失敗",
+      async () => {
+        throw new Error(`connect ECONNRESET ${upstreamText}`);
+      },
+      { kind: "connection" },
+    ],
+    [
+      "傳輸層的固定連線錯誤",
+      async () => {
+        throw new AppError(502, "訂閱上游連線失敗");
+      },
+      { kind: "connection" },
+    ],
+    [
+      "不是串流",
+      async () => new Response(upstreamText, { headers: { "Content-Type": "text/html" } }),
+      { kind: "invalid_response" },
+    ],
+    [
+      "串流事件不是 JSON",
+      async () =>
+        new Response(`data: {${upstreamText}\n\n`, {
+          headers: { "Content-Type": "text/event-stream" },
+        }),
+      { kind: "invalid_response" },
+    ],
+    [
+      "串流缺少用量",
+      async () => frames(event("完成", null)),
+      { kind: "invalid_response" },
+    ],
+    [
+      "串流在完成前結束",
+      async () => frames({ type: "response.created" }),
+      { kind: "stream_interrupted" },
+    ],
+    [
+      "串流讀到一半斷線",
+      async () =>
+        new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(
+                new TextEncoder().encode(
+                  `data: ${JSON.stringify({ type: "response.created" })}\n\n`,
+                ),
+              );
+              controller.error(new Error(`socket hang up ${upstreamText}`));
+            },
+          }),
+          { headers: { "Content-Type": "text/event-stream" } },
+        ),
+      { kind: "stream_interrupted" },
+    ],
+    [
+      "失敗事件：上游過載",
+      async () => frames({ type: "error", code: "server_is_overloaded", message: upstreamText }),
+      { kind: "server_error" },
+    ],
+    [
+      "失敗事件：對話超過上限",
+      async () =>
+        frames({
+          type: "response.failed",
+          response: { error: { code: "context_length_exceeded", message: upstreamText } },
+        }),
+      { kind: "context_too_long" },
+    ],
+    [
+      "失敗事件：模型不存在",
+      async () => frames({ type: "error", error: { type: "model_not_found", message: upstreamText } }),
+      { kind: "model_unavailable" },
+    ],
+    [
+      "失敗事件：額度代碼",
+      async () => frames({ type: "error", code: "usage_limit_reached" }),
+      { kind: "quota" },
+    ],
+    [
+      "失敗事件：未知代碼",
+      async () => frames({ type: "error", code: "unknown_upstream_failure", message: upstreamText }),
+      { kind: "stream_error" },
+    ],
+    [
+      "失敗事件：只有訊息文字像白名單代碼也不採信",
+      async () => frames({ type: "error", message: "context_length_exceeded model_not_found" }),
+      { kind: "stream_error" },
+    ],
+  ])("%s", async (_name, upstreamFetch, expected) => {
+    const f = await failing(upstreamFetch as typeof fetch);
+    const response = await f.send();
+    expect(response.statusCode).toBeGreaterThanOrEqual(400);
+    expect(f.broker.upstreamFailure(f.runId)).toEqual(expected);
+    // 記錄與回給工作容器的內容都不含上游的字串或標頭。
+    const recorded = JSON.stringify(f.broker.upstreamFailure(f.runId));
+    for (const text of [upstreamText, "node-7", "overloaded", "ECONNRESET", "socket hang up"]) {
+      expect(recorded).not.toContain(text);
+      expect(response.body).not.toContain(text);
+    }
+  });
+  it("刷新登入後上游仍回 401 記成登入失效", async () => {
+    const f = await failing(
+      async () => body(upstreamText, 401),
+      async (refresh) =>
+        refresh ? { ...identity, accessToken: "synthetic-renewed-access-token-12345" } : identity,
+    );
+    expect((await f.send()).statusCode).toBe(401);
+    expect(f.broker.upstreamFailure(f.runId)).toEqual({ kind: "auth", status: 401 });
+  });
+  it("成功的呼叫與代理自己擋下的請求沒有上游失敗", async () => {
+    const ok = await fixture();
+    expect((await ok.send()).statusCode).toBe(200);
+    expect(ok.broker.upstreamFailure(ok.runId)).toBeUndefined();
+    const local = await fixture();
+    expect((await local.send({ model: "other-model" })).statusCode).toBe(403);
+    expect(local.broker.upstreamFailure(local.runId)).toBeUndefined();
+    expect(local.calls()).toBe(0);
+  });
+});
