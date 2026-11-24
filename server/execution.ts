@@ -977,6 +977,8 @@ export class Execution {
     // 下一次執行會接續的候選：留下它的執行，以及接續時從驗證（verify）還是自動修復（repair）開始。
     // 失敗說明依它如實描述；判定候選不能用時先標記，再做其他事，中途停止也不會再被接續。
     let pending: { run: string; next: "verify" | "repair" } | undefined;
+    // 這次執行逾時並自動接續時，執行紀錄記成 auto_resumed，而不是任務接著的排隊狀態。
+    let runOutcome: "auto_resumed" | undefined;
     const settle = async () => {
       if (!pending) return;
       const { run } = pending;
@@ -2431,6 +2433,7 @@ ${querySummary(answer)}`,
             ),
         });
         if (claim.claimed) {
+          runOutcome = "auto_resumed";
           const task = await this.db.one<{ title: string }>(
             "SELECT title FROM tasks WHERE id=$1",
             [taskId],
@@ -2500,11 +2503,13 @@ ${querySummary(answer)}`,
         `failed:${runId ?? taskId}`,
         `工作需要處理：${clip(summary, 240)}`,
       );
+      // 每次失敗各一則（鍵含這次執行）：重試或自動接續後又失敗時，群組最後看到的不會停在「系統會自動接續」。
+      // 舊版鍵 failed:<任務> 的列照留，之後的失敗用新鍵另發；過時的由 staleNotification 過期。
       await notifyGroup(
         this.db,
         taskId,
         "failed",
-        `failed:${taskId}`,
+        `failed:${runId ?? taskId}`,
         groupFailureText(failure, retried),
       );
     } finally {
@@ -2513,8 +2518,8 @@ ${querySummary(answer)}`,
       if (runId) {
         await poll();
         await this.db.query(
-          "UPDATE runs r SET outcome=t.status FROM tasks t WHERE r.id=$1 AND t.id=r.task_id",
-          [runId],
+          "UPDATE runs r SET outcome=coalesce($2,t.status) FROM tasks t WHERE r.id=$1 AND t.id=r.task_id",
+          [runId, runOutcome ?? null],
         );
         await this.db.query(
           "UPDATE runs SET proxy_active=false,token_hash=NULL WHERE id=$1",

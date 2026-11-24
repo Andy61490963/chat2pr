@@ -260,7 +260,7 @@ export async function reclaimStaleClaims(c: Queryable) {
  * 可以用 /進度 取回的群組通知（$1 是群組，需先 JOIN tasks t）：
  * - 本群組、未送出、7 天內；不看 attempts，推播失敗被放棄的正是要取回的。
  * - 排除很快就過時的 group_waiting；補問只取任務仍在等這一版回答的（與 answers.ts questionByQuote 相同）；
- *   group_received 只在仍待確認、group_failed 只在仍是失敗、group_resumed（自動接續）只在接續還沒結束時才送。
+ *   group_received 只在仍待確認、group_failed 只在仍是失敗、group_resumed（自動接續）只在這個版本的接續還沒結束時才送。
  * - 排除 group_triage（判讀說明「和某題是同一件事」）：它掛在被重複的那題上，若算進「每個任務只取最新一則」，
  *   會把那題還在等回答的補問標成已被取代。
  * - 排除以 /進度 補送已被 LINE 拒收 REPLY_FAILURE_LIMIT 次的：reply token 一次只能用一次、整批一起成敗，
@@ -274,7 +274,7 @@ const retrievable = (n: string, includeDiscordClaims = false) =>
    AND (${n}.kind<>'group_question' OR (t.status='awaiting_approval' AND t.question IS NOT NULL AND ${n}.dedupe_key='group:question:'||t.id||':'||t.version))
    AND (${n}.kind<>'group_received' OR t.status='awaiting_approval')
    AND (${n}.kind<>'group_failed' OR t.status='failed')
-   AND (${n}.kind<>'group_resumed' OR t.status IN ('queued','running','reviewing','budget_wait'))
+   AND (${n}.kind<>'group_resumed' OR (t.status IN ('queued','running','reviewing','budget_wait') AND ${n}.dedupe_key='group:resumed:'||t.id||':'||t.version))
    AND (${n}.kind<>'group_no_changes' OR (t.status='answered' AND ${n}.dedupe_key='group:no_changes:'||t.id||':'||t.version))`;
 /**
  * 每個任務只取最新一則：同一任務有較新、也可取回的通知時，舊的不送。

@@ -10,6 +10,7 @@ import {
   phaseMinutes,
 } from "../../shared/observation.js";
 import { statusLabels, type TaskStatus } from "../../shared/types.js";
+import { notificationLabels } from "../../shared/status-glossary.js";
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -38,6 +39,7 @@ const runOutcomes: Record<string, string> = {
   failed: "未完成，需要處理",
   cancelled: "已取消",
   budget_wait: "額度不足，已保留",
+  auto_resumed: notificationLabels.autoResumed,
 };
 // brief：下拉選單用的短版，舊紀錄沒有結果時只寫「結果未保存」。
 const outcomeText = (run: RunView, brief = false) =>

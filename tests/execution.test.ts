@@ -1792,6 +1792,45 @@ it.each([
     expect(await autoResumes()).toEqual([]);
   },
 );
+it("失敗後重試、逾時自動接續、接續後又失敗：群組依序收到失敗、自動接續、新的失敗說明，每次失敗只一則", async () => {
+  const s = await scenario();
+  const groupMessages = async () =>
+    (
+      await db.query<{ kind: string; text: string }>(
+        "SELECT kind,text FROM notifications WHERE task_id=$1 AND kind IN ('group_failed','group_resumed') ORDER BY created_at,id",
+        [s.task.id],
+      )
+    ).map((n) => n.kind);
+  // 1. 逾時時今日預算用完：沒有自動接續，任務失敗，群組收到失敗說明。
+  failPhase(s, "review", 1, timeout, () =>
+    db.query(
+      "INSERT INTO usage(model,input_tokens,cached_tokens,output_tokens,cost) VALUES('gpt-6.1-sol',0,0,0,13)",
+    ),
+  );
+  await s.execution.execute(s.task.id);
+  const first = await db.one<Task>("SELECT * FROM tasks");
+  expect(first.status).toBe("failed");
+  expect(await groupMessages()).toEqual(["group_failed"]);
+  // 2. 隔天（預算恢復）管理者重試，又逾時：這個版本還沒接續過，自動接續一次。
+  await db.query("DELETE FROM usage");
+  await dashboardAction(s.task.id, "retry", first.version);
+  failPhase(s, "review", 1, timeout);
+  await s.execution.execute(s.task.id);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("queued");
+  expect(await groupMessages()).toEqual(["group_failed", "group_resumed"]);
+  // 3. 接續的執行又逾時：已接續過，照常失敗，群組要收到新的失敗說明，不能停在「系統會自動接續」。
+  failPhase(s, "review", 1, timeout);
+  await s.execution.execute(s.task.id);
+  expect((await db.one<Task>("SELECT * FROM tasks")).status).toBe("failed");
+  expect(await groupMessages()).toEqual([
+    "group_failed",
+    "group_resumed",
+    "group_failed",
+  ]);
+  // 同一次失敗再處理一次（例如重複派工）不會多發一則。
+  await s.execution.execute(s.task.id);
+  expect(await groupMessages()).toHaveLength(3);
+});
 it.each([
   {
     change: "需求版本改變",
@@ -1837,6 +1876,28 @@ it("任務詳情的執行紀錄帶各階段的進入時間，分得出修改與�
     expect(
       run.phases!.filter((p) => p.detail === repairPhaseDetail),
     ).toMatchObject([{ phase: "code" }]);
+  } finally {
+    await app.close();
+  }
+});
+it("被自動接續的那次執行，執行紀錄的結果是「逾時，已自動接續」而不是排隊中", async () => {
+  const s = await scenario();
+  failPhase(s, "review", 1, timeout);
+  await s.execution.execute(s.task.id);
+  await s.execution.execute(s.task.id);
+  const { buildApp } = await import("../server/app.js");
+  const app = await buildApp(db);
+  try {
+    const detail = (
+      await app.inject({
+        url: `/api/tasks/${s.task.id}`,
+        headers: await session(),
+      })
+    ).json();
+    const outcomes = (detail.runs as RunView[])
+      .sort((a, b) => a.started_at.localeCompare(b.started_at))
+      .map((r) => r.outcome);
+    expect(outcomes).toEqual(["auto_resumed", "ready"]);
   } finally {
     await app.close();
   }

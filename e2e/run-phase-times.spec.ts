@@ -90,3 +90,52 @@ for (const width of [1280, 375]) {
     expect(violations).toEqual([]);
   });
 }
+
+test("被自動接續的執行在執行紀錄顯示「逾時，已自動接續」，鈴鐺也用同一個標籤", async ({
+  page,
+}) => {
+  const resumed: RunView = {
+    ...run,
+    id: "demo-resumed-run",
+    outcome: "auto_resumed",
+    phases: run.phases!.slice(0, 6),
+  };
+  const notice = {
+    id: "notice-auto-resume",
+    task_id: null,
+    kind: "auto_resume",
+    disposition: "result",
+    title: ready.title,
+    text: `工作逾時，已保留修改並自動接續一次：${ready.title}`,
+    created_at: "2026-01-05T10:30:00Z",
+  };
+  await mockDashboard(page, {
+    state: { tasks: [ready], alerts: [notice], alertsSeenAt: null },
+    routes: {
+      [`/api/tasks/${ready.id}`]: {
+        ...detail,
+        task: ready,
+        runs: [resumed],
+        queue: null,
+      },
+      [`/api/tasks/${ready.id}/runs/${resumed.id}/events`]: {
+        events: [],
+        hasOlder: false,
+        nextBefore: null,
+      },
+    },
+  });
+  await page.goto(`/tasks?task=${ready.id}`);
+  const drawer = page.getByRole("dialog", { name: ready.title });
+  await drawer.getByRole("tab", { name: /^執行紀錄/ }).click();
+  await expect(
+    drawer.locator("dt", { hasText: "執行結果" }).locator("+ dd"),
+  ).toHaveText("逾時，已自動接續");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: /^通知(?:，|$)/ }).click();
+  await expect(
+    page
+      .getByRole("menuitem", { name: /工作逾時，已保留修改/ })
+      .getByText("逾時，已自動接續", { exact: true }),
+  ).toBeVisible();
+});

@@ -223,8 +223,8 @@ export async function markGroupTooLarge(
  * - 管理者私訊：超過 24 小時（看板鈴鐺本來就有同樣內容，改送一則彙整）。
  * - group_waiting／group_received：超過 6 小時，或任務已不在等待中。
  * - group_question：任務不再等回答、問題已清掉，或不是目前版本的提問（與 answers.ts questionByQuote 相同條件）。
- * - group_failed：任務已不是 failed。
- * - group_resumed（自動接續）：超過 6 小時，或接續已結束（任務不在排隊、執行或等待額度中）。
+ * - group_failed：任務已不是 failed，或同一任務之後又有新的失敗說明（每次失敗各一則，只送最新的）。
+ * - group_resumed（自動接續）：超過 6 小時、接續已結束（任務不在排隊、執行或等待額度中），或不是目前版本的接續。
  * - group_no_changes：超過 24 小時，或這個版本的任務已不再是已回覆。
  * - 其他群組通知：超過 24 小時。
  */
@@ -234,7 +234,8 @@ export const staleNotification = `COALESCE(CASE
   WHEN n.kind='group_received' THEN n.created_at<now()-interval '6 hours' OR t.status IS NULL OR t.status<>'awaiting_approval'
   WHEN n.kind='group_question' THEN t.status IS NULL OR t.status<>'awaiting_approval' OR t.question IS NULL OR n.dedupe_key<>'group:question:'||t.id||':'||t.version
   WHEN n.kind='group_failed' THEN t.status IS NULL OR t.status<>'failed'
-  WHEN n.kind='group_resumed' THEN n.created_at<now()-interval '6 hours' OR t.status IS NULL OR t.status NOT IN ('queued','running','reviewing','budget_wait')
+    OR EXISTS(SELECT 1 FROM notifications f WHERE f.task_id=n.task_id AND f.kind='group_failed' AND (f.created_at,f.id)>(n.created_at,n.id))
+  WHEN n.kind='group_resumed' THEN n.created_at<now()-interval '6 hours' OR t.status IS NULL OR t.status NOT IN ('queued','running','reviewing','budget_wait') OR n.dedupe_key<>'group:resumed:'||t.id||':'||t.version
   WHEN n.kind='group_no_changes' THEN n.created_at<now()-interval '24 hours' OR t.status IS NULL OR t.status<>'answered' OR n.dedupe_key<>'group:no_changes:'||t.id||':'||t.version
   ELSE n.created_at<now()-interval '24 hours'
 END,false)`;

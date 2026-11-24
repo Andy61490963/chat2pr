@@ -275,6 +275,8 @@ export const notificationLabels = {
   privatePushPaused: "私訊暫停",
   serviceDown: "服務異常",
   serviceUp: "服務已恢復",
+  // 執行紀錄的結果與鈴鐺共用：逾時但修改已保留、系統自動接續的那次執行（#256）。
+  autoResumed: "逾時，已自動接續",
 } as const;
 
 export const networkStatusLabels = {
