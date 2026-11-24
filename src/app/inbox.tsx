@@ -35,6 +35,7 @@ import {
   ChevronRight,
   Circle,
   CircleAlert,
+  CircleCheck,
   GitMerge,
   GitPullRequest,
   Loader2,
@@ -388,13 +389,21 @@ export function InboxView({
           resolvePickList={resolvePickList}
           empty={
             clear ? (
-              <Card className="gap-1 px-5 py-4">
-                <h2 id="inbox-todo" className="font-semibold">
-                  {inboxStatusLabels.clear}
-                </h2>
-                <p className="text-sm text-muted-foreground">
-                  {inboxStatusLabels.clearDescription}
-                </p>
+              <Card className="flex-row items-center gap-4 px-5 py-5">
+                <span
+                  aria-hidden
+                  className="grid size-10 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground"
+                >
+                  <CircleCheck className="size-5" />
+                </span>
+                <div className="min-w-0">
+                  <h2 id="inbox-todo" className="font-semibold">
+                    {inboxStatusLabels.clear}
+                  </h2>
+                  <p className="text-sm text-muted-foreground">
+                    {inboxStatusLabels.clearDescription}
+                  </p>
+                </div>
               </Card>
             ) : undefined
           }
@@ -646,7 +655,7 @@ function TaskSectionTitle({
       className={
         subdued
           ? "text-sm font-medium text-muted-foreground"
-          : "text-lg font-semibold"
+          : "heading-section"
       }
     >
       <button
@@ -668,9 +677,9 @@ function TaskSectionTitle({
 
 // 動態依種類給圖示與色調；技術細節留在系統紀錄。
 const activityKinds: Record<string, { icon: typeof Activity; tone: string }> = {
-  ready: { icon: GitPullRequest, tone: "text-good" },
-  answered: { icon: MessageSquareText, tone: "text-good" },
-  merged: { icon: GitMerge, tone: "text-good" },
+  ready: { icon: GitPullRequest, tone: "text-muted-foreground" },
+  answered: { icon: MessageSquareText, tone: "text-muted-foreground" },
+  merged: { icon: GitMerge, tone: "text-muted-foreground" },
   approve: { icon: Check, tone: "text-muted-foreground" },
   adopt: { icon: Check, tone: "text-muted-foreground" },
   started: { icon: Play, tone: "text-muted-foreground" },

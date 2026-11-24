@@ -145,7 +145,9 @@ test("桌面佇列依等待時間排序，每列只有一個狀態，審核面�
   ).toBeLessThanOrEqual(128);
   const target = review.getByRole("region", { name: "處理專案" });
   await expect(target).toContainText(project.name);
-  await expect(target).toContainText("目標分支：main");
+  await expect(
+    target.locator("dt", { hasText: "目標分支" }).locator("+ dd"),
+  ).toHaveText("main");
   await expect(target).toContainText("需求原文指名測試專案。");
   const acceptance = review.getByRole("region", { name: "預期驗收條件" });
   await expect(acceptance.getByRole("listitem")).toHaveText(
@@ -179,6 +181,50 @@ test("桌面佇列依等待時間排序，每列只有一個狀態，審核面�
     name: "確認專案與分支並核准修改",
   })).toBeVisible();
 });
+
+for (const colorScheme of ["light", "dark"] as const) {
+  test(`佇列列的等待時間與狀態固定靠右、數字等寬，佇列與面板是和頁面分得開的卡片（${colorScheme === "dark" ? "深色" : "淺色"}）`, async ({
+    page,
+  }) => {
+    await page.emulateMedia({ colorScheme });
+    await openFixture(page);
+    await page.goto("/");
+    await expect(queue(page).getByRole("listitem")).toHaveCount(30);
+    await expect(
+      panel(page).getByRole("heading", { name: "核對範例需求 01" }),
+    ).toBeVisible();
+    for (const column of ["[data-review-waiting]", "[data-review-status]"]) {
+      const edges = await queue(page)
+        .locator(column)
+        .evaluateAll((items) =>
+          items.map((item) => Math.round(item.getBoundingClientRect().right)),
+        );
+      expect(new Set(edges).size, `${column} 的右緣應對齊`).toBe(1);
+    }
+    await expect(
+      queue(page).locator("[data-review-waiting]").first(),
+    ).toHaveCSS("font-variant-numeric", "tabular-nums");
+    // 相鄰兩層表面（頁面與卡片）的亮度要分得出來，深色模式不能黏在一起。
+    const luminance = (color: string) => {
+      const [r, g, b] = color.match(/\d+(\.\d+)?/g)!.slice(0, 3).map((value) => {
+        const c = Number(value) / 255;
+        return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const page_ = await page.evaluate(
+      () => getComputedStyle(document.body).backgroundColor,
+    );
+    for (const surface of [queue(page), panel(page)]) {
+      const card = await surface.evaluate(
+        (element) => getComputedStyle(element).backgroundColor,
+      );
+      const [light, dark] = [luminance(card), luminance(page_)].sort((a, b) => b - a);
+      expect((light + 0.05) / (dark + 0.05)).toBeGreaterThanOrEqual(1.08);
+    }
+    await checkAxe(page);
+  });
+}
 
 test("桌面佇列將等最久的待挑選清單排第一、顯示等待時間並自動開啟", async ({
   page,
@@ -553,9 +599,9 @@ for (const width of [1440, 375]) {
       ).toBeVisible();
       await expect(submit).toHaveCount(0);
       if (isQuery)
-        await expect(section.getByText(/一併查詢（唯讀）/)).toContainText(
-          frontend.name,
-        );
+        await expect(
+          section.locator("dt", { hasText: "一併查詢（唯讀）" }).locator("+ dd"),
+        ).toContainText(frontend.name);
     });
   }
 }

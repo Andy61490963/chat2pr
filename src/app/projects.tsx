@@ -140,7 +140,7 @@ function ProjectList({
   onOpen: (id: string) => void;
 }) {
   return (
-    <div className="@3xl:rounded-xl @3xl:border @3xl:bg-card @3xl:text-card-foreground">
+    <div className="@3xl:rounded-xl @3xl:border @3xl:bg-card @3xl:text-card-foreground @3xl:shadow-card">
       <div
         aria-hidden="true"
         className="hidden grid-cols-[minmax(0,2fr)_6rem_minmax(0,1.2fr)_minmax(0,1.2fr)_7.5rem] gap-4 border-b px-5 py-2.5 text-xs text-muted-foreground @3xl:grid"
@@ -157,7 +157,7 @@ function ProjectList({
           return (
             <li
               key={p.id}
-              className="rounded-xl border bg-card text-card-foreground @3xl:rounded-none @3xl:border-0"
+              className="rounded-xl border bg-card text-card-foreground shadow-card @3xl:rounded-none @3xl:border-0 @3xl:shadow-none"
             >
               <button
                 type="button"

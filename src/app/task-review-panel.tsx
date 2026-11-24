@@ -27,6 +27,10 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  DescriptionItem,
+  DescriptionList,
+} from "@/components/ui/description-list";
+import {
   Label,
   Tabs,
   TabsContent,
@@ -414,7 +418,7 @@ export function TaskReviewPanel({
   const resultReport = report.body && (
     <section className="flex flex-col gap-2">
       <div className="flex items-center justify-between gap-2">
-        <h3 className="text-xs font-medium text-muted-foreground">
+        <h3 className="text-sm font-semibold">
           {t.mode === "query" ? "調查結果" : "修改結果"}
         </h3>
         <Button
@@ -503,27 +507,61 @@ export function TaskReviewPanel({
         ) : (
           <p className="font-semibold">處理專案</p>
         )}
-        {t.project_id ? (
-          <p
-            ref={projectHeading}
-            tabIndex={-1}
-            className="mt-2 font-medium [overflow-wrap:anywhere]"
-          >
-            {review?.project_name ?? projectName(state, t)}
-          </p>
-        ) : !editable && (
+        {!t.project_id && !editable && (
           <p className="mt-2">尚未指定專案</p>
         )}
-        {review?.repo && (
-          <p className="break-all font-mono text-xs">{review.repo}</p>
-        )}
-        {(t.project_id || t.target_branch) && (
-          <p className="mt-1 break-all">
-            目標分支：
-            <code>
-              {t.target_branch ?? (editable ? "尚未選擇" : "歷史任務未記錄")}
-            </code>
-          </p>
+        {(t.project_id ||
+          t.target_branch ||
+          !!t.project_routing?.evidence?.length ||
+          !!t.project_routing?.relatedProjects?.length) && (
+          <DescriptionList className="mt-2">
+            {t.project_id && (
+              <DescriptionItem label="專案">
+                <p
+                  ref={projectHeading}
+                  tabIndex={-1}
+                  className="font-medium"
+                >
+                  {review?.project_name ?? projectName(state, t)}
+                </p>
+                {review?.repo && (
+                  <p className="break-all font-mono text-xs text-muted-foreground">
+                    {review.repo}
+                  </p>
+                )}
+              </DescriptionItem>
+            )}
+            {(t.project_id || t.target_branch) && (
+              <DescriptionItem label="目標分支">
+                <code className="break-all">
+                  {t.target_branch ??
+                    (editable ? "尚未選擇" : "歷史任務未記錄")}
+                </code>
+              </DescriptionItem>
+            )}
+            {!!t.project_routing?.evidence?.length && (
+              <DescriptionItem label="依據">
+                <ul className="space-y-0.5">
+                  {t.project_routing.evidence.map((e, i) => (
+                    <li key={i} className="break-all">
+                      {e.kind === "message"
+                        ? inWorkbench
+                          ? "需求訊息"
+                          : `需求訊息 ${e.sourceId}`
+                        : e.sourceId.replace(/^repo:[^:]+:[^:]+:/, "")}
+                    </li>
+                  ))}
+                </ul>
+              </DescriptionItem>
+            )}
+            {!!t.project_routing?.relatedProjects?.length && (
+              <DescriptionItem label="一併查詢（唯讀）">
+                {t.project_routing.relatedProjects
+                  .map((p) => `${p.name}（${p.repo}）`)
+                  .join("、")}
+              </DescriptionItem>
+            )}
+          </DescriptionList>
         )}
         {t.mode === "query" && t.answer && (
           <details className="mt-2 break-all">
@@ -570,28 +608,6 @@ export function TaskReviewPanel({
               {t.project_routing?.reason ?? "請確認本次需求與目標專案"}
             </p>
           )}
-        {!!t.project_routing?.evidence?.length && (
-          <ul className="mt-1 space-y-1 text-xs text-muted-foreground">
-            {t.project_routing.evidence.map((e, i) => (
-              <li key={i} className="break-all">
-                依據：
-                {e.kind === "message"
-                  ? inWorkbench
-                    ? "需求訊息"
-                    : `需求訊息 ${e.sourceId}`
-                  : e.sourceId.replace(/^repo:[^:]+:[^:]+:/, "")}
-              </li>
-            ))}
-          </ul>
-        )}
-        {!!t.project_routing?.relatedProjects?.length && (
-          <p className="mt-2 break-words text-xs">
-            一併查詢（唯讀）：
-            {t.project_routing.relatedProjects
-              .map((p) => `${p.name}（${p.repo}）`)
-              .join("、")}
-          </p>
-        )}
         {t.project_id && (
           <p className="mt-2 text-xs">
             {review?.confirmed
@@ -661,7 +677,7 @@ export function TaskReviewPanel({
           aria-label={taskAcceptanceLabels.heading}
           className="flex flex-col gap-2"
         >
-          <h3 className="text-xs font-medium text-muted-foreground">
+          <h3 className="text-sm font-semibold">
             {taskAcceptanceLabels.heading}
           </h3>
           <ul className="list-disc space-y-1.5 pl-5">
@@ -935,21 +951,22 @@ export function TaskReviewPanel({
     </>
   );
   const metadata = (
-    <dl className="flex flex-wrap gap-x-5 gap-y-2 text-xs [overflow-wrap:anywhere]">
-      {[
-        ["任務類型", t.mode === "query" ? "查詢任務" : "修改程式"],
-        ["群組", review?.group_name ?? groupName(state, t)],
-        ["專案", review?.project_name ?? projectName(state, t)],
-        ...(t.version > 1 ? [["版本", t.version]] : []),
-        ["建立", date(t.created_at)],
-        ["更新", ago(t.updated_at)],
-      ].map(([label, value]) => (
-        <div key={label} className="min-w-0">
-          <dt className="text-muted-foreground">{label}</dt>
-          <dd className="mt-0.5 font-medium text-foreground">{value}</dd>
-        </div>
+    <DescriptionList pairs={2} className="max-w-xl text-xs">
+      {(
+        [
+          ["任務類型", t.mode === "query" ? "查詢任務" : "修改程式"],
+          ["群組", review?.group_name ?? groupName(state, t)],
+          ["專案", review?.project_name ?? projectName(state, t)],
+          ...(t.version > 1 ? [["版本", t.version, true] as const] : []),
+          ["建立", date(t.created_at), true],
+          ["更新", ago(t.updated_at), true],
+        ] satisfies (readonly [string, ReactNode, boolean?])[]
+      ).map(([label, value, numeric]) => (
+        <DescriptionItem key={label} label={label} numeric={!!numeric}>
+          {value}
+        </DescriptionItem>
       ))}
-    </dl>
+    </DescriptionList>
   );
   const header = (
     <SheetHeader className={cn("shrink-0 gap-2", inWorkbench && "pr-4")}>
@@ -989,7 +1006,7 @@ export function TaskReviewPanel({
   return (
     <>
       {inWorkbench ? (
-        <div className="lg:sticky lg:top-4 lg:z-10 lg:bg-background">
+        <div className="lg:sticky lg:top-4 lg:z-10 lg:bg-surface">
           {actionNotice}
           {header}
           {actions}
@@ -1021,7 +1038,7 @@ export function TaskReviewPanel({
         {hasPrResult && (
           <section className="flex flex-col gap-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h3 className="text-xs font-medium text-muted-foreground">
+              <h3 className="text-sm font-semibold">
                 修改結果
               </h3>
               {t.pr_url && (
@@ -1271,7 +1288,7 @@ export function TaskReviewPanel({
           </div>
         )}
         <section className="flex flex-col gap-2">
-          <h3 className="text-xs font-medium text-muted-foreground">需求</h3>
+          <h3 className="text-sm font-semibold">需求</h3>
           <p className="text-sm leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
             {t.summary}
           </p>
@@ -1282,7 +1299,7 @@ export function TaskReviewPanel({
           <section className="flex flex-col gap-2">
             <h3
               id="task-suggestions-title"
-              className="text-xs font-medium text-muted-foreground"
+              className="text-sm font-semibold"
             >
               可選方案，選一個後在下方派工
             </h3>
@@ -1527,7 +1544,7 @@ export function TaskReviewPanel({
               <TaskContextEvidence detail={detail} />
               {detail.references.length > 0 && (
                 <section className="min-w-0 text-sm">
-                  <h3 className="mb-1 text-xs font-medium text-muted-foreground">
+                  <h3 className="mb-1 text-sm font-semibold">
                     判讀時參考的資料
                   </h3>
                   {detail.references.map((ref) => (

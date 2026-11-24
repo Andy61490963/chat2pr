@@ -316,7 +316,7 @@ export function GroupsView({
         <GroupList groups={present} state={state} onOpen={setOpenId} />
       )}
       {departed.length > 0 && (
-        <details className="rounded-xl border bg-card px-4 text-card-foreground">
+        <details className="rounded-xl border bg-card px-4 text-card-foreground shadow-card">
           <summary className="min-h-11 cursor-pointer py-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
             {groupPageText.departed(departed.length)}
           </summary>
@@ -391,7 +391,7 @@ function GroupList({
 }) {
   return (
     <div className="@container">
-      <div className="@3xl:rounded-xl @3xl:border @3xl:bg-card @3xl:text-card-foreground">
+      <div className="@3xl:rounded-xl @3xl:border @3xl:bg-card @3xl:text-card-foreground @3xl:shadow-card">
         <div
           aria-hidden="true"
           className="hidden grid-cols-[minmax(0,1.6fr)_8rem_minmax(0,2fr)_5rem_7rem] gap-4 border-b px-5 py-2.5 text-xs text-muted-foreground @3xl:grid"
@@ -413,7 +413,7 @@ function GroupList({
             return (
               <li
                 key={g.id}
-                className="rounded-xl border bg-card text-card-foreground @3xl:rounded-none @3xl:border-0"
+                className="rounded-xl border bg-card text-card-foreground shadow-card @3xl:rounded-none @3xl:border-0 @3xl:shadow-none"
               >
                 <button
                   className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-2 rounded-[inherit] px-5 py-3 text-left transition-colors hover:bg-muted/40 @3xl:grid-cols-[minmax(0,1.6fr)_8rem_minmax(0,2fr)_5rem_7rem] @3xl:items-center"

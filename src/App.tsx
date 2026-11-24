@@ -994,7 +994,7 @@ export function App() {
                 />
                 {label}
                 {id === "inbox" && needs.length > 0 && (
-                  <span className="absolute top-1 right-[calc(50%-1.25rem)] min-w-4 rounded-full bg-warn px-1 text-[10px] leading-4 font-semibold text-background md:static md:ml-auto md:bg-warn-soft md:px-1.5 md:text-xs md:text-warn">
+                  <span className="absolute top-1 right-[calc(50%-1.25rem)] min-w-4 rounded-full bg-foreground px-1 text-[10px] leading-4 font-semibold text-background tabular-nums md:static md:ml-auto md:bg-muted md:px-1.5 md:text-xs md:text-foreground">
                     <span aria-hidden="true">{needs.length}</span>
                     <span className="sr-only">，{needs.length} 件待處理</span>
                   </span>
@@ -1096,7 +1096,7 @@ export function App() {
             <h1
               ref={heading}
               tabIndex={-1}
-              className="text-2xl font-semibold tracking-tight outline-none md:text-[26px]"
+              className="heading-page outline-none"
             >
               {current.label}
             </h1>
@@ -1511,7 +1511,7 @@ export function App() {
         <div
           role={toast.error ? "alert" : "status"}
           className={cn(
-            "fixed bottom-24 left-1/2 z-[60] flex w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-2.5 rounded-lg border bg-popover py-2.5 pr-2 pl-3.5 text-sm text-popover-foreground shadow-lg animate-in fade-in-0 slide-in-from-bottom-2 md:bottom-6",
+            "fixed bottom-24 left-1/2 z-[60] flex w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-2.5 rounded-lg border border-border-raised bg-popover py-2.5 pr-2 pl-3.5 text-sm text-popover-foreground shadow-raised animate-in fade-in-0 slide-in-from-bottom-2 md:bottom-6",
             toast.error && "border-danger/50 bg-danger-soft text-danger",
           )}
         >
