@@ -1,7 +1,7 @@
 import Fastify, { type FastifyInstance } from "fastify";
 import { z } from "zod";
 import { afterEach, describe, expect, it } from "vitest";
-import { replyError } from "../server/error-reply.js";
+import { replyError, replyRunnerError } from "../server/error-reply.js";
 import { AppError } from "../server/policy.js";
 import { readApiResponse } from "../src/app/api-response.js";
 
@@ -83,5 +83,26 @@ describe("早先註冊的路由也回看板格式的錯誤", () => {
     expect(res.json()).toEqual({
       error: "服務暫時無法完成操作，請檢查設定與服務狀態",
     });
+  });
+});
+
+describe("隔離執行器的錯誤回應", () => {
+  it("截斷點落在帳密中間時，回應也不含剩下的半段密碼", async () => {
+    const a: FastifyInstance = Fastify({ logger: false });
+    app = a;
+    a.setErrorHandler(replyRunnerError);
+    // 2000 字的截斷點落在虛構密碼中間：先截斷會剩下沒有「@」的半段網址，遮蔽規則認不出來。
+    const credential =
+      "postgres://fictional_user:Fictional-Pass-7731@db.example.test/demo";
+    const cut = 2000 - credential.indexOf("Pass");
+    a.post("/fail", async () => {
+      throw new AppError(502, `${"x".repeat(cut)}${credential} 連線失敗`);
+    });
+    const res = await a.inject({ method: "POST", url: "/fail" });
+    expect(res.statusCode).toBe(502);
+    const error = (res.json() as { error: string }).error;
+    expect(error.length).toBeLessThanOrEqual(2000);
+    expect(error).not.toContain("Fictional");
+    expect(error).not.toContain("Pa");
   });
 });

@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { execFileSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { networkInterfaces } from "node:os";
 import { Containers } from "../server/containers.js";
 import {
@@ -10,11 +11,12 @@ import type { CheckEnvironmentPolicy } from "../shared/check-environment.js";
 
 /**
  * 以真實 Docker 驗證定期檢查環境（#19）：網路只通到該檢查的目標、機密不落地、重用與清除。
- * 使用非正式的 verify- 實例與獨立位址池，結束時只清掉自己建立的資源。
+ * 使用每次執行唯一的 verify- 實例與獨立位址池，結束時只清掉自己建立的資源。
  * 需要先建好檢查映像：docker build -f infra/check/Dockerfile -t <標籤> .，以 CHECK_TEST_IMAGE 指定。
  */
 const image = process.env.CHECK_TEST_IMAGE ?? "line-agentflow-check:local";
-const instance = "verify-i19-checks";
+// 每次執行唯一：兩個 worktree 同時跑時，容器、網路名稱與清理用的 instance 標籤都不會撞在一起（#258）。
+const instance = `verify-i19-checks-${randomUUID().slice(0, 8)}`;
 const pool = "10.219.0.0/24";
 const policy: CheckEnvironmentPolicy = { idleMinutes: 120, max: 20 };
 const ids = {

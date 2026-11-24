@@ -233,3 +233,35 @@ it("可信基底快照失敗後清理也失敗，不會被後續清理原因取�
     },
   );
 });
+
+it("工作目錄初始化失敗：截斷點落在帳密中間時，錯誤訊息也不含剩下的半段密碼", async () => {
+  const c = new Containers("verify-prepare-mask"),
+    runId = randomUUID();
+  vi.spyOn(c, "ready").mockResolvedValue("fake-image");
+  vi.spyOn(c, "ensureVolume").mockResolvedValue();
+  vi.spyOn(c, "removeOwnedContainer").mockResolvedValue();
+  // 只保留最後 1000 字：截斷點落在虛構密碼中間，先截斷會剩下沒有「://」的半段網址。
+  const credential =
+    "fatal: unable to access postgres://fictional_user:Fictional-Pass-7731@db.example.test/demo";
+  const tail = credential.length - credential.indexOf("Pass");
+  vi.spyOn(c, "phase").mockResolvedValue({
+    exitCode: 128,
+    stdout: "",
+    stderr: `${credential}${"y".repeat(1000 - tail)}`,
+  });
+  c.docker = {
+    createContainer: async () => ({
+      id: "fake-helper",
+      start: async () => {},
+      wait: async () => ({ StatusCode: 0 }),
+      putArchive: async () => {},
+    }),
+  } as unknown as Docker;
+  const failure = await c.prepare(runId, "fake", Buffer.alloc(0)).then(
+    () => undefined,
+    (e: Error) => e,
+  );
+  expect(failure?.message).toMatch(/^專案準備失敗：/);
+  expect(failure?.message).not.toContain("7731");
+  expect(failure?.message).not.toContain("Pa");
+});
