@@ -489,7 +489,8 @@ export function ReviewWorkbench({
       className={cn(
         "min-w-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground",
         items.length > 0 &&
-          "lg:grid lg:grid-cols-[22.5rem_minmax(0,1fr)] lg:items-start lg:gap-4",
+          // 寬螢幕把佇列放寬，群組與頻道名稱才不會被狀態字樣擠到截斷。
+          "lg:grid lg:grid-cols-[22.5rem_minmax(0,1fr)] lg:items-start lg:gap-4 xl:grid-cols-[27rem_minmax(0,1fr)]",
       )}
     >
       {items.length ? (
