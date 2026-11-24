@@ -1253,7 +1253,16 @@ export class Execution {
       await assertCurrent();
       // 追加修改：上一題的 PR 還開著，就接在那個 PR 的分支上繼續改，不另開 PR。
       const continuation = await this.continuationOf(task, project);
-      task.base_sha = task.base_sha ?? continuation?.headSha ?? head;
+      // 上一次執行已收集、還沒有驗證結論的修改（含敏感路徑核准後）：同一基底與需求版本在下面寫回工作副本接續（#241）。
+      // 先查出來，寫回前就中斷時失敗說明也知道修改仍保留。
+      const resume =
+        task.mode !== "query" && this.runner.applyCandidate
+          ? await resumableCandidate(this.db, task, runId)
+          : undefined;
+      if (resume)
+        pending = { run: resume.run, next: resume.feedback ? "repair" : "verify" };
+      // 只有接續保留的修改才沿用它的基底；其他重試（基底驗證或安裝失敗等）改用目標分支最新的 commit（#261）。
+      task.base_sha = resume?.baseSha ?? continuation?.headSha ?? head;
       const issue = await this.syncIssue(task.id);
       task.issue_number = issue.number;
       task.issue_url = issue.url;
@@ -1302,14 +1311,6 @@ export class Execution {
         await assertCurrent();
         await this.runner.upload(runId, project.image, archive);
       }
-      // 上一次執行已收集、還沒有驗證結論的修改：同一基底與需求版本在下面寫回工作副本接續（#241）。
-      // 先查出來，寫回前就中斷時失敗說明也知道修改仍保留。
-      const resume =
-        task.mode !== "query" && this.runner.applyCandidate
-          ? await resumableCandidate(this.db, task, runId)
-          : undefined;
-      if (resume)
-        pending = { run: resume.run, next: resume.feedback ? "repair" : "verify" };
       const hasSnapshot = await this.provideSnapshot(project, runId);
       const relatedSources = await this.provideRelated(task, project, runId);
       await assertCurrent();
