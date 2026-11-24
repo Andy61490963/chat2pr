@@ -5,14 +5,21 @@ import { projectQuotaWaitPrefix } from "../shared/status-glossary.js";
 import { saveEvents, safeDetail, connectionFailure } from "./observation.js";
 import { diskPaused } from "./docker-disk.js";
 import type { RunEvent, RunVerificationScope } from "../shared/observation.js";
-import { phaseLabels } from "../shared/observation.js";
+import {
+  longestPhase,
+  phaseDurations,
+  phaseLabels,
+  phaseMinutes,
+  repairPhaseDetail,
+  type PhaseMark,
+} from "../shared/observation.js";
 import { randomUUID } from "node:crypto";
 import { APIConnectionError } from "openai";
 import {
   approvalNotice,
   requireProjectConfirmation,
 } from "./project-routing.js";
-import { Database } from "./db.js";
+import { Database, type DbClient } from "./db.js";
 import {
   CLAIM_LOCK,
   RUN_LOCK,
@@ -35,7 +42,7 @@ import { GitHub, BranchUnavailable } from "./github.js";
 import { Line } from "./line.js";
 import { config, secrets, token } from "./config.js";
 import { hash } from "./auth.js";
-import { AppError, classifyRisk, redact } from "./policy.js";
+import { AppError, classifyRisk, redact, taipeiDay } from "./policy.js";
 import { subscriptionLimited } from "./triage.js";
 import {
   classifyFailure,
@@ -66,6 +73,7 @@ import {
 } from "./full-access.js";
 import { containsSecret, scrubber, scrubResult } from "./secret-scrub.js";
 import {
+  autoResumeText,
   detailHint,
   groupText,
   notifyGroup,
@@ -918,6 +926,41 @@ export class Execution {
     const q = await queueEstimate(this.db.pool, task.id, limit);
     await tellGroupWaiting(this.db, task.id, "busy", q);
   }
+  /** 這次執行用掉最多時間的階段，一句話；沒有階段紀錄時是空字串。 */
+  private async longestPhase(runId: string | undefined) {
+    if (!runId) return "";
+    const marks = await this.db.query<Omit<PhaseMark, "at"> & { at: Date }>(
+      "SELECT phase,at,detail FROM run_events WHERE run_id=$1 AND source='app' AND kind='phase' ORDER BY at,seq",
+      [runId],
+    );
+    const top = longestPhase(
+      phaseDurations(
+        marks.map((m) => ({ ...m, at: m.at.toISOString() })),
+        new Date().toISOString(),
+      ),
+    );
+    return top ? `用掉最多時間的是${top.label}（${phaseMinutes(top.ms)}）` : "";
+  }
+  /**
+   * 再派一次執行還有沒有額度：訂閱模式看今日執行次數，API 模式看今日預算（不算這次執行自己的預留，結束時就釋放）。
+   * 夠的話回傳空字串，不夠時回傳原因。
+   */
+  private async resumeShortfall(reservation: string | undefined) {
+    const s = await this.db.settings();
+    if (s.ai_mode !== "api") {
+      const today = await this.db.one<{ count: number }>(
+        "SELECT count(*)::int AS count FROM runs WHERE (started_at AT TIME ZONE 'Asia/Taipei')::date=(now() AT TIME ZONE 'Asia/Taipei')::date",
+      );
+      return today.count >= s.daily_runs ? "今日執行次數已用完" : "";
+    }
+    const { total } = await this.db.one<{ total: string }>(
+      "SELECT (SELECT COALESCE(sum(cost),0) FROM usage WHERE (created_at AT TIME ZONE 'Asia/Taipei')::date=$1::date)+(SELECT COALESCE(sum(GREATEST(amount-spent,0)),0) FROM reservations WHERE NOT released AND id IS DISTINCT FROM $2) AS total",
+      [taipeiDay(), reservation ?? null],
+    );
+    return Number(total) + Number(s.task_budget) > Number(s.daily_budget)
+      ? "今日預估額度不足"
+      : "";
+  }
   async execute(taskId: string) {
     const snapshot = await this.db.settingsSnapshot();
     const s = snapshot.value;
@@ -934,6 +977,8 @@ export class Execution {
     // 下一次執行會接續的候選：留下它的執行，以及接續時從驗證（verify）還是自動修復（repair）開始。
     // 失敗說明依它如實描述；判定候選不能用時先標記，再做其他事，中途停止也不會再被接續。
     let pending: { run: string; next: "verify" | "repair" } | undefined;
+    // 這次執行逾時並自動接續時，執行紀錄記成 auto_resumed，而不是任務接著的排隊狀態。
+    let runOutcome: "auto_resumed" | undefined;
     const settle = async () => {
       if (!pending) return;
       const { run } = pending;
@@ -944,6 +989,7 @@ export class Execution {
       );
     };
     let currentPhase = "starting",
+      repairing = false,
       localSeq = 0,
       cursor = 0;
     let pollPending: Promise<void> | undefined,
@@ -1004,7 +1050,10 @@ export class Execution {
         runId,
         name,
       ]);
-      await record("phase");
+      await record(
+        "phase",
+        name === "code" && repairing ? repairPhaseDetail : undefined,
+      );
     };
     try {
       // 每個任務各自一把鎖：同一任務不會被兩個工作同時執行，不同任務可以並行（#21）。
@@ -1253,7 +1302,16 @@ export class Execution {
       await assertCurrent();
       // 追加修改：上一題的 PR 還開著，就接在那個 PR 的分支上繼續改，不另開 PR。
       const continuation = await this.continuationOf(task, project);
-      task.base_sha = task.base_sha ?? continuation?.headSha ?? head;
+      // 上一次執行已收集、還沒有驗證結論的修改（含敏感路徑核准後）：同一基底與需求版本在下面寫回工作副本接續（#241）。
+      // 先查出來，寫回前就中斷時失敗說明也知道修改仍保留。
+      const resume =
+        task.mode !== "query" && this.runner.applyCandidate
+          ? await resumableCandidate(this.db, task, runId)
+          : undefined;
+      if (resume)
+        pending = { run: resume.run, next: resume.feedback ? "repair" : "verify" };
+      // 只有接續保留的修改才沿用它的基底；其他重試（基底驗證或安裝失敗等）改用目標分支最新的 commit（#261）。
+      task.base_sha = resume?.baseSha ?? continuation?.headSha ?? head;
       const issue = await this.syncIssue(task.id);
       task.issue_number = issue.number;
       task.issue_url = issue.url;
@@ -1302,14 +1360,6 @@ export class Execution {
         await assertCurrent();
         await this.runner.upload(runId, project.image, archive);
       }
-      // 上一次執行已收集、還沒有驗證結論的修改：同一基底與需求版本在下面寫回工作副本接續（#241）。
-      // 先查出來，寫回前就中斷時失敗說明也知道修改仍保留。
-      const resume =
-        task.mode !== "query" && this.runner.applyCandidate
-          ? await resumableCandidate(this.db, task, runId)
-          : undefined;
-      if (resume)
-        pending = { run: resume.run, next: resume.feedback ? "repair" : "verify" };
       const hasSnapshot = await this.provideSnapshot(project, runId);
       const relatedSources = await this.provideRelated(task, project, runId);
       await assertCurrent();
@@ -1688,6 +1738,7 @@ export class Execution {
       const first = resume ? resume.attempt + (resume.feedback ? 1 : 0) : 0;
       for (let attempt = first; attempt < 2; attempt++) {
         const reuse = !!resume && !resume.feedback && attempt === resume.attempt;
+        repairing = attempt > 0;
         await this.db.audit(
           task.id,
           "attempt",
@@ -2346,14 +2397,62 @@ ${querySummary(answer)}`,
       }
       // 看板、通知與群組只看分類後的白話說明；堆疊與完整輸出只在上面的執行紀錄。
       // 逾時時仍有可接續的修改：說明保留了什麼、重試從哪裡接續，而不是建議縮小需求範圍。
+      const timedOut = classifyFailure(raw).plain === timeoutPlain;
+      const kept = timedOut ? pending : undefined;
       const failure = classifyFailure(
-        pending && classifyFailure(raw).plain === timeoutPlain
-          ? `${pending.next === "repair" ? "修改與審查意見已保留" : "修改已保留"}，${raw}`
+        kept
+          ? `${kept.next === "repair" ? "修改與審查意見已保留" : "修改已保留"}，${raw}`
           : raw,
         currentPhase,
         "task",
         failureProject,
       );
+      // 逾時要說出時間花在哪個階段，管理者才知道該縮小哪一部分（#256）。
+      const longest = timedOut ? await this.longestPhase(runId) : "";
+      if (longest)
+        failure.detail = `${failure.detail ? `${failure.detail}\n` : ""}${longest}`;
+      let resumedBefore = false;
+      if (kept && runId) {
+        // 修改已保留：同一需求版本自動接續一次，不通知失敗。接續照常佔用每日次數與預算，
+        // 額度不夠就不接續，照 #246 的說明失敗並寫出原因（#256）。
+        const next =
+          kept.next === "repair"
+            ? "沿用審查意見進行唯一一次自動修復"
+            : "從測試與獨立審查接續";
+        const claim = await claimAutoResume(this.db, taskId, runId, {
+          lastError: `單次執行時間用完，修改已保留，系統已自動排入接續，${next}。`,
+          detail: (version) =>
+            `自動接續：單次執行時間用完前修改已保留，系統自動排入接續（需求版本 ${version}，每個版本一次），接下來${next}。${longest}`,
+          shortfall: () => this.resumeShortfall(reservation),
+          onClaim: (c, version) =>
+            notifyGroup(
+              c,
+              taskId,
+              "resumed",
+              `resumed:${taskId}:${version}`,
+              autoResumeText(kept.next),
+            ),
+        });
+        if (claim.claimed) {
+          runOutcome = "auto_resumed";
+          const task = await this.db.one<{ title: string }>(
+            "SELECT title FROM tasks WHERE id=$1",
+            [taskId],
+          );
+          await this.line.notify(
+            taskId,
+            "auto_resume",
+            `auto_resume:${taskId}:${claim.version}`,
+            `工作逾時，已保留修改並自動接續一次：${task?.title ?? ""}`,
+          );
+          return;
+        }
+        resumedBefore = claim.used;
+        if (claim.shortfall) {
+          failure.action = `${claim.shortfall}，沒有自動接續；額度恢復後${failure.action}`;
+          failure.group = `${claim.shortfall}，沒有自動接續；${failure.group}`;
+        }
+      }
       const current = await this.db.one<{ version: number }>(
         "SELECT version FROM tasks WHERE id=$1",
         [taskId],
@@ -2386,7 +2485,7 @@ ${querySummary(answer)}`,
         }
       }
       // 安裝依賴在同一次執行內已重試過一次（install_retry）。
-      const retried = used > 0 || /^安裝失敗：/.test(raw);
+      const retried = used > 0 || resumedBefore || /^安裝失敗：/.test(raw);
       const summary = failureNotice(failure, retried, where);
       const failed = await this.db.query(
         "UPDATE tasks SET status='failed',last_error=$2,updated_at=now() WHERE id=$1 AND status IN ('running','reviewing') RETURNING id",
@@ -2405,11 +2504,13 @@ ${querySummary(answer)}`,
         `failed:${runId ?? taskId}`,
         `工作需要處理：${clip(summary, 240)}`,
       );
+      // 每次失敗各一則（鍵含這次執行）：重試或自動接續後又失敗時，群組最後看到的不會停在「系統會自動接續」。
+      // 舊版鍵 failed:<任務> 的列照留，之後的失敗用新鍵另發；過時的由 staleNotification 過期。
       await notifyGroup(
         this.db,
         taskId,
         "failed",
-        `failed:${taskId}`,
+        `failed:${runId ?? taskId}`,
         groupFailureText(failure, retried),
       );
     } finally {
@@ -2418,8 +2519,8 @@ ${querySummary(answer)}`,
       if (runId) {
         await poll();
         await this.db.query(
-          "UPDATE runs r SET outcome=t.status FROM tasks t WHERE r.id=$1 AND t.id=r.task_id",
-          [runId],
+          "UPDATE runs r SET outcome=coalesce($2,t.status) FROM tasks t WHERE r.id=$1 AND t.id=r.task_id",
+          [runId, runOutcome ?? null],
         );
         await this.db.query(
           "UPDATE runs SET proxy_active=false,token_hash=NULL WHERE id=$1",
@@ -2445,6 +2546,55 @@ ${querySummary(answer)}`,
       lock.release();
     }
   }
+}
+
+/** 單次執行逾時、修改已保留時，同一需求版本自動接續的次數（#256）。 */
+export const AUTO_RESUMES = 1;
+/**
+ * 逾時且修改已保留：把任務放回排隊，下一次執行照 #246 從保留的修改接續。
+ * 鎖住任務後在同一交易計數、放回排隊、寫稽核與群組進度：程序重啟或同一次逾時被重複處理，都不會接續兩次。
+ * 任務已不是這次執行的需求版本（改版、取消或狀態改變）時不接續；used 表示這個版本已自動接續過，
+ * shortfall 是還沒接續過、但額度不夠再派一次的原因。
+ */
+export async function claimAutoResume(
+  db: Database,
+  taskId: string,
+  runId: string,
+  o: {
+    lastError: string;
+    detail: (version: number) => string;
+    shortfall: () => Promise<string>;
+    onClaim?: (c: DbClient, version: number) => Promise<void>;
+  },
+): Promise<
+  | { claimed: true; version: number }
+  | { claimed: false; used: boolean; shortfall?: string }
+> {
+  return db.transaction(async (c) => {
+    const task = (
+      await c.query<{ version: number }>(
+        "SELECT t.version FROM tasks t JOIN runs r ON r.id=$2 AND r.task_id=t.id WHERE t.id=$1 AND t.status IN ('running','reviewing') AND t.version=r.version AND t.approved_version=t.version FOR UPDATE OF t",
+        [taskId, runId],
+      )
+    ).rows[0];
+    if (!task) return { claimed: false, used: false };
+    const { n } = (
+      await c.query<{ n: number }>(
+        "SELECT count(*)::int AS n FROM audit WHERE task_id=$1 AND kind='auto_resume' AND detail LIKE $2",
+        [taskId, `%需求版本 ${task.version}，%`],
+      )
+    ).rows[0];
+    if (n >= AUTO_RESUMES) return { claimed: false, used: true };
+    const shortfall = await o.shortfall();
+    if (shortfall) return { claimed: false, used: false, shortfall };
+    await c.query(
+      "UPDATE tasks SET status='queued',retry_at=NULL,last_error=$2,updated_at=now() WHERE id=$1",
+      [taskId, o.lastError],
+    );
+    await db.audit(taskId, "auto_resume", o.detail(task.version), c);
+    await o.onClaim?.(c, task.version);
+    return { claimed: true, version: task.version };
+  });
 }
 
 /** 同一需求版本遇到暫時性錯誤時，自動重試的次數與重試前的等待秒數。 */
