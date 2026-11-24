@@ -1516,14 +1516,14 @@ it("安裝失敗後目標分支前進：重試改用目標分支最新的 commit
   expect(task.base_sha).toBe("fixed-sha");
   expect(await startedBases()).toEqual(["base-sha", "fixed-sh"]);
 });
-it("有保留的修改時目標分支前進：重試仍用原基底接續，不換成新 commit", async () => {
+it("有保留的修改時目標分支前進：接續仍用原基底，不換成新 commit", async () => {
   const s = await scenario();
   failPhase(s, "review", 1, timeout);
   await s.execution.execute(s.task.id);
-  const failed = await db.one<Task>("SELECT * FROM tasks");
-  expect(failed.last_error).toContain("修改已保留");
+  // 逾時且修改已保留：系統自動接續（#256），任務回到排隊，不用人按重試。
+  const resumed = await db.one<Task>("SELECT * FROM tasks");
+  expect(resumed.status).toBe("queued");
   s.github.base = async () => "moved-sha";
-  await dashboardAction(s.task.id, "retry", failed.version);
   await s.execution.execute(s.task.id);
   const task = await db.one<Task>("SELECT * FROM tasks");
   expect(task.status).toBe("ready");
