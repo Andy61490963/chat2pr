@@ -1490,6 +1490,63 @@ it("實際修改碰到敏感路徑：核准後沿用同一份修改接續測試�
   ]);
   expect(s.publishedFiles).toEqual(s.applied);
 });
+const startedBases = async () =>
+  (
+    await db.query<{ detail: string }>(
+      "SELECT detail FROM audit WHERE kind='started' ORDER BY id",
+    )
+  ).map((a) => a.detail.slice(a.detail.lastIndexOf(" ") + 1));
+it("安裝失敗後目標分支前進：重試改用目標分支最新的 commit，時間軸寫出新基底", async () => {
+  const s = await scenario();
+  const call = s.runner.call.bind(s.runner);
+  let failInstall = true;
+  s.runner.call = async <T>(path: string, raw: unknown): Promise<T> =>
+    path === "phase" && (raw as { phase?: string }).phase === "install" && failInstall
+      ? ({ exitCode: 1, stdout: "", stderr: "npm ERR! 找不到虛構套件" } as T)
+      : call<T>(path, raw);
+  await s.execution.execute(s.task.id);
+  const failed = await db.one<Task>("SELECT * FROM tasks");
+  expect(failed.status).toBe("failed");
+  failInstall = false;
+  s.github.base = async () => "fixed-sha";
+  await dashboardAction(s.task.id, "retry", failed.version);
+  await s.execution.execute(s.task.id);
+  const task = await db.one<Task>("SELECT * FROM tasks");
+  expect(task.status).toBe("ready");
+  expect(task.base_sha).toBe("fixed-sha");
+  expect(await startedBases()).toEqual(["base-sha", "fixed-sh"]);
+});
+it("有保留的修改時目標分支前進：重試仍用原基底接續，不換成新 commit", async () => {
+  const s = await scenario();
+  failPhase(s, "review", 1, timeout);
+  await s.execution.execute(s.task.id);
+  const failed = await db.one<Task>("SELECT * FROM tasks");
+  expect(failed.last_error).toContain("修改已保留");
+  s.github.base = async () => "moved-sha";
+  await dashboardAction(s.task.id, "retry", failed.version);
+  await s.execution.execute(s.task.id);
+  const task = await db.one<Task>("SELECT * FROM tasks");
+  expect(task.status).toBe("ready");
+  expect(task.base_sha).toBe("base-sha");
+  expect(s.applied).toHaveLength(1);
+  expect(s.counts().codeCalls).toBe(1);
+  expect(await startedBases()).toEqual(["base-sha", "base-sha"]);
+});
+it("敏感路徑送審期間目標分支前進：核准後仍用送審時的基底接續", async () => {
+  const s = await scenario();
+  s.change({ sensitive: true });
+  await s.execution.execute(s.task.id);
+  const pending = await db.one<Task>("SELECT * FROM tasks");
+  expect(pending.status).toBe("awaiting_approval");
+  s.github.base = async () => "moved-sha";
+  await dashboardAction(s.task.id, "approve", pending.version);
+  await s.execution.execute(s.task.id);
+  const task = await db.one<Task>("SELECT * FROM tasks");
+  expect(task.status).toBe("ready");
+  expect(task.base_sha).toBe("base-sha");
+  expect(s.applied).toHaveLength(1);
+  expect(await startedBases()).toEqual(["base-sha", "base-sha"]);
+});
 it("修復後仍未通過的修改不沿用：重試從目標分支重新修改", async () => {
   const s = await scenario();
   s.change({ failTests: true });

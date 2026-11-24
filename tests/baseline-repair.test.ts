@@ -309,6 +309,30 @@ it("一般任務在紅基底照舊被擋：不開發、不發布", async () => {
   expect(s.counts()).toMatchObject({ coded: 0, published: 0, testCalls: 2 });
 });
 
+it("目標分支修好後重試：改用最新的 commit 重新驗證基底，通過後照常開發與發布（#261）", async () => {
+  const s = await autoScenario([ok, redBaseline]);
+  await s.execution.execute(s.task.id);
+  const failed = await s.reload();
+  expect(failed.status).toBe("failed");
+  expect(failed.last_error).toContain("目標分支本身就建置或測試失敗");
+  // 修復 PR 合併後目標分支前進到新 commit，基底測試通過。
+  s.setSha("3333333ccccccccc");
+  await dashboardAction(s.task.id, "retry", failed.version);
+  await s.execution.execute(s.task.id);
+  const task = await s.reload();
+  expect(task.status).toBe("ready");
+  expect(task.base_sha).toBe("3333333ccccccccc");
+  expect(s.counts()).toMatchObject({ coded: 1, published: 1, testCalls: 4 });
+  const started = await db.query<{ detail: string }>(
+    "SELECT detail FROM audit WHERE task_id=$1 AND kind='started' ORDER BY id",
+    [s.task.id],
+  );
+  expect(started.map((a) => a.detail.slice(-8))).toEqual(["1111111a", "3333333c"]);
+  expect(await db.query("SELECT branch,sha FROM baseline_passes")).toEqual([
+    { branch: "main", sha: "3333333ccccccccc" },
+  ]);
+});
+
 it("從基底失敗的任務建立修復任務：帶入失敗的測試，等人工核准，重複按只會有一筆", async () => {
   const s = await autoScenario([ok, redBaseline]);
   await s.execution.execute(s.task.id);
