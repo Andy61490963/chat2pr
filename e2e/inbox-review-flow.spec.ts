@@ -176,3 +176,109 @@ test("手機上捲動審核明細時，三個決定仍留在底部且可點擊",
     expect(Math.abs(await check(action) - positions[index])).toBeLessThan(2);
   }
 });
+
+test("已選案件有未存草稿時按 Alt+Enter 先詢問，繼續編輯不核准也不丟失草稿", async ({ page }) => {
+  const { tasks: [current, next] } = await mockInboxReview(page);
+  const writes: string[] = [];
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (request.method() === "POST" && path.startsWith("/api/tasks/")) writes.push(path);
+  });
+  await page.goto(`/?review=${current.id}`);
+  const review = page.getByRole("region", { name: "審核面板" });
+  await review.getByRole("button", { name: /修改這一題/ }).click();
+  const field = review.getByRole("textbox", { name: "需求說明" });
+  const draft = `${current.summary}\n${next.title}`;
+  await field.fill(draft);
+  const row = page.getByRole("list", { name: "待決策佇列" })
+    .getByRole("button", { name: new RegExp(current.title) });
+  await expect(row).toHaveAttribute("aria-current", "true");
+  await row.press("Alt+Enter");
+  const guard = page.getByRole("dialog", { name: "放棄未儲存的修改？" });
+  await expect(guard).toBeVisible();
+  expect(writes).toEqual([]);
+  await guard.getByRole("button", { name: "繼續編輯" }).press("Enter");
+  await expect(guard).toBeHidden();
+  await expect(row).toHaveAttribute("aria-current", "true");
+  await expect(field).toBeVisible();
+  await expect(field).toHaveValue(draft);
+  expect(writes).toEqual([]);
+});
+
+test("主動作有焦點時 J、K 可換筆，在輸入欄或確認視窗則保留目前案件", async ({ page }) => {
+  const { tasks } = await mockInboxReview(page);
+  const [, , , current, next] = tasks;
+  await page.goto(`/?review=${current.id}`);
+  const queue = page.getByRole("list", { name: "待決策佇列" });
+  const review = page.getByRole("region", { name: "審核面板" });
+  const currentRow = queue.getByRole("button", { name: new RegExp(current.title) });
+  const nextRow = queue.getByRole("button", { name: new RegExp(next.title) });
+  const approve = review.getByRole("button", { name: /確認專案與分支並核准修改/ });
+  await currentRow.press("Enter");
+  await expect(approve).toBeFocused();
+  await page.keyboard.press("j");
+  await expect(nextRow).toHaveAttribute("aria-current", "true");
+  await nextRow.press("Enter");
+  await expect(review.getByRole("button", { name: /回答問題/ })).toBeFocused();
+  await page.keyboard.press("k");
+  await expect(currentRow).toHaveAttribute("aria-current", "true");
+  await review.getByRole("button", { name: /^結束任務/ }).click();
+  const dialog = page.getByRole("dialog", { name: "結束任務？" });
+  const cancel = dialog.getByRole("button", { name: "先不要" });
+  for (const key of ["j", "k"]) {
+    await cancel.press(key);
+    await expect(cancel).toBeFocused();
+    await expect(page).toHaveURL(new RegExp(`review=${current.id}$`));
+  }
+  await cancel.press("Enter");
+  await review.getByRole("button", { name: /修改這一題/ }).click();
+  const field = review.getByRole("textbox", { name: "需求說明" });
+  await field.fill("");
+  await field.pressSequentially("jk");
+  await expect(field).toBeFocused();
+  await expect(field).toHaveValue("jk");
+  await expect(currentRow).toHaveAttribute("aria-current", "true");
+});
+
+test("手機核准後下一筆尚未讀回時，底部顯示進度且不可再次送出舊決定", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  const { tasks: [current, next], state } = await mockInboxReview(page);
+  const endpoint = `/api/tasks/${current.id}/actions`;
+  const writes: string[] = [];
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (request.method() === "POST" && path.startsWith("/api/tasks/")) writes.push(path);
+  });
+  await page.route(`**${endpoint}`, (route) => {
+    expect(route.request().postDataJSON()).toMatchObject({ action: "approve", version: current.version });
+    state.tasks = state.tasks.map((entry) => entry.id === current.id ? { ...entry, status: "queued" } : entry);
+    state.stuckTasks = [];
+    return route.fulfill({ json: { ...current, status: "queued" } });
+  });
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  await page.route(`**/api/tasks/${next.id}`, async (route) => {
+    await pending;
+    await route.fallback();
+  });
+  const review = page.getByRole("dialog");
+  const approveName = /確認專案與分支並核准修改/;
+  const loading = review.getByText(/^正在讀取下一筆[.…]*$/);
+  try {
+    await page.goto(`/?review=${current.id}`);
+    const approve = review.getByRole("button", { name: approveName });
+    await expect(approve).toBeInViewport({ ratio: 1 });
+    const box = (await approve.boundingBox())!;
+    await approve.click();
+    await expect(page).toHaveURL(new RegExp(`review=${next.id}$`));
+    await expect(loading).toBeInViewport({ ratio: 1 });
+    expect((await loading.boundingBox())!.y).toBeGreaterThan(812 * 0.65);
+    await expect(review.getByRole("button", { name: approveName, disabled: false })).toHaveCount(0);
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  } finally {
+    release();
+  }
+  await expect(review.getByRole("button", { name: /回答問題/ })).toBeEnabled();
+  await expect(loading).toBeHidden();
+  expect(writes).toEqual([endpoint]);
+});
