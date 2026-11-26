@@ -55,6 +55,7 @@ import {
   questionByQuote,
 } from "./answers.js";
 import {
+  importantLineGroupNotice,
   lineQuotaBlocked,
   lineQuotaUsage,
   markQuotaExhausted,
@@ -633,12 +634,15 @@ export class Line {
     const { ids } = result;
     if (!ids) {
       const blamed = replyRejected(result.status, result.message) ? 1 : 0;
-      await c.query(
-        `UPDATE notifications SET sent_at=NULL,reply_failures=reply_failures+$3,
+      const { rows } = await c.query<{ id: string; task_id: string | null; group_name: string }>(
+        `WITH settled AS (UPDATE notifications SET sent_at=NULL,reply_failures=reply_failures+$3,
            line_reply_policy=CASE WHEN $8 THEN 'manual' ELSE line_reply_policy END,
            line_reply_uncertain_at=CASE WHEN $8 THEN now() ELSE line_reply_uncertain_at END,
            last_error=CASE WHEN reply_failures+$3>=$4 THEN $5 ELSE $2 END
-         WHERE id=ANY($1::uuid[]) AND sent_at=$6 AND last_error=$7 AND sent_message_id IS NULL`,
+         WHERE id=ANY($1::uuid[]) AND sent_at=$6 AND last_error=$7 AND sent_message_id IS NULL
+         RETURNING id,task_id,kind,text,group_id)
+         SELECT n.id,n.task_id,g.name AS group_name FROM settled n JOIN groups g ON g.id=n.group_id
+         WHERE $8 AND ${importantLineGroupNotice}`,
         [
           claim.ids,
           replyFailedNote,
@@ -650,6 +654,14 @@ export class Line {
           result.possiblyDelivered === true,
         ],
       );
+      for (const notice of rows) {
+        const text = `LINE 未確認重要回覆是否送達「${redact(notice.group_name)}」。請到群組聊天室查看，必要時代為轉達。`;
+        await c.query(
+          `INSERT INTO notifications(task_id,kind,dedupe_key,text) VALUES($1,'reply_uncertain',$2,$3)
+           ON CONFLICT(dedupe_key) DO NOTHING`,
+          [notice.task_id, `reply_uncertain:${notice.id}`, text],
+        );
+      }
       return;
     }
     for (const [i, id] of claim.ids.entries())

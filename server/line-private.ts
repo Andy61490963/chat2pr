@@ -18,6 +18,7 @@ import {
   saveQuotaUsage,
 } from "./line-quota.js";
 import { LineChatPlatform } from "./line-platform.js";
+import { groupReplyStillUncertain } from "./reply-uncertain.js";
 import { redact } from "./policy.js";
 
 export const privateActionKinds = [
@@ -30,6 +31,7 @@ export const privateActionKinds = [
   "interrupted",
   "triage",
   "publish_race",
+  "reply_uncertain",
 ] as const;
 
 export function privateDigestText(items: { text: string }[], url: string) {
@@ -60,6 +62,7 @@ export async function prepareDigest(db: Database, mode: LinePrivateMode, lowQuot
          n.created_at<$5::timestamptz-interval '24 hours'
          OR (NOT $2 AND NOT (n.kind=ANY($3::text[]) OR n.kind='service_down'
            OR ($6 AND n.kind='check' AND (n.dedupe_key LIKE 'check-system:%' OR n.text LIKE '⚠️ %'))))
+         OR (n.kind='reply_uncertain' AND NOT ${groupReplyStillUncertain})
          OR (n.kind='service_down' AND NOT EXISTS (
            SELECT 1 FROM service_health h WHERE h.name=split_part(n.dedupe_key,':',2)
            AND h.outage_started_at=n.line_outage_started_at))
