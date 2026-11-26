@@ -842,8 +842,7 @@ export const discordOnlySetup: Pick<
 const reviewImageId = "demo-review-image";
 const reviewImagePath = `/api/messages/${reviewImageId}/image`;
 
-export function reviewWorkbenchFixture() {
-  const now = Date.now();
+export function reviewWorkbenchFixture(now = Date.now()) {
   const tasks = Array.from({ length: 26 }, (_, index): Task => {
     const kind = index % 3;
     const created = new Date(now - (26 - index) * 25 * 60_000).toISOString();
@@ -1040,6 +1039,59 @@ export const recentActivity: ActivityEvent[] = [
     created_at: "2026-01-10T08:10:00Z",
   },
 ];
+
+export const inboxReviewTime = "2026-01-10T09:00:00Z";
+export const inboxDetailUnavailable = "範例審核資料暫時無法讀取。";
+
+export async function mockInboxReview(page: Page) {
+  const fixture = reviewWorkbenchFixture(Date.parse(inboxReviewTime));
+  const titles = [
+    "顯示匯出報表的日期範圍", "確認月份篩選的預設值", "為示範清單選擇專案",
+    "整理月底對帳明細", "查詢匯出的資料筆數", "指定收據樣式的專案",
+    "重新產生示範月報", "確認是否列出停用項目", "選擇通知設定的專案", "保留上次查詢的月份",
+  ];
+  const tasks = titles.map((title, index): Task => {
+    const entry = fixture.tasks[index];
+    return {
+      ...entry, title,
+      ...(index === 0 ? { created_at: "2026-01-09T08:00:00Z" } : {}),
+      ...(index === 6 ? {
+        status: "failed", updated_at: entry.created_at, last_error: "範例服務暫時沒有回應。",
+      } : {}),
+    };
+  });
+  const state: State = {
+    ...fixture.state,
+    tasks,
+    pickLists: [],
+    stuckTasks: [{ ...stuckTasks[1], taskId: tasks[0].id, title: tasks[0].title }],
+    health: [
+      ...fixture.state.health.filter(({ name }) => !exhaustedPushHealth.some((entry) => entry.name === name)),
+      ...exhaustedPushHealth,
+    ],
+    activity: recentActivity,
+  };
+  const sourceEnd = "最後一項請保留原來的欄位順序。";
+  const longSource = [
+    "請幫示範專案整理月底的對帳明細，方便各組逐項核對。",
+    ...Array.from({ length: 12 }, (_, index) =>
+      `第 ${index + 1} 組使用範例表單。請分列日期、分類、筆數與小計，讓核對的人能回去找到原始紀錄。`,
+    ),
+    sourceEnd,
+  ].join("\n");
+  const details = Object.fromEntries(tasks.map((entry, index) => {
+    const base = fixture.details.get(entry.id)!;
+    const sources = index === 3
+      ? fixture.details.get(tasks[0].id)!.sources.map((source) =>
+          source.type === "text" && source.availability === "readable" ? { ...source, text: longSource } : source)
+      : base.sources;
+    return [`/api/tasks/${entry.id}`, { ...base, task: entry, sources } satisfies Detail];
+  }));
+  await page.clock.setFixedTime(new Date(inboxReviewTime));
+  await mockDashboard(page, { state: { ...state }, routes: details });
+  await page.route(/\/api\/state(\?|$)/, (route) => route.fulfill({ json: state }));
+  return { state, tasks, sourceEnd };
+}
 
 export async function mockDashboard(
   page: Page,
