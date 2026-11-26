@@ -45,11 +45,11 @@ export type ReviewActions = Pick<
   "act" | "answer" | "followup" | "go" | "open" | "relink" | "repairBaseline"
 > & {
   verifyQuickActor: () => Promise<boolean>;
-  approveFromQueue: (task: Detail["task"], body: QuickApproval["body"], onError: (text: string) => void) => Promise<boolean>;
+  approveFromQueue: (task: Detail["task"], body: QuickApproval["body"], onError: (text: string, updated?: Detail["task"]) => void) => Promise<boolean>;
 };
 
 type DetailResult = { id: string; detail?: Detail; error?: string };
-type RowError = Pick<Detail["task"], "version" | "updated_at"> & { text: string };
+type RowError = { text: string } & (Pick<Detail["task"], "version" | "updated_at"> | { awaitingUpdateFrom: State["tasks"] });
 
 function readError(cause: unknown) {
   if (cause instanceof TypeError && /^(Failed to fetch|Load failed|NetworkError when attempting to fetch resource\.?)$/i.test(cause.message))
@@ -96,12 +96,19 @@ export function ReviewWorkbench({
   const guard = useGuard();
   const [checking, setChecking] = useState(false);
   const [rowErrors, setRowErrors] = useState<Record<string, RowError>>({});
-  const errors = Object.entries(rowErrors);
-  const remaining = errors.filter(([id, failed]) =>
-    items.some((item) => item.kind === "task" && item.id === id) &&
-    state.tasks.some((task) => task.id === id && task.version === failed.version && task.updated_at === failed.updated_at),
-  );
-  if (remaining.length !== errors.length) setRowErrors(Object.fromEntries(remaining));
+  let reconciled = rowErrors;
+  for (const [id, failed] of Object.entries(rowErrors)) {
+    const task = state.tasks.find((task) => task.id === id);
+    if (!task || !items.some((item) => item.kind === "task" && item.id === id) ||
+        ("version" in failed && (task.version !== failed.version || task.updated_at !== failed.updated_at))) {
+      if (reconciled === rowErrors) reconciled = { ...rowErrors };
+      delete reconciled[id];
+    } else if ("awaitingUpdateFrom" in failed && failed.awaitingUpdateFrom !== state.tasks) {
+      if (reconciled === rowErrors) reconciled = { ...rowErrors };
+      reconciled[id] = { text: failed.text, version: task.version, updated_at: task.updated_at };
+    }
+  }
+  if (reconciled !== rowErrors) setRowErrors(reconciled);
   const [queueCursor, setQueueCursor] = useState<string | null>(null);
   const [actorChanged, setActorChanged] = useState(false);
   const [quickNotice, setQuickNotice] = useState<{ id: string; text: string } | null>(null);
@@ -311,9 +318,11 @@ export function ReviewWorkbench({
         reviewInstead("案件與清單不同，尚未核准。請重新確認目前的需求、專案與分支。", fresh);
         return;
       }
-      await finish(id, () => actions.approveFromQueue(fresh.task, expected.body, (text) => {
-        const { version, updated_at } = current.task;
-        setRowErrors((errors) => ({ ...errors, [id]: { version, updated_at, text } }));
+      await finish(id, () => actions.approveFromQueue(fresh.task, expected.body, (text, updated) => {
+        const error: RowError = updated
+          ? { text, version: updated.version, updated_at: updated.updated_at }
+          : { text, awaitingUpdateFrom: latest.current.state.tasks };
+        setRowErrors((errors) => ({ ...errors, [id]: error }));
       }), "advance", initialSelection);
     } catch (cause) {
       if (stillHere()) reviewInstead(`無法重新確認案件，尚未核准。${readError(cause)} 請重新載入後再試。`);

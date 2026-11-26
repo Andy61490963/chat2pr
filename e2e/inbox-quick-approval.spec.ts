@@ -132,16 +132,25 @@ test("送出核准遇到版本衝突會在該列保留原因並重新整理佇�
   await expect(page.getByRole("status").filter({ hasText: /已.*核准/ })).toHaveCount(0);
 });
 
-for (const change of ["版本變更", "更新時間變更", "離開佇列再返回"] as const) {
+for (const change of ["版本變更", "更新時間變更", "離開佇列再返回", "衝突時已升版、重新整理後再次升版"] as const) {
   test(`快速核准被拒後，${change}會清掉舊錯誤並重讀後再核准`, async ({ page }) => {
     const { state, tasks } = await mockInboxReview(page);
     const current = tasks[3];
     const target = row(page, current.title);
     const approve = target.getByRole("button", quickName);
-    await page.route(`**/api/tasks/${current.id}/actions`, (route) =>
-      route.fulfill({ status: 409, json: { error: "需求版本已更新" } }), { times: 1 });
+    const conflict = change === "衝突時已升版、重新整理後再次升版";
+    const refreshed = conflict ? { ...current, version: current.version + 1 } : current;
+    await page.route(`**/api/tasks/${current.id}/actions`, (route) => {
+      if (conflict) {
+        state.tasks = tasks.filter((task) => task.id !== tasks[4].id)
+          .map((task) => task.id === current.id ? refreshed : task);
+      }
+      return route.fulfill({ status: 409, json: { error: "需求版本已更新" } });
+    }, { times: 1 });
     await page.goto("/");
+    if (conflict) await expect(row(page, tasks[4].title)).toBeVisible();
     await approve.click();
+    if (conflict) await expect(row(page, tasks[4].title)).toHaveCount(0);
     await expect(target.getByRole("alert")).toHaveText("需求版本已更新");
     await expect(target.getByRole("button", { name: "查看", exact: true })).toBeEnabled();
 
@@ -151,8 +160,8 @@ for (const change of ["版本變更", "更新時間變更", "離開佇列再返�
       await expect(target).toHaveCount(0);
     }
     const updated = {
-      ...current,
-      version: change === "版本變更" ? current.version + 1 : current.version,
+      ...refreshed,
+      version: change === "版本變更" || conflict ? refreshed.version + 1 : refreshed.version,
       updated_at: change === "更新時間變更" ? new Date(Date.parse(current.updated_at) + 1000).toISOString() : current.updated_at,
     };
     state.tasks = tasks.map((task) => task.id === current.id ? updated : task);

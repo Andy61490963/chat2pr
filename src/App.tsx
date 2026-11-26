@@ -313,18 +313,18 @@ export function App() {
   const guard = useGuard();
   // 動態只載入最近的一部分；按「載入更多」才加大範圍。
   const activityLimit = useRef(80);
-  const refresh = useCallback(async () => {
+  const refreshSnapshot = useCallback(async () => {
     try {
-      setState(
-        await request<State>(`/api/state?activity=${activityLimit.current}`),
-      );
+      const snapshot = await request<State>(`/api/state?activity=${activityLimit.current}`);
+      setState(snapshot);
       setError("");
-      return true;
+      return snapshot;
     } catch (e) {
       setError(message(e));
-      return false;
+      return null;
     }
   }, [request]);
+  const refresh = useCallback(async () => (await refreshSnapshot()) !== null, [refreshSnapshot]);
   // 通道停了會回 502／530 的 HTML 頁：當成暫時連不上（configured=null），
   // 登入頁給「重新連線」，不要叫使用者去執行 npm run setup。
   const connect = useCallback(async (signal?: AbortSignal) => {
@@ -592,7 +592,7 @@ export function App() {
   const run = async <T,>(
     fn: () => Promise<T>,
     done: string | ((result: T) => string) = "已儲存",
-    onError = (text: string) => setToast({ text, error: true }),
+    onError: (text: string) => void | Promise<void> = (text) => setToast({ text, error: true }),
   ) => {
     setBusy(true);
     try {
@@ -601,7 +601,7 @@ export function App() {
         const result = await fn();
         toastText = typeof done === "function" ? done(result) : done;
       } catch (e) {
-        onError(message(e));
+        await onError(message(e));
         return false;
       }
       setToast({ text: toastText });
@@ -1388,11 +1388,12 @@ export function App() {
                 }
                 loadTaskDetail={loadTaskDetail}
                 reviewActions={{
-                  approveFromQueue: async (task, body, onError) => {
-                    const success = await run(() => postTaskAction(task, "approve", body), "已確認專案並核准，開始排程", onError);
-                    if (!success) await refresh();
-                    return success;
-                  },
+                  approveFromQueue: (task, body, onError) =>
+                    run(() => postTaskAction(task, "approve", body), "已確認專案並核准，開始排程", async (text) => {
+                      const snapshot = await refreshSnapshot();
+                      const updated = snapshot?.tasks.find(({ id }) => id === task.id);
+                      if (!snapshot || updated) onError(text, updated);
+                    }),
                   verifyQuickActor: async () => {
                     const current = await request<NonNullable<typeof user>>("/api/me");
                     return !!user.id && current.id === user.id && current.role === "admin" && user.role === "admin";
