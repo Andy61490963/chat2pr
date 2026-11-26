@@ -9,11 +9,12 @@ export type WorkerEventRejectionReason = "欄位不符" | "種類不符" | "無�
 export type ReportWorkerRejection = (kind: WorkerEventKindLabel, reason: WorkerEventRejectionReason) => void;
 
 // 與 worker/observe.mjs 的輸出同步。額外欄位會使整筆事件失效。
+const detail = z.string().max(6000);
 const workerEvent = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("thread"), threadId: WorkerThreadId }),
-  z.strictObject({ kind: z.literal("usage"), detail: z.string().max(24000).optional() }),
-  z.strictObject({ kind: detailKind, detail: z.string().max(24000) }),
-  z.strictObject({ kind: commandKind, detail: z.string().max(24000), exitCode: z.int32().nullish() }),
+  z.strictObject({ kind: z.literal("usage"), detail: detail.optional() }),
+  z.strictObject({ kind: detailKind, detail }),
+  z.strictObject({ kind: commandKind, detail, exitCode: z.int32().nullish() }),
 ]);
 
 export function parseWorkerEvent(json: string, reject?: ReportWorkerRejection) {

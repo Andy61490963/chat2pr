@@ -602,7 +602,7 @@ export class Containers {
       });
       const consumeLine = (line: string, ending: string) => {
         if (!line.startsWith(workerEventPrefix)) {
-          if (error.length < 100000) error += line + ending;
+          if (error.length < 100000) error += (line + ending).slice(0, 100000 - error.length);
         } else if (line.length > maxWorkerEventLine) {
           options?.onRejectedWorkerEvent?.("未知", "欄位不符");
         } else {
@@ -622,7 +622,8 @@ export class Containers {
           discardUntilNewline = false;
           pending = pending.slice(newline + 1);
         }
-        if (!discardUntilNewline && pending.length > maxWorkerEventLine) {
+        const lineLimit = pending.startsWith(workerEventPrefix) ? maxWorkerEventLine : 100000;
+        if (!discardUntilNewline && pending.length > lineLimit) {
           consumeLine(pending, "");
           discardUntilNewline = true;
         }
