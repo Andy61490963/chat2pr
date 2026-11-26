@@ -210,6 +210,7 @@ export interface GroupReplyClaim {
   ids: string[];
   /** 保留 PostgreSQL 的微秒精度，用來核對目前仍是同一輪領取。 */
   claimedAt: string;
+  retryIds?: string[];
 }
 
 /** 核對領取時間，並鎖住此次仍持有的通知直到寫回結果。 */
@@ -260,9 +261,9 @@ export async function reclaimStaleClaims(c: Queryable) {
  * - 排除以 /進度 補送已被 LINE 拒收 REPLY_FAILURE_LIMIT 次的：reply token 一次只能用一次、整批一起成敗，
  *   一直取回同一則會讓這個群組的 /進度 永遠失敗。
  */
-const retrievable = (n: string, includeDiscordClaims = false) =>
-  `${n}.group_id=$1 AND t.group_id=$1
-   AND (${n}.sent_at IS NULL${includeDiscordClaims ? ` OR ($2='discord' AND ${n}.last_error=$3 AND ${n}.sent_message_id IS NULL)` : ""})
+const retrievable = (n: string, group: string, inFlight: string) =>
+  `${n}.group_id=${group} AND t.group_id=${group}
+   AND (${n}.sent_at IS NULL${inFlight})
    AND ${n}.created_at>now()-interval '7 days' AND ${n}.kind NOT IN ('group_waiting','group_triage')
    AND ${n}.reply_failures<${REPLY_FAILURE_LIMIT}
    AND (${n}.kind<>'group_question' OR (t.status='awaiting_approval' AND t.question IS NOT NULL AND ${n}.dedupe_key='group:question:'||t.id||':'||t.version))
@@ -278,23 +279,30 @@ const retrievable = (n: string, includeDiscordClaims = false) =>
 const newer = (a: string, b: string) =>
   `(${a}.kind<>'group_received',${a}.created_at,${a}.id)>(${b}.kind<>'group_received',${b}.created_at,${b}.id)`;
 // Discord 補送期間群組仍可執行 /進度，已佔住的新通知仍要擋住同任務的舊通知。
-const newestOfTask = `NOT EXISTS(SELECT 1 FROM notifications m WHERE m.task_id=n.task_id AND ${retrievable("m", true)} AND ${newer("m", "n")})`;
-const pendingFrom = (automatic: boolean) => `FROM notifications n LEFT JOIN tasks t ON t.id=n.task_id JOIN groups g ON g.id=n.group_id
-  WHERE g.platform=$2 AND (g.platform<>'line' OR n.line_digest_id IS NULL
+export function pendingGroupRepliesFrom(automatic: boolean, forAlert = false) {
+  const group = forAlert ? "g.id" : "$1";
+  const platform = forAlert ? "'line'" : "$2";
+  const thread = forAlert ? "NULL::text" : "$4::text";
+  const claimed = forAlert ? ` OR (n.last_error='${claimingNote}' AND n.sent_message_id IS NULL)` : "";
+  const newerClaim = forAlert ? "" : " OR ($2='discord' AND m.last_error=$3 AND m.sent_message_id IS NULL)";
+  const newestOfTask = `NOT EXISTS(SELECT 1 FROM notifications m WHERE m.task_id=n.task_id AND ${retrievable("m", group, newerClaim)} AND ${newer("m", "n")})`;
+  return `FROM notifications n LEFT JOIN tasks t ON t.id=n.task_id JOIN groups g ON g.id=n.group_id
+  WHERE g.platform=${platform} AND (g.platform<>'line' OR n.line_digest_id IS NULL
     OR n.last_error LIKE '${quotaShortPrefix}%'
     OR (n.line_reply_policy IS NOT NULL AND NOT EXISTS (
       SELECT 1 FROM notifications p WHERE p.line_digest_id=n.line_digest_id AND p.sent_at IS NULL
         AND p.attempts<3 AND p.line_reply_policy IS NULL AND COALESCE(p.last_error,'') NOT LIKE '${quotaShortPrefix}%')))
-  AND (n.line_reply_policy IS DISTINCT FROM 'free' OR NOT (${staleNotification}))
-  AND ((${retrievable("n")} AND ${newestOfTask}) OR (
-    g.platform='line' AND n.group_id=$1 AND n.sent_at IS NULL AND n.reply_failures<${REPLY_FAILURE_LIMIT}
-    AND (n.task_id IS NULL OR t.group_id=$1) AND NOT (${staleNotification})
+  AND (n.line_reply_policy IS NULL OR NOT (${staleNotification}))
+  AND ((${retrievable("n", group, claimed)} AND ${newestOfTask}) OR (
+    g.platform='line' AND n.group_id=${group} AND (n.sent_at IS NULL${claimed}) AND n.reply_failures<${REPLY_FAILURE_LIMIT}
+    AND (n.task_id IS NULL OR t.group_id=${group}) AND NOT (${staleNotification})
     AND (n.kind IN ('group_check','group_triage') OR (n.kind='group_waiting'
       AND ${automatic ? "true" : "n.line_reply_policy IS NOT NULL"}))))
   AND (g.platform<>'discord' OR (n.kind<>'group_received' AND
     (n.discord_retry_at IS NULL OR n.discord_retry_at<=now()) AND
     (CASE WHEN n.source_message_id IS NOT NULL THEN n.discord_thread_id ELSE t.discord_thread_id END)
-      IS NOT DISTINCT FROM $4::text))`;
+      IS NOT DISTINCT FROM ${thread}))`;
+}
 
 /**
  * 在呼叫端的交易內佔住最舊的 limit 則可取回通知：先以目前的陳述式時間設定 sent_at，
@@ -316,13 +324,13 @@ export async function claimPendingGroupReplies(
     await c.query<ClaimedReply & { kind: string; unconfirmed: boolean; important: boolean; retryable: boolean }>(
       `SELECT n.id,n.kind,n.text,n.quick_replies,n.line_reply_policy IS NOT DISTINCT FROM 'manual' AS unconfirmed,
          ${importantLineGroupNotice} AS important,
-         (n.line_reply_retry_count=0 AND (n.line_reply_uncertain_at IS NOT NULL OR n.last_error=$6) AND
-           COALESCE(n.line_reply_uncertain_at,n.created_at) <= $5::timestamptz - interval '5 minutes') AS retryable
-       ${pendingFrom(!!automatic)}
+         (n.line_reply_retry_count=0 AND
+           n.line_reply_uncertain_at <= $5::timestamptz - interval '5 minutes') AS retryable
+       ${pendingGroupRepliesFrom(!!automatic)}
        ${automatic ? `AND g.enabled AND g.left_at IS NULL AND g.reply_mode<>'off' AND ${groupRepliesOn}` : ""}
        ${automatic === "important" ? `AND (${importantLineGroupNotice} OR n.line_reply_policy='free')` : ""}
        ORDER BY ${automatic ? `(${importantLineGroupNotice}) DESC,` : ""} n.created_at,n.id FOR UPDATE OF n SKIP LOCKED`,
-      [groupId, platform, claimingNote, threadId, new Date(Date.now()), replyFailedNote],
+      [groupId, platform, claimingNote, threadId, new Date(Date.now())],
     )
   ).rows;
   const rows = automatic
@@ -342,7 +350,7 @@ export async function claimPendingGroupReplies(
        WHERE id=ANY($1::uuid[]) RETURNING sent_at::text AS claimed_at`,
       [ids, claimingNote, !!automatic],
     );
-    claim = { ids, claimedAt: stamped.rows[0].claimed_at };
+    claim = { ids, claimedAt: stamped.rows[0].claimed_at, retryIds: automatic ? picked.filter((r) => r.unconfirmed).map((r) => r.id) : [] };
     if (platform === "line") await supersedeOlderGroupReplies(c, groupId, ids);
   }
   return {

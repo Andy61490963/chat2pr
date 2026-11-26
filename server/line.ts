@@ -124,7 +124,6 @@ interface Ack {
   claim?: GroupReplyClaim;
 }
 export class Line {
-  private backfilledReplyAlerts = false;
   private readonly unusedReplies = new Map<string, { token: string; expiresAt: number }>();
 
   constructor(
@@ -638,6 +637,7 @@ export class Line {
       const { rows } = await c.query<{ id: string }>(
         `UPDATE notifications SET sent_at=NULL,reply_failures=reply_failures+$3,
            line_reply_policy=CASE WHEN $8 THEN 'manual' ELSE line_reply_policy END,
+           line_reply_retry_count=line_reply_retry_count - CASE WHEN NOT $8 AND id=ANY($9::uuid[]) THEN 1 ELSE 0 END,
            line_reply_uncertain_at=CASE WHEN $8 THEN now() ELSE line_reply_uncertain_at END,
            last_error=CASE WHEN reply_failures+$3>=$4 THEN $5 ELSE $2 END
          WHERE id=ANY($1::uuid[]) AND sent_at=$6 AND last_error=$7 AND sent_message_id IS NULL
@@ -651,6 +651,7 @@ export class Line {
           claim.claimedAt,
           claimingNote,
           result.possiblyDelivered === true,
+          claim.retryIds ?? [],
         ],
       );
       if (result.possiblyDelivered && rows.length) await queueUncertainReplyAlerts(c, rows.map((row) => row.id));
@@ -739,10 +740,6 @@ export class Line {
   async flushNotifications() {
     // LINE 與 Discord 停在「補送中」且已逾時的通知都放回待送。LINE 額度用完時也要回收。
     await reclaimStaleClaims(this.db);
-    if (!this.backfilledReplyAlerts) {
-      await this.db.transaction((c) => queueUncertainReplyAlerts(c));
-      this.backfilledReplyAlerts = true;
-    }
     const discord = typeof this.discord === "function" ? this.discord() : this.discord;
     const results = await Promise.allSettled([
       withLinePushLock(this.db, async () => {

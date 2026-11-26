@@ -144,6 +144,8 @@ ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_digest_id uuid;
 -- free 可隨群組發言送出。manual 可用 /進度 取回；重要免費回覆送達未確認時，冷卻五分鐘後可隨新發言再補送一次。
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_reply_policy text CHECK (line_reply_policy IN ('free','manual'));
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_reply_uncertain_at timestamptz;
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_reply_alert_id uuid REFERENCES notifications(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS notifications_reply_alert ON notifications(line_reply_alert_id) WHERE line_reply_alert_id IS NOT NULL;
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_reply_retry_count integer NOT NULL DEFAULT 0;
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_outage_started_at timestamptz;
 CREATE TABLE IF NOT EXISTS service_health (name text PRIMARY KEY, ok boolean NOT NULL, detail text NOT NULL, checked_at timestamptz NOT NULL DEFAULT now());
