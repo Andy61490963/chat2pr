@@ -49,7 +49,7 @@ function Checkbox({
     <CheckboxPrimitive.Root
       data-slot="checkbox"
       className={cn(
-        "peer group grid size-11 shrink-0 place-items-center rounded-sm outline-none focus-visible:focus-frame disabled:cursor-not-allowed disabled:opacity-50 md:size-4",
+        "peer group relative grid size-4 shrink-0 place-items-center rounded-sm outline-none focus-visible:focus-frame disabled:cursor-not-allowed disabled:opacity-50 max-md:after:absolute max-md:after:left-1/2 max-md:after:top-1/2 max-md:after:size-11 max-md:after:-translate-x-1/2 max-md:after:-translate-y-1/2",
         className,
       )}
       {...props}
@@ -150,9 +150,9 @@ function Tabs({
 
 const TabsContent = TabsPrimitive.Content;
 const segmentedListClass =
-  "inline-flex h-auto w-fit max-w-full items-center justify-start overflow-x-auto rounded-md bg-muted p-1 md:h-9 text-muted-foreground";
+  "inline-flex h-auto w-fit max-w-full items-center justify-center max-sm:justify-start overflow-x-auto rounded-md bg-muted p-1 md:h-9 text-muted-foreground";
 const segmentedItemClass =
-  "inline-flex h-full flex-none items-center justify-center gap-1.5 rounded-md border border-transparent px-2.5 py-1 text-sm font-medium whitespace-nowrap text-foreground transition-colors focus-visible:border-ring focus-visible:focus-frame disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-popover dark:text-muted-foreground dark:data-[state=active]:border-input dark:data-[state=active]:bg-background dark:data-[state=active]:text-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4";
+  "inline-flex h-full flex-1 max-sm:flex-none items-center justify-center gap-1.5 rounded-md border border-transparent px-2.5 py-1 text-sm font-medium whitespace-nowrap text-foreground transition-colors focus-visible:border-ring focus-visible:focus-frame disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-popover dark:text-muted-foreground dark:data-[state=active]:border-input dark:data-[state=active]:bg-background dark:data-[state=active]:text-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4";
 
 function TabsList({
   className,

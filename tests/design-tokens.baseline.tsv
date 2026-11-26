@@ -31,6 +31,7 @@ src/App.tsx	大圓角須改用規範圓角	rounded-lg	bbfdcbe4e6bca1ae
 src/App.tsx	大圓角須改用規範圓角	rounded-lg	d00b74f43f85170b
 src/App.tsx	漸層或毛玻璃須改用單色表面	backdrop-blur	93b7c968a822bd3a
 src/app/inbox.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	55130ef66daaaf8a
+src/app/inbox.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	552353603fdcc1f2
 src/app/inbox.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	82023b447004e97a
 src/app/inbox.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	82a5c755cb93ecfd
 src/app/inbox.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	88e606f1b8dacf0f
@@ -71,6 +72,7 @@ src/app/shared.tsx	任意工具值須改用具名 token	text-[11px]	b72ada0c4b1b
 src/app/shared.tsx	大圓角須改用規範圓角	rounded-full	b72ada0c4b1b0b93
 src/app/system.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	08e0c835813a593f
 src/app/system.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	a01004f5716416a1
+src/app/system.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	ee7c9b5520e51821
 src/app/system.tsx	任意工具值須改用具名 token	flex-[1_1_12rem]	00cfbcd8dc8579f8
 src/app/system.tsx	任意工具值須改用具名 token	grid-cols-[1fr_auto]	6f3386d80535fde2
 src/app/system.tsx	任意工具值須改用具名 token	grid-cols-[auto_minmax(0,1fr)]	762c30fcc641ef20

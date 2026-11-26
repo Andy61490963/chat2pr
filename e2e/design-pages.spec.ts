@@ -63,7 +63,8 @@ for (const width of [375, 1440]) {
       for (const screen of screens) {
         await test.step(screen.name, async () => {
           await page.goto(screen.path);
-          await expect(page.getByRole("main")).toBeVisible();
+          // 開啟報告抽屜後，Radix 會暫時從無障礙樹隱藏後方的主畫面。
+          await expect(page.locator("main")).toBeAttached();
           const content = page
             .getByText(screen.content, { exact: true })
             .first();

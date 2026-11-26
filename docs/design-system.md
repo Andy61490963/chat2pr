@@ -61,7 +61,7 @@
 | 樣式表 | 語意代幣之外的原始色值（含具名顏色、hex、RGB、HSL、OKLCH）、固定字級／間距／圓角、`font` 簡寫、漸層與毛玻璃。只有 `src/styles.css` 的主題、根元素及深色主題代幣可以定義原始色值。 |
 | 產生的 CSS | Tailwind 主題先清除預設色盤、字級、圓角與陰影，再宣告看板使用的代幣。編譯測試同時驗證允許與禁止的候選類別。 |
 
-Radix 狀態與子元素選擇器、媒體查詢斷點、IntersectionObserver 的 `rootMargin`、連結錨點、工單編號屬於選擇條件或資料。CI 的靜態檢查不量測渲染後的對比、觸控範圍或版面。這些由瀏覽器驗收檢查。第三方套件、應用程式執行時載入的圖形內容及 `src/`、`shared/` 以外的文件不屬於這份來源盤點。
+Radix 狀態與子元素選擇器、媒體查詢斷點、IntersectionObserver 的 `rootMargin`、連結錨點、工單編號屬於選擇條件或資料。數字間距工具依 `--spacing` 的倍數運作；間距是否適合資料密度仍須看畫面。渲染後的對比、觸控範圍與版面由瀏覽器驗收檢查。第三方套件、應用程式執行時載入的圖形內容及 `src/`、`shared/` 以外的文件不屬於這份來源盤點。
 
 掃描器可追蹤同檔宣告，識別 JSX 屬性、`cn`、`clsx`、`cva` 與直接設定 DOM 樣式的語法。跨檔函式回傳的類別、執行期拼出的完整類別，以及經 `{...props}` 隱含傳入的屬性須由審查者核對。具名資料變數按檔案登記在 `scripts/design-style-context.ts`。磁碟的 `--disk-used-width` 取自容量比例，查詢報告的 `--diagram-width` 取自 SVG 實測寬度與使用者縮放倍率，進度條的 `--progress-offset` 取自目前的完成比例。
 
@@ -84,12 +84,12 @@ Radix 狀態與子元素選擇器、媒體查詢斷點、IntersectionObserver �
 
 盤點數字依同一版掃描器計算。每一筆紀錄一個樣式，同一工具中的色碼或單位計一次。逐項原因和來源識別見[基準清單](../tests/design-tokens.baseline.tsv)。
 
-主線 `acb8e51` 共 425 筆，本輪保留 163 筆。下表記錄這次盤點，後續各分支以基準清單查詢即時數量。
+主線 `7f5808c` 共 426 筆，本輪保留 164 筆。下表記錄這次盤點，後續各分支以基準清單查詢即時數量。
 
 | 原因 | 主線 | 本輪保留 |
 | --- | ---: | ---: |
-| 任意工具值須改用具名 token | 182 | 72 |
-| 動態樣式須使用已登記的 CSS 變數 | 21 | 18 |
+| 任意工具值須改用具名 token | 184 | 74 |
+| 動態樣式須使用已登記的 CSS 變數 | 20 | 17 |
 | 只有浮層可用陰影代幣 | 14 | 0 |
 | 固定字級、間距或圓角須改用 token | 58 | 21 |
 | 大圓角須改用規範圓角 | 141 | 48 |
@@ -110,7 +110,7 @@ Radix 狀態與子元素選擇器、媒體查詢斷點、IntersectionObserver �
 | `src/app/egress.tsx` | 3 | 0 |
 | `src/app/friction.tsx` | 2 | 0 |
 | `src/app/groups.tsx` | 24 | 0 |
-| `src/app/inbox.tsx` | 9 | 9 |
+| `src/app/inbox.tsx` | 10 | 10 |
 | `src/app/members.tsx` | 4 | 0 |
 | `src/app/memory-overview.tsx` | 7 | 0 |
 | `src/app/page-notices.tsx` | 1 | 1 |
@@ -125,7 +125,7 @@ Radix 狀態與子元素選擇器、媒體查詢斷點、IntersectionObserver �
 | `src/app/run-observer.tsx` | 6 | 6 |
 | `src/app/settings.tsx` | 12 | 12 |
 | `src/app/shared.tsx` | 5 | 4 |
-| `src/app/system.tsx` | 19 | 19 |
+| `src/app/system.tsx` | 20 | 20 |
 | `src/app/task-actions.tsx` | 5 | 5 |
 | `src/app/task-clarification.tsx` | 2 | 0 |
 | `src/app/task-review-panel.tsx` | 29 | 29 |
@@ -142,12 +142,13 @@ Radix 狀態與子元素選擇器、媒體查詢斷點、IntersectionObserver �
 | `src/components/ui/sheet.tsx` | 2 | 0 |
 | `src/components/ui/table.tsx` | 2 | 0 |
 | `src/components/ui/tooltip.tsx` | 3 | 0 |
-| `src/flow/architecture-flow.js` | 40 | 40 |
+| `src/flow/architecture-flow.js` | 39 | 39 |
 | `src/styles.css` | 12 | 0 |
+
 
 ## 分階段接手與重跑
 
-本階段遷移群組、記憶總覽、專案與連線、成員、定期檢查、聊天室、任務及報告，另包含系統頁內的容量、使用摩擦、磁碟與網路區塊。第二輪核對尚開放的平行 PR 為 #269、#270、#274、#275、#277、#282、#283。主殼由平行 PR 維護，共用入口只調整 Empty 與 SectionTitle 兩個轉接處。
+本階段遷移群組、記憶總覽、專案與連線、成員、定期檢查、聊天室、任務及報告，另包含系統頁內的容量、使用摩擦、磁碟與網路區塊。第二輪核對的平行 PR 包含 #269、#270、#274、#275、#277、#282、#283。#274 已先合併，#277 仍在審查。重新套用主線時，兩個來自 #274 的 `[overflow-wrap:anywhere]` 分別位於收件匣與系統頁，替換方式見上表。主殼由平行 PR 維護，共用入口只調整 Empty 與 SectionTitle 兩個轉接處。
 
 第二階段依合併後的版本處理以下檔案，估計 2 至 4 個人日，包含鍵盤與版面驗收。
 
