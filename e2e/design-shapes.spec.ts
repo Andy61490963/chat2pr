@@ -5,21 +5,31 @@ import { detail, mockDashboard, task } from "./dashboard-fixture";
 
 async function expectRound(mark: Locator) {
   await expect(mark).toBeVisible();
-  const round = await mark.evaluate((el) => {
-    const { width, height } = el.getBoundingClientRect();
-    const css = getComputedStyle(el);
-    return [
-      css.borderTopLeftRadius,
-      css.borderTopRightRadius,
-      css.borderBottomLeftRadius,
-      css.borderBottomRightRadius,
-    ].every((r) =>
-      r.endsWith("%")
-        ? parseFloat(r) >= 50
-        : parseFloat(r) >= Math.min(width, height) / 2,
-    );
-  });
-  expect(round).toBe(true);
+  await expect
+    .poll(() =>
+      mark.evaluate((el) => {
+        const { width, height } = el.getBoundingClientRect();
+        const css = getComputedStyle(el);
+        const corners = [
+          css.borderTopLeftRadius,
+          css.borderTopRightRadius,
+          css.borderBottomLeftRadius,
+          css.borderBottomRightRadius,
+        ];
+        const round =
+          width > 0 &&
+          height > 0 &&
+          corners.every((r) =>
+            r.endsWith("%")
+              ? parseFloat(r) >= 50
+              : parseFloat(r) >= Math.min(width, height) / 2,
+          );
+        return round
+          ? "圓形"
+          : `${el.className}（${width} × ${height}），四角 ${corners.join("、")}`;
+      }),
+    )
+    .toBe("圓形");
 }
 
 for (const width of [375, 1440]) {
@@ -93,11 +103,15 @@ for (const width of [375, 1440]) {
         if (settings) await page.getByText("全部服務", { exact: true }).click();
         const rows = page.getByRole("tabpanel").getByRole("listitem");
         const service = settings
-          ? rows.filter({ has: page.getByText("LINE", { exact: true }) })
+          ? page
+              .locator("details[open]")
+              .filter({ has: page.getByText("全部服務", { exact: true }) })
+              .getByRole("listitem")
+              .filter({ has: page.getByText("LINE", { exact: true }) })
           : rows.filter({ hasText: "負責建立與回收工作容器的主機程序" });
-        const mark = service.locator(":scope > span").first();
-        await expectRound(mark);
+        const mark = service.locator(":scope > span.size-2");
         await service.evaluate((el) => el.scrollIntoView({ block: "center" }));
+        await expectRound(mark);
         await expect(mark).toBeInViewport();
       }
       const dir = process.env.DESIGN_SHOTS_DIR;
