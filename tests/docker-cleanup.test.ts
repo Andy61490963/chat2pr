@@ -87,7 +87,8 @@ describe("要清理的映像標籤", () => {
     const docker = {
       listContainers: async () => [{ ImageID: "sha:running" }],
       listImages: async () =>
-        images.map((i) => ({ ...i, Created: i.Created - 0 })),
+        // cleanupDocker 用真實時間判斷 14 天，把虛構映像的建立時間平移到今天，保持相對年齡
+        images.map((i) => ({ ...i, Created: i.Created + (Date.now() - now) / 1000 })),
       getImage: (name: string) => ({
         remove: async (opts?: unknown) => {
           calls.push(`remove ${name} ${JSON.stringify(opts ?? {})}`);
