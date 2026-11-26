@@ -236,6 +236,27 @@ it("分段接收含六千個跳脫字元的工作端訊息仍可還原原文", a
   expect(result.stderr).toBe("");
 });
 
+it("各類工作端事件只接受最多六千字元的明細，超長時逐筆回報欄位不符", async () => {
+  const kinds = ["usage", "error", "message", "files", "command_start", "command_end"];
+  const detail = "字".repeat(6000);
+  const result = await readWorkerLines(kinds.flatMap((kind) => [
+    JSON.stringify({ kind, detail }),
+    JSON.stringify({ kind, detail: detail + "字" }),
+  ]));
+  expect(result.events.map((event) => event.kind)).toEqual(kinds);
+  expect(result.events.every((event) => event.detail === detail)).toBe(true);
+  expect(result.rejected).toEqual(kinds.map((kind) => [kind, "欄位不符"]));
+});
+
+it("一般錯誤長行分段超過容器事件上限時仍保留尾段及下一行診斷", async () => {
+  const part = "x".repeat(33000);
+  const tail = "範例錯誤原因\n下一行診斷\n";
+  const result = await readStderrChunks([part, part, tail]);
+  expect(result.stderr.endsWith(tail)).toBe(true);
+  expect(result.stderr).toHaveLength(part.length * 2 + tail.length);
+  expect(result.rejected).toEqual([]);
+});
+
 it("過長的容器事件分段抵達只拒收一次，保留下一筆事件與一般錯誤", async () => {
   const valid = { kind: "message", detail: "後續回覆" };
   const result = await readStderrChunks([
