@@ -44,6 +44,40 @@ const setUsage = (used: number) =>
 const usage = () => db.one("SELECT detail FROM service_health WHERE name='line_quota'");
 const flush = () => new Line(db).flushNotifications();
 
+it("尚未同步月用量時也會查群組人數，後續推播沿用快取", async () => {
+  await db.query("DELETE FROM service_health WHERE name='line_quota'");
+  const fetch = vi.fn(async (url: string) => url.endsWith("/members/count")
+    ? Response.json({ count: 6 })
+    : Response.json({ sentMessages: [{ id: "ResultA" }] }));
+  vi.stubGlobal("fetch", fetch);
+  await notice("group_ready", "範例第一份結果");
+  await flush();
+  expect(await db.one("SELECT member_count FROM groups WHERE id='group-a'")).toEqual({ member_count: 6 });
+  await setUsage(100);
+  await db.query("UPDATE notifications SET sent_at=now()-interval '3 minutes' WHERE sent_at IS NOT NULL");
+  await notice("group_ready", "範例第二份結果");
+  await flush();
+  expect(fetch.mock.calls.filter(([url]) => url.endsWith("/members/count"))).toHaveLength(1);
+  expect(await usage()).toEqual({ detail: "本月已用 106／上限 200 則" });
+});
+
+it("人數查不到時按八人估算推播成本，餘額不足就保留通知", async () => {
+  const pushes: string[] = [];
+  vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    if (url.endsWith("/members/count")) return new Response(null, { status: 403 });
+    pushes.push(JSON.parse(String(init.body)).to);
+    return Response.json({ sentMessages: [{ id: "ResultB" }] });
+  });
+  await setUsage(188);
+  await notice("group_ready", "範例修改已完成");
+  await flush();
+  expect(await usage()).toEqual({ detail: "本月已用 196／上限 200 則" });
+  await db.query("UPDATE notifications SET sent_at=now()-interval '3 minutes' WHERE sent_at IS NOT NULL");
+  await notice("group_ready", "另一份範例修改已完成");
+  await flush();
+  expect(pushes).toEqual(["group-a"]);
+});
+
 beforeEach(async () => {
   await reset();
   await fixture();
