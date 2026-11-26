@@ -15,17 +15,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium --only-shell
-      - name: 收件匣流程與手機操作列驗證
-        env:
-          E2E_PORT: 5336
-        run: |
-          mkdir -p "$RUNNER_TEMP/inbox-shots"
-          INBOX_SHOT_DIR="$RUNNER_TEMP/inbox-shots" npx playwright test 'inbox-|review-workbench|pick-lists' --workers=2
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: inbox-a-shots
-          path: ${{ runner.temp }}/inbox-shots/*.png
+      - run: npm run test:e2e
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
