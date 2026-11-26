@@ -928,12 +928,17 @@ export function reviewWorkbenchFixture() {
   return { state, tasks, details, pickLists, reviewSource };
 }
 
-export async function mockInboxFlow(page: Page, empty = false, scenario?: "成員" | "風險" | "版本變更") {
+export async function mockInboxFlow(page: Page, empty = false, scenario?: "成員" | "風險" | "版本變更" | "重試") {
   const fixture = reviewWorkbenchFixture();
   fixture.state.health = [...fixture.state.health.filter(check => check.name !== "notifications"), ...exhaustedPushHealth];
   fixture.state.activity = recentActivity;
   fixture.state.stuckTasks = empty ? [] : [stuckTasks[0]];
   const first = fixture.details.get(fixture.tasks[0].id)!;
+  if (scenario === "重試") {
+    first.task.status = "failed";
+    first.task.updated_at = first.task.created_at;
+    first.task.last_error = "執行器連線暫時中斷";
+  }
   if (scenario === "風險") first.task.risk_reasons = ["需要核對示範專案的資料存取範圍。"];
   if (scenario === "版本變更") first.task = { ...first.task, version: first.task.version + 1 };
   first.sources[0].text = Array.from({ length: 18 }, (_, index) =>

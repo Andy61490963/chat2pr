@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
-import { mockInboxFlow, project } from "./dashboard-fixture";
+import { emitDashboardEvent, mockInboxFlow, project } from "./dashboard-fixture";
 
 const row = (page: Page, title: string) => page.getByRole("listitem").filter({ has: page.getByText(title, { exact: true }) });
 const details = (page: Page, title: string) => row(page, title).getByRole("button", { name: /查看詳情/ });
@@ -21,6 +21,36 @@ test("核准一筆後留在清單，按 Enter 直接開啟下一筆", async ({ p
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.keyboard.press("Enter");
   await expect(page.getByRole("dialog").getByRole("heading", { name: next.title }).first()).toBeVisible();
+});
+
+test("快速重試只送出一次，顯示完成回饋並選到下一筆", async ({ page }) => {
+  const { tasks: [first, next], state } = await mockInboxFlow(page, false, "重試");
+  let requests = 0;
+  await page.route(`**/api/tasks/${first.id}/actions`, async route => {
+    expect(route.request().postDataJSON()).toEqual({ action: "retry", version: first.version });
+    requests++;
+    state.tasks = state.tasks.filter(task => task.id !== first.id);
+    await route.fulfill({ json: { ...first, status: "queued" } });
+  });
+  await page.goto("/");
+  await details(page, first.title).focus();
+  await page.keyboard.press("a");
+  await expect(page.getByRole("status").filter({ hasText: "已重新排程" })).toBeVisible();
+  await expect(details(page, next.title)).toBeFocused();
+  await expect(page).toHaveURL("/");
+  expect(requests).toBe(1);
+});
+
+test("即時更新中斷時保留案件與更新入口，恢復連線後收起提示", async ({ page }) => {
+  const { tasks: [first] } = await mockInboxFlow(page);
+  await page.goto("/");
+  await expect(details(page, first.title)).toBeVisible();
+  await emitDashboardEvent(page, "error");
+  const warning = page.getByRole("status").filter({ hasText: "即時更新中斷了" });
+  await expect(warning.getByRole("button", { name: "立即更新" })).toBeVisible({ timeout: 10000 });
+  await expect(details(page, first.title)).toBeVisible();
+  await emitDashboardEvent(page, "connected");
+  await expect(warning).toHaveCount(0);
 });
 
 for (const scenario of ["成員", "風險", "版本變更"] as const) {
