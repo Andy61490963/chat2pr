@@ -172,6 +172,9 @@ it("工作端七種事件經容器入口保留，包含未取得結束碼的指�
     { type: "item.completed", item: { id: "item_3", type: "agent_message", text: "" } },
     { type: "item.completed", item: { id: "item_4", type: "error", message: "範例錯誤" } },
     { type: "error", message: "" },
+    { type: "error", message: "長".repeat(25000) },
+    { type: "turn.completed" },
+    { type: "turn.completed", usage: null },
     { type: "turn.completed", usage },
   ];
   const lines: string[] = [];
@@ -189,6 +192,9 @@ it("工作端七種事件經容器入口保留，包含未取得結束碼的指�
     { kind: "message", detail: "" },
     { kind: "error", detail: "範例錯誤" },
     { kind: "error", detail: "" },
+    { kind: "error", detail: "長".repeat(6000) },
+    { kind: "usage" },
+    { kind: "usage", detail: "null" },
     { kind: "usage", detail: JSON.stringify(usage) },
   ]);
   expect(result.rejected).toEqual([]);
