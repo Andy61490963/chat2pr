@@ -10,8 +10,7 @@ export function createModelUpstreamHandler(
   steps: readonly ModelStep[],
 ): RequestListener {
   let position = 0;
-  return (request, reply) => {
-    request.resume();
+  return async (request, reply) => {
     if (request.url !== "/backend-api/codex/responses") {
       reply.writeHead(404).end();
       return;
@@ -20,7 +19,20 @@ export function createModelUpstreamHandler(
       reply.writeHead(405, { Allow: "POST" }).end();
       return;
     }
-    const step = steps[position];
+    let step = steps[position];
+    if (step?.kind === "text" && "recentRejection" in step) {
+      const parts: Buffer[] = [];
+      let length = 0;
+      try {
+        for await (const part of request) {
+          const bytes = Buffer.from(part); length += bytes.length;
+          if (length > 1024 * 1024) { reply.writeHead(413).end(); return; }
+          parts.push(bytes);
+        }
+        const { resolveConversationStep } = await import("./conversations.js");
+        step = resolveConversationStep(step, JSON.parse(Buffer.concat(parts).toString("utf8")));
+      } catch { reply.writeHead(400).end(); return; }
+    } else request.resume();
     if (!step || step.kind === "error") {
       if (step) position++;
       reply

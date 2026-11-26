@@ -50,7 +50,7 @@ function replay(views: ReturnType<typeof dashboard>[], receipts: readonly string
   const pending = dashboard(original, "awaiting_approval", [], ["triage"]);
   let delivered = false;
   const ctx: RecoveryFlowContext = {
-    projectId, repository, githubWebhookSecret: "example-merge-proof", lineSecret: "example-line-proof",
+    projectId, repository, githubWebhookSecret: "ExampleMerge266", lineSecret: "ExampleLine266",
     async groupMessages() { return delivered ? receipts : []; },
     async gateway(packet) {
       expect(packet.d.data.options[0].value).toBe(basicFixture.discord.text);
