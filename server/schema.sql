@@ -124,6 +124,7 @@ CREATE TABLE IF NOT EXISTS run_events(
  UNIQUE(run_id,source,seq)
 );
 CREATE INDEX IF NOT EXISTS run_events_run ON run_events(run_id,id);
+ALTER TABLE run_events ADD COLUMN IF NOT EXISTS rejected_count integer;
 CREATE TABLE IF NOT EXISTS usage (
  id bigserial PRIMARY KEY, reservation_id uuid REFERENCES reservations(id), model text NOT NULL, input_tokens bigint NOT NULL,
  cached_tokens bigint NOT NULL, output_tokens bigint NOT NULL, cost numeric(12,6) NOT NULL, created_at timestamptz NOT NULL DEFAULT now()

@@ -42,7 +42,7 @@
 
 訂閱轉送層的 502 只代表轉送失敗；請看該階段執行事件裡訂閱代理記錄的固定類別與上游 HTTP 狀態碼（若有），不要從轉送層的 502 推測上游也回了 502。
 
-工作容器寫到 stderr 的 `AGENTFLOW_EVENT` 是不可信輸入。`server/containers.ts` 只接受 `worker/observe.mjs` 使用的七種事件及各自的欄位：`thread`、`usage`、`error`、`command_start`、`command_end`、`message`、`files`。新增工作端事件時要一起更新白名單與容器測試。`phase_end` 由執行器或伺服器記錄，明細仍可能是容器的 stderr。
+工作容器寫到 stderr 的 `AGENTFLOW_EVENT` 是不可信輸入。`server/containers.ts` 只接受 `worker/observe.mjs` 使用的七種事件及各自的欄位：`thread`、`usage`、`error`、`command_start`、`command_end`、`message`、`files`。用量缺欄時仍保存 `usage` 事件。指令結束碼可以是 32 位元有號整數、`null` 或缺欄；文字明細可以是空字串。對話識別碼接受 1 至 128 個英數字、句點、底線或連字號。額外欄位、保留種類或格式錯誤均整筆拒收。執行器在同一次執行只保存第一筆拒收的階段、白名單種類與固定原因；未知種類統一顯示「未知」，後續拒收只更新累計數。新增工作端事件時，要用 SDK 事件經 `observeTurn` 序列化後驗證容器入口與保存格式。`phase_end` 由執行器或伺服器記錄，明細仍可能是容器的 stderr。
 
 看板的「訂閱失敗原因」只讀該次執行的 `runs.upstream_failure`。伺服器在訂閱修改或審查失敗時，從執行器回傳的 `r.upstreamFailure` 保存固定類別與有效 HTTP 狀態碼；來源是代理的階段授權。舊紀錄的明細保留供展開，不據以回填原因。Codex 重連收到的 403 只說明這次重連遭拒。
 

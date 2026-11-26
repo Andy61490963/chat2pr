@@ -48,6 +48,9 @@ function EventHeading({ event }: { event: RunEvent }) {
       <span>{phaseLabels[phase] ?? phase}</span>
       <span>{label}</span>
       {exitCode != null && <span>結束碼 {exitCode}</span>}
+      {kind === "worker_event_rejected" && event.rejectedCount != null && (
+        <span>累計 {event.rejectedCount} 筆</span>
+      )}
     </p>
   );
 }

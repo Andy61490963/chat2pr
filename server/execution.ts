@@ -1018,7 +1018,7 @@ export class Execution {
         this.db,
         runId,
         "runner",
-        scrubEvents(events.filter((e) => e.seq > cursor)),
+        scrubEvents(events.filter((e) => e.seq > cursor || e.kind === "worker_event_rejected")),
       );
       for (const e of events)
         if (Number.isSafeInteger(e.seq)) cursor = Math.max(cursor, e.seq);

@@ -803,7 +803,7 @@ export class Tasks {
     const rows = await this.db.query<{ seq: number }>(
       `SELECT id::int AS seq,at,phase,kind,
       CASE WHEN run_content_visible(run_id) THEN detail ELSE NULL END AS detail,
-      thread_id AS "threadId",container_id AS "containerId",exit_code AS "exitCode"
+      thread_id AS "threadId",container_id AS "containerId",exit_code AS "exitCode",rejected_count AS "rejectedCount"
       FROM run_events WHERE run_id=$1 AND ($2::bigint IS NULL OR id<$2) ORDER BY id DESC LIMIT 201`,
       [runId, before ?? null],
     );
