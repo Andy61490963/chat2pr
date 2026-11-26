@@ -46,6 +46,9 @@ describe("依樣式的語法位置檢查設計代幣", () => {
       ),
     ).toEqual(["p-[13px]"]);
   });
+  it("共用物件中的連結路徑可含類別名稱", () => {
+    expect(values('export const guide = { article: "https://demo.invalid/rounded-lg", href: "docs/rounded-lg" };', "shared/example.ts")).toEqual([]);
+  });
   it("辨認 DOM 方括號樣式指定", () => {
     expect(values('el.style["color"]="red";')).toEqual(["red"]);
   });

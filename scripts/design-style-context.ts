@@ -18,8 +18,8 @@ function looksLikeClassList(text: string) {
     .every(
       (word) =>
         bareUtilities.has(word) ||
-        (/^[-\w![&*]/.test(word) &&
-          /[-:[(]/.test(word) &&
+        (!/^[a-z][\w+.-]*:\/\//i.test(word) &&
+          /^!?-?(?:[\w@*]+[-:(]|\[)/.test(word) &&
           !/[^\x21-\x7e]/.test(word)),
     );
 }
