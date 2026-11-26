@@ -21,6 +21,7 @@ import {
   discordServiceLabels,
   discordServiceText,
   groupPlatformLabels,
+  inferenceStatusLabels,
   networkStatusLabels,
   systemStatusLabels,
 } from "../../shared/status-glossary.js";
@@ -86,6 +87,8 @@ import {
   type State,
   ago,
   date,
+  healthBadge,
+  healthStatus,
 } from "./shared";
 import { useUnsaved } from "./unsaved";
 
@@ -172,8 +175,8 @@ const services = [
   { key: "github", name: "GitHub App", hint: "讀取專案、建立 Issue 與 PR" },
   {
     key: "codex",
-    name: "Codex 訂閱登入",
-    hint: "訂閱模式的 AI",
+    name: "Codex 訂閱推論",
+    hint: "尚未完成真實推論檢查。排程會透過工作使用的訂閱代理確認，不計每日派工次數。",
     mode: "subscription",
   },
   { key: "openai", name: "OpenAI API", hint: "API 模式的 AI", mode: "api" },
@@ -1068,6 +1071,8 @@ export function SettingsView({
       const h = disabled
         ? undefined
         : state.health.find((h) => h.name === i.key);
+      const status = healthStatus(h);
+      const inference = i.key === "codex";
       // 判讀與檢索在使用時更新，顯示最近一次結果；其他服務由每小時檢查確認，
       // 超過一天沒有再確認的結果不能當成「正常」，只代表上次正常。
       const onUse = [
@@ -1079,6 +1084,7 @@ export function SettingsView({
       ].includes(i.key);
       const stale =
         !onUse &&
+        !h?.inferenceStatus &&
         !!h?.ok &&
         Date.now() - new Date(h.checked_at).getTime() > 86400000;
       const pushService =
@@ -1087,7 +1093,13 @@ export function SettingsView({
           : undefined;
       const quota = pushService?.quota;
       const detail = pushService ? pushService.detail : h?.detail;
-      const action = !disabled && !quota && (stale || (h ? !h.ok : !onUse));
+      const action = !disabled && !quota &&
+        (stale || status === "failed" || (!h && !onUse && !inference));
+      const label = disabled ? connectionStatusLabels.disabled
+        : stale ? connectionStatusLabels.stale
+        : inference ? inferenceStatusLabels[status]
+        : h ? (h.ok ? connectionStatusLabels.healthy : connectionStatusLabels.needsAttention)
+        : onUse ? connectionStatusLabels.noRecord : connectionStatusLabels.unchecked;
       return {
         action,
         row: (
@@ -1098,16 +1110,16 @@ export function SettingsView({
             <span
               className={cn(
                 "size-2 shrink-0 rounded-full bg-border",
-                !quota && h?.ok && !stale && "bg-good",
+                !quota && status === "healthy" && !stale && "bg-good",
                 stale && "bg-warn",
-                !quota && h && !h.ok && "bg-danger",
+                !quota && status === "failed" && "bg-danger",
               )}
             />
             <span className="flex min-w-0 flex-1 flex-col">
               <span className="text-sm font-medium">{i.name}</span>
               <span className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
                 {detail ?? i.hint}
-                {h && !quota && (
+                {h && !quota && status !== "unknown" && (
                   <span className={cn("block", stale && "text-warn")}>
                     {onUse ? "最近一次" : "最後確認"} {ago(h.checked_at)}
                     {stale && "，每小時會自動確認；可按「檢查連線」立即更新"}
@@ -1116,23 +1128,8 @@ export function SettingsView({
               </span>
             </span>
             {!quota && (
-              <Badge
-                variant={
-                  h ? (stale ? "warn" : h.ok ? "good" : "danger") : "secondary"
-                }
-              >
-                {disabled
-                  ? connectionStatusLabels.disabled
-                  : h
-                    ? stale
-                      ? connectionStatusLabels.stale
-                      : h.ok
-                        ? connectionStatusLabels.healthy
-                        : connectionStatusLabels.needsAttention
-                    : // 使用時才更新的項目沒有紀錄，代表還沒用到，不是漏了檢查。
-                      onUse
-                      ? connectionStatusLabels.noRecord
-                      : connectionStatusLabels.unchecked}
+              <Badge variant={stale ? "warn" : healthBadge[status]}>
+                {label}
               </Badge>
             )}
           </li>

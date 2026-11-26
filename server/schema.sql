@@ -116,6 +116,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS runs_one_active_per_task ON runs(task_id) WHER
 UPDATE settings SET value='{"max_runs":2}'::jsonb || value WHERE id=1;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS outcome text;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS observed boolean NOT NULL DEFAULT false;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS upstream_failure jsonb;
 CREATE TABLE IF NOT EXISTS run_events(
  id bigserial PRIMARY KEY, run_id uuid NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
  source text NOT NULL, seq integer NOT NULL, at timestamptz NOT NULL, phase text NOT NULL,
@@ -123,6 +124,7 @@ CREATE TABLE IF NOT EXISTS run_events(
  UNIQUE(run_id,source,seq)
 );
 CREATE INDEX IF NOT EXISTS run_events_run ON run_events(run_id,id);
+ALTER TABLE run_events ADD COLUMN IF NOT EXISTS rejected_count integer;
 CREATE TABLE IF NOT EXISTS usage (
  id bigserial PRIMARY KEY, reservation_id uuid REFERENCES reservations(id), model text NOT NULL, input_tokens bigint NOT NULL,
  cached_tokens bigint NOT NULL, output_tokens bigint NOT NULL, cost numeric(12,6) NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
@@ -145,6 +147,7 @@ ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_reply_uncertain_at times
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_reply_retry_count integer NOT NULL DEFAULT 0;
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_outage_started_at timestamptz;
 CREATE TABLE IF NOT EXISTS service_health (name text PRIMARY KEY, ok boolean NOT NULL, detail text NOT NULL, checked_at timestamptz NOT NULL DEFAULT now());
+ALTER TABLE service_health ADD COLUMN IF NOT EXISTS probe_info jsonb;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS config_version integer NOT NULL DEFAULT 1;
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS triage_failures integer NOT NULL DEFAULT 0;
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS triage_error text;
@@ -237,6 +240,9 @@ BEGIN
  IF NEW.revoked OR NEW.received_at<=message_retention_cutoff() THEN
   UPDATE run_events SET detail=NULL WHERE run_id IN (
    SELECT r.id FROM runs r JOIN tasks t ON t.id=r.task_id WHERE t.group_id=NEW.group_id AND NEW.id=ANY(t.source_ids)
+  );
+  UPDATE runs SET upstream_failure=NULL WHERE upstream_failure IS NOT NULL AND task_id IN (
+   SELECT t.id FROM tasks t WHERE t.group_id=NEW.group_id AND NEW.id=ANY(t.source_ids)
   );
   UPDATE runs SET result=erase_candidate_quotes(result) WHERE result ? 'candidate' AND task_id IN (
    SELECT t.id FROM tasks t WHERE t.group_id=NEW.group_id AND NEW.id=ANY(t.source_ids)
@@ -819,3 +825,22 @@ CREATE TABLE IF NOT EXISTS baseline_passes (
 );
 -- 「修復目標分支」任務（#248）：只能從基底驗證失敗的任務建立，可以在基底為紅時開始，結束時的關卡不變。
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS baseline_repair boolean NOT NULL DEFAULT false;
+
+CREATE TABLE IF NOT EXISTS task_stalls (
+ episode text PRIMARY KEY, task_id uuid NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+ version integer NOT NULL, status text NOT NULL, reason text NOT NULL, action_label text NOT NULL,
+ target text NOT NULL CHECK(target IN ('task','system')), since timestamptz NOT NULL, notice_id uuid
+);
+CREATE INDEX IF NOT EXISTS task_stalls_notice ON task_stalls(notice_id) WHERE notice_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS inference_probe_budget (
+ id boolean PRIMARY KEY CHECK(id), day date NOT NULL, attempts integer NOT NULL CONSTRAINT inference_probe_count CHECK(attempts BETWEEN 0 AND 8)
+);
+DO $$ BEGIN
+ IF EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='inference_probe_budget'::regclass AND conname='inference_probe_budget_attempts_check') THEN
+   ALTER TABLE inference_probe_budget DROP CONSTRAINT inference_probe_budget_attempts_check,
+     ADD CONSTRAINT inference_probe_count CHECK(attempts BETWEEN 0 AND 8);
+ END IF;
+END $$;
+ALTER TABLE inference_probe_budget ADD COLUMN IF NOT EXISTS reserved_at timestamptz;
+ALTER TABLE inference_probe_budget ADD COLUMN IF NOT EXISTS early_attempts integer NOT NULL DEFAULT 0 CHECK(early_attempts BETWEEN 0 AND 2);
+CREATE INDEX IF NOT EXISTS audit_task_failure ON audit(task_id,created_at DESC,id DESC) WHERE kind='error';

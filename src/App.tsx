@@ -75,6 +75,7 @@ import {
   attention,
   cash,
   countOf,
+  healthStatus,
   Initials,
   memoryHold,
   message,
@@ -214,7 +215,7 @@ const writeUrl = (view: View, task: string | null, push = true) => {
 const vital: Record<string, string> = {
   line: "LINE",
   github: "GitHub App",
-  codex: "Codex 訂閱登入",
+  codex: "Codex 訂閱推論",
   openai: "OpenAI API",
   runner: "隔離執行器",
   tunnel: "HTTPS 入口",
@@ -836,7 +837,7 @@ export function App() {
   const lineQuota = state?.health.find((h) => h.name === LINE_QUOTA && !h.ok);
   const down = (state?.health ?? []).filter(
     (h) =>
-      !h.ok &&
+      healthStatus(h) === "failed" &&
       vital[h.name] &&
       // 額度用完時推播失敗是預期中的，由下方黃色橫幅說明，不算「連線異常」。
       !(lineQuota && h.name === "notifications") &&
@@ -852,7 +853,8 @@ export function App() {
     : memoryHold(state);
   const reserve = state?.settings.codex_reserve_percent ?? 0;
   const accountSnapshot = typeof account === "object" ? account : null;
-  const quotaCheck = state?.health.find((h) => h.name === subscriptionGateName);
+  const gate = state?.health.find((h) => h.name === subscriptionGateName);
+  const quotaCheck = gate && "quota" in gate ? gate.quota : gate;
   const subscriptionHold = !subscription
     ? null
     : reserve > 0 &&

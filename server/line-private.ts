@@ -20,6 +20,7 @@ import {
 import { LineChatPlatform } from "./line-platform.js";
 import { groupReplyStillUncertain } from "./reply-uncertain.js";
 import { redact } from "./policy.js";
+import { liveStuckNotice } from "./stuck-tasks.js";
 
 export const privateActionKinds = [
   "connection_secrets_updated",
@@ -29,6 +30,7 @@ export const privateActionKinds = [
   "project_input",
   "failed",
   "interrupted",
+  "stuck_tasks",
   "triage",
   "publish_race",
   "reply_uncertain",
@@ -63,6 +65,7 @@ export async function prepareDigest(db: Database, mode: LinePrivateMode, lowQuot
          OR (NOT $2 AND NOT (n.kind=ANY($3::text[]) OR n.kind='service_down'
            OR ($6 AND n.kind='check' AND (n.dedupe_key LIKE 'check-system:%' OR n.text LIKE '⚠️ %'))))
          OR (n.kind='reply_uncertain' AND NOT ${groupReplyStillUncertain})
+         OR (n.kind='stuck_tasks' AND NOT ${liveStuckNotice})
          OR (n.kind='service_down' AND NOT EXISTS (
            SELECT 1 FROM service_health h WHERE h.name=split_part(n.dedupe_key,':',2)
            AND h.outage_started_at=n.line_outage_started_at))
