@@ -24,8 +24,19 @@ function lineApi(send?: (body: Push, key: string) => Promise<Response>) {
   });
   return pushes;
 }
-const notice = (kind: string, text: string, group = "group-a") =>
-  db.query("INSERT INTO notifications(kind,dedupe_key,text,group_id) VALUES($1,$2,$2,$3)", [kind, text, group]);
+const noticeStatus: Record<string, string> = {
+  group_received: "awaiting_approval", group_question: "awaiting_approval", group_ready: "ready",
+  group_answered: "answered", group_merged: "merged", group_failed: "failed", group_waiting: "queued", group_resumed: "queued",
+};
+async function notice(kind: string, text: string, group = "group-a") {
+  const task = (await db.one<{ id: string }>(
+    `INSERT INTO tasks(group_id,title,summary,acceptance,status,question,dedupe_key)
+     VALUES($1,$2,'範例摘要','[]',$3,$4::jsonb,$2) RETURNING id`,
+    [group, text, noticeStatus[kind], kind === "group_question" ? JSON.stringify({ text, choices: [] }) : null],
+  ))!;
+  return db.query("INSERT INTO notifications(kind,dedupe_key,text,group_id,task_id) VALUES($1,$2,$3,$4,$5)",
+    [kind, `group:${kind.slice(6)}:${task.id}:1`, text, group, task.id]);
+}
 const setUsage = (used: number) =>
   db.query(`INSERT INTO service_health(name,ok,detail) VALUES('line_quota',true,$1)
     ON CONFLICT(name) DO UPDATE SET ok=true,detail=EXCLUDED.detail`, [`本月已用 ${used}／上限 200 則`]);
@@ -200,11 +211,7 @@ it("每輪最多查五十個群組的人數，下一輪會輪到額度夠用的�
 });
 
 it("無法確認推播結果又發現額度不足時，把已領取的答案還給免費回覆", async () => {
-  const project = await db.one<{ id: string }>("SELECT id FROM projects LIMIT 1");
-  const task = await db.one<{ id: string }>(`INSERT INTO tasks(project_id,group_id,title,summary,acceptance,status,dedupe_key)
-    VALUES($1,'group-a','範例問題','查詢結果','[]','answered','SampleTask') RETURNING id`, [project!.id]);
   await notice("group_answered", "範例答案");
-  await db.query("UPDATE notifications SET task_id=$1", [task!.id]);
   lineApi(async () => { throw new Error("模擬回應中斷"); });
   await flush();
   const collect = () => db.transaction((c) => claimPendingGroupReplies(c, "group-a", 5, "line", null, "important"));

@@ -186,6 +186,7 @@ export async function buildApp(
   runner: Pick<Runner, "call"> = new HttpRunner(),
   validationProgress?: import("./validation-queue.js").ValidationQueue["progress"],
   refreshDiscord?: () => void,
+  line = new Line(db),
 ) {
   const app = Fastify({
     logger: {
@@ -295,8 +296,7 @@ export async function buildApp(
       }
     },
   );
-  const line = new Line(db),
-    tasks = new Tasks(db),
+  const tasks = new Tasks(db),
     budget = new Budget(db),
     github = new GitHub();
   await registerAuth(app, db);

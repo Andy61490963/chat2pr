@@ -61,6 +61,7 @@ export const groupDeliveryText = {
   closedNotice: "結束通知",
   quota: "LINE 本月推播額度已用完",
   groupSize: "LINE 剩餘推播額度不夠這個群組的人數",
+  quotaPriority: "剩餘推播額度保留給重要通知，這則進度已略過",
   lineRate: "LINE 暫時限制推播速度",
   lineRejected: "LINE 沒有收下這則訊息",
   lineError: "LINE 回應錯誤",

@@ -51,19 +51,22 @@ export class LineChatPlatform implements ChatPlatform {
     message: ChatReplyMessage,
     retryKey: string,
   ) {
+    const { ids, newlyAccepted } = await this.pushGroupBatch(groupId, [message], retryKey);
+    return { messageId: ids[0], newlyAccepted };
+  }
+
+  async pushGroupBatch(groupId: string, messages: ChatReplyMessage[], retryKey: string) {
     const response = await pushLineMessage(
       this.pushAccess(),
       groupId,
-      lineText(message),
+      messages.map(lineText),
       retryKey,
     );
-    const sent = response.ok
-      ? ((await response.json().catch(() => null)) as {
-          sentMessages?: { id?: string }[];
-        } | null)
-      : null;
+    const sent = (await response.json().catch(() => null)) as {
+      sentMessages?: { id?: string }[];
+    } | null;
     return {
-      messageId: sent?.sentMessages?.[0]?.id ?? null,
+      ids: messages.map((_, i) => sent?.sentMessages?.[i]?.id ?? null),
       newlyAccepted: response.ok,
     };
   }
@@ -103,7 +106,7 @@ export class LineChatPlatform implements ChatPlatform {
     await pushLineMessage(
       this.pushAccess(),
       recipientId,
-      lineText(text),
+      [lineText(text)],
       retryKey,
     );
   }

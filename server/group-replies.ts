@@ -11,6 +11,7 @@ import { splitQueryAnswer } from "../shared/query-answer.js";
 import type { DbClient } from "./db.js";
 import type { ChatButton as QuickReply } from "./chat-platform.js";
 import { redact } from "./policy.js";
+import { importantLineGroupNotice, staleNotification } from "./line-quota.js";
 import type { TaskStatus } from "../shared/types.js";
 
 export type ReplyMode = "off" | "results" | "all";
@@ -119,9 +120,6 @@ export const staleAnswerAck = "這題已經回答過或需求已更新，請看�
 /** 用「回覆」回答補問、內容卻含憑證格式：不收、不交給 AI，也不能回「收到」讓人以為已收下。 */
 export const credentialAnswerAck =
   "這則回答看起來含有密碼或金鑰，沒有收下，也不會交給 AI。請先收回這則訊息，機密改由管理者在看板輸入；其他內容請不含機密再回覆一次。";
-export const undeliveredHint = (n: number) =>
-  `有 ${n} 則先前沒送達的回覆，打 /進度 取回。`;
-
 export interface AckState {
   /** 原本要回的 commandAck 或 followupAck（可能已附上預估時間）。 */
   base: string;
@@ -133,12 +131,10 @@ export interface AckState {
   noProject: boolean;
   /** 訂閱模式且 Codex 額度關卡關閉。 */
   aiQuotaOut: boolean;
-  /** 先前沒送達、可以用 /進度 取回的群組回覆數；0 表示不提。 */
-  undelivered: number;
 }
 /** 依優先序挑「收到」的文字：暫停 → 判讀停止 → 沒有可用專案 → AI 額度 → 原文字。 */
 export function ackFor(s: AckState) {
-  const text = s.paused
+  return s.paused
     ? pausedAck
     : s.triageStopped
       ? triageStoppedAck
@@ -147,9 +143,6 @@ export function ackFor(s: AckState) {
         : s.aiQuotaOut
           ? aiQuotaAck
           : s.base;
-  return s.undelivered > 0
-    ? `${text}\n${undeliveredHint(s.undelivered)}`
-    : text;
 }
 
 /** 給群組成員看的任務狀態（成員沒有看板帳號，用白話說明下一步在誰手上）。 */
@@ -285,23 +278,16 @@ const newer = (a: string, b: string) =>
   `(${a}.kind<>'group_received',${a}.created_at,${a}.id)>(${b}.kind<>'group_received',${b}.created_at,${b}.id)`;
 // Discord 補送期間群組仍可執行 /進度，已佔住的新通知仍要擋住同任務的舊通知。
 const newestOfTask = `NOT EXISTS(SELECT 1 FROM notifications m WHERE m.task_id=n.task_id AND ${retrievable("m", true)} AND ${newer("m", "n")})`;
-const pendingFrom = `FROM notifications n JOIN tasks t ON t.id=n.task_id JOIN groups g ON g.id=n.group_id
-  WHERE g.platform=$2 AND ${retrievable("n")} AND ${newestOfTask}
+const pendingFrom = (automatic: boolean) => `FROM notifications n LEFT JOIN tasks t ON t.id=n.task_id JOIN groups g ON g.id=n.group_id
+  WHERE g.platform=$2 AND (g.platform<>'line' OR n.line_digest_id IS NULL)
+  AND ((${retrievable("n")} AND ${newestOfTask}) OR (
+    g.platform='line' AND n.group_id=$1 AND n.sent_at IS NULL AND n.reply_failures<${REPLY_FAILURE_LIMIT}
+    AND (n.task_id IS NULL OR t.group_id=$1) AND NOT (${staleNotification})
+    AND n.kind IN (${automatic ? "'group_check','group_waiting','group_triage'" : "'group_check'"})))
   AND (g.platform<>'discord' OR (n.kind<>'group_received' AND
     (n.discord_retry_at IS NULL OR n.discord_retry_at<=now()) AND
     (CASE WHEN n.source_message_id IS NOT NULL THEN n.discord_thread_id ELSE t.discord_thread_id END)
       IS NOT DISTINCT FROM $4::text))`;
-
-/** 本群組可用 /進度 取回的通知數，以及其中是否有推播失敗過的。 */
-export async function pendingGroupReplies(c: DbClient, groupId: string) {
-  const r = (
-    await c.query<{ count: string; failed: boolean | null }>(
-      `SELECT count(*) AS count,bool_or(n.last_error IS NOT NULL) AS failed ${pendingFrom}`,
-      [groupId, "line", claimingNote, null],
-    )
-  ).rows[0];
-  return { count: Number(r?.count ?? 0), failed: r?.failed === true };
-}
 
 /**
  * 在呼叫端的交易內佔住最舊的 limit 則可取回通知：先以目前的陳述式時間設定 sent_at，
@@ -316,15 +302,22 @@ export async function claimPendingGroupReplies(
   limit: number,
   platform: "line" | "discord" = "line",
   threadId: string | null = null,
+  automatic?: "important" | "all",
 ) {
   const rows = (
     await c.query<ClaimedReply & { kind: string }>(
-      `SELECT n.id,n.kind,n.text,n.quick_replies ${pendingFrom}
-       ORDER BY n.created_at,n.id FOR UPDATE OF n SKIP LOCKED`,
+      `SELECT n.id,n.kind,n.text,n.quick_replies ${pendingFrom(!!automatic)}
+       ${automatic ? `AND g.enabled AND g.left_at IS NULL AND g.reply_mode<>'off' AND ${groupRepliesOn}` : ""}
+       ${automatic === "important" ? `AND (${importantLineGroupNotice})` : ""}
+       ORDER BY ${automatic ? `(${importantLineGroupNotice}) DESC,` : ""} n.created_at,n.id FOR UPDATE OF n SKIP LOCKED`,
       [groupId, platform, claimingNote, threadId],
     )
   ).rows;
-  const picked = rows.slice(0, limit);
+  // LINE 只顯示最後一則訊息的快速回覆。其他補問先摘要，下一次發言仍能收到可直接作答的原訊息。
+  const question = automatic && rows.find((r) => r.quick_replies?.length);
+  const picked = rows.filter((r) => !question || !r.quick_replies?.length || r === question).slice(0, limit);
+  if (question) picked.sort((a, b) => Number(a === question) - Number(b === question));
+  const pickedIds = new Set(picked.map((r) => r.id));
   let claim: GroupReplyClaim | undefined;
   if (picked.length) {
     const ids = picked.map((r) => r.id);
@@ -342,6 +335,10 @@ export async function claimPendingGroupReplies(
         : r,
     ),
     remaining: rows.length - picked.length,
+    summaries: automatic ? rows.filter((r) => !pickedIds.has(r.id)).slice(0, 20).map((r) => {
+      const text = r.kind === "group_answered" ? splitQueryAnswer(r.text).body : r.text;
+      return `- ${Array.from(redact(text).replace(/\s+/g, " ")).slice(0, 100).join("")}`;
+    }) : [],
     claim,
   };
 }
@@ -357,7 +354,9 @@ export async function supersedeOlderGroupReplies(
     `UPDATE notifications u SET sent_at=now(),last_error=$3
        FROM (SELECT o.id FROM notifications o JOIN notifications p ON p.task_id=o.task_id AND p.id=ANY($2::uuid[])
          WHERE o.group_id=$1 AND o.sent_at IS NULL AND o.kind<>'group_waiting' AND o.id<>p.id AND o.created_at<=p.created_at
+         AND p.kind NOT IN ('group_waiting','group_triage','group_check')
          AND ($4='line' OR o.kind<>'group_received')
+         AND ($4<>'line' OR o.line_digest_id IS NULL)
          FOR UPDATE OF o SKIP LOCKED) s
        WHERE u.id=s.id`,
     [groupId, ids, supersededNote, platform],

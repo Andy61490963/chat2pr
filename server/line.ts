@@ -10,6 +10,7 @@ import { fetchLine } from "./line-http.js";
 import type { ChatReplyMessage, ChatReplyResult } from "./chat-platform.js";
 import { LineChatPlatform, lineReplyLimit } from "./line-platform.js";
 import { isProgressCommand, isTaskCommand } from "../shared/chat.js";
+import { flushLineGroups } from "./line-group-push.js";
 import { flushLinePrivate } from "./line-private.js";
 import {
   linePrivateDefaults,
@@ -28,11 +29,12 @@ import {
   credentialAnswerAck,
   detailRequest,
   lineChunks,
+  groupText,
   groupRepliesOn,
   ackFor,
   claimPendingGroupReplies,
+  claimingNote,
   lockGroupReplyClaim,
-  pendingGroupReplies,
   progressMoreNote,
   progressSummary,
   progressTasks,
@@ -43,7 +45,6 @@ import {
   REPLY_FAILURE_LIMIT,
   staleAnswerAck,
   type GroupReplyClaim,
-  type QuickReply,
 } from "./group-replies.js";
 import { subscriptionGateName } from "./subscription-gate.js";
 import { LINE_QUOTA } from "../shared/line-quota.js";
@@ -54,24 +55,16 @@ import {
   questionByQuote,
 } from "./answers.js";
 import {
-  LineQuotaExhausted,
-  expireQuotaHeld,
-  fetchLineQuota,
-  groupMemberCount,
   lineQuotaBlocked,
   lineQuotaUsage,
-  markGroupTooLarge,
   markQuotaExhausted,
-  recordLinePush,
   saveQuotaUsage,
   withLinePushLock,
 } from "./line-quota.js";
 import {
   isMonthlyLimit,
-  pushCost,
-  quotaExhaustedDetail,
   quotaRemaining,
-  quotaShortForGroup,
+  quotaUsageOf,
   quotaTestBlocked,
 } from "../shared/line-quota.js";
 const Event = z
@@ -115,16 +108,20 @@ export const LinePayload = z.object({ events: z.array(Event).max(100) });
 interface Ack {
   token: string;
   messages: ChatReplyMessage[];
+  recent?: { group: string; expiresAt: number };
   /** 第一則是進度摘要，其後每則訊息依序對應 claim.ids。 */
   claim?: GroupReplyClaim;
 }
 export class Line {
+  private readonly unusedReplies = new Map<string, { token: string; expiresAt: number }>();
+
   constructor(
     private db: Database,
     private discord?: DiscordChatPlatform | (() => DiscordChatPlatform | undefined),
   ) {}
   async ingest(body: unknown) {
     const payload = LinePayload.parse(body);
+    const receivedAt = Date.now();
     const adoptions: Array<{ task: string; version: number; index: number }> =
       [];
     // 「/任務」的立即回覆：交易完成後才送，失敗不影響收訊。
@@ -243,6 +240,16 @@ export class Line {
         if (e.type === "message" && e.message) {
           const replyOn =
             !!e.replyToken && settings.reply_mode !== "off" && settings.replies;
+          const queueReply = (messages: ChatReplyMessage[] = []) => {
+            if (!replyOn || !e.replyToken) return;
+            const expiresAt = Math.min(e.timestamp ?? receivedAt, receivedAt) + 60_000;
+            if (expiresAt <= Date.now()) return;
+            acks.push({
+              token: e.replyToken,
+              messages,
+              recent: settings.enabled && !settings.left_at ? { group, expiresAt } : undefined,
+            });
+          };
           // 「/進度」：用不耗推播額度的 reply token 回本群組的需求狀態與先前沒送到的回覆。
           // 不建任務、不送判讀、不呼叫模型；在判斷補問回答與指令之前處理，引用補問打 /進度 也不會被當成回答。
           if (e.message.type === "text" && isProgressCommand(e.message.text)) {
@@ -317,11 +324,7 @@ export class Line {
               false,
               e.message.id,
             );
-            if (replyOn)
-              acks.push({
-                token: e.replyToken!,
-                messages: [t.status === "queued" ? answerAck : answerHeldAck],
-              });
+            queueReply([t.status === "queued" ? answerAck : answerHeldAck]);
             return;
           }
           // 回答補問卻含憑證格式：明確拒收。不存原文、不排判讀，也不能落到追問路徑回「收到」，
@@ -345,13 +348,8 @@ export class Line {
                 e.message.quotedMessageId,
               ],
             );
-            if (saved.rowCount && replyOn)
-              acks.push({
-                token: e.replyToken!,
-                messages: [
-                  settings.enabled ? credentialAnswerAck : disabledAck,
-                ],
-              });
+            if (saved.rowCount)
+              queueReply([settings.enabled ? credentialAnswerAck : disabledAck]);
             return;
           }
           // 引用機器人的查詢回答打「詳細」：用 reply token 分段送出完整內容，不建任務、不呼叫模型。
@@ -378,14 +376,8 @@ export class Line {
                   e.message.quotedMessageId,
                 ],
               );
-              if (saved.rowCount && replyOn)
-                acks.push({
-                  token: e.replyToken!,
-                  messages: lineChunks(
-                    splitQueryAnswer(full.answer).body,
-                    lineReplyLimit,
-                  ),
-                });
+              if (saved.rowCount)
+                queueReply(lineChunks(splitQueryAnswer(full.answer).body, lineReplyLimit));
               return;
             }
           }
@@ -423,25 +415,12 @@ export class Line {
               isFile ? e.message.fileSize ?? null : null,
             ],
           );
-          if ((command || botReply) && saved.rowCount && replyOn)
-            acks.push({
-              token: e.replyToken!,
-              messages: [
-                eligible
-                  ? await this.honestAck(
-                      c,
-                      group,
-                      botReply
-                        ? await this.followupAck(
-                            c,
-                            group,
-                            e.message.quotedMessageId,
-                          )
-                        : commandAck,
-                    )
-                  : disabledAck,
-              ],
-            });
+          if (saved.rowCount && replyOn) {
+            if (command || botReply) {
+              const base = botReply ? await this.followupAck(c, group, e.message.quotedMessageId) : commandAck;
+              queueReply([eligible ? await this.honestAck(c, group, base) : disabledAck]);
+            } else if (settings.enabled) queueReply();
+          }
           if (eligible && saved.rowCount)
             await c.query(
               "UPDATE groups SET first_pending_at=COALESCE(first_pending_at,now()),last_pending_at=now() WHERE id=$1",
@@ -449,7 +428,10 @@ export class Line {
             );
         }
       });
-    for (const a of acks) await this.sendAck(a);
+    for (const a of acks) {
+      if (a.recent) await this.replyWithPending(a.recent.group, a.token, a.recent.expiresAt, a.messages);
+      else await this.sendAck(a);
+    }
     for (const a of adoptions) {
       const reply =
         "這個按鈕已改為看板確認流程。請先到看板檢視目標專案與方案，再確認執行。";
@@ -513,7 +495,6 @@ export class Line {
   /**
    * 「收到」依收訊當下的系統狀態說實話（只改文字，不改審核、派工、判讀規則）：
    * 系統或判讀暫停、本群組判讀連續失敗停止、群組沒有可用專案（條件同 triage-window.ts）、訂閱模式的 Codex 額度關卡關閉。
-   * 推播額度用完或本群組有推播失敗的回覆時，再提醒可以打 /進度 取回，但不附完整內容。
    */
   private async honestAck(c: DbClient, group: string, base: string) {
     const s = (
@@ -522,35 +503,72 @@ export class Line {
         triage_stopped: boolean;
         ai_out: boolean;
         no_project: boolean;
-        push_out: boolean;
       }>(
         `SELECT COALESCE((s.value->>'paused')::boolean,false) OR COALESCE((s.value->>'triage_paused')::boolean,false) AS paused,
            COALESCE((SELECT g.triage_failures>=3 FROM groups g WHERE g.id=$1),false) AS triage_stopped,
            COALESCE(s.value->>'ai_mode','')='subscription' AND COALESCE((SELECT NOT ok FROM service_health WHERE name=$2),false) AS ai_out,
-           NOT EXISTS(SELECT 1 FROM group_projects gp JOIN projects p ON p.id=gp.project_id WHERE gp.group_id=$1 AND p.enabled AND p.validated_at IS NOT NULL) AS no_project,
-           COALESCE((SELECT NOT ok FROM service_health WHERE name=$3),false) AS push_out
+           NOT EXISTS(SELECT 1 FROM group_projects gp JOIN projects p ON p.id=gp.project_id WHERE gp.group_id=$1 AND p.enabled AND p.validated_at IS NOT NULL) AS no_project
          FROM settings s WHERE s.id=1`,
-        [group, subscriptionGateName, LINE_QUOTA],
+        [group, subscriptionGateName],
       )
     ).rows[0];
-    const pending = await pendingGroupReplies(c, group);
     return ackFor({
       base,
       paused: !!s?.paused,
       triageStopped: !!s?.triage_stopped,
       noProject: !!s?.no_project,
       aiQuotaOut: !!s?.ai_out,
-      undelivered: s?.push_out || pending.failed ? pending.count : 0,
     });
+  }
+  private async replyWithPending(group: string, token: string, expiresAt: number, messages: ChatReplyMessage[]) {
+    if (expiresAt <= Date.now()) return;
+    const slots = lineReplyLimit - messages.length;
+    if (slots <= 0) {
+      await this.reply(token, messages);
+      return;
+    }
+    const pending = await this.db.transaction(async (c) => {
+      const { rows: [quota] } = await c.query<{ ok: boolean; detail: string }>(
+        "SELECT ok,detail FROM service_health WHERE name=$1", [LINE_QUOTA],
+      );
+      const exhausted = quota?.ok === false || quotaRemaining(quotaUsageOf(quota?.detail)) === 0;
+      return claimPendingGroupReplies(c, group, slots, "line", null, exhausted ? "important" : "all");
+    });
+    if (!pending.claim) {
+      if (expiresAt <= Date.now()) return;
+      if (messages.length) await this.reply(token, messages);
+      else if (expiresAt > (this.unusedReplies.get(group)?.expiresAt ?? 0))
+        this.unusedReplies.set(group, { token, expiresAt });
+      return;
+    }
+    const unlisted = pending.remaining - pending.summaries.length;
+    const more = pending.remaining
+      ? `\n\n其餘待送通知：\n${pending.summaries.join("\n")}${unlisted ? `\n另有 ${unlisted} 則未列出。` : ""}\n${progressMoreNote(pending.remaining)}`
+      : "";
+    const notices = pending.replies.map((notice, i) => {
+      const suffix = i === pending.replies.length - 1 ? more : "";
+      return { text: groupText(redact(notice.text), 4900 - suffix.length) + suffix, quick: notice.quick_replies };
+    });
+    const result = expiresAt > Date.now()
+      ? await this.reply(token, [...messages, ...notices])
+      : { ids: null, status: null };
+    const claim = pending.claim;
+    await this.db.transaction((c) => this.settleClaimed(c, claim, result, messages.length));
+  }
+  private async flushRecentReplies() {
+    for (const [group, reply] of [...this.unusedReplies]) {
+      if (this.unusedReplies.get(group) !== reply) continue;
+      this.unusedReplies.delete(group);
+      await this.replyWithPending(group, reply.token, reply.expiresAt, []);
+    }
   }
   private async sendAck({ token, messages, claim }: Ack) {
     if (!claim) {
       await this.reply(token, messages);
       return;
     }
-    const sent = await this.db.transaction(async (c) => {
-      // 同一批 webhook 的回覆可能已排隊一段時間。先核對領取時間，再鎖住這批通知直到寫回；
-      // 送出最多等 5 秒，其間回收與推播都能用 SKIP LOCKED 略過，避免舊回覆改到下一輪。
+    const renewed = await this.db.transaction(async (c) => {
+      // 同批 webhook 可能已排隊一段時間。送出前續領兩分鐘，涵蓋 LINE 最多五秒的等待。
       const rows = await lockGroupReplyClaim(c, claim);
       if (rows.length !== claim.ids.length || rows.some((r) => !r.valid)) {
         // 摘要和通知共用一個 reply token。整批已變更時，只歸還此交易仍持有的列。
@@ -559,27 +577,34 @@ export class Line {
             "UPDATE notifications SET sent_at=NULL,last_error=$2 WHERE id=ANY($1::uuid[])",
             [rows.map((r) => r.id), replyFailedNote],
           );
-        return false;
+        return;
       }
-      const result = await this.reply(token, messages);
-      await this.settleClaimed(c, claim.ids, result);
-      return true;
+      const { rows: [stamp] } = await c.query<{ claimed_at: string }>(
+        "UPDATE notifications SET sent_at=statement_timestamp() WHERE id=ANY($1::uuid[]) RETURNING sent_at::text AS claimed_at",
+        [claim.ids],
+      );
+      return { ids: claim.ids, claimedAt: stamp.claimed_at };
     });
-    if (!sent)
+    if (!renewed) {
       await this.reply(token, [
         "這批群組回覆已更新，請再輸入 /進度 查看最新進度。",
       ]);
+      return;
+    }
+    const result = await this.reply(token, messages);
+    await this.db.transaction((c) => this.settleClaimed(c, renewed, result, 1));
   }
   /**
-   * 在持有整批通知列鎖的交易內寫回。reply 成功就依索引記下 sent_message_id（之後「詳細」、引用追問、引用作答才接得上）；
+   * 核對領取時間後依回覆順序寫回訊息 ID，讓「詳細」、引用追問與作答能接續。
    * 失敗或逾時就把佔住的列還原成未送出，下次 /進度 或正常推播可以再試。
    * LINE 以內容問題拒收（replyRejected）時，這批每則 reply_failures+1；到 REPLY_FAILURE_LIMIT 次就改寫成
    * replyGaveUpNote、不再被 /進度 取回，之後的 /進度 至少能回摘要。限流、5xx、逾時、沒有權杖不計。
    */
   private async settleClaimed(
     c: DbClient,
-    notices: string[],
+    claim: GroupReplyClaim,
     result: ChatReplyResult,
+    firstNotice: number,
   ) {
     const { ids } = result;
     if (!ids) {
@@ -587,21 +612,23 @@ export class Line {
       await c.query(
         `UPDATE notifications SET sent_at=NULL,reply_failures=reply_failures+$3,
            last_error=CASE WHEN reply_failures+$3>=$4 THEN $5 ELSE $2 END
-         WHERE id=ANY($1::uuid[]) AND sent_message_id IS NULL`,
+         WHERE id=ANY($1::uuid[]) AND sent_at=$6 AND last_error=$7 AND sent_message_id IS NULL`,
         [
-          notices,
+          claim.ids,
           replyFailedNote,
           blamed,
           REPLY_FAILURE_LIMIT,
           replyGaveUpNote,
+          claim.claimedAt,
+          claimingNote,
         ],
       );
       return;
     }
-    for (const [i, id] of notices.entries())
+    for (const [i, id] of claim.ids.entries())
       await c.query(
-        "UPDATE notifications SET sent_message_id=$2,last_error=NULL WHERE id=$1",
-        [id, ids[i + 1] ?? null],
+        "UPDATE notifications SET sent_message_id=$2,last_error=NULL WHERE id=$1 AND sent_at=$3 AND last_error=$4",
+        [id, ids[i + firstNotice] ?? null, claim.claimedAt, claimingNote],
       );
   }
   /**
@@ -685,169 +712,17 @@ export class Line {
     const results = await Promise.allSettled([
       withLinePushLock(this.db, async () => {
         const access = secrets().lineToken;
-        if (!access) return;
-        await this.flushGroupNotifications(access);
+        if (!access) {
+          this.unusedReplies.clear();
+          return;
+        }
+        await this.flushRecentReplies();
+        await flushLineGroups(this.db, access);
         if (!(await lineQuotaBlocked(this.db))) await flushLinePrivate(this.db, access);
       }),
       discord && flushDiscordNotifications(this.db, discord),
     ]);
     if (results.some((result) => result.status === "rejected"))
       throw new Error("部分聊天通知未能完成，請檢查資料庫與服務設定。");
-  }
-
-  private async flushGroupNotifications(access: string) {
-    const s = await this.db.settings();
-    // 總開關關閉後，還沒送出的群組訊息不再送；之後重新開啟也不補發舊訊息。
-    if (s.group_replies === false) {
-      await this.db.query(
-        `UPDATE notifications n SET sent_at=now(),last_error='群組回覆已關閉，未送出'
-         FROM groups g WHERE n.group_id=g.id AND g.platform='line' AND n.sent_at IS NULL`,
-      );
-      return;
-    }
-    if (await lineQuotaBlocked(this.db)) return;
-    const platform = new LineChatPlatform(access);
-    // 剩餘額度（line_quota 說明裡的用量）與群組人數：群組推播依人數計費，剩下的則數不夠某群組時本輪略過那個群組，
-    // 不加 attempts，小群組照送。用量未知（還沒查過）時由 LINE 的 429 判斷。
-    let usage = await lineQuotaUsage(this.db);
-    let usageChanged = false;
-    const members = new Map<string, number | null>();
-    const short = new Set<string>();
-    const tooFew = (group: string) => {
-      const left = quotaRemaining(usage);
-      return left !== null && left < pushCost(members.get(group));
-    };
-    const markShort = (c: DbClient, group: string) =>
-      c.query(
-        `UPDATE notifications u SET last_error=$2
-         FROM (SELECT id FROM notifications WHERE group_id=$1 AND sent_at IS NULL AND attempts<3 AND reply_failures<$3
-           FOR UPDATE SKIP LOCKED) s
-         WHERE u.id=s.id`,
-        [
-          group,
-          quotaShortForGroup(
-            quotaRemaining(usage) ?? 0,
-            members.get(group) ?? null,
-          ),
-          REPLY_FAILURE_LIMIT,
-        ],
-      );
-    if (Number.isFinite(quotaRemaining(usage) ?? Infinity)) {
-      const groups = await this.db.query<{ group_id: string }>(
-        `SELECT DISTINCT n.group_id FROM notifications n JOIN groups g ON g.id=n.group_id
-         WHERE n.sent_at IS NULL AND n.attempts<3 AND g.platform='line' LIMIT 50`,
-      );
-      for (const { group_id } of groups)
-        members.set(
-          group_id,
-          await groupMemberCount(this.db, group_id, access),
-        );
-      for (const { group_id } of groups)
-        if (tooFew(group_id)) {
-          short.add(group_id);
-          await markShort(this.db.pool, group_id);
-        }
-    }
-    // 撈取與送出在同一交易、鎖住這批通知：其他補送流程可以用 SKIP LOCKED 略過正在推送的列。
-    await this.db.transaction(async (c) => {
-      // 先前因額度不夠而略過、這輪要續送的群組：過時的不補送（比照解除封鎖前的 expireStaleNotifications）。
-      await expireQuotaHeld(c, [...short]);
-      type Pending = {
-        id: string;
-        group_id: string;
-        kind: string;
-        text: string;
-        quick_replies: QuickReply[] | null;
-      };
-      const notifications = (
-        await c.query<Pending>(
-          `SELECT n.* FROM notifications n JOIN groups g ON g.id=n.group_id
-           WHERE n.sent_at IS NULL AND n.attempts<3 AND g.platform='line' AND n.group_id<>ALL($1::text[])
-           ORDER BY n.created_at LIMIT 10 FOR UPDATE OF n SKIP LOCKED`,
-          [[...short]],
-        )
-      ).rows;
-      for (const n of notifications) {
-        // 本地估算的額度已用完：等連線檢查以 LINE 的回報更新用量（用完就會整個暫停）。
-        if ((quotaRemaining(usage) ?? 1) < 1) break;
-        if (short.has(n.group_id)) continue;
-        if (tooFew(n.group_id)) {
-          // 這一輪前面的推播用掉了額度，剩下的已不夠這個群組。
-          short.add(n.group_id);
-          await markShort(c, n.group_id);
-          continue;
-        }
-        // 每則各自一個 savepoint：某則寫入失敗只退回那一則，不會讓整批已送出的紀錄一起被撤銷。
-        await c.query("SAVEPOINT push");
-        try {
-          const result = await platform.sendToGroup(
-            n.group_id,
-            {
-              text: n.kind === "group_answered" ? splitQueryAnswer(n.text).body : n.text,
-              quick: n.quick_replies,
-            },
-            n.id,
-          );
-          // 群組依人數累加用量（未知時 1），送私訊前先寫回 line_quota。
-          if (usage && result.newlyAccepted) {
-            usage = {
-              ...usage,
-              used: usage.used + pushCost(members.get(n.group_id)),
-            };
-            usageChanged = true;
-          }
-          // 記下平台回傳的訊息 ID，讓群組成員可引用它接續任務。
-          await c.query(
-            "UPDATE notifications SET sent_at=now(),attempts=attempts+1,last_error=NULL,sent_message_id=$2 WHERE id=$1",
-            [n.id, result.messageId],
-          );
-          await recordLinePush(this.db);
-          await c.query("RELEASE SAVEPOINT push");
-        } catch (e) {
-          await c.query("ROLLBACK TO SAVEPOINT push");
-          if (e instanceof LineQuotaExhausted) {
-            // 撞到每月上限不是這則通知的問題：不算失敗次數、不把 notifications 寫成連線失敗。
-            // 先向 LINE 查用量：群組撞到、但還剩 1 則以上，只是剩下的不夠這個群組的人數——
-            // 本輪略過其餘群組；剩 0 則或查不到用量才整個暫停，不再逐則撞 429。
-            const fresh = await fetchLineQuota(access).catch(() => null);
-            if (fresh) {
-              usage = fresh;
-              usageChanged = true;
-            }
-            const left = quotaRemaining(fresh);
-            if (left !== null && left >= 1) {
-              const known = members.get(n.group_id) ?? null;
-              if (Number.isFinite(left))
-                await markGroupTooLarge(this.db, n.group_id, left);
-              await c.query(
-                "UPDATE notifications SET last_error=$2 WHERE id=$1",
-                [
-                  n.id,
-                  quotaShortForGroup(
-                    Number.isFinite(left) ? left : 0,
-                    known !== null && known > left ? known : null,
-                  ),
-                ],
-              );
-              break;
-            }
-            await c.query(
-              "UPDATE notifications SET last_error=$2 WHERE id=$1",
-              [n.id, quotaExhaustedDetail],
-            );
-            // 保留用量：剛查到的、本地累加的，都沒有就沿用原本說明裡的。
-            await markQuotaExhausted(this.db, usage, access);
-            usageChanged = false;
-            break;
-          }
-          await c.query(
-            "UPDATE notifications SET attempts=attempts+1,last_error=$2 WHERE id=$1",
-            [n.id, redact(String(e))],
-          );
-          await recordLinePush(this.db, redact(String(e)));
-        }
-      }
-    });
-    if (usage && usageChanged) await saveQuotaUsage(this.db, usage);
   }
 }

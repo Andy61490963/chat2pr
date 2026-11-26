@@ -1224,8 +1224,8 @@ export function SettingsView({
               LINE 推播（群組回覆與私訊）
             </CardTitle>
             <CardDescription>
-              過去 {linePrivateDigestMinutes}{" "}
-              分鐘未送出摘要時，新通知會立即送出。接下來累積的通知會在上一則送出滿{" "}
+              管理者私訊在過去 {linePrivateDigestMinutes}{" "}
+              分鐘未送出摘要時會立即送出。接下來累積的私訊會在上一則送出滿{" "}
               {linePrivateDigestMinutes} 分鐘時合併送出，每則最多列 5
               件，完整通知在看板鈴鐺。
             </CardDescription>
@@ -1235,6 +1235,9 @@ export function SettingsView({
               <p className="text-sm text-muted-foreground tabular-nums">
                 {push.usage}
               </p>
+            )}
+            {push.forecast && (
+              <p className="text-sm text-muted-foreground">{push.forecast}</p>
             )}
             {push.notice && (s.admin_line_id || push.blocked) && (
               <p

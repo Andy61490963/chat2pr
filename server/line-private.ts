@@ -6,7 +6,7 @@ import {
   lineServiceOutageMinutes,
   type LinePrivateMode,
 } from "../shared/line-private.js";
-import { expiredNote, quotaRemaining } from "../shared/line-quota.js";
+import { expiredNote, lineQuotaLow, quotaRemaining } from "../shared/line-quota.js";
 import { config } from "./config.js";
 import type { Database } from "./db.js";
 import {
@@ -46,7 +46,10 @@ export function privateDigestText(items: { text: string }[], url: string) {
 type DigestItem = { id: string; text: string; line_digest_id: string | null };
 
 /** LINE 與 Discord 的管理者私訊共用：篩選範圍、過期不補送、合併成摘要（#158、#207）。 */
-export async function prepareDigest(db: Database, mode: LinePrivateMode) {
+export async function prepareDigest(db: Database, mode: LinePrivateMode, lowQuota = false) {
+  const allowedKinds = mode === "action"
+    ? privateActionKinds
+    : lowQuota ? [...privateActionKinds, "answered", "ready", "merged", "no_changes"] : null;
   return db.transaction(async (c) => {
     const now = new Date();
     // 服務異常比對同一次中斷，恢復後留在鈴鐺；全通知模式的恢復私訊也須符合 15 分鐘門檻。
@@ -55,7 +58,8 @@ export async function prepareDigest(db: Database, mode: LinePrivateMode) {
          last_error=CASE WHEN n.created_at<$5::timestamptz-interval '24 hours' THEN $1 ELSE '已留在看板鈴鐺' END
        WHERE n.group_id IS NULL AND n.sent_at IS NULL AND (
          n.created_at<$5::timestamptz-interval '24 hours'
-         OR (NOT $2 AND NOT (n.kind=ANY($3::text[]) OR n.kind='service_down'))
+         OR (NOT $2 AND NOT (n.kind=ANY($3::text[]) OR n.kind='service_down'
+           OR ($6 AND n.kind='check' AND (n.dedupe_key LIKE 'check-system:%' OR n.text LIKE '⚠️ %'))))
          OR (n.kind='service_down' AND NOT EXISTS (
            SELECT 1 FROM service_health h WHERE h.name=split_part(n.dedupe_key,':',2)
            AND h.outage_started_at=n.line_outage_started_at))
@@ -64,10 +68,11 @@ export async function prepareDigest(db: Database, mode: LinePrivateMode) {
        )`,
       [
         expiredNote,
-        mode === "all",
-        privateActionKinds,
+        allowedKinds === null,
+        allowedKinds ?? [],
         lineServiceOutageMinutes,
         now,
+        mode === "all" && lowQuota,
       ],
     );
     // 名單改變時另立摘要，避免用同一個重試鍵送出不同的內容。
@@ -129,6 +134,7 @@ export async function flushLinePrivate(db: Database, access: string) {
   const digest = await prepareDigest(
     db,
     settings.line_private_mode ?? linePrivateDefaults.line_private_mode,
+    lineQuotaLow(usage),
   );
   if (!digest) return;
 

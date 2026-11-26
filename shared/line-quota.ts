@@ -21,7 +21,7 @@ export const quotaRetryBlocked =
 export const quotaTestBlocked = "LINE 本月推播額度已用完，權杖沒有問題";
 /** 鈴鐺清單頂端的提示。 */
 export const quotaBellNotice =
-  "LINE 推播額度用完，群組回覆與私訊暫停，看板通知照常";
+  "LINE 推播額度用完，群組有人發言時會補送重要通知，看板通知照常";
 /** 過期、不再補送的通知寫進 last_error 的字。 */
 export const expiredNote = "已過期，未補送";
 
@@ -58,6 +58,11 @@ export function quotaRemaining(
   return usage.limit === null
     ? Infinity
     : Math.max(0, usage.limit - usage.used);
+}
+
+/** 剩餘兩成起只推重要通知。用量未知或方案無上限時照原設定送出。 */
+export function lineQuotaLow(usage: { limit: number | null; used: number } | null) {
+  return usage !== null && usage.limit !== null && usage.used * 5 >= usage.limit * 4;
 }
 
 /**
@@ -97,30 +102,70 @@ export function retryDescription(f: {
   return `會重送私訊 ${f.direct} 則、群組 ${f.group} 則（群組依人數計入額度）${skipped}。`;
 }
 
+const quotaCalendar = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Taipei",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+function quotaDisplay(
+  usage: ReturnType<typeof quotaUsageOf>,
+  sample?: { ok: boolean; detail?: string; checked_at?: string },
+) {
+  if (!usage) return { usage: null, forecast: null };
+  const amount =
+    usage.limit === null
+      ? `${usage.used} 則（方案沒有上限）`
+      : `${usage.used}／上限 ${usage.limit}`;
+  const checkedAt = new Date(sample?.checked_at ?? "");
+  const checkedDay = Number.isFinite(checkedAt.getTime())
+    ? quotaCalendar.format(checkedAt)
+    : null;
+  if (checkedDay && !quotaCalendar.format(new Date()).startsWith(checkedDay.slice(0, 7))) {
+    return { usage: "尚未取得本月推播用量", forecast: null };
+  }
+  if (sample?.detail?.includes("上次查到")) {
+    return { usage: `上次查到已用 ${amount}，本月用量待確認`, forecast: null };
+  }
+  const summary = { usage: `本月已用 ${amount}`, forecast: null };
+  if (
+    !checkedDay || !sample?.ok || usage.used === 0 ||
+    usage.limit === null || usage.used >= usage.limit
+  ) {
+    return summary;
+  }
+  const [year, month, day] = checkedDay.split("-").map(Number);
+  const projectedDay = Math.ceil((day * usage.limit) / usage.used);
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return {
+    usage: summary.usage,
+    forecast:
+      projectedDay <= lastDay
+        ? `按本月平均每日用量，預估 ${month} 月 ${projectedDay} 日用完。`
+        : "按本月平均每日用量，預估本月不會用完。",
+  };
+}
+
 /**
  * 設定頁「LINE 推播（群組回覆與私訊）」卡片要顯示什麼。抽成純函式，
  * 讓「額度用完時停用重送與測試通知、改顯示額度說明」可以不渲染畫面就測。
  */
 export function linePushPanel(
-  health: { name: string; ok: boolean; detail?: string }[] | undefined,
+  health: { name: string; ok: boolean; detail?: string; checked_at?: string }[] | undefined,
   failures: { direct: number; group: number; stale: number },
   reserve: number = linePrivateDefaults.line_group_reserve_percent,
 ) {
   const blocked = quotaBlocked(health);
-  const usage = quotaUsageOf(
-    health?.find((h) => h.name === LINE_QUOTA)?.detail,
-  );
+  const sample = health?.find((h) => h.name === LINE_QUOTA);
+  const usage = quotaUsageOf(sample?.detail);
   const failed = failures.direct + failures.group;
   const privateHold = linePrivateQuotaHold(usage, reserve);
   return {
     blocked,
-    usage: usage
-      ? usage.limit === null
-        ? `本月已用 ${usage.used} 則（方案沒有上限）`
-        : `本月已用 ${usage.used}／上限 ${usage.limit}`
-      : null,
+    ...quotaDisplay(usage, sample),
     notice: blocked
-      ? `${quotaRetryBlocked}。群組的「收到」與看板鈴鐺照常；每小時會向 LINE 確認額度，恢復後自動續送暫停期間排隊的通知，過時的訊息不補送。`
+      ? `${quotaRetryBlocked}。群組有人發言時，會在回覆中帶上待送的重要通知摘要。看板鈴鐺照常，系統每小時向 LINE 確認額度，恢復後會續送仍有效的通知。`
       : privateHold ? linePrivateQuotaNotes[privateHold] : null,
     failed,
     failedText: failed

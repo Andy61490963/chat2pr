@@ -72,6 +72,7 @@ export type DeliveryStatus =
 export type DeliveryReason =
   | "quota"
   | "group_size"
+  | "priority"
   | "rate"
   | "replies_off"
   | "expired"
@@ -97,6 +98,7 @@ export interface DeliveryRow {
 const reasonNotes: Record<DeliveryReason, string> = {
   quota: groupDeliveryText.quota,
   group_size: groupDeliveryText.groupSize,
+  priority: groupDeliveryText.quotaPriority,
   // 不寫「稍後會再送」：重試 3 次後就不再送，這句也會出現在「送不出去」的說明裡。
   rate: groupDeliveryText.lineRate,
   replies_off: repliesOffNote,
@@ -138,6 +140,7 @@ function reasonOf(
     );
     return pick("error", note ?? discordDeliveryNotes.unavailable);
   }
+  if (error === groupDeliveryText.quotaPriority) return pick("priority");
   if (error.startsWith(rateLimitedPrefix)) return pick("rate");
   if (
     error.startsWith(quotaShortPrefix) ||
