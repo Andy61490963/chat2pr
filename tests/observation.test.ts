@@ -1,5 +1,6 @@
 import { beforeEach, afterAll, it, expect, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import Fastify from "fastify";
 import { db, reset, fixture, session } from "./helpers.js";
 import { buildApp } from "../server/app.js";
 import { Tasks } from "../server/tasks.js";
@@ -11,6 +12,8 @@ import {
   connectionFailure,
 } from "../server/observation.js";
 import { HttpRunner } from "../server/execution.js";
+import { SubscriptionBroker } from "../server/subscription-broker.js";
+import { phaseEndEvents } from "../server/test-failures.js";
 // @ts-expect-error 工作容器採用原生 ESM，無需 TypeScript 編譯。
 import { observeTurn } from "../worker/observe.mjs";
 beforeEach(reset);
@@ -80,6 +83,64 @@ it("分頁無遺漏且重複串流事件不重複保存", async () => {
   expect(a.hasOlder).toBe(true);
   expect(b.events).toHaveLength(5);
   expect(b.hasOlder).toBe(false);
+});
+it.each([
+  { phase: "code", outcome: "修改恢復成功", status: 200 },
+  { phase: "review", outcome: "審查遭上游拒絕", status: 400 },
+])("訂閱重試後$outcome，執行事件只保留重試次數、類別與狀態碼", async ({ phase, status }) => {
+  const { taskId, runId } = await fixtureRun();
+  const buffer = new ObservationBuffer();
+  const upstreamBody = "範例上游內文";
+  const upstreamHeader = "SyntheticHeader264";
+  const completed = { type: "response.completed", response: { usage: { input_tokens: 3, output_tokens: 1 } } };
+  const upstreamFetch = vi.fn<typeof fetch>()
+    .mockResolvedValueOnce(new Response(upstreamBody, { status: 500, headers: { "x-example": upstreamHeader } }))
+    .mockRejectedValueOnce(new Error(upstreamBody))
+    .mockResolvedValueOnce(status === 200
+      ? new Response(`data: ${JSON.stringify(completed)}\n\n`, { headers: { "content-type": "text/event-stream" } })
+      : new Response(upstreamBody, { status }));
+  const broker = new SubscriptionBroker({
+    credentials: async () => ({
+      accessToken: "SyntheticAccess264",
+      accountId: "SyntheticAccount264",
+      secrets: [],
+      models: ["model-test"],
+      defaultModel: "model-test",
+    }),
+    upstreamFetch,
+  });
+  const app = Fastify();
+  broker.register(app);
+  try {
+    const lease = await broker.issue({
+      runId, phase, deadline: Date.now() + 10000,
+      onRetry: (event) => buffer.add(runId, phase, event),
+    });
+    const send = () => app.inject({
+      method: "POST",
+      url: `${lease.basePath}/responses`,
+      headers: { authorization: `Bearer ${lease.token}` },
+      payload: { model: lease.model, input: [], stream: true },
+    });
+    expect((await send()).statusCode).toBe(502);
+    expect(buffer.read(runId)).toHaveLength(0);
+    expect((await send()).statusCode).toBe(502);
+    expect((await send()).statusCode).toBe(status === 200 ? 200 : 502);
+    const result = { exitCode: status === 200 ? 0 : 1, stdout: "", stderr: "", upstreamFailure: lease.failure() };
+    for (const event of phaseEndEvents(phase, result)) buffer.add(runId, phase, event);
+    await saveEvents(db, runId, "runner", buffer.read(runId));
+    const { events } = await new Tasks(db).runEvents(taskId, runId);
+    expect(events).toMatchObject([
+      { phase, kind: "upstream_retry", detail: "上游暫時失敗，已讓 Codex 重試（第 1 次）：upstream_http（HTTP 500）" },
+      { phase, kind: "upstream_retry", detail: "上游暫時失敗，已讓 Codex 重試（第 2 次）：connection" },
+      { phase, kind: "phase_end", exitCode: result.exitCode, detail: status === 200 ? null : "upstream_http（HTTP 400）" },
+    ]);
+    expect(JSON.stringify(events)).not.toContain(upstreamBody);
+    expect(JSON.stringify(events)).not.toContain(upstreamHeader);
+  } finally {
+    broker.close();
+    await app.close();
+  }
 });
 it("到期立即不可讀，撤回清除內容且延遲事件不能寫回；備份排除執行輸出", async () => {
   const { taskId, runId } = await fixtureRun(),
