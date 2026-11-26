@@ -106,6 +106,13 @@ it("只讓指定路徑的 POST 推進腳本；broker 依序收到工具指令、
   expect((await peer.send()).statusCode).toBe(502);
 });
 
+it("永久錯誤回傳劇本指定的原因，不會變成服務暫時失敗", async () => {
+  const peer = await fixture([{ kind: "error", status: 400, message: "指定的模型不存在" }]);
+  const response = await fetch(peer.origin + "/backend-api/codex/responses", { method: "POST" });
+  expect(response.status).toBe(400);
+  expect(await response.json()).toEqual({ error: { message: "指定的模型不存在" } });
+});
+
 it.each<[ModelStep, number, string]>([
   [{ kind: "error", status: 429 }, 429, "訂閱額度"],
   [{ kind: "error", status: 502 }, 502, "上游回應失敗"],

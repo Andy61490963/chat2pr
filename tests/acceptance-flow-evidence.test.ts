@@ -1,8 +1,18 @@
 import { expect, it } from "vitest";
-import { checkFlowEvidence, formatFlowFailure, waitForWorkDisposal } from "../scripts/acceptance/flows/evidence.js";
+import { checkFlowEvidence, disposeRetainedWorkspaces, formatFlowFailure, waitForWorkDisposal } from "../scripts/acceptance/flows/evidence.js";
 
 const clean = { stranded: 0, stale: 0, leaks: 0, resources: [] as string[], states: ["answered"], audit: ["已回答"], events: ["驗證完成"], messages: ["共五張票"] };
 const canary = "ExampleKey266";
+
+it("只對已結案且工作副本名稱屬本次實例的任務要求回收", async () => {
+  const instance = "verify-266-test";
+  const id = "1b9fa83f-0e8e-479d-8b63-40a197186a19";
+  const row = { id, workspace: `agentflow-${instance}-job-${id}`, completed_at: new Date() };
+  const calls: string[] = [];
+  await disposeRetainedWorkspaces(instance, [row, { ...row, completed_at: null }, { ...row, workspace: "不是本次工作副本" }], async run => { calls.push(run); });
+  expect(calls).toEqual([id]);
+  await expect(disposeRetainedWorkspaces("production", [row], async () => {})).rejects.toThrow("驗收");
+});
 
 it("群組收到通知但執行器仍在清理時等待，過期後保留真正的殘留", async () => {
   let reads = 0;

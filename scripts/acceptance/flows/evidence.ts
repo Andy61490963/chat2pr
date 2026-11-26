@@ -13,6 +13,16 @@ export async function waitForWorkDisposal(read: () => Promise<string[]>, timeout
   }
 }
 
+export type RetainedRun = { id: string; workspace: string | null; completed_at: Date | null };
+
+export async function disposeRetainedWorkspaces(instance: string, rows: RetainedRun[], dispose: (id: string, workspace: string) => Promise<void>) {
+  if (!/^verify-266-[a-z0-9-]+$/.test(instance)) throw new Error("只能回收本次驗收副本");
+  for (const row of rows) {
+    if (row.completed_at && /^[a-f0-9-]{36}$/.test(row.id) && row.workspace === `agentflow-${instance}-job-${row.id}`)
+      await dispose(row.id, row.workspace);
+  }
+}
+
 export interface FlowEvidence {
   stranded: number;
   stale: number;

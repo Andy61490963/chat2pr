@@ -3,7 +3,7 @@ import type { RequestListener } from "node:http";
 export type ModelStep =
   | { kind: "text"; text: string }
   | { kind: "tool"; name: string; arguments: Record<string, unknown> }
-  | { kind: "error"; status: 429 | 502 }
+  | { kind: "error"; status: 400 | 403 | 404 | 429 | 502; message?: string }
   | { kind: "disconnect" };
 
 export function createModelUpstreamHandler(
@@ -27,7 +27,7 @@ export function createModelUpstreamHandler(
         .writeHead(step?.status ?? 500, { "content-type": "application/json" })
         .end(
           JSON.stringify({
-            error: { message: step ? "模擬上游錯誤" : "驗收腳本已用盡" },
+            error: { message: step ? step.message ?? "模擬上游錯誤" : "驗收腳本已用盡" },
           }),
         );
       return;
