@@ -195,6 +195,7 @@ export async function probeInference(
     );
     ok = result.ok === true;
     failure = parseUpstreamFailure(result.failure);
+    if (!ok && !failure) return skip('未取得可確認的推論結果，請檢查訂閱代理。');
     if (!ok && failure && ['quota','quota_unavailable','concurrent_request'].includes(failure.kind) && failure.status === undefined)
       return skip(`${upstreamFailureText(failure)}，未送出真實推論。`);
     const latency = Date.now() - sent;

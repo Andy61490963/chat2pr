@@ -62,6 +62,12 @@ describe("推論讀數與鈴鐺同步結案", () => {
   afterEach(clear);
   afterAll(() => db.close());
 
+  it("首次異常的檢查與中斷起點完全相同，十五分鐘整點不會漏報", async () => {
+    await observe(false, new Date());
+    expect(await db.one("SELECT checked_at=outage_started_at AS aligned FROM service_health WHERE name=$1", [name]))
+      .toEqual({ aligned: true });
+  });
+
   it("先開始卻較晚返回的工作或探測不得改寫讀數或產生通知", async () => {
     const younger = new Date();
     const older = new Date(younger.getTime() - minute);

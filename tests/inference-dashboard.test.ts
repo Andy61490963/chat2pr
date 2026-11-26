@@ -150,3 +150,12 @@ it('讀不到主機資源只更新略過原因，保留前次 502 類別與時�
   const {systemHealth} = await import('../server/inference-health.js');
   expect((await systemHealth(db)).find(row => row.name==='codex')).toMatchObject({inferenceStatus:'unknown',detail:expect.stringMatching(/讀不到主機資源.*502/)});
 });
+
+it('執行器回應未附有效失敗證據時，只能顯示未確認', async () => {
+  const runner = new HttpRunner();
+  vi.spyOn(runner,'call').mockResolvedValue({ ok:false, failure:{kind:'不明原因'} });
+  await probeInference(db,runner,(await db.settingsSnapshot()).revision,async () => ({known:true,hold:null}));
+  const {systemHealth} = await import('../server/inference-health.js');
+  expect((await systemHealth(db)).find(row => row.name==='codex')).toMatchObject({inferenceStatus:'unknown'});
+  expect(await db.query("SELECT 1 FROM service_health WHERE name='codex_inference'")).toEqual([]);
+});

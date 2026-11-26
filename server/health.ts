@@ -163,8 +163,9 @@ export async function recordHealth(
     const probe = observation ? { ...options.probe, ...observation } : options.probe;
     // 有通知門檻的項目剛啟動時也要等中斷確認並達門檻，才改變通知基準。
     const inserted = await c.query(
-      `INSERT INTO service_health(name,ok,detail,reading_ok,notified_ok,probe_info,outage_started_at)
-       VALUES($1,$2,$3,$2,$4,$5,CASE WHEN $1='codex_inference' AND NOT $2 THEN clock_timestamp() END)
+      `INSERT INTO service_health(name,ok,detail,reading_ok,notified_ok,probe_info,checked_at,outage_started_at)
+       SELECT $1,$2,$3,$2,$4,$5,coalesce(outage,now()),outage FROM
+         (SELECT CASE WHEN $1='codex_inference' AND NOT $2 THEN now()::timestamptz(3) END AS outage) initial
        ON CONFLICT(name) DO NOTHING RETURNING name`,
       [name, ok, detail, Object.hasOwn(noticeDelay, name) || ok, probe],
     );
