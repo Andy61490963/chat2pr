@@ -5,11 +5,15 @@ import { PassThrough, type Duplex } from "node:stream";
 import { request, type ClientRequest } from "node:http";
 import { buffer } from "node:stream/consumers";
 import { pack } from "tar-stream";
+import { parseWorkerEvent, type ReportWorkerRejection } from "../shared/worker-event.js";
 import { AppError } from "./policy.js";
 import { instanceName } from "./config.js";
 const cleanupDelay = () => new Promise((resolve) => setTimeout(resolve, 100));
 export const COLLECT_OUTPUT_BYTES = 16 * 1024 * 1024;
 const nugetFeedPath = "/opt/agentflow/nuget-feed";
+const workerEventPrefix = "AGENTFLOW_EVENT ";
+// 六千個字元在 JSON 跳脫後最多佔三萬六千個字元，另保留欄位與種類的空間。
+const maxWorkerEventLine = 64 * 1024;
 /** 擁有者提供的環境資料（例如資料庫結構快照）；所有階段唯讀掛載。 */
 export const environmentPath = "/agentflow/env";
 /** 候選檔案只能是工作副本內的相對路徑，不能碰 git 紀錄、跳出目錄或夾帶換行。 */
@@ -97,7 +101,7 @@ export class ContainerDeadline {
   }
 }
 /** 執行器接受的最低工作映像版本；與 worker/Dockerfile 的 io.agentflow.worker-rev 同步。 */
-export const WORKER_REV = "2026-11-26.1";
+export const WORKER_REV = "2026-11-26.2";
 /** 完全存取時唯一允許傳進工作容器的環境變數：專案登記的資料庫連線與 SSH 主機。 */
 export const FULL_ACCESS_ENV = /^AGENTFLOW_(DB_[A-Z]+|SSH_HOSTS)=/;
 export const containerPolicy = (
@@ -438,6 +442,7 @@ export class Containers {
     observe?: (event: Partial<RunEvent> & { kind: string }) => void,
     options?: {
       output?: "collect";
+      onRejectedWorkerEvent?: ReportWorkerRejection;
       /** SQL 審查複驗在全新匿名卷工作，候選原稿只掛載在 /candidate。 */
       reviewCopy?: boolean;
       /** 連線資料整理的輸出可能含有憑證，只交給即時附接的讀取端。 */
@@ -567,6 +572,7 @@ export class Containers {
         );
       }
       let pending = "";
+      let discardUntilNewline = false;
       let output = "",
         error = "",
         outputBytes = 0,
@@ -594,25 +600,34 @@ export class Containers {
         }
         if (output.length < 12 * 1024 * 1024) output += b.toString();
       });
-      err.on("data", (b) => {
+      const consumeLine = (line: string, ending: string) => {
+        if (!line.startsWith(workerEventPrefix)) {
+          if (error.length < 100000) error += (line + ending).slice(0, 100000 - error.length);
+        } else if (line.length > maxWorkerEventLine) {
+          options?.onRejectedWorkerEvent?.("未知", "欄位不符");
+        } else {
+          const event = parseWorkerEvent(line.slice(workerEventPrefix.length), options?.onRejectedWorkerEvent);
+          if (event) observe?.(event);
+        }
+      };
+      err.on("data", (b: string) => {
         if (!observe || !input || options?.reviewCopy) {
-          if (error.length < 100000) error += b.toString();
+          if (error.length < 100000) error += b;
           return;
         }
-        pending += b.toString();
+        pending += b;
         let newline;
         while ((newline = pending.indexOf("\n")) >= 0) {
-          const line = pending.slice(0, newline);
+          if (!discardUntilNewline) consumeLine(pending.slice(0, newline), "\n");
+          discardUntilNewline = false;
           pending = pending.slice(newline + 1);
-          if (line.startsWith("AGENTFLOW_EVENT ")) {
-            try {
-              observe(JSON.parse(line.slice(16)));
-            } catch {
-              /* 不可信輸出不能影響執行 */
-            }
-          } else if (error.length < 100000) error += line + "\n";
         }
-        if (pending.length > 24000) pending = "";
+        const lineLimit = pending.startsWith(workerEventPrefix) ? maxWorkerEventLine : 100000;
+        if (!discardUntilNewline && pending.length > lineLimit) {
+          consumeLine(pending, "");
+          discardUntilNewline = true;
+        }
+        if (discardUntilNewline) pending = "";
       });
       // attach 必須沒有 HTTP 內容；docker-modem 會把查詢參數寫成
       // POST 內容，競態時這段 JSON 會混進容器 stdin。
@@ -683,12 +698,7 @@ export class Containers {
       }
       const result = await deadline.run(() => container.wait());
       await deadline.run(() => drained);
-      if (
-        pending &&
-        error.length < 100000 &&
-        !pending.startsWith("AGENTFLOW_EVENT ")
-      )
-        error += pending;
+      if (pending) consumeLine(pending, "");
       if (outputOverflow)
         throw new AppError(
           413,

@@ -76,6 +76,26 @@ it.each([
 );
 
 it("回覆引述備援訊息仍是回覆，已清除內容的錯誤仍是錯誤", () => {
-  expect(runEventKind({ kind: "message", detail: fallback })).toBe("message");
-  expect(runEventKind({ kind: "error", detail: null })).toBe("error");
+  expect(
+    runEventKind({ phase: "code", kind: "message", detail: fallback }),
+  ).toBe("message");
+  expect(runEventKind({ phase: "code", kind: "error", detail: null })).toBe(
+    "error",
+  );
+});
+
+it("只有開發與審查階段的 SDK 重連錯誤顯示為重連被拒", () => {
+  const error = {
+    kind: "error",
+    detail: "Reconnecting... 1/4 (unexpected status 403 Forbidden)",
+  };
+  for (const phase of ["code", "review"]) {
+    expect(eventLabels[runEventKind({ ...error, phase })]).toBe(
+      "重連被拒（HTTP 403）",
+    );
+  }
+  expect(runEventKind({ ...error, phase: "test" })).toBe("error");
+  expect(runEventKind({ ...error, phase: "code", kind: "message" })).toBe(
+    "message",
+  );
 });

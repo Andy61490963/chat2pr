@@ -7,6 +7,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Containers } from "../server/containers.js";
 import { SourceCache } from "../server/source-cache.js";
 
+// @ts-expect-error 工作容器採用原生 ESM，無需 TypeScript 編譯。
+import { observeTurn } from "../worker/observe.mjs";
+
 vi.mock("node:http", async (original) => ({
   ...(await original<typeof import("node:http")>()),
   request: vi.fn(),
@@ -125,6 +128,155 @@ function fakeRequest(immediate: boolean) {
   );
   return { req, stream, upgrade };
 }
+
+async function readStderrChunks(chunks: string[]) {
+  const { c, runId, container } = fixture();
+  const { stream } = fakeRequest(true);
+  vi.spyOn(c, "finishContainer").mockResolvedValue();
+  const observed = vi.fn();
+  const rejected = vi.fn();
+  vi.mocked(c.docker.modem.demuxStream).mockImplementation((_stream, _stdout, stderr) => {
+    for (const chunk of chunks) stderr.write(chunk);
+  });
+  Object.assign(container, {
+    wait: async () => {
+      stream.end();
+      stream.resume();
+      return { StatusCode: 0 };
+    },
+  });
+  const result = await c.phase(runId, "fake", ["node"], "none", "{}", 1000, false, false, observed, {
+    onRejectedWorkerEvent: rejected,
+  });
+  expect(result.exitCode).toBe(0);
+  expect(observed.mock.calls.shift()).toEqual([{ kind: "container", containerId: container.id }]);
+  return { events: observed.mock.calls.map(([event]) => event), rejected: rejected.mock.calls, stderr: result.stderr };
+}
+
+function readWorkerLines(lines: string[]) {
+  return readStderrChunks(lines.map((line) => `AGENTFLOW_EVENT ${line}\n`));
+}
+
+it("工作端七種事件經容器入口保留，包含未取得結束碼的指令與空白回覆", async () => {
+  const command = { id: "item_0", type: "command_execution", command: "pwd", aggregated_output: "" };
+  const changes = [{ path: "example.txt", kind: "add" }];
+  const usage = { input_tokens: 12, cached_input_tokens: 0, output_tokens: 4 };
+  const events = [
+    { type: "thread.started", thread_id: "thread_example-01" },
+    { type: "turn.started" },
+    { type: "item.started", item: { ...command, status: "in_progress", exit_code: null } },
+    { type: "item.completed", item: { ...command, status: "failed", exit_code: null } },
+    { type: "item.started", item: { ...command, id: "item_1", status: "in_progress" } },
+    { type: "item.completed", item: { ...command, id: "item_1", status: "completed", exit_code: 0, aggregated_output: "/example" } },
+    { type: "item.completed", item: { id: "item_2", type: "file_change", changes, status: "completed" } },
+    { type: "item.completed", item: { id: "item_3", type: "agent_message", text: "" } },
+    { type: "item.completed", item: { id: "item_4", type: "error", message: "範例錯誤" } },
+    { type: "error", message: "" },
+    { type: "error", message: "長".repeat(25000) },
+    { type: "turn.completed" },
+    { type: "turn.completed", usage: null },
+    { type: "turn.completed", usage },
+  ];
+  const lines: string[] = [];
+  await observeTurn({ runStreamed: async () => ({ events }) }, "範例工作", {}, (event: unknown) => {
+    lines.push(JSON.stringify(event));
+  });
+  const result = await readWorkerLines(lines);
+  expect(result.events).toStrictEqual([
+    { kind: "thread", threadId: "thread_example-01" },
+    { kind: "command_start", detail: "pwd\n", exitCode: null },
+    { kind: "command_end", detail: "pwd\n", exitCode: null },
+    { kind: "command_start", detail: "pwd\n" },
+    { kind: "command_end", detail: "pwd\n/example", exitCode: 0 },
+    { kind: "files", detail: JSON.stringify(changes) },
+    { kind: "message", detail: "" },
+    { kind: "error", detail: "範例錯誤" },
+    { kind: "error", detail: "" },
+    { kind: "error", detail: "長".repeat(6000) },
+    { kind: "usage" },
+    { kind: "usage", detail: "null" },
+    { kind: "usage", detail: JSON.stringify(usage) },
+  ]);
+  expect(result.rejected).toEqual([]);
+});
+
+it("容器拒收保留種類、未知種類及格式錯誤，通知只含固定種類與原因", async () => {
+  const reserved = ["phase", "phase_end", "container", "observer_error", "observer_restored", "truncated", "upstream_retry"];
+  const invalid = [
+    { kind: "範例未知種類" },
+    { kind: "message", detail: "範例文字", exitCode: 1 },
+    { kind: "command_end", detail: "範例文字", exitCode: "失敗" },
+    { kind: "command_end", detail: "範例", exitCode: 2147483648 },
+    { kind: "files" },
+    { kind: "thread", threadId: "" },
+    { kind: "thread", threadId: "範例\n識別碼" },
+    { kind: "thread", threadId: "x".repeat(2048) },
+  ];
+  const result = await readWorkerLines([
+    ...reserved.map((kind) => JSON.stringify({ kind })),
+    ...invalid.map((event) => JSON.stringify(event)),
+    "{",
+    JSON.stringify({ kind: "message", detail: "後續回覆" }),
+  ]);
+  expect(result.events).toEqual([{ kind: "message", detail: "後續回覆" }]);
+  expect(result.rejected).toEqual([
+    ...reserved.map(() => ["未知", "種類不符"]),
+    ["未知", "種類不符"], ["message", "欄位不符"], ["command_end", "欄位不符"], ["command_end", "欄位不符"], ["files", "欄位不符"],
+    ["thread", "欄位不符"], ["thread", "欄位不符"], ["thread", "欄位不符"], ["未知", "無法解析"],
+  ]);
+});
+
+it("分段接收含六千個跳脫字元的工作端訊息仍可還原原文", async () => {
+  const detail = "\u0001".repeat(6000);
+  const line = `AGENTFLOW_EVENT ${JSON.stringify({ kind: "message", detail })}\n`;
+  const result = await readStderrChunks([line.slice(0, 25000), line.slice(25000)]);
+  expect(result.events.map((event) => event.kind)).toEqual(["message"]);
+  expect(result.events[0].detail === detail).toBe(true);
+  expect(result.rejected).toEqual([]);
+  expect(result.stderr).toBe("");
+});
+
+it("各類工作端事件只接受最多六千字元的明細，超長時逐筆回報欄位不符", async () => {
+  const kinds = ["usage", "error", "message", "files", "command_start", "command_end"];
+  const detail = "字".repeat(6000);
+  const result = await readWorkerLines(kinds.flatMap((kind) => [
+    JSON.stringify({ kind, detail }),
+    JSON.stringify({ kind, detail: detail + "字" }),
+  ]));
+  expect(result.events.map((event) => event.kind)).toEqual(kinds);
+  expect(result.events.every((event) => event.detail === detail)).toBe(true);
+  expect(result.rejected).toEqual(kinds.map((kind) => [kind, "欄位不符"]));
+});
+
+it("一般錯誤長行分段超過容器事件上限時仍保留尾段及下一行診斷", async () => {
+  const part = "x".repeat(33000);
+  const tail = "範例錯誤原因\n下一行診斷\n";
+  const result = await readStderrChunks([part, part, tail]);
+  expect(result.stderr.endsWith(tail)).toBe(true);
+  expect(result.stderr).toHaveLength(part.length * 2 + tail.length);
+  expect(result.rejected).toEqual([]);
+});
+
+it("過長的容器事件分段抵達只拒收一次，保留下一筆事件與一般錯誤", async () => {
+  const valid = { kind: "message", detail: "後續回覆" };
+  const result = await readStderrChunks([
+    'AGENTFLOW_EVENT {"detail":"',
+    "x".repeat(32 * 1024),
+    "x".repeat(32 * 1024),
+    "不應出現在紀錄的尾段",
+    `\nAGENTFLOW_EVENT ${JSON.stringify(valid)}\n範例診斷\n`,
+  ]);
+  expect(result.rejected).toEqual([["未知", "欄位不符"]]);
+  expect(result.events).toEqual([valid]);
+  expect(result.stderr).toBe("範例診斷\n");
+});
+
+it("容器事件在輸出結尾缺少完整 JSON 時只拒收一次", async () => {
+  const result = await readStderrChunks(['AGENTFLOW_EVENT {"detail":', '"未完成']);
+  expect(result.events).toEqual([]);
+  expect(result.rejected).toEqual([["未知", "無法解析"]]);
+  expect(result.stderr).toBe("");
+});
 
 it("連線整理的容器停用日誌驅動程式並保留即時附接輸出", async () => {
   const { c, runId, create } = fixture();
