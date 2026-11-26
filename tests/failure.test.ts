@@ -18,6 +18,14 @@ import { codexSdkCrash, codexSdkStackOnly } from "./failure-samples.js";
 
 // 正式環境近 30 天看得到、但使用者看不懂的失敗訊息（#22），各自固定分類與白話說明。
 describe("實際錯誤樣本的分類", () => {
+  it("可信診斷保留原有分類，只顯示固定原因與上游狀態碼", () => {
+    const raw = `Codex 執行失敗：虛構的容器輸出${reportTailMark}訂閱轉送失敗`;
+    const failure = classifyFailure(raw, "code", "task", undefined, { kind: "upstream_http", status: 500 });
+    expect(failure.category).toBe(classifyFailure(raw, "code").category);
+    expect(failure.plain).toContain("500");
+    expect(failure.plain).toContain("訂閱上游回應失敗");
+    expect(groupFailureText(failure)).not.toContain("虛構的容器輸出");
+  });
   it("系統套件（#18）：來源被白名單擋下或計畫不再通過固定規則是設定問題，其他安裝失敗是環境問題", () => {
     for (const raw of [
       "系統套件安裝失敗（退出碼 100）：Err:1 https://deb.debian.org/debian bookworm InRelease\n  403  Forbidden [IP: 172.18.0.2 3128]",

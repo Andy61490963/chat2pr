@@ -1,4 +1,8 @@
 import { maskCredentials } from "../shared/credentials.js";
+import {
+  upstreamFailureDetail,
+  type UpstreamFailure,
+} from "../shared/upstream-failure.js";
 import { safeDetail } from "./observation.js";
 
 /**
@@ -178,8 +182,19 @@ export function failureBlocks(output: string, limit = 5000) {
  */
 export function phaseEndEvents(
   phase: string,
-  result: { exitCode: number; stdout: string; stderr: string },
+  result: {
+    exitCode: number;
+    stdout: string;
+    stderr: string;
+    upstreamFailure?: UpstreamFailure;
+  },
 ) {
+  if (result.upstreamFailure && result.exitCode !== 0 && (phase === "code" || phase === "review"))
+    return [{
+      kind: "phase_end",
+      exitCode: result.exitCode,
+      detail: upstreamFailureDetail(result.upstreamFailure),
+    }];
   const blocks =
     phase === "test" && result.exitCode !== 0
       ? failureBlocks(`${result.stdout}\n${result.stderr}`)

@@ -1,5 +1,6 @@
 import { beforeEach, afterAll, it, expect, vi } from "vitest";
 import { reviewVerdict } from "../server/pr-body.js";
+import { phaseEndEvents } from "../server/test-failures.js";
 import { transientFailure, claimAutoResume } from "../server/execution.js";
 import { codexSdkCrash } from "./failure-samples.js";
 import {
@@ -496,6 +497,33 @@ it.each(["code", "review"])(
     expect(s.counts().published).toBe(0);
   },
 );
+
+it("訂閱修改失敗後，執行紀錄、看板與群組保留代理原因", async () => {
+  const sample = await scenario();
+  const original = sample.runner.call.bind(sample.runner);
+  await db.query("DELETE FROM service_health WHERE name=$1", [subscriptionGateName]);
+  await db.query(`UPDATE settings SET value=jsonb_set(value,'{ai_mode}','"subscription"')`);
+  sample.runner.account = async () => ({ allowed: true, checkedAt: new Date().toISOString() });
+  sample.runner.call = async <T>(path: string, body: unknown): Promise<T> => {
+    if (path !== "phase" || (body as {phase?: string}).phase !== "code") return original<T>(path, body);
+    const result = { exitCode: 1, stdout: "", stderr: "訂閱轉送失敗，未使用其他計費方式", upstreamFailure: { kind: "upstream_http", status: 500 } } as const;
+    const observations = phaseEndEvents("code", result).map((event) => ({ ...event, seq: 1, phase: "code", at: new Date().toISOString() }));
+    return { ...result, observations } as T;
+  };
+  const execution = new Execution(db, sample.github, sample.line, sample.budget, sample.runner);
+  await execution.execute(sample.task.id);
+  expect(await db.one("SELECT status FROM tasks WHERE id=$1", [sample.task.id])).toEqual({ status: "queued" });
+  const event = await db.one<{ detail: string }>("SELECT detail FROM run_events WHERE source='runner' AND phase='code' AND kind='phase_end'");
+  expect(event.detail).toMatch(/upstream_http.*500/);
+  await db.query("UPDATE tasks SET retry_at=now()-interval '1 second' WHERE id=$1", [sample.task.id]);
+  await execution.execute(sample.task.id);
+  const task = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [sample.task.id]);
+  expect(task.status).toBe("failed");
+  const reason = parseFailure(task.last_error!)!.plain.replace(/（已自動重試一次，仍然失敗）$/, "");
+  expect(reason).toMatch(/訂閱上游回應失敗.*500/);
+  const group = await db.one<{ text: string }>("SELECT text FROM notifications WHERE task_id=$1 AND kind='group_failed'", [sample.task.id]);
+  expect(group.text).toContain(reason);
+});
 
 it("phase 的容器與 HTTP 使用相同剩餘期限，結束清理另有短期限", async () => {
   const s = await scenario(),

@@ -1,9 +1,14 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { Transform } from "node:stream";
+import {
+  parseUpstreamFailure,
+  type UpstreamFailure,
+} from "../shared/upstream-failure.js";
 import { AppError } from "./policy.js";
 import {
   subscriptionFetch,
+  SubscriptionTransportError,
   SUBSCRIPTION_RESPONSES_URL,
 } from "./subscription-http.js";
 
@@ -24,6 +29,7 @@ interface Run {
   capabilities: Set<string>;
 }
 interface Capability {
+  recordFailure: (failure: UpstreamFailure) => void;
   runId: string;
   phaseId: string;
   phase: string;
@@ -43,8 +49,28 @@ export const subscriptionLimits = {
   lifetimeMs: 30 * 60 * 1000,
 };
 const digest = (s: string) => createHash("sha256").update(s).digest("hex");
-const safeError = (status: number, message: string) =>
-  new AppError(status, message);
+class BrokerError extends AppError {
+  constructor(status: number, message: string, readonly kind?: UpstreamFailure["kind"]) {
+    super(status, message);
+  }
+}
+const safeError = (status: number, message: string, kind?: UpstreamFailure["kind"]) =>
+  new BrokerError(status, message, kind);
+const connectionMessage = "訂閱推論連線失敗，未使用其他計費方式";
+
+type PublicErrors = ReadonlyMap<string, [status: number, kind: UpstreamFailure["kind"]]>;
+const credentialErrors: PublicErrors = new Map([
+  ["Codex 訂閱額度已達上限", [429, "quota"]],
+  ["無法確認訂閱額度，暫停新的推論", [429, "quota_unavailable"]],
+  ["服務需要有效的 ChatGPT 訂閱登入，未使用 API 計費", [503, "auth"]],
+  ["訂閱登入讀取或刷新失敗，請確認服務登入", [503, "auth"]],
+]);
+function knownError(error: unknown, messages: PublicErrors) {
+  if (!(error instanceof AppError)) return undefined;
+  const { message, statusCode } = error;
+  const rule = messages.get(message);
+  if (rule && statusCode === rule[0]) return safeError(rule[0], message, rule[1]);
+}
 const subscriptionQuotaCodes = new Set([
   "usage_limit_reached",
   "rate_limit_exceeded",
@@ -60,7 +86,7 @@ function localTools(
   depth = 0,
 ): LocalTool[] {
   if (!Array.isArray(value) || value.length > 256 || depth > 4)
-    throw safeError(403, "訂閱代理工具宣告無效");
+    throw safeError(403, "訂閱代理工具宣告無效", "invalid_tools");
   const result: LocalTool[] = [];
   for (const tool of value) {
     if (
@@ -69,7 +95,7 @@ function localTools(
       typeof tool.name !== "string" ||
       !/^[a-zA-Z0-9_.-]{1,200}$/.test(tool.name)
     )
-      throw safeError(403, "訂閱代理不允許遠端或無名工具");
+      throw safeError(403, "訂閱代理不允許遠端或無名工具", "tool_denied");
     if (tool.type === "namespace") {
       result.push(
         ...localTools(
@@ -80,8 +106,8 @@ function localTools(
       );
     } else if (tool.type === "function" || tool.type === "custom") {
       result.push({ type: tool.type, name: tool.name, namespace });
-    } else throw safeError(403, "訂閱代理不允許遠端工具");
-    if (result.length > 256) throw safeError(403, "訂閱代理工具宣告超過限制");
+    } else throw safeError(403, "訂閱代理不允許遠端工具", "tool_denied");
+    if (result.length > 256) throw safeError(403, "訂閱代理工具宣告超過限制", "tool_limit");
   }
   return result;
 }
@@ -155,6 +181,17 @@ export class SubscriptionBroker {
   private now() {
     return this.options.now?.() ?? Date.now();
   }
+  private async credentials(refresh: boolean) {
+    try {
+      return await this.options.credentials(refresh);
+    } catch (error) {
+      const known = knownError(error, credentialErrors);
+      if (known) throw known;
+      throw refresh
+        ? safeError(502, connectionMessage, "auth")
+        : safeError(503, "訂閱登入讀取失敗，未使用其他計費方式");
+    }
+  }
   async issue(input: {
     runId: string;
     phase: string;
@@ -199,14 +236,17 @@ export class SubscriptionBroker {
     run.capabilities.add(key);
     const controller = new AbortController();
     const timer = setTimeout(
-      () => this.revokePhase(key),
+      () => {
+        this.capabilities.get(key)?.recordFailure({ kind: "phase_deadline" });
+        this.revokePhase(key);
+      },
       Math.max(1, run.deadline - this.now()),
     );
     timer.unref();
     this.issuing.set(key, { runId: input.runId, controller, timer });
     try {
       const identity = await interruptible(
-        this.options.credentials(false),
+        this.credentials(false),
         controller.signal,
       );
       const model = input.model || identity.defaultModel;
@@ -219,6 +259,7 @@ export class SubscriptionBroker {
       if (run.revoked || run.deadline <= this.now())
         throw safeError(408, "訂閱階段已取消或超過期限");
       const phaseId = randomUUID();
+      let failure: UpstreamFailure | undefined;
       this.issuing.delete(key);
       this.capabilities.set(key, {
         runId: input.runId,
@@ -228,18 +269,23 @@ export class SubscriptionBroker {
         deadline: run.deadline,
         identity,
         timer,
+        recordFailure: (value) => {
+          // 並行請求被拒時，進行中的原請求仍可能回報真正的失敗原因。
+          if (!failure || failure.kind === "concurrent_request") failure = value;
+        },
       });
       return {
         token,
         model,
         basePath: `/v1/${input.runId}/${phaseId}`,
+        failure: (): UpstreamFailure | undefined => failure && { ...failure },
         revoke: () => this.revokePhase(key),
       };
     } catch (error) {
       clearTimeout(timer);
       this.issuing.delete(key);
       run.capabilities.delete(key);
-      if (error instanceof AppError) throw error;
+      if (error instanceof BrokerError) throw error;
       throw safeError(503, "訂閱登入讀取失敗，未使用其他計費方式");
     }
   }
@@ -254,6 +300,7 @@ export class SubscriptionBroker {
     const cap = this.capabilities.get(key);
     if (!cap) return;
     clearTimeout(cap.timer);
+    if (cap.controller) cap.recordFailure({ kind: "phase_cancelled" });
     cap.controller?.abort();
     this.runs.get(cap.runId)?.capabilities.delete(key);
     this.capabilities.delete(key);
@@ -295,18 +342,25 @@ export class SubscriptionBroker {
             !run ||
             cap.runId !== req.params.runId ||
             cap.phaseId !== req.params.phaseId ||
-            run.revoked ||
-            cap.deadline <= this.now()
+            run.revoked
           )
             throw safeError(403, "訂閱階段授權已失效");
-          if (cap.controller)
+          if (cap.deadline <= this.now()) {
+            cap.recordFailure({ kind: "phase_deadline" });
+            throw safeError(403, "訂閱階段授權已失效");
+          }
+          if (cap.controller) {
+            cap.recordFailure({ kind: "concurrent_request" });
             throw safeError(429, "同一訂閱階段已有進行中的呼叫");
+          }
           if (
             run.requests >= subscriptionLimits.requests ||
             run.inputBytes >= subscriptionLimits.inputBytes ||
             run.outputTokens >= subscriptionLimits.outputTokens
-          )
+          ) {
+            cap.recordFailure({ kind: "usage_limit" });
             throw safeError(429, "訂閱工作已達應用程式用量上限");
+          }
           run.requests++;
           const controller = new AbortController();
           cap.controller = controller;
@@ -347,20 +401,31 @@ export class SubscriptionBroker {
                 counted as Transform & { receivedEncodedLength: number }
               ).receivedEncodedLength = state.received;
               if (state.controller.signal.aborted)
-                return done(safeError(408, "訂閱階段已取消或超過期限"));
+                return done(safeError(408, "訂閱階段已取消或超過期限", "phase_cancelled"));
               if (
                 state.received > subscriptionLimits.requestBytes ||
                 state.run.inputBytes > subscriptionLimits.inputBytes
               )
-                return done(safeError(413, "訂閱請求超過用量限制"));
+                return done(safeError(413, "訂閱請求超過用量限制", "request_limit"));
               done(null, chunk);
             },
+          });
+          // 解析器可能已提早拒絕本文，此時仍接住計量串流的錯誤並保留原先原因。
+          counted.on("error", (error) => {
+            if (error instanceof BrokerError && error.kind)
+              state.cap.recordFailure({ kind: error.kind });
           });
           payload.on("error", (error) => counted.destroy(error));
           return payload.pipe(counted);
         },
-        onError: async (req) => {
-          this.incoming.get(req)?.cleanup();
+        onError: async (req, _reply, error) => {
+          const state = this.incoming.get(req);
+          if (!state) return;
+          const kind = error instanceof BrokerError && error.kind
+            ? error.kind
+            : error.code === "FST_ERR_CTP_BODY_TOO_LARGE" ? "request_limit" : "invalid_request";
+          state.cap.recordFailure({ kind });
+          state.cleanup();
         },
         onResponse: async (req) => {
           this.incoming.get(req)?.cleanup();
@@ -369,11 +434,14 @@ export class SubscriptionBroker {
       async (req, reply) => {
         const state = this.incoming.get(req)!;
         const { cap, run, controller } = state;
+        const phaseError = () =>
+          safeError(408, "訂閱階段已取消或超過期限",
+            cap.deadline <= this.now() ? "phase_deadline" : "phase_cancelled");
         if (controller.signal.aborted || cap.deadline <= this.now())
-          throw safeError(408, "訂閱階段已取消或超過期限");
+          throw phaseError();
         const raw = req.body as Record<string, unknown>;
         if (!raw || typeof raw !== "object" || raw.model !== cap.model)
-          throw safeError(403, "不允許此訂閱模型");
+          throw safeError(403, "不允許此訂閱模型", "model_denied");
         if (
           raw.previous_response_id ||
           raw.background ||
@@ -381,7 +449,7 @@ export class SubscriptionBroker {
           raw.stream !== true ||
           raw.store === true
         )
-          throw safeError(400, "只接受不保存遠端歷史的串流推論");
+          throw safeError(400, "只接受不保存遠端歷史的串流推論", "invalid_request");
         const declared = raw.tools === undefined ? [] : localTools(raw.tools);
         // Codex 0.166 的 Responses-Lite 將工具宣告放在 input；所有宣告入口使用同一守門。
         for (const item of raw.input)
@@ -391,7 +459,7 @@ export class SubscriptionBroker {
           )
             declared.push(...localTools(item.tools));
         if (declared.length > 256)
-          throw safeError(403, "訂閱代理工具宣告超過限制");
+          throw safeError(403, "訂閱代理工具宣告超過限制", "tool_limit");
         if (raw.tool_choice !== undefined) {
           const choice = raw.tool_choice as {
             type?: unknown;
@@ -415,7 +483,7 @@ export class SubscriptionBroker {
             !["auto", "none", "required"].includes(String(raw.tool_choice)) &&
             !namedLocal
           )
-            throw safeError(403, "訂閱代理不允許指定遠端工具");
+            throw safeError(403, "訂閱代理不允許指定遠端工具", "tool_choice_denied");
         }
         const body: Record<string, unknown> = {};
         for (const name of [
@@ -438,6 +506,8 @@ export class SubscriptionBroker {
         body.prompt_cache_key = cap.runId;
         const serialized = JSON.stringify(body);
         let complete = false;
+        let upstreamStatus: number | undefined;
+        let fallbackKind: UpstreamFailure["kind"] | undefined;
         const secrets = new Set([
           cap.identity.accessToken,
           cap.identity.accountId,
@@ -447,7 +517,9 @@ export class SubscriptionBroker {
           let response: Response | undefined;
           for (let attempt = 0; attempt < 2; attempt++) {
             if (controller.signal.aborted || cap.deadline <= this.now())
-              throw safeError(408, "訂閱階段已取消或超過期限");
+              throw phaseError();
+            upstreamStatus = undefined;
+            fallbackKind = "connection";
             response = await (this.options.upstreamFetch ?? subscriptionFetch)(
               UPSTREAM,
               {
@@ -463,12 +535,20 @@ export class SubscriptionBroker {
                 },
                 body: serialized,
               },
-            );
+            ).catch((error: unknown) => {
+              if (!this.options.upstreamFetch && error instanceof SubscriptionTransportError) {
+                upstreamStatus = error.upstreamStatus;
+                throw safeError(error.statusCode, error.message, error.kind);
+              }
+              throw safeError(502, connectionMessage, "connection");
+            });
+            upstreamStatus = response.status;
             if (response.status !== 401 || attempt) break;
+            fallbackKind = "auth";
             await response.body?.cancel();
             const previous = cap.identity.accessToken;
             cap.identity = await interruptible(
-              this.options.credentials(true),
+              this.credentials(true),
               controller.signal,
             );
             for (const secret of [
@@ -481,43 +561,51 @@ export class SubscriptionBroker {
               !cap.identity.models.includes(cap.model) ||
               cap.identity.accessToken === previous
             )
-              throw safeError(401, "訂閱登入已失效，請重新登入");
+              throw safeError(401, "訂閱登入已失效，請重新登入", "auth");
           }
           if (!response?.ok || !response.body) {
-            await response?.body?.cancel();
             const status =
               response?.status === 429
                 ? 429
                 : response?.status === 401
                   ? 401
                   : 502;
+            if (status === 429) fallbackKind = "quota";
+            else if (status === 401) fallbackKind = "auth";
+            else if (upstreamStatus !== undefined && upstreamStatus >= 300 && upstreamStatus < 400)
+              fallbackKind = "redirect";
+            else fallbackKind = response?.ok ? "missing_body" : "upstream_http";
+            await response?.body?.cancel();
             throw safeError(
               status,
               status === 429
                 ? "Codex 訂閱額度已達上限"
                 : "訂閱上游回應失敗，未使用其他計費方式",
+              fallbackKind,
             );
           }
           const contentType = response.headers.get("content-type");
           if (contentType && !contentType.includes("text/event-stream")) {
+            fallbackKind = "invalid_stream";
             await response.body.cancel();
-            throw safeError(502, "訂閱上游未回傳有效串流");
+            throw safeError(502, "訂閱上游未回傳有效串流", "invalid_stream");
           }
           let tail = "",
             bytes = 0;
           const events: unknown[] = [];
           const decoder = new TextDecoder();
+          fallbackKind = "stream_interrupted";
           for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
             if (controller.signal.aborted || cap.deadline <= this.now())
-              throw safeError(408, "訂閱階段已取消或超過期限");
+              throw phaseError();
             bytes += chunk.byteLength;
             if (bytes > subscriptionLimits.responseBytes)
-              throw safeError(429, "訂閱回應超過用量上限");
+              throw safeError(429, "訂閱回應超過用量上限", "response_limit");
             tail += decoder.decode(chunk, { stream: true });
             const frames = tail.split(/\r?\n\r?\n/);
             tail = frames.pop() ?? "";
             if (Buffer.byteLength(tail) > subscriptionLimits.frameBytes)
-              throw safeError(502, "訂閱回應事件超過限制");
+              throw safeError(502, "訂閱回應事件超過限制", "frame_limit");
             for (const frame of frames) {
               const data = frame
                 .split(/\r?\n/)
@@ -526,10 +614,17 @@ export class SubscriptionBroker {
                 .join("\n");
               if (!data || data === "[DONE]") continue;
               if (Buffer.byteLength(data) > subscriptionLimits.frameBytes)
-                throw safeError(502, "訂閱回應事件超過限制");
-              const event = JSON.parse(data);
+                throw safeError(502, "訂閱回應事件超過限制", "frame_limit");
+              let event;
+              try {
+                event = JSON.parse(data);
+              } catch {
+                throw safeError(502, connectionMessage, "invalid_event");
+              }
+              if (event === null) throw safeError(502, connectionMessage, "invalid_event");
+              if (typeof event.type !== "string")
+                throw safeError(502, "訂閱推論串流回報錯誤", "invalid_event");
               if (
-                typeof event.type !== "string" ||
                 event.type === "error" ||
                 event.type === "response.failed" ||
                 event.response?.error ||
@@ -549,6 +644,7 @@ export class SubscriptionBroker {
                 throw safeError(
                   quota ? 429 : 502,
                   quota ? "Codex 訂閱額度已達上限" : "訂閱推論串流回報錯誤",
+                  quota ? "quota" : "stream_error",
                 );
               }
               if (event.type === "response.completed") {
@@ -566,26 +662,27 @@ export class SubscriptionBroker {
                       u.input_tokens_details.cached_tokens < 0 ||
                       u.input_tokens_details.cached_tokens > u.input_tokens))
                 )
-                  throw safeError(502, "訂閱回應缺少有效用量");
-                if (complete) throw safeError(502, "訂閱回應重複完成");
+                  throw safeError(502, "訂閱回應缺少有效用量", "invalid_usage");
+                if (complete) throw safeError(502, "訂閱回應重複完成", "duplicate_completion");
                 run.outputTokens += u.output_tokens;
                 if (run.outputTokens > subscriptionLimits.outputTokens)
-                  throw safeError(429, "訂閱工作已達應用程式用量上限");
+                  throw safeError(429, "訂閱工作已達應用程式用量上限", "output_limit");
                 complete = true;
               }
               events.push(event);
             }
           }
           if (!complete || tail.trim())
-            throw safeError(502, "訂閱串流在完成前中斷");
+            throw safeError(502, "訂閱串流在完成前中斷", "stream_interrupted");
           if (
             controller.signal.aborted ||
             reply.raw.destroyed ||
             cap.deadline <= this.now()
           )
-            throw safeError(408, "訂閱階段已取消或超過期限");
+            throw phaseError();
           if (containsCredential(events, secrets))
-            throw safeError(502, "訂閱上游回應包含受保護資料，已停止傳送");
+            throw safeError(502, "訂閱上游回應包含受保護資料，已停止傳送", "protected_data");
+          fallbackKind = undefined;
           // 有界緩衝至完成後才釋出，避免錯誤、半個 token 或偽完成事件先到工作容器。
           reply.hijack();
           reply.raw.writeHead(200, {
@@ -597,11 +694,13 @@ export class SubscriptionBroker {
           state.successful = true;
           reply.raw.end();
         } catch (error) {
-          // 原始 fetch、OAuth、JSON 錯誤及供應商本文可能包含主憑證，全部使用固定安全訊息。
           const publicError =
-            error instanceof AppError
+            error instanceof BrokerError
               ? error
-              : safeError(502, "訂閱推論連線失敗，未使用其他計費方式");
+              : safeError(502, connectionMessage, fallbackKind);
+          const failure = parseUpstreamFailure({ kind: publicError.kind, status: upstreamStatus });
+          if (controller.signal.aborted) cap.recordFailure({ kind: "phase_cancelled" });
+          else if (failure) cap.recordFailure(failure);
           throw publicError;
         } finally {
           // 無完成用量的呼叫不可讓工作程式盲重試；新工作需重新取得可信服務核准。
