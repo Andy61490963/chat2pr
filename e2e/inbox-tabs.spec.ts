@@ -73,6 +73,8 @@ test("手機首屏四個分類、排序與卡住任務捷徑同列且能完整�
   const stuck = page.getByRole("button", { name: "卡住的任務 1" });
   const sort = page.getByRole("combobox", { name: "待決策排序" });
   await expect(tabs).toHaveCount(4);
+  const stuckLabel = (await stuck.getByText("卡住的任務", { exact: true }).boundingBox())!;
+  expect(stuckLabel.width).toBeGreaterThanOrEqual(50);
   await expect(page.getByRole("heading", { name: "需要你處理" })).toHaveCount(0);
   const firstTab = (await tabs.first().boundingBox())!;
   let previousRight = firstTab.x;
