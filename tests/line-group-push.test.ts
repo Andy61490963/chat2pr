@@ -343,6 +343,27 @@ it("縮批重試確認 LINE 已收下原本整批時，中間進度也不會又�
     .toEqual([{ sent_message_id: null, last_error: null }, { sent_message_id: null, last_error: null }]);
 });
 
+it("縮批確認收件卻缺少原訊息清單時，只讓群組用進度指令取回未確認的部分", async () => {
+  const keys: string[] = [];
+  lineApi(async (_body, key) => {
+    keys.push(key);
+    if (keys.length === 1) throw new Error("模擬收件後回應中斷");
+    return new Response(null, { status: 409, headers: { "x-line-accepted-request-id": "OriginalBatch" } });
+  });
+  await notice("group_received", "待確認的收件通知");
+  await notice("group_answered", "已確認的查詢答案");
+  await flush();
+  await setUsage(160);
+  await flush();
+  expect(keys).toEqual([keys[0], keys[0]]);
+  expect(await db.one("SELECT sent_at IS NOT NULL AS delivered,sent_message_id FROM notifications WHERE kind='group_answered'"))
+    .toEqual({ delivered: true, sent_message_id: null });
+  const collect = (automatic?: "all") =>
+    db.transaction((c) => claimPendingGroupReplies(c, "group-a", 5, "line", null, automatic));
+  expect((await collect("all")).replies).toEqual([]);
+  expect((await collect()).replies.map((r) => r.text)).toEqual(["待確認的收件通知"]);
+});
+
 it("每輪最多查五十個群組的人數，下一輪會輪到額度夠用的小群組", async () => {
   await setUsage(197);
   const checked: string[] = [];
