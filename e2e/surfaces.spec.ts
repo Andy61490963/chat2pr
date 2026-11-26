@@ -311,6 +311,26 @@ test("你可以儲存個人保留比例並看到 chat2pr 上限與重置時間",
   expect(reserve).toBe(59);
 });
 
+test("在設定頁的手機畫面查看 LINE 本月用量、上限與預估用完日", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.clock.setFixedTime(new Date("2028-02-11T12:00:00+08:00"));
+  await mockDashboard(page, {
+    state: {
+      health: [{
+        name: "line_quota",
+        ok: true,
+        detail: "本月已用 100／上限 200 則",
+        checked_at: "2028-02-09T16:00:00Z",
+      }],
+    },
+  });
+  await page.goto("/settings?tab=notifications");
+  const card = page.getByRole("region", { name: "LINE 推播（群組回覆與私訊）", exact: true });
+  await expect(card.getByText("本月已用 100／上限 200", { exact: true })).toBeVisible();
+  await expect(card.getByText("按本月平均每日用量，預估 2 月 20 日用完。")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
+});
+
 test("在 375px 可以用鍵盤調整 LINE 推播設定並看到私訊暫停", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.emulateMedia({ reducedMotion: "reduce" });

@@ -47,6 +47,27 @@ describe("LINE 私訊摘要的送出時機", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each([
+    { used: 159, includeRecovery: true },
+    { used: 160, includeRecovery: false },
+  ])("全通知私訊在已用 $used／200 時按重要性使用剩餘額度", async ({ used, includeRecovery }) => {
+    await db.query("UPDATE settings SET value=value || '{\"line_private_mode\":\"all\"}'::jsonb WHERE id=1");
+    await db.query(
+      "INSERT INTO service_health(name,ok,detail) VALUES('line_quota',true,$1) ON CONFLICT(name) DO UPDATE SET ok=true,detail=EXCLUDED.detail",
+      [`本月已用 ${used}／上限 200 則`],
+    );
+    await enqueue("failed", "示範任務失敗，需要你處理");
+    await enqueue("answered", "示範查詢已有答案");
+    await enqueue("ready", "示範修改已建立 PR");
+    await enqueue("group_new", "範例群組剛加入");
+    await flushLinePrivate(db, "testToken123");
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(pushedText(0)).toContain("示範任務失敗，需要你處理");
+    expect(pushedText(0)).toContain("示範查詢已有答案");
+    expect(pushedText(0)).toContain("示範修改已建立 PR");
+    expect(pushedText(0).includes("範例群組剛加入")).toBe(includeRecovery);
+  });
+
   it("第一件立即送出，第二、三件在上一則送出滿 10 分鐘時合併", async () => {
     await enqueue("approval", "第一件需要你確認");
     await flushLinePrivate(db, "虛構權杖");

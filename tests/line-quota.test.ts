@@ -104,6 +104,50 @@ describe("辨識 LINE 每月推播額度用完", () => {
 describe("設定頁的 LINE 推播卡片", () => {
   const failures = { direct: 2, group: 3, stale: 4 };
 
+  describe("預估推播額度用完日", () => {
+    afterEach(() => vi.useRealTimers());
+
+    function panel(detail: string, checked_at = "2028-02-09T16:00:00Z", ok = true) {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2028-02-11T12:00:00+08:00"));
+      const sample = { name: "line_quota", ok, detail, checked_at };
+      return linePushPanel([sample], failures);
+    }
+
+    it("依最近查核日和本月日均用量估算，閏年的月底也能顯示", () => {
+      expect(panel("本月已用 100／上限 200 則")).toMatchObject({
+        usage: "本月已用 100／上限 200",
+        forecast: "按本月平均每日用量，預估 2 月 20 日用完。",
+      });
+      expect(panel("本月已用 70／上限 200 則")).toMatchObject({
+        forecast: "按本月平均每日用量，預估 2 月 29 日用完。",
+      });
+      expect(panel("本月已用 60／上限 200 則")).toMatchObject({
+        forecast: "按本月平均每日用量，預估本月不會用完。",
+      });
+    });
+
+    it("用量不足以估算時保留用量說明，不列出推測日期", () => {
+      for (const sample of [
+        panel("本月已用 0／上限 200 則"),
+        panel("本月已用 100 則，方案沒有推播上限"),
+        panel("尚未查到用量"),
+        panel("無法連線至 LINE（上次查到本月已用 100／上限 200 則）"),
+        panel("本月已用 100／上限 200 則", "無效日期"),
+        panel("本月已用 200／上限 200 則", undefined, false),
+      ]) {
+        expect(sample).toMatchObject({ forecast: null });
+      }
+    });
+
+    it("跨月後尚未取得新用量時不沿用上月的數字或日期", () => {
+      expect(panel("本月已用 100／上限 200 則", "2028-01-31T15:59:00Z")).toMatchObject({
+        usage: "尚未取得本月推播用量",
+        forecast: null,
+      });
+    });
+  });
+
   it("額度用完時顯示用量與額度說明，停用重送與測試通知", () => {
     const panel = linePushPanel(
       [

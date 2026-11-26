@@ -38,7 +38,6 @@ import {
   replyFailedNote,
   replyGaveUpNote,
   tellGroupWaiting,
-  undeliveredHint,
 } from "../server/group-replies.js";
 import { askInGroup } from "../server/answers.js";
 import { approvalNotice } from "../server/project-routing.js";
@@ -53,6 +52,7 @@ import { recordHealth } from "../server/health.js";
 import type { Task } from "../shared/types.js";
 
 let app: Awaited<ReturnType<typeof buildApp>>;
+let line: Line;
 let headers: Awaited<ReturnType<typeof session>>;
 let project: string;
 let sent: { url: string; body: any }[];
@@ -61,7 +61,8 @@ beforeEach(async () => {
   await reset();
   project = await fixture();
   headers = await session();
-  app = await buildApp(db);
+  line = new Line(db);
+  app = await buildApp(db, undefined, undefined, undefined, undefined, undefined, undefined, line);
   sent = [];
   vi.stubGlobal(
     "fetch",
@@ -1088,14 +1089,15 @@ describe("用 reply token 取回與說實話", () => {
   async function send(
     id: string,
     text: string,
-    opts: { quoted?: string; group?: string } = {},
+    opts: { quoted?: string; group?: string; timestamp?: number } = {},
   ) {
     const payload = JSON.stringify({
       events: [
         {
           webhookEventId: `event-${id}`,
           type: "message",
-          replyToken: `fictional-reply-${id}`,
+          replyToken: `fictionalReply${id.replace(/[^a-z0-9]/gi, "")}`,
+          timestamp: opts.timestamp ?? Date.now(),
           source: {
             type: "group",
             groupId: opts.group ?? "group-a",
@@ -1614,11 +1616,11 @@ describe("用 reply token 取回與說實話", () => {
 
   it("/進度表 不觸發；不回覆設定或總開關關閉時不回；群組停用時說明沒有啟用", async () => {
     await settings();
-    await answeredTask("查詢");
     await send("p1", "/進度表");
     await send("p2", "有人說 /進度");
     expect(replyCalls).toHaveLength(0);
 
+    await answeredTask("查詢");
     await settings({ reply_mode: "off" });
     await send("p3", "/進度");
     expect(replyCalls).toHaveLength(0);
@@ -1699,26 +1701,93 @@ describe("用 reply token 取回與說實話", () => {
     ]);
   });
 
-  it("推播額度用完或有回覆沒送到時，「收到」只加一句 /進度 提示", async () => {
+  it("推播額度用完時，群組下一則普通發言直接帶出本群組的重要結果與補問", async () => {
     await settings();
-    const id = await answeredTask("查訂單欄位");
-    // 剛排入、推播還沒輪到的不提示。
-    await send("m1", "/任務 調整按鈕顏色");
-    expect(lastReply()).toEqual([commandAck]);
-
     await db.query(
       "INSERT INTO service_health(name,ok,detail) VALUES('line_quota',false,'LINE 本月推播額度已用完')",
     );
-    await send("m2", "/任務 調整按鈕顏色");
-    expect(lastReply()).toEqual([`${commandAck}\n${undeliveredHint(1)}`]);
-    expect(lastReply()[0]).not.toContain("查詢結果");
-
-    await db.query("DELETE FROM service_health WHERE name='line_quota'");
+    const answer = await answeredTask("示範報表");
     await db.query(
-      "UPDATE notifications SET attempts=3,last_error='LINE 通知失敗（500）' WHERE task_id=$1",
-      [id],
+      "UPDATE notifications SET text=text||' password=ExampleKey123' WHERE task_id=$1",
+      [answer],
     );
-    await send("m3", "/任務 調整按鈕顏色");
-    expect(lastReply()).toEqual([`${commandAck}\n${undeliveredHint(1)}`]);
+    const question = await askingTask("示範匯出");
+    const stale = await askingTask("過期問題", "cancelled");
+    const waiting = await task("等候整理");
+    await notifyGroup(db, waiting, "received", "received:demo", "等候整理的中間進度");
+    await db.query("INSERT INTO groups(id,name,enabled) VALUES('group-b','群組乙',true)");
+    const other = await answeredTask("群組乙的查詢", "group-b");
+
+    await send("chat", "大家早安");
+    expect(replyCalls).toHaveLength(1);
+    const messages = lastReply().join("\n");
+    expect(messages).toContain("示範報表");
+    expect(messages).toContain("是按了沒下載，還是內容不對？");
+    expect(messages).toContain("[已遮蔽]");
+    expect(messages).not.toMatch(/ExampleKey123|等候整理的中間進度|群組乙的查詢|過期問題/);
+    expect((await notice(answer)).sent_message_id).toMatch(/^reply-1-/);
+    expect((await notice(question.id)).sent_message_id).toMatch(/^reply-1-/);
+    for (const id of [stale.id, other, waiting]) expect((await notice(id)).sent_at).toBeNull();
+    await send("chat", "大家早安");
+    expect(replyCalls).toHaveLength(1);
+    expect(pushes).toHaveLength(0);
+  });
+
+  it("指令的收到與待送結果共用一次免費回覆，送達後不再推播", async () => {
+    await settings();
+    const answer = await answeredTask("示範日期");
+    await send("command", "/任務 更新日期");
+    expect(replyCalls).toHaveLength(1);
+    expect(lastReply()[0]).toBe(commandAck);
+    expect(lastReply()[1]).toContain("示範日期");
+    expect((await notice(answer)).sent_message_id).toBe("reply-1-1");
+    await line.flushNotifications();
+    expect(pushes).toHaveLength(0);
+  });
+
+  it("重要結果超過五則時，同一個回覆也會摘要其餘項目，仍可取回可引用的原訊息", async () => {
+    await settings();
+    for (let i = 1; i <= 6; i++) await answeredTask(`範例結果${i}`);
+    await db.query(
+      "INSERT INTO service_health(name,ok,detail) VALUES('line_quota',false,'LINE 本月推播額度已用完')",
+    );
+    await send("summary", "早安");
+    expect(replyCalls).toHaveLength(1);
+    expect(lastReply().length).toBeLessThanOrEqual(5);
+    for (let i = 1; i <= 6; i++) expect(lastReply().join("\n")).toContain(`範例結果${i}`);
+    expect(lastReply().join("\n")).toContain("/進度");
+    await send("progress", "/進度");
+    expect(lastReply().some((text) => text.includes(detailHint))).toBe(true);
+  });
+
+  it("一般發言後一分鐘內排入的通知優先用還沒用過的回覆，之後不重用權杖", async () => {
+    await settings();
+    await send("recent", "大家早安");
+    expect(replyCalls).toHaveLength(0);
+    const answer = await answeredTask("剛完成的查詢");
+    await line.flushNotifications();
+    expect(replyCalls.map((call) => call.token)).toEqual(["fictionalReplyrecent"]);
+    expect(lastReply().join("\n")).toContain("剛完成的查詢");
+    expect((await notice(answer)).sent_message_id).toMatch(/^reply-1-/);
+    expect(pushes).toHaveLength(0);
+    await answeredTask("後來的查詢");
+    await line.flushNotifications();
+    expect(replyCalls).toHaveLength(1);
+  });
+
+  it("過期發言與已關閉回覆的群組都不消耗回覆權杖", async () => {
+    await settings();
+    await send("expired", "早安", { timestamp: Date.now() - 61000 });
+    await answeredTask("示範進度");
+    await line.flushNotifications();
+    expect(replyCalls).toHaveLength(0);
+    await settings({ reply_mode: "off" });
+    await send("off", "有人嗎");
+    expect(replyCalls).toHaveLength(0);
+    await settings({ reply_mode: "results" });
+    await setSettings({ group_replies: false });
+    await send("systemOff", "有人嗎");
+    await line.flushNotifications();
+    expect(replyCalls).toHaveLength(0);
   });
 });
