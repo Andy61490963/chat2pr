@@ -96,6 +96,9 @@ async function withCapability<T extends { exitCode: number }>(
     phase,
     model: typeof job.model === "string" ? job.model : undefined,
     deadline,
+    onRetry: phase === "code" || phase === "review"
+      ? (event) => observations.add(runId, phase, event)
+      : undefined,
   });
   try {
     const remaining = deadline - Date.now();
