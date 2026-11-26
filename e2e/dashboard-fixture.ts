@@ -1042,6 +1042,16 @@ export const recentActivity: State["activity"] = [
 
 export const inboxReviewTime = "2026-01-10T09:00:00Z";
 export const inboxDetailUnavailable = "範例審核資料暫時無法讀取。";
+export const summaryTasks = [activityTask, rejectedTask, cancelledTask, closedPrTask];
+export const summaryActivity: State["activity"] = [activityTask, ...summaryTasks].map((entry, index) => ({
+  id: 5 - index,
+  task_id: entry.id,
+  task_title: entry.title,
+  task_mode: entry.mode,
+  kind: "attempt",
+  detail: entry.mode === "query" ? "開始調查" : "開始程式修改",
+  created_at: new Date(Date.parse(inboxReviewTime) - index * 60_000).toISOString(),
+}));
 
 export async function mockInboxReview(page: Page) {
   const fixture = reviewWorkbenchFixture(Date.parse(inboxReviewTime));

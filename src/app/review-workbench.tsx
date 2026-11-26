@@ -398,7 +398,7 @@ export function ReviewWorkbench({
     <div
       ref={panel}
       data-review-id={item.id}
-      className="min-w-0 [&_a[data-slot=button]]:max-lg:min-h-11 [&_button]:max-w-full [&_button]:whitespace-normal [&_button]:max-lg:min-h-11 [&_select]:max-lg:min-h-11 [&_summary]:max-lg:min-h-11"
+      className={cn("min-w-0 [&_a[data-slot=button]]:max-lg:min-h-11 [&_button]:max-w-full [&_button]:whitespace-normal [&_button]:max-lg:min-h-11 [&_select]:max-lg:min-h-11 [&_summary]:max-lg:min-h-11", list && "max-lg:flex max-lg:h-full max-lg:flex-col")}
     >
       {(!desktop || !detail) && actionNotice && (
         <div className="sticky top-0 z-10">{actionNotice}</div>
@@ -413,7 +413,7 @@ export function ReviewWorkbench({
             finish(item.id, () => resolvePickList(list, ids), "advance")
           }
           onPrimaryMount={attachPrimary}
-          actionDock={desktop ? null : actionDock}
+          mobile={!desktop}
         />
       ) : (
         <>
@@ -498,17 +498,18 @@ export function ReviewWorkbench({
     <div
       ref={workbench}
       tabIndex={-1}
-      onKeyDown={(event) => {
+      onKeyDownCapture={(event) => {
         if (event.key !== "Enter" || !event.altKey || event.ctrlKey || event.metaKey ||
-            event.shiftKey || event.nativeEvent.isComposing || busy || suspended) return;
+            event.shiftKey || event.nativeEvent.isComposing) return;
+        event.preventDefault();
+        if (busy || suspended || event.repeat) return;
         const target = event.target;
         const button = primary.current;
         if (!(target instanceof HTMLElement) || !event.currentTarget.contains(target) ||
             !button?.isConnected || button.disabled || button.getAttribute("aria-disabled") === "true") return;
         if (!item || panel.current?.dataset.reviewId !== item.id) return;
         if (target !== button && target.closest<HTMLElement>("[data-review-row]")?.dataset.reviewRow !== item.id) return;
-        event.preventDefault();
-        if (!event.repeat) button.click();
+        button.click();
       }}
       className={cn(
         "min-w-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground",

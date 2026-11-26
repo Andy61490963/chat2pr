@@ -448,7 +448,10 @@ for (const width of [1440, 375]) {
       await expect(
         review.getByRole("button", { name: "結束任務" }),
       ).toHaveCount(1);
+      const metadata = review.locator("summary").filter({ hasText: "任務資料" });
+      await metadata.press("Enter");
       const fields = review.locator('[data-slot="sheet-header"] dl');
+      await expect(fields).toBeVisible();
       await expect(fields.locator("dt")).toHaveText([
         "任務類型",
         "群組",
@@ -462,6 +465,7 @@ for (const width of [1440, 375]) {
         "color",
         await page.evaluate(() => getComputedStyle(document.body).color),
       );
+      await metadata.press("Enter");
       const section = review.getByRole("region", { name: "處理專案" });
       const explanation = isQuery
         ? "查詢可以同時參考多個專案的原始碼"
