@@ -150,10 +150,14 @@ test("成員看到需要管理者處理的原因，可以開任務但不會進�
 });
 
 test("系統執行分頁在訂閱帳戶可用但推論失敗時顯示上游原因", async ({ page }) => {
+  const detail = "真實推論未通過：訂閱上游回應失敗（上游 HTTP 502）。耗時 27 毫秒，請檢查訂閱代理。";
+  const text = `服務異常：Codex 訂閱推論。${detail}`;
   await mockDashboard(page, {
     state: {
       settings: { ...defaultState.settings, ai_mode: "subscription" },
       health: failedInferenceHealth,
+      alerts: [{ id: "notice267", task_id: null, title: null, kind: "service_down", disposition: "inbox", text, created_at: "2026-01-01T08:00:00Z" }],
+      alertsSeenAt: null,
     },
   });
   await page.goto("/system?tab=execution");
@@ -163,7 +167,10 @@ test("系統執行分頁在訂閱帳戶可用但推論失敗時顯示上游原�
     inference.getByRole("heading", { name: "Codex 訂閱推論" }),
   ).toBeVisible();
   await expect(inference.getByText("需處理", { exact: true })).toBeVisible();
-  await expect(
-    inference.getByText("訂閱上游回應失敗（上游 HTTP 502）"),
-  ).toBeVisible();
+  await expect(inference.getByText(detail, { exact: true })).toBeVisible();
+  await inference.screenshot({ path: test.info().outputPath("推論異常.png"), animations: "disabled" });
+  await page.getByRole("button", { name: /^通知(?:，|$)/ }).click();
+  const menu = page.getByRole("menu");
+  await expect(menu.getByText(text, { exact: true })).toBeVisible();
+  await menu.screenshot({ path: test.info().outputPath("異常通知.png"), animations: "disabled" });
 });

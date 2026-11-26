@@ -822,4 +822,7 @@ CREATE TABLE IF NOT EXISTS task_stalls (
  target text NOT NULL CHECK(target IN ('task','system')), since timestamptz NOT NULL, notice_id uuid
 );
 CREATE INDEX IF NOT EXISTS task_stalls_notice ON task_stalls(notice_id) WHERE notice_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS inference_probe_budget (
+ id boolean PRIMARY KEY CHECK(id), day date NOT NULL, attempts integer NOT NULL CHECK(attempts BETWEEN 1 AND 8)
+);
 CREATE INDEX IF NOT EXISTS audit_task_failure ON audit(task_id,created_at DESC,id DESC) WHERE kind='error';

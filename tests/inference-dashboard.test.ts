@@ -11,6 +11,7 @@ vi.mock("../server/config.js", async (original) => ({
 
 beforeEach(async () => {
   await reset();
+  await db.query("DELETE FROM inference_probe_budget");
   await db.query(
     "DELETE FROM service_health WHERE name IN ('codex','codex_subscription_gate','codex_inference','host_resources')",
   );
@@ -24,6 +25,20 @@ afterEach(async () => {
   );
 });
 afterAll(() => db.close());
+
+it("同日含失敗補測最多八次，並行搶最後一次不會超支，也不占用使用者次數", async () => {
+  const runner = new HttpRunner();
+  const call = vi.spyOn(runner, "call").mockResolvedValue({ ok: false, failure: { kind: "upstream_http", status: 502 } });
+  const revision = (await db.settingsSnapshot()).revision;
+  const probe = () => probeInference(db, runner, revision, async () => ({ known: true, hold: null }));
+  for (let attempt = 0; attempt < 7; attempt++) await probe();
+  await Promise.all([probe(), probe(), probe()]);
+  expect(call).toHaveBeenCalledTimes(8);
+  expect(await db.query("SELECT 1 FROM runs")).toEqual([]);
+  await db.query("UPDATE inference_probe_budget SET day=day-1");
+  await probe();
+  expect(call).toHaveBeenCalledTimes(9);
+});
 
 it("更換模型不沿用舊模型的綠燈，主機無讀數只記待檢不通知推論故障", async () => {
   const runner = new HttpRunner();

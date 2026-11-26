@@ -34,6 +34,44 @@ export interface UpstreamFailure {
   status?: number;
 }
 
+const retryPolicy = {
+  upstream_http: "5xx",
+  connection: true,
+  invalid_stream: true,
+  stream_interrupted: true,
+  model_denied: false,
+  invalid_request: false,
+  invalid_tools: false,
+  tool_denied: false,
+  tool_limit: false,
+  tool_choice_denied: false,
+  phase_deadline: false,
+  phase_cancelled: false,
+  concurrent_request: false,
+  usage_limit: false,
+  request_limit: false,
+  redirect: false,
+  auth: false,
+  quota: false,
+  quota_unavailable: false,
+  missing_body: false,
+  response_limit: false,
+  frame_limit: false,
+  invalid_event: false,
+  stream_error: false,
+  invalid_usage: false,
+  duplicate_completion: false,
+  output_limit: false,
+  protected_data: false,
+} satisfies Record<UpstreamFailure["kind"], boolean | "5xx">;
+
+export function isRetryableUpstreamFailure(failure: UpstreamFailure): boolean {
+  const policy = retryPolicy[failure.kind];
+  if (policy === "5xx")
+    return failure.status !== undefined && failure.status >= 500 && failure.status <= 599;
+  return policy;
+}
+
 function isKind(value: unknown): value is UpstreamFailure["kind"] {
   return typeof value === "string" && Object.hasOwn(reasons, value);
 }

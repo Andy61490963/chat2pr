@@ -66,6 +66,9 @@ test("手機看板的欄位以版面或中文標點分隔，頁面不會水平�
   const runs = taskDrawer.getByRole("region", { name: "Codex 執行紀錄" });
   const events = runs.getByRole("list", { name: "執行事件" });
   await expect(events.getByText("結束碼 1", { exact: true })).toBeVisible();
+  const retry = events.getByRole("listitem").filter({ hasText: "訂閱上游重試" });
+  await retry.getByText("檢視內容", { exact: true }).click();
+  await expect(retry.getByText("上游暫時失敗，已讓 Codex 重試（第 1 次）：upstream_http（HTTP 503）")).toBeVisible();
   await expect(runs.getByText(/^更新於 /)).toBeVisible();
   const picker = runs.getByRole("combobox", { name: /^執行紀錄/ });
   await checkLayout(page, "執行紀錄");

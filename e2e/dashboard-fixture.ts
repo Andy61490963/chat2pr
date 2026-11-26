@@ -583,6 +583,13 @@ export async function mockDashboardSeparators(page: Page) {
   };
   const runEvents: RunEvent[] = [
     {
+      seq: 2,
+      at: dashboardSeparatorsTime,
+      phase: "code",
+      kind: "upstream_retry",
+      detail: "上游暫時失敗，已讓 Codex 重試（第 1 次）：upstream_http（HTTP 503）",
+    },
+    {
       seq: 1,
       at: timestamp,
       phase: "test",
@@ -818,7 +825,7 @@ export const firstSetupHealth: State["health"] = [
 
 export const failedInferenceHealth: State["health"] = [
   ...firstSetupHealth.filter(({ name }) => name !== "codex"),
-  { name: "codex", ok: false, detail: "訂閱上游回應失敗（上游 HTTP 502）", checked_at: timestamp },
+  { name: "codex", ok: false, detail: "真實推論未通過：訂閱上游回應失敗（上游 HTTP 502）。耗時 27 毫秒，請檢查訂閱代理。", checked_at: timestamp },
 ];
 
 export const discordOnlySetup: Pick<

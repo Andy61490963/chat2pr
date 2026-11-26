@@ -52,6 +52,7 @@ const Event = z.object({
     "truncated",
     "observer_error",
     "observer_restored",
+    "upstream_retry",
   ]),
   detail: z.string().max(24000).nullable().optional(),
   threadId: z.string().uuid().optional(),
