@@ -1,5 +1,7 @@
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Line } from "../server/line.js";
+import { claimPendingGroupReplies } from "../server/group-replies.js";
+import { syncLineQuota } from "../server/line-quota.js";
 import { db, fixture, reset } from "./helpers.js";
 
 vi.mock("../server/config.js", async (original) => ({
@@ -195,4 +197,38 @@ it("每輪最多查五十個群組的人數，下一輪會輪到額度夠用的�
   await flush();
   expect(checked).toHaveLength(51);
   expect(recipients).toEqual(["Group51"]);
+});
+
+it("無法確認推播結果又發現額度不足時，把已領取的答案還給免費回覆", async () => {
+  const project = await db.one<{ id: string }>("SELECT id FROM projects LIMIT 1");
+  const task = await db.one<{ id: string }>(`INSERT INTO tasks(project_id,group_id,title,summary,acceptance,status,dedupe_key)
+    VALUES($1,'group-a','範例問題','查詢結果','[]','answered','SampleTask') RETURNING id`, [project!.id]);
+  await notice("group_answered", "範例答案");
+  await db.query("UPDATE notifications SET task_id=$1", [task!.id]);
+  lineApi(async () => { throw new Error("模擬回應中斷"); });
+  await flush();
+  const collect = () => db.transaction((c) => claimPendingGroupReplies(c, "group-a", 5, "line", null, "important"));
+  expect((await collect()).replies).toHaveLength(0);
+  vi.stubGlobal("fetch", async (url: string) =>
+    Response.json(url.endsWith("/quota") ? { type: "limited", value: 200 } : { totalUsage: 200 }));
+  await syncLineQuota(db, "SampleToken");
+  expect((await collect()).replies.map((n) => n.text)).toEqual(["範例答案"]);
+});
+
+it("通知原有的失敗次數不同時，每個重試鍵始終對應同一份名單", async () => {
+  const attempts = new Map<string, string[]>();
+  const changed: string[] = [];
+  const pushes = lineApi(async (body, key) => {
+    const texts = body.messages.map((m) => m.text);
+    if (attempts.has(key) && JSON.stringify(attempts.get(key)) !== JSON.stringify(texts)) changed.push(key);
+    attempts.set(key, texts);
+    throw new Error("模擬回應中斷");
+  });
+  await notice("group_merged", "已嘗試兩次的合併通知");
+  await db.query("UPDATE notifications SET attempts=2");
+  await notice("group_ready", "剛完成的修改");
+  await flush();
+  await flush();
+  expect(pushes).toHaveLength(2);
+  expect(changed).toEqual([]);
 });
