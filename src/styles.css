@@ -190,6 +190,10 @@
   @apply focus-frame;
 }
 
+[data-slot="input"][aria-invalid="true"]:focus-visible {
+  outline-color: var(--danger);
+}
+
 @utility focus-frame {
   outline: var(--focus-width) solid var(--ring);
   outline-offset: var(--focus-offset);

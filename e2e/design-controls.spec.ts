@@ -92,17 +92,16 @@ test("無效欄位取得鍵盤焦點時用危險色標出外框", async ({ page 
   const input = page.getByRole("textbox", { name: "工單名稱" });
   await input.evaluate((el) => el.setAttribute("aria-invalid", "true"));
   await input.focus();
-  const paint = await input.evaluate((el) => {
+  const danger = await input.evaluate((el) => {
     const marker = document.createElement("span");
     marker.style.color = "var(--danger)";
     el.after(marker);
-    const danger = getComputedStyle(marker).color;
+    const color = getComputedStyle(marker).color;
     marker.remove();
-    const { outlineColor, outlineStyle } = getComputedStyle(el);
-    return { danger, outlineColor, outlineStyle };
+    return color;
   });
-  expect(paint.outlineStyle).toBe("solid");
-  expect(paint.outlineColor).toBe(paint.danger);
+  await expect(input).toHaveCSS("outline-style", "solid");
+  await expect(input).toHaveCSS("outline-color", danger);
 });
 
 test("進度列依資料把剩餘四分之一平移出可視範圍", async ({ page }) => {
