@@ -55,3 +55,12 @@ it.each([0, 100])("保留群組額度百分之 %i 時，重要回覆未確認會
   await line.flushNotifications();
   expect(privateMessages).toHaveLength(reserve === 0 ? 1 : 0);
 });
+
+it("升級後首次維護補上既有未確認重要回覆的提醒，重跑只留一則", async () => {
+  await db.query("UPDATE notifications SET line_reply_policy='manual' WHERE group_id='group-a'");
+  await db.query("UPDATE settings SET value=jsonb_set(value,'{admin_line_id}','null')");
+  await line.flushNotifications();
+  await line.flushNotifications();
+  expect(await notices()).toMatchObject([{ disposition: "action", text: expect.stringContaining("轉達") }]);
+  expect(await dashboardAlerts(db, false)).not.toEqual(expect.arrayContaining([expect.objectContaining({ kind: "reply_uncertain" })]));
+});
