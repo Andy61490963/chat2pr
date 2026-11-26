@@ -141,6 +141,12 @@ ALTER TABLE notifications ADD COLUMN IF NOT EXISTS discord_thread_id text;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS discord_thread_id text;
 -- 私訊摘要先保存批次，再對 LINE 推播；重試同一批沿用同一個 LINE 重試鍵。
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_digest_id uuid;
+-- free 可隨群組發言送出。manual 可用 /進度 取回；重要免費回覆送達未確認時，冷卻五分鐘後可隨新發言再補送一次。
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_reply_policy text CHECK (line_reply_policy IN ('free','manual'));
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_reply_uncertain_at timestamptz;
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_reply_alert_id uuid REFERENCES notifications(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS notifications_reply_alert ON notifications(line_reply_alert_id) WHERE line_reply_alert_id IS NOT NULL;
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_reply_retry_count integer NOT NULL DEFAULT 0;
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_outage_started_at timestamptz;
 CREATE TABLE IF NOT EXISTS service_health (name text PRIMARY KEY, ok boolean NOT NULL, detail text NOT NULL, checked_at timestamptz NOT NULL DEFAULT now());
 ALTER TABLE service_health ADD COLUMN IF NOT EXISTS probe_info jsonb;
@@ -471,8 +477,10 @@ END $legacy_images$;
 
 CREATE INDEX IF NOT EXISTS tasks_sources_gin ON tasks USING gin(source_ids);
 CREATE INDEX IF NOT EXISTS tasks_updated_id ON tasks (updated_at DESC, id DESC);
-CREATE INDEX IF NOT EXISTS audit_task_ending ON audit (task_id, created_at DESC, id DESC)
-  WHERE kind IN ('reject','cancel','closed','unsend','duplicate');
+CREATE INDEX IF NOT EXISTS audit_task_terminal ON audit (task_id, created_at DESC, id DESC)
+  WHERE kind IN ('reject','cancel','closed','answered','merged');
+DROP INDEX IF EXISTS audit_task_end_transition;
+DROP INDEX IF EXISTS audit_task_ending;
 CREATE INDEX IF NOT EXISTS runs_task_started ON runs (task_id, started_at DESC, id DESC);
 CREATE TABLE IF NOT EXISTS chat_revision(id integer PRIMARY KEY CHECK(id=1),revision bigint NOT NULL DEFAULT 0);
 INSERT INTO chat_revision(id) VALUES(1) ON CONFLICT DO NOTHING;
@@ -494,6 +502,7 @@ ALTER TABLE groups ADD COLUMN IF NOT EXISTS name_synced_at timestamptz;
 -- 群組推播依人數計費：快取群組人數，判斷剩餘推播額度夠不夠送；24 小時更新一次，讀不到時為 NULL（未知）。
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS member_count integer;
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS member_count_at timestamptz;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS member_count_estimate integer;
 -- 查詢任務：只調查並回覆，不修改程式、不開 PR；調查結果存在 answer。
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS mode text NOT NULL DEFAULT 'change';
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS answer text;
@@ -839,3 +848,7 @@ END $$;
 ALTER TABLE inference_probe_budget ADD COLUMN IF NOT EXISTS reserved_at timestamptz;
 ALTER TABLE inference_probe_budget ADD COLUMN IF NOT EXISTS early_attempts integer NOT NULL DEFAULT 0 CHECK(early_attempts BETWEEN 0 AND 2);
 CREATE INDEX IF NOT EXISTS audit_task_failure ON audit(task_id,created_at DESC,id DESC) WHERE kind='error';
+DELETE FROM service_health AS deferred USING service_health AS reading
+WHERE deferred.name='codex_probe_deferred' AND reading.name='codex_inference'
+  AND reading.reading_ok IS NOT NULL AND deferred.checked_at<=reading.checked_at
+  AND (deferred.probe_info->>'model') IS NOT DISTINCT FROM (reading.probe_info->>'model');

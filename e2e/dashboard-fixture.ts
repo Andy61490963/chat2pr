@@ -146,6 +146,9 @@ export const project: Project = {
 export const group: DashboardGroup = {
   id: "group-demo",
   platform: "line",
+  member_count: null,
+  member_count_estimate: null,
+  has_pending_line_push: false,
   name: "測試群組",
   project_ids: [project.id],
   enabled: true,

@@ -1946,10 +1946,10 @@ export class Execution {
               runId,
               JSON.stringify({ answer, querySources }),
             ]);
+            await this.db.audit(task.id, "answered", `查詢已回覆：${task.title}`, c);
             return true;
           });
           if (!answered) return;
-          await this.db.audit(task.id, "answered", `查詢已回覆：${task.title}`);
           if (task.issue_number)
             await this.github
               .commentIssue?.(

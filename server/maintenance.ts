@@ -92,6 +92,13 @@ export async function downloadPendingImages(
       );
     }
   }
+  await db.query(
+    `UPDATE service_health SET ok=true,detail='目前沒有下載失敗的圖片',checked_at=now()
+     WHERE name='images' AND NOT ok AND NOT EXISTS (
+       SELECT 1 FROM messages WHERE type='image' AND image IS NULL AND content_attempts>0
+         AND NOT revoked AND received_at>message_retention_cutoff()
+     )`,
+  );
 }
 export async function backup(db: Database) {
   const secret = secrets().sessionSecret;

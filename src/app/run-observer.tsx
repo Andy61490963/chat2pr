@@ -9,6 +9,7 @@ import {
   phaseDurations,
   phaseLabels,
   phaseMinutes,
+  runEventKind,
 } from "../../shared/observation.js";
 import { statusLabels, type TaskStatus } from "../../shared/types.js";
 import { notificationLabels } from "../../shared/status-glossary.js";
@@ -33,16 +34,11 @@ const time = (s: string) =>
   new Date(s).toLocaleString("zh-TW", { hour12: false });
 
 function EventHeading({ event }: { event: RunEvent }) {
-  const { phase, kind, detail, exitCode } = event;
-  let label = eventLabels[kind] ?? kind;
-  let failed = kind === "error" || (exitCode != null && exitCode !== 0);
-  if (
-    (phase === "code" || phase === "review") && kind === "error" &&
-    detail && /^Reconnecting\.\.\. \d+\/\d+ \(unexpected status 403\b/i.test(detail)
-  ) {
-    label = "重連被拒（HTTP 403）";
-    failed = false;
-  }
+  const { phase, exitCode } = event;
+  const kind = runEventKind(event);
+  const label = eventLabels[kind] ?? kind;
+  const failed = kind === "error" ||
+    (kind !== "reconnect_rejected" && exitCode != null && exitCode !== 0);
   return (
     <p className={`flex flex-wrap gap-x-3 gap-y-1 [overflow-wrap:anywhere] ${failed ? "text-danger" : "font-medium"}`}>
       <span>{phaseLabels[phase] ?? phase}</span>

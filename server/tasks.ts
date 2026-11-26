@@ -39,7 +39,7 @@ import {
   type SourceMessage,
   type Task,
 } from "../shared/types.js";
-import { deliveryState, type GroupDelivery } from "../shared/group-delivery.js";
+import { deliveryState, type DeliveryRow, type GroupDelivery } from "../shared/group-delivery.js";
 import { lineQuotaBlocked } from "./line-quota.js";
 import {
   taskEndColumns,
@@ -761,20 +761,16 @@ export class Tasks {
    * 管理者要看得出來並能複製內容代為轉達；原始 last_error 與 LINE 訊息 ID 不回傳。
    */
   private async groupDeliveries(id: string): Promise<GroupDelivery[]> {
-    const rows = await this.db.query<{
+    const rows = await this.db.query<DeliveryRow & {
       id: string;
       kind: string;
       text: string | null;
-      sent_at: string | null;
-      has_message_id: boolean;
-      attempts: number;
-      last_error: string | null;
       created_at: string;
       platform: ChatPlatformId | null;
     }>(
       // 原文與聊天室同樣受保存期限限制：到期後只回狀態，不回文字，也就不能複製。
       `SELECT n.id,n.kind,CASE WHEN n.created_at>message_retention_cutoff() THEN left(n.text,4500) END AS text,
-         n.sent_at,n.sent_message_id IS NOT NULL AS has_message_id,n.attempts,n.last_error,n.created_at,g.platform
+         n.sent_at,n.sent_message_id IS NOT NULL AS has_message_id,n.attempts,n.last_error,n.line_reply_policy,n.created_at,g.platform
        FROM notifications n LEFT JOIN groups g ON g.id=n.group_id
        WHERE n.task_id=$1 AND n.group_id IS NOT NULL ORDER BY n.created_at,n.id`,
       [id],

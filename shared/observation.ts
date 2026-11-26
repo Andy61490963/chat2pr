@@ -65,6 +65,8 @@ export const eventLabels: Record<string, string> = {
   message: "Codex 回覆",
   usage: "Token 用量",
   error: "錯誤",
+  notice: "提示",
+  reconnect_rejected: "重連被拒（HTTP 403）",
   phase_end: "階段結束",
   truncated: "部分紀錄已截斷",
   observer_error: "進度連線中斷",
@@ -72,6 +74,24 @@ export const eventLabels: Record<string, string> = {
   worker_event_rejected: "容器事件已丟棄",
   upstream_retry: "訂閱上游重試",
 };
+
+const modelMetadataFallback =
+  /^Model metadata for `[A-Za-z0-9._:/-]+` not found\. Defaulting to fallback metadata; this can degrade performance and cause issues\.$/;
+
+export function runEventKind({
+  kind,
+  phase,
+  detail,
+}: Pick<RunEvent, "kind" | "phase" | "detail">) {
+  if (kind !== "error" || !detail) return kind;
+  if (modelMetadataFallback.test(detail)) return "notice";
+  if (
+    (phase === "code" || phase === "review") &&
+    /^Reconnecting\.\.\. \d+\/\d+ \(unexpected status 403\b/i.test(detail)
+  )
+    return "reconnect_rejected";
+  return kind;
+}
 
 /** 自動修復那次「Codex 修改程式」的階段說明；舊紀錄沒有時，以之前出現過「評估驗證結果」判斷。 */
 export const repairPhaseDetail = "自動修復";

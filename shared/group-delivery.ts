@@ -72,11 +72,14 @@ export type DeliveryStatus =
 export type DeliveryReason =
   | "quota"
   | "group_size"
+  | "priority"
   | "rate"
   | "replies_off"
+  | "bot_left"
   | "expired"
   | "superseded"
   | "reply_failed"
+  | "reply_uncertain"
   | "error";
 export interface Delivery {
   status: DeliveryStatus;
@@ -92,17 +95,21 @@ export interface DeliveryRow {
   has_message_id?: boolean;
   attempts: number;
   last_error: string | null;
+  line_reply_policy?: "free" | "manual" | null;
 }
 
 const reasonNotes: Record<DeliveryReason, string> = {
   quota: groupDeliveryText.quota,
   group_size: groupDeliveryText.groupSize,
+  priority: groupDeliveryText.quotaPriority,
   // 不寫「稍後會再送」：重試 3 次後就不再送，這句也會出現在「送不出去」的說明裡。
   rate: groupDeliveryText.lineRate,
   replies_off: repliesOffNote,
+  bot_left: groupDeliveryText.botLeft,
   expired: expiredNote,
   superseded: supersededNote,
   reply_failed: "以 /進度 補送沒有成功，下次再試",
+  reply_uncertain: groupDeliveryText.replyUncertain,
   error: groupDeliveryText.lineRejected,
 };
 
@@ -127,6 +134,7 @@ function reasonOf(
     note,
   });
   if (error === repliesOffNote) return pick("replies_off");
+  if (error === groupDeliveryText.botLeft) return pick("bot_left");
   if (error === expiredNote) return pick("expired");
   if (error === supersededNote) return pick("superseded");
   // 補送中（claimingNote）已在 deliveryState 先處理；其餘以 /進度 開頭的都是補送失敗（含 replyGaveUpNote）。
@@ -138,6 +146,7 @@ function reasonOf(
     );
     return pick("error", note ?? discordDeliveryNotes.unavailable);
   }
+  if (error === groupDeliveryText.quotaPriority) return pick("priority");
   if (error.startsWith(rateLimitedPrefix)) return pick("rate");
   if (
     error.startsWith(quotaShortPrefix) ||
@@ -175,6 +184,14 @@ export function deliveryState(
     if (!error) return { status: "sent", reason: null, note: "已送到群組" };
     return { status: "skipped", ...reasonOf(error, context.platform) };
   }
+  if (row.line_reply_policy === "manual")
+    return {
+      status: error === replyGaveUpNote ? "failed" : "pending",
+      reason: "reply_uncertain",
+      note: groupDeliveryText.replyUncertain,
+    };
+  if (row.line_reply_policy === "free" && error !== replyGaveUpNote)
+    return { status: "pending", reason: "priority", note: reasonNotes.priority };
   if (
     context.platform !== "discord" &&
     context.quotaBlocked &&
@@ -211,6 +228,7 @@ export const undelivered = (d: Delivery) =>
 
 /** 聊天室訊息旁的短標籤。 */
 export function deliveryLabel(d: Delivery) {
+  if (d.reason === "reply_uncertain") return groupDeliveryText.replyUncertainLabel;
   switch (d.status) {
     case "sent":
       return "已送出";
@@ -233,6 +251,8 @@ export function deliveryNotice(d: Delivery, kind?: string) {
   const subject = kind
     ? (deliverySubjects[kind] ?? groupKindLabels[kind] ?? text.generic)
     : text.generic;
+  if (d.reason === "reply_uncertain")
+    return `${subject}：${text.replyUncertain}。${d.status === "failed" ? text.forward : text.manualProgress}。`;
   // note 可能缺漏（舊資料或測試替身），缺值時不能讓整個看板崩潰。
   const explain = (
     status: string,
@@ -244,6 +264,7 @@ export function deliveryNotice(d: Delivery, kind?: string) {
       : `${subject}${status}。${action}。`;
   if (d.reason === "quota" || d.reason === "group_size")
     return explain(text.undelivered, d.note, text.tryProgress);
+  if (d.reason === "priority") return `${subject}${text.pending}。${d.note}。`;
   switch (d.status) {
     case "sent":
       return `${subject}${text.sent}。`;

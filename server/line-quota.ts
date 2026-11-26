@@ -8,6 +8,7 @@ import {
   LINE_QUOTA,
   expiredNote,
   isMonthlyLimit,
+  pushCost,
   quotaExhaustedDetail,
   quotaShortPrefix,
   quotaUsageOf,
@@ -29,6 +30,16 @@ import {
 export class LineQuotaExhausted extends Error {
   constructor() {
     super(quotaExhaustedDetail);
+  }
+}
+
+/** 補問、結案結果、待處理失敗與檢查異常優先使用群組額度。檢查異常的前綴由 notifyCheck 固定產生。 */
+export const importantLineGroupNotice = `(n.kind IN ('group_question','group_ready','group_merged','group_answered','group_failed','group_no_changes','group_closed','group_triage')
+  OR (n.kind='group_check' AND n.text LIKE '⚠️ %'))`;
+
+export class LinePushRejected extends Error {
+  constructor(readonly status: number) {
+    super(status === 429 ? "LINE 推播太頻繁，稍後會再送（429）" : `LINE 通知失敗（${status}）`);
   }
 }
 
@@ -56,7 +67,7 @@ export async function withLinePushLock<T>(db: Database, run: () => Promise<T>) {
 export async function pushLineMessage(
   access: string,
   to: string,
-  message: { type: "text"; text: string },
+  messages: { type: "text"; text: string }[],
   retryKey: string,
 ) {
   const response = await fetchLine("https://api.line.me/v2/bot/message/push", {
@@ -66,7 +77,7 @@ export async function pushLineMessage(
       "Content-Type": "application/json",
       "X-Line-Retry-Key": retryKey,
     },
-    body: JSON.stringify({ to, messages: [message] }),
+    body: JSON.stringify({ to, messages }),
     signal: AbortSignal.timeout(10000),
   });
   if (
@@ -79,11 +90,8 @@ export async function pushLineMessage(
   } | null;
   if (isMonthlyLimit(response.status, body?.message))
     throw new LineQuotaExhausted();
-  throw new Error(
-    response.status === 429
-      ? "LINE 推播太頻繁，稍後會再送（429）"
-      : `LINE 通知失敗（${response.status}）`,
-  );
+  if (response.status >= 400 && response.status < 500) throw new LinePushRejected(response.status);
+  throw new Error(`LINE 通知失敗（${response.status}）`);
 }
 
 export function recordLinePush(db: Database, error?: string) {
@@ -135,6 +143,11 @@ export async function markQuotaExhausted(
       : quotaExhaustedDetail,
     { trackOutage: true },
   );
+  // 額度封鎖後無法再向 LINE 確認先前中斷的批次，讓群組下一次的免費回覆能領取。
+  await db.query(
+    `UPDATE notifications n SET line_digest_id=NULL FROM groups g WHERE g.id=n.group_id AND g.platform='line'
+       AND n.sent_at IS NULL AND n.line_digest_id IS NOT NULL`,
+  );
 }
 
 /**
@@ -164,12 +177,15 @@ export async function groupMemberCount(
   groupId: string,
   access: string,
 ) {
-  const row = await db.one<{ member_count: number | null; fresh: boolean }>(
-    "SELECT member_count,COALESCE(member_count_at>now()-interval '24 hours',false) AS fresh FROM groups WHERE id=$1 AND platform='line'",
+  const row = await db.one<{ member_count: number | null; member_count_estimate: number | null; fresh: boolean }>(
+    "SELECT member_count,member_count_estimate,COALESCE(member_count_at>now()-interval '24 hours',false) AS fresh FROM groups WHERE id=$1 AND platform='line'",
     [groupId],
   );
-  if (!row) return null;
-  if (row.fresh) return row.member_count;
+  const cached = {
+    members: row?.member_count ?? null,
+    cost: pushCost(row?.member_count ?? null, row?.member_count_estimate),
+  };
+  if (!row || row.fresh) return cached;
   let count: number | null = null;
   try {
     const response = await fetch(
@@ -193,19 +209,18 @@ export async function groupMemberCount(
       "UPDATE groups SET member_count_at=now()-interval '23 hours' WHERE id=$1 AND platform='line'",
       [groupId],
     );
-    return row.member_count;
+    return cached;
   }
   await db.query(
-    "UPDATE groups SET member_count=$2,member_count_at=now() WHERE id=$1 AND platform='line'",
+    "UPDATE groups SET member_count=$2,member_count_estimate=NULL,member_count_at=now() WHERE id=$1 AND platform='line'",
     [groupId, count],
   );
-  return count;
+  return { members: count, cost: pushCost(count) };
 }
 
 /**
  * LINE 以每月上限拒絕某群組的推播，額度 API 卻顯示還剩 remaining 則：這個群組實際要的比 remaining 多
- * （人數讀不到，或 LINE 的用量統計有落差）。記下「至少 remaining+1 人」並視為剛更新，
- * 24 小時內不再對這個群組撞 429；額度變多（換月、升級方案）時自然又能送。
+ * （人數讀不到，或 LINE 的用量統計有落差）。用這個下限提高推播估值，實測人數留給人數 API 更新。
  */
 export async function markGroupTooLarge(
   db: Database,
@@ -213,8 +228,9 @@ export async function markGroupTooLarge(
   remaining: number,
 ) {
   await db.query(
-    "UPDATE groups SET member_count=GREATEST(COALESCE(member_count,0),$2),member_count_at=now() WHERE id=$1 AND platform='line'",
-    [groupId, remaining + 1],
+    `UPDATE groups SET member_count_estimate=GREATEST(COALESCE(member_count_estimate,0),$2)
+     WHERE id=$1 AND platform='line' AND (member_count IS NULL OR member_count<=$3)`,
+    [groupId, pushCost(null, remaining + 1), remaining],
   );
 }
 
@@ -255,7 +271,8 @@ export async function expireStaleNotifications(c: DbClient) {
     await c.query<{ group_id: string | null }>(
       `UPDATE notifications u SET sent_at=now(),last_error=$1
        FROM (SELECT n.id FROM notifications n LEFT JOIN tasks t ON t.id=n.task_id
-         WHERE n.sent_at IS NULL AND ${lineNotificationTarget} AND ${staleNotification} FOR UPDATE OF n SKIP LOCKED) s
+         WHERE n.sent_at IS NULL AND (n.group_id IS NULL OR n.line_digest_id IS NULL)
+           AND ${lineNotificationTarget} AND ${staleNotification} FOR UPDATE OF n SKIP LOCKED) s
        WHERE u.id=s.id RETURNING u.group_id`,
       [expiredNote],
     )
@@ -273,20 +290,19 @@ export async function expireStaleNotifications(c: DbClient) {
 }
 
 /**
- * 因剩餘額度不夠群組人數而略過（last_error 是 quotaShortForGroup）、現在不在 held 裡（額度夠了或人數未知，
- * 這輪會續送）的群組通知中，已過時的標成已過期。原因：這種略過不會進入 line_quota 封鎖，
+ * 群組恢復推播前，把因剩餘額度不夠群組人數而略過、現在已過時的通知標成已過期。原因：這種略過不會進入 line_quota 封鎖，
  * syncLineQuota 解除封鎖時的 expireStaleNotifications 管不到；不先清掉，換月後會把幾週前的說明推給整個群組。
- * 還在略過的群組（held）不動：那段期間成員仍可用 /進度（7 天內）取回。
+ * 其他群組仍可用 /進度（7 天內）取回。
  */
-export async function expireQuotaHeld(c: DbClient, held: string[]) {
+export async function expireQuotaHeld(c: DbClient, group: string) {
   await c.query(
     `UPDATE notifications u SET sent_at=now(),last_error=$1
      FROM (SELECT n.id FROM notifications n LEFT JOIN tasks t ON t.id=n.task_id
-       WHERE n.sent_at IS NULL AND n.group_id IS NOT NULL AND n.group_id<>ALL($2::text[])
+       WHERE n.sent_at IS NULL AND n.group_id=$2
          AND ${lineNotificationTarget} AND n.last_error LIKE $3||'%' AND ${staleNotification}
        FOR UPDATE OF n SKIP LOCKED) s
      WHERE u.id=s.id`,
-    [expiredNote, held, quotaShortPrefix],
+    [expiredNote, group, quotaShortPrefix],
   );
 }
 

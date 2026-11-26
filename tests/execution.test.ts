@@ -2892,6 +2892,24 @@ it("安裝錯誤只寫在 stdout 時，摘要仍有錯誤內容；完整輸出�
   );
   expect(retry.detail).toContain("error NU1101");
 });
+it("回答稽核寫入失敗時不發布本次答案", async () => {
+  const s = await queryScenario();
+  const audit = db.audit.bind(db);
+  const fault = vi.spyOn(db, "audit").mockImplementation(async (...args) => {
+    if (args[1] === "answered") throw new Error("示範回答稽核寫入失敗");
+    await audit(...args);
+  });
+  try {
+    await s.execution.execute(s.task.id);
+    const task = await db.one<Task>("SELECT status,answer,last_error FROM tasks WHERE id=$1", [s.task.id]);
+    expect(task.answer).toBeNull();
+    expect(task.last_error).toContain("示範回答稽核寫入失敗");
+    expect(task.status).not.toBe("answered");
+  } finally {
+    fault.mockRestore();
+  }
+});
+
 it("追問時提示帶入前面的問答（由舊到新），回答標明延續哪一題", async () => {
   const s = await queryScenario();
   const first = await db.one<{ id: string }>(

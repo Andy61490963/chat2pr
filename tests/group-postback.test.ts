@@ -200,11 +200,12 @@ describe("補問的常見答案按鈕", () => {
     await asking("query", []);
     const withSecret = await asking("query", ["沒有下載", fakeToken]);
     await new Line(db).flushNotifications();
-    expect(pushes).toHaveLength(2);
-    const plain = pushes.find((p) => !p.messages[0].quickReply)!;
-    expect(plain.messages[0].text).toContain("直接「回覆」這則訊息回答就可以");
-    const buttons = pushes.find((p) => p.messages[0].quickReply)!.messages[0]
-      .quickReply.items;
+    expect(pushes).toHaveLength(1);
+    expect(pushes[0].messages).toHaveLength(2);
+    const [plain, question] = pushes[0].messages;
+    expect(plain.quickReply).toBeUndefined();
+    expect(plain.text).toContain("直接「回覆」這則訊息回答就可以");
+    const buttons = question.quickReply.items;
     expect(buttons.map((b: any) => b.action.data)).toEqual([
       `answer:${withSecret.id}:${withSecret.version}:0`,
     ]);
@@ -462,10 +463,13 @@ describe("/任務 沒有建立新任務時回報群組", () => {
 
     // 推播送到群組，是純文字（不帶按鈕）。
     await new Line(db).flushNotifications();
-    expect(pushes.map((p) => p.to)).toEqual(Array(4).fill("group-a"));
-    expect(pushes[3].messages).toEqual([
-      { type: "text", text: triageIgnoredText },
-    ]);
+    expect(pushes.map((p) => p.to)).toEqual(["group-a"]);
+    expect(pushes[0].messages).toEqual([
+      triageDuplicateText("匯出少了訂單日期"),
+      triageRememberedText("報工相關需求都改測試專案"),
+      triageKnownMemoryText,
+      triageIgnoredText,
+    ].map((text) => ({ type: "text", text })));
   });
 
   it("記住的內容較長時只回前 100 字", async () => {

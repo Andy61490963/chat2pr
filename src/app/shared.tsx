@@ -525,6 +525,7 @@ export function StationTrack({
     | "mode"
     | "last_error"
     | "end_summary"
+    | "end_reason"
     | "updated_at"
     | "pr_number"
   >;
@@ -544,6 +545,12 @@ export function StationTrack({
         ? "cancel"
         : "other");
   const endCopy = taskEndLabels[endKind];
+  const duplicateAction =
+    endKind === "duplicate" && task.end_reason === "duplicate" &&
+    (status === "cancelled" || status === "rejected")
+      ? taskEndLabels.duplicate[status]
+      : null;
+  const reason = duplicateAction ? end?.reason?.replace(/^重複(?:；|$)/, "") : end?.reason;
   const completion =
     endKind === "other" && (status === "merged" || status === "answered")
       ? taskCompletionEvents[status]
@@ -600,14 +607,15 @@ export function StationTrack({
           <span className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">
             {ended ? (
               <>
-                {end?.actor &&
+                {!duplicateAction && end?.actor &&
                   // 英數字結尾的帳號和「於」之間留空格，避免黏在一起。
                   `${end.actor}${/[A-Za-z0-9]$/.test(end.actor) ? " " : ""}於 `}
                 <time dateTime={endAt}>
                   {labelled ? date(endAt) : endDay.format(new Date(endAt))}
                 </time>{" "}
-                {completion ?? endCopy.event}
-                {labelled && end?.reason && `，原因是${end.reason}`}
+                {duplicateAction && end?.actor && `${end.actor} `}
+                {duplicateAction ?? completion ?? endCopy.event}
+                {labelled && reason && `，原因是${reason}`}
               </>
             ) : at === undefined ? (
               position

@@ -48,7 +48,9 @@
 
 調整訂閱重試時，一起核對 `shared/upstream-failure.ts` 的可重試類別、訂閱代理的階段連敗上限與 `worker/provider.mjs` 的 CLI 重試設定。代理保留授權且 CLI 願意重送，工作才有機會恢復。只有下一次請求實際送往上游時才記重試事件，避免把最後一次失敗也算成重試。
 
-修改任務結束稽核的種類或文字格式時，同步更新 `server/task-end.ts` 的解析與 `tests/task-end.test.ts` 的樣本。若調整結束稽核的種類，也要同步更新 `server/schema.sql` 的 `audit_task_ending` 索引條件。看板依同一規則取得最新結束紀錄，才能讓任務列表與詳情顯示一致，又避免逐張查詢。
+新的執行事件顯示分類集中在 `shared/observation.ts` 的 `runEventKind`，讓看板的標籤與錯誤色使用相同判斷，並保留原始事件供查核。
+
+修改任務結束稽核的種類或文字格式時，同步更新 `server/task-end.ts` 的解析與 `tests/task-end.test.ts` 的樣本。若調整結束稽核的種類，也要同步更新 `server/schema.sql` 的 `audit_task_terminal` 索引條件。列表與詳情都依目前狀態找出造成結案的稽核。後續新訊息的 `duplicate` 判讀與來源撤回只留在時間軸，因重複而拒絕或取消的任務則以結案時寫入的 `end_reason` 為準。
 
 修改收集結果（`worker/trusted-changes.mjs` 的 `files`：path、base64 內容、mode）或 `runs.result` 的寫法時，同步核對 `server/execution.ts` 的接續點 `candidate`（`resumableCandidate`、`candidateKey`）與 `server/containers.ts` 的 `applyCandidate`，並跑 `tests/execution.test.ts` 的接續案例與 `tests/containers.test.ts` 的寫回案例。中斷後的下一次執行靠這份紀錄把修改寫回新副本、從測試與獨立審查接續（#241）；`runs.result` 存成 jsonb 後欄位順序會變，比對候選內容要逐欄比，不能直接比 JSON 字串。發布時 `runs.result` 會換成 PR 結果，查接續點時要把有 `prUrl`／`answer` 的執行也算成「最近一次」，否則會撿回更早、已被取代的候選。新增會判定候選不能用的檢查（驗證、複驗、機密、寫回）時，丟錯前先呼叫 `settle()`，再做暫停檢查或切換階段；否則剛好暫停或逾時，下一次重試會再接續同一份註定失敗的修改，重複消耗每日次數與審查額度。派工的基底也由這份接續點決定（#261）：有可接續的候選就用它的 `baseSha`，否則用目標分支（追加修改則是 PR）目前的 head；不要另加旗標或在別處沿用舊的 `tasks.base_sha`，否則修好目標分支後重試會一直卡在舊基底的驗證失敗。
 
@@ -106,6 +108,8 @@
 專案頁的分區與頁首可派工數量共用 `shared/project-setup.ts` 的 `projectListSections`。分區依已保存的驗證結果、啟用狀態與群組綁定判斷，驗證進度只影響卡片顯示，避免同一專案在驗證途中移動分區或使摘要數字變動。
 
 服務異常通知使用 `shared/service-health-text.ts` 的固定說明。新增錯誤對照時，在 `tests/health.test.ts` 補上探測原文及對應說明，避免把讀數裡的技術字串帶進鈴鐺或 LINE 私訊。恢復通知的去重鍵使用服務名稱與中斷起點，重試同一段中斷時沿用原鍵。
+
+`codex_probe_deferred` 只說明推論為何未確認，不是獨立的故障。新增類似的說明列時，同步核對系統頁、鈴鐺與部署冒煙查詢（`scripts/lib/smoke-health.sql`），避免直接把 `ok=false` 當成服務異常。
 
 設定頁「服務連線」以 `line_quota` 的封鎖狀態及已保存的額度錯誤判斷要顯示的推播說明。舊資料的「LINE 通知失敗（429）」也指向額度列。現行的「LINE 推播太頻繁」要保留獨立提示，因為短時間限流可稍後再試，與每月額度耗盡的處理方式不同。調整對照時同步更新 `tests/dashboard-status.test.ts`。
 
@@ -174,7 +178,7 @@ Discord 討論串共用父頻道的群組設定，但保存來源、判讀上下
 | 部署提醒排程工作已停用，改為直接啟動監督程序                  | 這次部署照常完成，但重開機後不會自動啟動；冒煙測試「開機自動啟動」會提醒。執行 `npm run install:startup` 修復（#250）。                              |
 | 看板「HTTPS 入口」短暫異常                                    | 通道狀態檔超過 180 秒沒更新就會顯示異常，說明寫「通道狀態檔已 N 分鐘沒有更新」；通道重新連線後會恢復。未滿 5 分鐘的中斷只記系統紀錄，不通知。          |
 | 系統頁「主機資源」顯示「已回升……穩定 5 分鐘後恢復派新工作」 | 記憶體暫停派工的穩定期（#243）；未滿 10 分鐘的暫停不通知。                                                                                            |
-| 群組回覆「收到」不計入 LINE 推播額度，其他群組回覆會計入      | 「收到」使用 reply token；其他是推播，依群組人數計算。                                                                                                |
+| LINE 即時回覆免費，同群一次推播按收件人數計費      | 同一個 reply token 只能使用一次。一次付費推播最多包含五個訊息物件。                                                                                                |
 | 儲存下載來源白名單時提示「暫時無法更新套件出口代理」          | 執行器沒回應，或 egress 還是 #18 以前的映像；設定已保存，部署（重建 egress）後下一次安裝前會自動同步。                                                |
 | 執行紀錄出現「下載來源白名單未能更新，沿用代理目前的清單」    | 同上；安裝照常進行，只是用代理原本的清單。                                                                                                            |
 | 設定頁「LINE 推播額度」異常、推播全部暫停，但「LINE」連線正常 | 本月推播額度用完（`service_health` 的 `line_quota`）。每小時查 LINE 的額度 API，有剩餘額度才自動解除；細節見 `docs/operations.md`「推播額度用完時」。 |
@@ -203,11 +207,11 @@ Discord 討論串共用父頻道的群組設定，但保存來源、判讀上下
   - 私訊摘要在呼叫 LINE 前保存批次識別碼，重試沿用相同的 LINE 重試鍵。用同一個鍵重送已收下的摘要時，LINE 回 409，系統仍視為送達，避免網路逾時造成重複推播。
   - 私訊摘要的 10 分鐘窗口從成功送出開始算。過期或留在看板的通知也可能有 `sent_at`，只有帶批次識別碼且沒有 `last_error` 的已送通知才能開啟窗口，避免略過的通知延後待確認私訊。
   - 服務異常的私訊判斷要核對同一次中斷的開始時間，且在滿 15 分鐘後還要有異常讀數，避免把新一輪異常或已恢復的短暫中斷當作長時間中斷。看板沿用原本的異常與恢復通知時機。
-  - 每送一則就在本地把用量加上人數（未知時 1）並寫回說明，不必每則都查額度 API；連線檢查每小時再以 LINE 的回報校正。
-  - 群組撞到 429 monthly limit 時先查額度 API：還剩 1 則以上只是不夠這個群組，本輪略過群組、私訊照送，並把這個群組記成「至少剩餘＋1 人」（`markGroupTooLarge`），24 小時內不再對它撞 429；剩 0 則、查不到或私訊也撞到才整個封鎖。
+  - 每批群組推播只計一次人數。重試保留初次請求的鍵，包括有成員通知過時或改走免費回覆的批次。收到 409 代表 LINE 已接受此鍵的請求。只有名單一致才能依原順序寫回訊息識別碼；縮批時只記送達。LINE 只顯示最後一則訊息的快速回覆按鈕，同批只能放一個帶按鈕的補問，且須放在末尾。[LINE 重試文件](https://developers.line.biz/en/docs/messaging-api/retrying-api-request/)
+  - 群組收到 429 monthly limit 時先查月額度。還有餘額時，個別群組保留原重試鍵，估算成本提高至至少「剩餘＋1」。這個下限獨立保存在 `member_count_estimate`，直到人數 API 成功回報。餘額為零、查不到餘額或私訊也撞到上限時，才封鎖整體推播。
   - 封鎖時要保留用量（`markQuotaExhausted` 沒給用量就沿用原說明解析出的），看板才顯示得出「本月已用 X／上限 Y」。
   - 因人數不夠而略過的群組通知，續送前要先跑 `expireQuotaHeld`（`last_error` 以 `quotaShortPrefix` 開頭、這輪不再略過的群組，過時的標成已過期）。原因：這種略過不會進入 `line_quota` 封鎖，`syncLineQuota` 解除封鎖時的 `expireStaleNotifications` 管不到；大群組可能被略過幾週，換月額度一恢復就會把舊說明推給整個群組。還在略過的群組不動，成員仍可用 `/進度` 取回 7 天內的回覆。
-- **群組人數 API（`/v2/bot/group/{id}/members/count`、聊天室用 `/v2/bot/room/{id}/members/count`）不計推播額度，但仍要快取 24 小時**：通知排程每 20 秒跑一輪，每輪都查會無謂地打 LINE；只有剩餘額度已知且有上限時才需要人數。
+- **群組人數快取 24 小時。** 即使尚未同步本月用量，群組推播也先向 LINE 查人數。群組和多人聊天室分別使用 `group` 與 `room` 的 `members/count`。查詢失敗就沿用快取，一小時後再查。沒有實測值時先以 8 人估算，若 LINE 已因剩餘則數不足拒收，則估值至少要高於該餘額。看板顯示相同估值。
 
 ## 7. AI 判讀與查詢的規則
 
@@ -231,8 +235,8 @@ Discord 討論串共用父頻道的群組設定，但保存來源、判讀上下
 - **回覆補問就是回答**：收訊時若引用的是本群組、目前版本的補問（`notifications.kind='group_question'`，`dedupe_key` 帶版本），直接以 `server/answers.ts` 的 `applyAnswer` 併進需求，不再進判讀、也不呼叫模型；舊版本的提問不會被套用。看板「送出回答」走同一個函式。
 - **追加修改接在同一個 PR**：修改任務有 `parent_id`、上一題 `status=ready` 且 PR 仍開著（同儲存庫、分支相同、目標分支相同）時，派工以 PR head 為 `base_sha`、沿用上一題的分支，發布改用 `GitHub.continuePr`（快轉分支、PR 說明附上追加段落）。上一題還在 queued／running／reviewing／budget_wait 時先不執行。重試時若分支是上一題的、但 PR 已不能接續，就停下來請人確認，避免把舊 PR 當成這次的結果。
 - **群組推播要記下 LINE 回傳的訊息 ID**（`sentMessages[0].id`）。少了它，成員引用機器人的回答時就認不出是哪一題。
-- **用 reply token 補送通知（`/進度`）也要寫回訊息 ID**：`Line.reply` 回傳每則的 `sentMessages[i].id`，呼叫端依陣列索引寫回對應通知的 `sent_message_id`。同一個 reply token 只能用一次，所有內容必須合併成一個最多 5 則的 `messages` 陣列，不能分兩次回。補送前在收訊交易內用 `claimPendingGroupReplies`（`FOR UPDATE OF n SKIP LOCKED` 並先設 `sent_at`）佔住，reply 失敗或逾時再把 `sent_at` 還原。原因：沒寫回 ID，補送的答案打「詳細」、補送的問題用「回覆」作答都接不上；不先佔住，`flushNotifications` 會在同一時間再推一次。
-- **`/進度` 佔住的通知要能自己回來、壞掉的那則要隔離**：佔住（收訊交易內）與寫回 reply 結果（交易提交後）之間程序可能中止，`flushNotifications` 每輪開頭以 `reclaimStaleClaims` 把停在 `claimingNote` 超過 2 分鐘、沒有 `sent_message_id` 的列放回待送（兩分鐘是尚未送出的領取期限。送出前須比對 PostgreSQL 保存的完整領取時間，並鎖住通知列直到寫回結果；回收與推播用 `SKIP LOCKED` 略過送出中的批次。額度暫停時也會回收，讓成員可再次取回）。reply 被 LINE 以內容問題拒收（`replyRejected`：4xx，但不含 429、401／403 與「reply token」失效）時這批 `reply_failures+1`，到 2 次就改寫 `replyGaveUpNote`、不再被 `retrievable` 取回；5xx、逾時、沒有權杖不加。原因：reply token 一次只能用一次、整批一起成敗，一則讓 LINE 一直回 400 的內容會讓整個群組的 `/進度` 永遠失敗；token 失效、限流則是換一個 token 就好，算進去會冤枉正常的通知。
+- **用 reply token 補送通知（`/進度`）也要寫回訊息 ID**：`Line.reply` 回傳每則的 `sentMessages[i].id`，呼叫端依陣列索引寫回對應通知的 `sent_message_id`。同一個 reply token 只能用一次，所有內容必須合併成一個最多 5 則的 `messages` 陣列，不能分兩次回。補送前在收訊交易內用 `claimPendingGroupReplies`（`FOR UPDATE OF n SKIP LOCKED` 並先設 `sent_at`）佔住，回覆未確認收件時再把 `sent_at` 還原。若連線尚未建立，排程仍可接手。若回覆逾時、中途斷線或收到 5xx，LINE 可能已經收件，須把 `line_reply_policy` 設為 `manual`，保留給成員用 `/進度` 取回。重要通知冷卻五分鐘後，群組再發言時可用新的免費回覆補送一次；領取時一併記錄次數，避免同時發言或重啟造成重複補送。確定未送出時，只退回本次自動補送領取的名額。同批未確認的重要回覆共用一筆管理者提醒，所有來源都無法再由 `/進度` 取回時解除。若仍無法確認，後續原本就要送出的回覆附上待確認筆數。原因：沒寫回 ID，補送的答案打「詳細」、補送的問題用「回覆」作答都接不上；不先佔住，`flushNotifications` 會在同一時間再推一次。
+- **`/進度` 佔住的通知要能自己回來、壞掉的那則要隔離**：佔住（收訊交易內）與寫回 reply 結果（交易提交後）之間程序可能中止，`flushNotifications` 每輪開頭以 `reclaimStaleClaims` 把停在 `claimingNote` 超過 2 分鐘、沒有 `sent_message_id` 的列放回待送（送出前核對 PostgreSQL 保存的完整領取時間並續領。先提交交易再呼叫 LINE，收到回應後只能結算同一次領取。這樣傳送時不用占住資料列鎖，舊回應也不會覆寫新的領取。額度暫停時也會回收，讓成員可再次取回）。reply 被 LINE 以內容問題拒收（`replyRejected`：4xx，但不含 429、401／403 與「reply token」失效）時這批 `reply_failures+1`，到 2 次就改寫 `replyGaveUpNote`、不再被 `retrievable` 取回；5xx、逾時、沒有權杖不加。原因：reply token 一次只能用一次、整批一起成敗，一則讓 LINE 一直回 400 的內容會讓整個群組的 `/進度` 永遠失敗；token 失效、限流則是換一個 token 就好，算進去會冤枉正常的通知。
 - **Discord 的 `/進度` 先提交領取交易，再送出摘要與通知**。補送時逐則核對領取時間，只鎖正在送出的通知列，寫回訊息識別碼後才標記同任務的舊通知已被取代。新通知已被領取時，另一個 `/進度` 和背景推播都要等補送結果，再決定是否送出同任務的舊通知。送出失敗就歸還尚未送達的通知，遇到 429 依 Discord 指定的等待時間延後，兩種失敗次數都維持原值。共用的 `reclaimStaleClaims` 會回收 LINE 和 Discord 已領取、逾時且沒有訊息識別碼的通知。原因是 Discord 送訊等待期間，同頻道收訊仍須能鎖住群組列，回收也須避開正在送出的通知。
 - **同一交易排入的通知 `created_at` 相同**（PostgreSQL 的 `now()` 是交易開始時間）：要挑「同一任務最新一則」時不能只比 `created_at`、`id`。例如 `approvalNotice` 的 `group_received` 和接著 `askInGroup` 的 `group_question` 同時間排入，`/進度` 以 `group_received` 排最後、再比時間與 `id`；標記較舊通知為已被取代時，也直接在 SQL 裡和佔住的列比較（含同一時間），不要把 `created_at` 傳回 JS 再比。原因：只比 `id`（隨機 UUID）時約一半機率挑到「收到」，補問被標成已被取代，群組再也拿不到要回答的問題；JS `Date` 只到毫秒，傳回資料庫比較會漏掉同一毫秒內的列。
 - **補問共用憑證判定。** 看板輸入、LINE 引用作答、常見答案的通知文字及按鈕，都以同一規則檢查。成員引用本群組可辨識的補問且回答含憑證格式時，只保存固定提示及已處理狀態，避免原文進入聊天紀錄、需求版本、稽核或後續判讀。這項檢查也適用於停用群組與過期補問。過期補問的普通文字仍依原有流程當作補充。

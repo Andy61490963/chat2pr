@@ -22,6 +22,7 @@ it.each(["all", "results"] as const)(
     );
     expect(result.replies).toBe(true);
     expect(result.text).toMatch(/收到.*1\/1.*進度/);
+    expect(result.text).toMatch(/發言.*重要/);
   },
 );
 it("離開的群組不列入回覆數", () => {

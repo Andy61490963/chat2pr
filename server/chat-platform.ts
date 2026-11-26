@@ -4,10 +4,12 @@ export type ChatReplyMessage =
   string | { text: string; quick?: ChatButton[] | null };
 
 export interface ChatReplyResult {
-  /** 依訊息順序回傳 ID，整批未送出時為 null。 */
+  /** 依訊息順序回傳 ID，未確認收件時為 null。 */
   ids: (string | null)[] | null;
   status: number | null;
   message?: unknown;
+  /** 平台可能已經收下這次回覆。 */
+  possiblyDelivered?: boolean;
 }
 
 export interface ChatPlatform {
