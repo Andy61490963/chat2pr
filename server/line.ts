@@ -286,7 +286,7 @@ export class Line {
               token: e.replyToken!,
               expiresAt,
               messages: [
-                progressSummary(tasks, total, replies.length),
+                progressSummary(tasks, total, replies.length, "群組", replies.some((r) => r.unconfirmed)),
                 ...notes,
               ],
               claim,
@@ -548,7 +548,7 @@ export class Line {
     }
     const unlisted = pending.remaining - pending.summaries.length;
     const more = pending.remaining
-      ? `\n\n其餘待送通知：\n${pending.summaries.join("\n")}${unlisted ? `\n另有 ${unlisted} 則未列出。` : ""}\n下次群組發言時會繼續補送，也可以輸入 /進度 取回待送的任務結果。`
+      ? `\n\n其餘待送通知：\n${pending.summaries.join("\n")}${unlisted ? `\n另有 ${unlisted} 則未列出。` : ""}\n可以輸入 /進度 取回待送的任務結果。`
       : "";
     const notices = pending.replies.map((notice, i) => {
       const suffix = i === pending.replies.length - 1 ? more : "";
@@ -607,7 +607,7 @@ export class Line {
   }
   /**
    * 核對領取時間後依回覆順序寫回訊息 ID，讓「詳細」、引用追問與作答能接續。
-   * 失敗或逾時就把佔住的列還原成未送出，下次 /進度 或正常推播可以再試。
+   * 未確認 LINE 是否收件時只開放手動 /進度 取回，以免自動重送。
    * LINE 以內容問題拒收（replyRejected）時，這批每則 reply_failures+1；到 REPLY_FAILURE_LIMIT 次就改寫成
    * replyGaveUpNote、不再被 /進度 取回，之後的 /進度 至少能回摘要。限流、5xx、逾時、沒有權杖不計。
    */
@@ -622,6 +622,7 @@ export class Line {
       const blamed = replyRejected(result.status, result.message) ? 1 : 0;
       await c.query(
         `UPDATE notifications SET sent_at=NULL,reply_failures=reply_failures+$3,
+           line_reply_policy=CASE WHEN $8 THEN 'manual' ELSE line_reply_policy END,
            last_error=CASE WHEN reply_failures+$3>=$4 THEN $5 ELSE $2 END
          WHERE id=ANY($1::uuid[]) AND sent_at=$6 AND last_error=$7 AND sent_message_id IS NULL`,
         [
@@ -632,13 +633,14 @@ export class Line {
           replyGaveUpNote,
           claim.claimedAt,
           claimingNote,
+          result.possiblyDelivered === true,
         ],
       );
       return;
     }
     for (const [i, id] of claim.ids.entries())
       await c.query(
-        "UPDATE notifications SET sent_message_id=$2,last_error=NULL WHERE id=$1 AND sent_at=$3 AND last_error=$4",
+        "UPDATE notifications SET sent_message_id=$2,last_error=NULL,line_reply_policy=NULL WHERE id=$1 AND sent_at=$3 AND last_error=$4",
         [id, ids[i + firstNotice] ?? null, claim.claimedAt, claimingNote],
       );
   }

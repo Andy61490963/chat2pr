@@ -139,6 +139,8 @@ ALTER TABLE notifications ADD COLUMN IF NOT EXISTS discord_thread_id text;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS discord_thread_id text;
 -- 私訊摘要先保存批次，再對 LINE 推播；重試同一批沿用同一個 LINE 重試鍵。
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_digest_id uuid;
+-- LINE 待送通知的免費回覆方式：free 可隨群組發言送出，manual 只在成員輸入 /進度 時取回。
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_reply_policy text CHECK (line_reply_policy IN ('free','manual'));
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_outage_started_at timestamptz;
 CREATE TABLE IF NOT EXISTS service_health (name text PRIMARY KEY, ok boolean NOT NULL, detail text NOT NULL, checked_at timestamptz NOT NULL DEFAULT now());
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS config_version integer NOT NULL DEFAULT 1;
@@ -488,6 +490,7 @@ ALTER TABLE groups ADD COLUMN IF NOT EXISTS name_synced_at timestamptz;
 -- 群組推播依人數計費：快取群組人數，判斷剩餘推播額度夠不夠送；24 小時更新一次，讀不到時為 NULL（未知）。
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS member_count integer;
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS member_count_at timestamptz;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS member_count_estimate integer;
 -- 查詢任務：只調查並回覆，不修改程式、不開 PR；調查結果存在 answer。
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS mode text NOT NULL DEFAULT 'change';
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS answer text;

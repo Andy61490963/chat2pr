@@ -147,6 +147,7 @@ export const group: DashboardGroup = {
   id: "group-demo",
   platform: "line",
   member_count: null,
+  member_count_estimate: null,
   name: "測試群組",
   project_ids: [project.id],
   enabled: true,

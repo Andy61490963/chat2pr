@@ -1,4 +1,5 @@
 import { splitQueryAnswer } from "../shared/query-answer.js";
+import { quotaShortPrefix } from "../shared/line-quota.js";
 /**
  * 回覆提出需求的群組。管理者私訊之外，群組成員也要知道需求收到了、結果是什麼。
  *
@@ -76,7 +77,7 @@ export async function notifyGroupDirect(
   );
 }
 
-/** 判讀沒有建立新任務時，回給用 /任務 提出的群組的說明（推播，不用 reply token）。 */
+/** 判讀沒有建立新任務時，回給用 /任務 提出的群組的說明。 */
 export const triageDuplicateText = (title: string) =>
   `這則和「${title}」是同一件事，已記在那題，處理完會一起回報，不用重新提出。`;
 /** 記住的內容回到群組前先遮罩憑證格式，並以字元（非 UTF-16 單位）截到 100 字，避免切壞表情符號。 */
@@ -173,6 +174,7 @@ export function progressSummary(
   pending: number,
   // Discord 的「群組」是頻道；用使用者看到的詞。
   place: "群組" | "頻道" | "討論串" = "群組",
+  hasUnconfirmedReply = false,
 ) {
   const lines = tasks.map(
     (t) =>
@@ -182,9 +184,8 @@ export function progressSummary(
   const head = tasks.length
     ? `這個${place}最近的需求（還沒結束或 7 天內有變動）：\n${lines.join("\n")}`
     : `這個${place}最近 7 天沒有需求。`;
-  return groupText(
-    `${head}\n\n${pending ? "下面是先前沒送到的回覆。" : "目前沒有待取回的結果。"}`,
-  );
+  if (hasUnconfirmedReply) return groupText(`${head}\n\n下面是這次取回的回覆，包含先前送達狀態未確認的訊息。`);
+  return groupText(`${head}\n\n${pending ? "下面是先前沒送到的回覆。" : "目前沒有待取回的結果。"}`);
 }
 export const progressMoreNote = (n: number) => `還有 ${n} 則，再輸入 /進度。`;
 
@@ -254,8 +255,8 @@ export async function reclaimStaleClaims(c: Queryable) {
  * - 本群組、未送出、7 天內；不看 attempts，推播失敗被放棄的正是要取回的。
  * - 排除很快就過時的 group_waiting；補問只取任務仍在等這一版回答的（與 answers.ts questionByQuote 相同）；
  *   group_received 只在仍待確認、group_failed 只在仍是失敗、group_resumed（自動接續）只在這個版本的接續還沒結束時才送。
- * - 排除 group_triage（判讀說明「和某題是同一件事」）：它掛在被重複的那題上，若算進「每個任務只取最新一則」，
- *   會把那題還在等回答的補問標成已被取代。
+ * - LINE 的指令判讀說明由 pendingFrom 另外取回。「和某題是同一件事」掛在被重複的那題上，
+ *   若算進「每個任務只取最新一則」，會把那題還在等回答的補問標成已被取代。
  * - 排除以 /進度 補送已被 LINE 拒收 REPLY_FAILURE_LIMIT 次的：reply token 一次只能用一次、整批一起成敗，
  *   一直取回同一則會讓這個群組的 /進度 永遠失敗。
  */
@@ -279,11 +280,18 @@ const newer = (a: string, b: string) =>
 // Discord 補送期間群組仍可執行 /進度，已佔住的新通知仍要擋住同任務的舊通知。
 const newestOfTask = `NOT EXISTS(SELECT 1 FROM notifications m WHERE m.task_id=n.task_id AND ${retrievable("m", true)} AND ${newer("m", "n")})`;
 const pendingFrom = (automatic: boolean) => `FROM notifications n LEFT JOIN tasks t ON t.id=n.task_id JOIN groups g ON g.id=n.group_id
-  WHERE g.platform=$2 AND (g.platform<>'line' OR n.line_digest_id IS NULL)
+  WHERE g.platform=$2 AND (g.platform<>'line' OR n.line_digest_id IS NULL
+    OR n.last_error LIKE '${quotaShortPrefix}%'
+    OR (n.line_reply_policy IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM notifications p WHERE p.line_digest_id=n.line_digest_id AND p.sent_at IS NULL
+        AND p.attempts<3 AND p.line_reply_policy IS NULL AND COALESCE(p.last_error,'') NOT LIKE '${quotaShortPrefix}%')))
+  AND (n.line_reply_policy IS DISTINCT FROM 'free' OR NOT (${staleNotification}))
+  ${automatic ? "AND n.line_reply_policy IS DISTINCT FROM 'manual'" : ""}
   AND ((${retrievable("n")} AND ${newestOfTask}) OR (
     g.platform='line' AND n.group_id=$1 AND n.sent_at IS NULL AND n.reply_failures<${REPLY_FAILURE_LIMIT}
     AND (n.task_id IS NULL OR t.group_id=$1) AND NOT (${staleNotification})
-    AND n.kind IN (${automatic ? "'group_check','group_waiting','group_triage'" : "'group_check'"})))
+    AND (n.kind IN ('group_check','group_triage') OR (n.kind='group_waiting'
+      AND ${automatic ? "true" : "n.line_reply_policy IS NOT NULL"}))))
   AND (g.platform<>'discord' OR (n.kind<>'group_received' AND
     (n.discord_retry_at IS NULL OR n.discord_retry_at<=now()) AND
     (CASE WHEN n.source_message_id IS NOT NULL THEN n.discord_thread_id ELSE t.discord_thread_id END)
@@ -305,10 +313,10 @@ export async function claimPendingGroupReplies(
   automatic?: "important" | "all",
 ) {
   const rows = (
-    await c.query<ClaimedReply & { kind: string }>(
-      `SELECT n.id,n.kind,n.text,n.quick_replies ${pendingFrom(!!automatic)}
+    await c.query<ClaimedReply & { kind: string; unconfirmed: boolean }>(
+      `SELECT n.id,n.kind,n.text,n.quick_replies,n.line_reply_policy IS NOT DISTINCT FROM 'manual' AS unconfirmed ${pendingFrom(!!automatic)}
        ${automatic ? `AND g.enabled AND g.left_at IS NULL AND g.reply_mode<>'off' AND ${groupRepliesOn}` : ""}
-       ${automatic === "important" ? `AND (${importantLineGroupNotice})` : ""}
+       ${automatic === "important" ? `AND (${importantLineGroupNotice} OR n.line_reply_policy='free')` : ""}
        ORDER BY ${automatic ? `(${importantLineGroupNotice}) DESC,` : ""} n.created_at,n.id FOR UPDATE OF n SKIP LOCKED`,
       [groupId, platform, claimingNote, threadId],
     )

@@ -67,12 +67,12 @@ export function lineQuotaLow(usage: { limit: number | null; used: number } | nul
   return usage.used * 5 >= threshold || (usage.used + cost) * 5 > threshold;
 }
 
-/**
- * 一則推播用掉幾則額度：群組推播依群組人數計費（人數未知時當 1），私訊（members 為 undefined）1 則。
- * 這也是「剩餘額度夠不夠送這則」的門檻。
- */
-export function pushCost(members?: number | null) {
-  return Math.max(1, members ?? 1);
+/** 查不到群組人數時，用同一個估值保留額度、估算用量並提示管理者。 */
+export const unknownGroupPushCost = 8;
+
+/** 群組按收件人數計費，私訊（未傳入人數）計一則。 */
+export function pushCost(members?: number | null, estimate?: number | null) {
+  return Math.max(members === null ? unknownGroupPushCost : (members ?? 1), estimate ?? 0, 1);
 }
 
 /** quotaShortForGroup 的開頭：額度恢復時用它找出「因額度不夠而略過」的通知，先清掉過時的再續送。 */

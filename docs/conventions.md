@@ -199,11 +199,11 @@ Discord 討論串共用父頻道的群組設定，但保存來源、判讀上下
   - 私訊摘要在呼叫 LINE 前保存批次識別碼，重試沿用相同的 LINE 重試鍵。用同一個鍵重送已收下的摘要時，LINE 回 409，系統仍視為送達，避免網路逾時造成重複推播。
   - 私訊摘要的 10 分鐘窗口從成功送出開始算。過期或留在看板的通知也可能有 `sent_at`，只有帶批次識別碼且沒有 `last_error` 的已送通知才能開啟窗口，避免略過的通知延後待確認私訊。
   - 服務異常的私訊判斷要核對同一次中斷的開始時間，且在滿 15 分鐘後還要有異常讀數，避免把新一輪異常或已恢復的短暫中斷當作長時間中斷。看板沿用原本的異常與恢復通知時機。
-  - 每批群組推播只累加一次人數（未知時 1）。保留批次的重試鍵，按 LINE 回傳順序將訊息識別碼寫回各自的通知，這樣引用答案和補問都能接回原任務。LINE 只顯示最後一則訊息的快速回覆按鈕，同批只能放一個帶按鈕的補問，且須放在末尾。
-  - 群組撞到 429 monthly limit 時先查額度 API：還剩 1 則以上只是不夠這個群組，本輪略過群組、私訊照送，並把這個群組記成「至少剩餘＋1 人」（`markGroupTooLarge`），24 小時內不再對它撞 429；剩 0 則、查不到或私訊也撞到才整個封鎖。
+  - 每批群組推播只計一次人數。重試保留初次請求的鍵，包括有成員通知過時或改走免費回覆的批次。收到 409 代表 LINE 已接受此鍵的請求。只有名單一致才能依原順序寫回訊息識別碼；縮批時只記送達。LINE 只顯示最後一則訊息的快速回覆按鈕，同批只能放一個帶按鈕的補問，且須放在末尾。[LINE 重試文件](https://developers.line.biz/en/docs/messaging-api/retrying-api-request/)
+  - 群組收到 429 monthly limit 時先查月額度。還有餘額時，個別群組保留原重試鍵，估算成本提高至至少「剩餘＋1」。這個下限獨立保存在 `member_count_estimate`，直到人數 API 成功回報。餘額為零、查不到餘額或私訊也撞到上限時，才封鎖整體推播。
   - 封鎖時要保留用量（`markQuotaExhausted` 沒給用量就沿用原說明解析出的），看板才顯示得出「本月已用 X／上限 Y」。
   - 因人數不夠而略過的群組通知，續送前要先跑 `expireQuotaHeld`（`last_error` 以 `quotaShortPrefix` 開頭、這輪不再略過的群組，過時的標成已過期）。原因：這種略過不會進入 `line_quota` 封鎖，`syncLineQuota` 解除封鎖時的 `expireStaleNotifications` 管不到；大群組可能被略過幾週，換月額度一恢復就會把舊說明推給整個群組。還在略過的群組不動，成員仍可用 `/進度` 取回 7 天內的回覆。
-- **群組人數 API（`/v2/bot/group/{id}/members/count`、聊天室用 `/v2/bot/room/{id}/members/count`）不計推播額度，但仍要快取 24 小時**：通知排程每 20 秒跑一輪，每輪都查會無謂地打 LINE；只有剩餘額度已知且有上限時才需要人數。
+- **群組人數快取 24 小時。** 即使尚未同步本月用量，群組推播也先向 LINE 查人數。群組和多人聊天室分別使用 `group` 與 `room` 的 `members/count`。查詢失敗就沿用快取，一小時後再查。沒有實測值時先以 8 人估算，若 LINE 已因剩餘則數不足拒收，則估值至少要高於該餘額。看板顯示相同估值。
 
 ## 7. AI 判讀與查詢的規則
 
@@ -227,7 +227,7 @@ Discord 討論串共用父頻道的群組設定，但保存來源、判讀上下
 - **回覆補問就是回答**：收訊時若引用的是本群組、目前版本的補問（`notifications.kind='group_question'`，`dedupe_key` 帶版本），直接以 `server/answers.ts` 的 `applyAnswer` 併進需求，不再進判讀、也不呼叫模型；舊版本的提問不會被套用。看板「送出回答」走同一個函式。
 - **追加修改接在同一個 PR**：修改任務有 `parent_id`、上一題 `status=ready` 且 PR 仍開著（同儲存庫、分支相同、目標分支相同）時，派工以 PR head 為 `base_sha`、沿用上一題的分支，發布改用 `GitHub.continuePr`（快轉分支、PR 說明附上追加段落）。上一題還在 queued／running／reviewing／budget_wait 時先不執行。重試時若分支是上一題的、但 PR 已不能接續，就停下來請人確認，避免把舊 PR 當成這次的結果。
 - **群組推播要記下 LINE 回傳的訊息 ID**（`sentMessages[0].id`）。少了它，成員引用機器人的回答時就認不出是哪一題。
-- **用 reply token 補送通知（`/進度`）也要寫回訊息 ID**：`Line.reply` 回傳每則的 `sentMessages[i].id`，呼叫端依陣列索引寫回對應通知的 `sent_message_id`。同一個 reply token 只能用一次，所有內容必須合併成一個最多 5 則的 `messages` 陣列，不能分兩次回。補送前在收訊交易內用 `claimPendingGroupReplies`（`FOR UPDATE OF n SKIP LOCKED` 並先設 `sent_at`）佔住，reply 失敗或逾時再把 `sent_at` 還原。原因：沒寫回 ID，補送的答案打「詳細」、補送的問題用「回覆」作答都接不上；不先佔住，`flushNotifications` 會在同一時間再推一次。
+- **用 reply token 補送通知（`/進度`）也要寫回訊息 ID**：`Line.reply` 回傳每則的 `sentMessages[i].id`，呼叫端依陣列索引寫回對應通知的 `sent_message_id`。同一個 reply token 只能用一次，所有內容必須合併成一個最多 5 則的 `messages` 陣列，不能分兩次回。補送前在收訊交易內用 `claimPendingGroupReplies`（`FOR UPDATE OF n SKIP LOCKED` 並先設 `sent_at`）佔住，回覆未確認收件時再把 `sent_at` 還原。若連線尚未建立，排程仍可接手。若回覆逾時、中途斷線或收到 5xx，LINE 可能已經收件，須把 `line_reply_policy` 設為 `manual`，只讓成員用 `/進度` 主動取回。這項限制在手動取回失敗後仍有效。原因：沒寫回 ID，補送的答案打「詳細」、補送的問題用「回覆」作答都接不上；不先佔住，`flushNotifications` 會在同一時間再推一次。
 - **`/進度` 佔住的通知要能自己回來、壞掉的那則要隔離**：佔住（收訊交易內）與寫回 reply 結果（交易提交後）之間程序可能中止，`flushNotifications` 每輪開頭以 `reclaimStaleClaims` 把停在 `claimingNote` 超過 2 分鐘、沒有 `sent_message_id` 的列放回待送（送出前核對 PostgreSQL 保存的完整領取時間並續領。先提交交易再呼叫 LINE，收到回應後只能結算同一次領取。這樣傳送時不用占住資料列鎖，舊回應也不會覆寫新的領取。額度暫停時也會回收，讓成員可再次取回）。reply 被 LINE 以內容問題拒收（`replyRejected`：4xx，但不含 429、401／403 與「reply token」失效）時這批 `reply_failures+1`，到 2 次就改寫 `replyGaveUpNote`、不再被 `retrievable` 取回；5xx、逾時、沒有權杖不加。原因：reply token 一次只能用一次、整批一起成敗，一則讓 LINE 一直回 400 的內容會讓整個群組的 `/進度` 永遠失敗；token 失效、限流則是換一個 token 就好，算進去會冤枉正常的通知。
 - **Discord 的 `/進度` 先提交領取交易，再送出摘要與通知**。補送時逐則核對領取時間，只鎖正在送出的通知列，寫回訊息識別碼後才標記同任務的舊通知已被取代。新通知已被領取時，另一個 `/進度` 和背景推播都要等補送結果，再決定是否送出同任務的舊通知。送出失敗就歸還尚未送達的通知，遇到 429 依 Discord 指定的等待時間延後，兩種失敗次數都維持原值。共用的 `reclaimStaleClaims` 會回收 LINE 和 Discord 已領取、逾時且沒有訊息識別碼的通知。原因是 Discord 送訊等待期間，同頻道收訊仍須能鎖住群組列，回收也須避開正在送出的通知。
 - **同一交易排入的通知 `created_at` 相同**（PostgreSQL 的 `now()` 是交易開始時間）：要挑「同一任務最新一則」時不能只比 `created_at`、`id`。例如 `approvalNotice` 的 `group_received` 和接著 `askInGroup` 的 `group_question` 同時間排入，`/進度` 以 `group_received` 排最後、再比時間與 `id`；標記較舊通知為已被取代時，也直接在 SQL 裡和佔住的列比較（含同一時間），不要把 `created_at` 傳回 JS 再比。原因：只比 `id`（隨機 UUID）時約一半機率挑到「收到」，補問被標成已被取代，群組再也拿不到要回答的問題；JS `Date` 只到毫秒，傳回資料庫比較會漏掉同一毫秒內的列。

@@ -4,7 +4,7 @@ import { Check, Copy, RefreshCw, Send } from "lucide-react";
 import type { NotificationFailures, Settings } from "../../shared/types.js";
 import { ConnectionSecrets } from "./connection-secrets";
 import { linePushService } from "../../shared/group-delivery.js";
-import { LINE_QUOTA, linePushPanel } from "../../shared/line-quota.js";
+import { LINE_QUOTA, linePushPanel, pushCost } from "../../shared/line-quota.js";
 import {
   lineGroupReserveLabel,
   linePrivateDefaults,
@@ -1049,6 +1049,10 @@ export function SettingsView({
     s.line_group_reserve_percent ??
     linePrivateDefaults.line_group_reserve_percent;
   const push = linePushPanel(state.health, failures, reserve);
+  const estimatedGroups = state.groups.filter((g) =>
+    g.platform === "line" && !g.left_at && g.reply_mode !== "off" &&
+    (g.member_count == null || (g.member_count_estimate ?? 0) > g.member_count)
+  );
   const [allServicesOpen, setAllServicesOpen] = useState(false);
   const serviceRows = services
     .filter((i) => !i.mode || i.mode === s.ai_mode)
@@ -1239,6 +1243,11 @@ export function SettingsView({
             {push.forecast && (
               <p className="text-sm text-muted-foreground">{push.forecast}</p>
             )}
+            {estimatedGroups.map((g) => (
+              <p key={g.id} className="break-words text-sm text-muted-foreground">
+                {g.name}目前人數未知，以 {pushCost(g.member_count ?? null, g.member_count_estimate)} 人估算每次推播用量。
+              </p>
+            ))}
             {push.notice && (s.admin_line_id || push.blocked) && (
               <p
                 role="status"

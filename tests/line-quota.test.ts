@@ -37,7 +37,7 @@ describe("LINE 查詢錯誤只留下安全訊息", () => {
       one: async () => ({ member_count: 7, fresh: false }),
       query,
     } as unknown as Database;
-    expect(await groupMemberCount(db, "group-demo", "虛構權杖")).toBe(7);
+    expect(await groupMemberCount(db, "group-demo", "ExampleToken")).toEqual({ members: 7, cost: 7 });
     expect(query).toHaveBeenCalledOnce();
     expect(query.mock.calls[0][1]).toEqual(["group-demo"]);
   });

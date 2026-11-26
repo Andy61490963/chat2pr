@@ -8,6 +8,7 @@ import {
   LINE_QUOTA,
   expiredNote,
   isMonthlyLimit,
+  pushCost,
   quotaExhaustedDetail,
   quotaShortPrefix,
   quotaUsageOf,
@@ -33,7 +34,7 @@ export class LineQuotaExhausted extends Error {
 }
 
 /** 補問、結案結果、待處理失敗與檢查異常優先使用群組額度。檢查異常的前綴由 notifyCheck 固定產生。 */
-export const importantLineGroupNotice = `(n.kind IN ('group_question','group_ready','group_merged','group_answered','group_failed','group_no_changes')
+export const importantLineGroupNotice = `(n.kind IN ('group_question','group_ready','group_merged','group_answered','group_failed','group_no_changes','group_closed','group_triage')
   OR (n.kind='group_check' AND n.text LIKE '⚠️ %'))`;
 
 export class LinePushRejected extends Error {
@@ -176,12 +177,15 @@ export async function groupMemberCount(
   groupId: string,
   access: string,
 ) {
-  const row = await db.one<{ member_count: number | null; fresh: boolean }>(
-    "SELECT member_count,COALESCE(member_count_at>now()-interval '24 hours',false) AS fresh FROM groups WHERE id=$1 AND platform='line'",
+  const row = await db.one<{ member_count: number | null; member_count_estimate: number | null; fresh: boolean }>(
+    "SELECT member_count,member_count_estimate,COALESCE(member_count_at>now()-interval '24 hours',false) AS fresh FROM groups WHERE id=$1 AND platform='line'",
     [groupId],
   );
-  if (!row) return null;
-  if (row.fresh) return row.member_count;
+  const cached = {
+    members: row?.member_count ?? null,
+    cost: pushCost(row?.member_count ?? null, row?.member_count_estimate),
+  };
+  if (!row || row.fresh) return cached;
   let count: number | null = null;
   try {
     const response = await fetch(
@@ -205,19 +209,18 @@ export async function groupMemberCount(
       "UPDATE groups SET member_count_at=now()-interval '23 hours' WHERE id=$1 AND platform='line'",
       [groupId],
     );
-    return row.member_count;
+    return cached;
   }
   await db.query(
-    "UPDATE groups SET member_count=$2,member_count_at=now() WHERE id=$1 AND platform='line'",
+    "UPDATE groups SET member_count=$2,member_count_estimate=NULL,member_count_at=now() WHERE id=$1 AND platform='line'",
     [groupId, count],
   );
-  return count;
+  return { members: count, cost: pushCost(count) };
 }
 
 /**
  * LINE 以每月上限拒絕某群組的推播，額度 API 卻顯示還剩 remaining 則：這個群組實際要的比 remaining 多
- * （人數讀不到，或 LINE 的用量統計有落差）。記下「至少 remaining+1 人」並視為剛更新，
- * 24 小時內不再對這個群組撞 429；額度變多（換月、升級方案）時自然又能送。
+ * （人數讀不到，或 LINE 的用量統計有落差）。用這個下限提高推播估值，實測人數留給人數 API 更新。
  */
 export async function markGroupTooLarge(
   db: Database,
@@ -225,8 +228,9 @@ export async function markGroupTooLarge(
   remaining: number,
 ) {
   await db.query(
-    "UPDATE groups SET member_count=GREATEST(COALESCE(member_count,0),$2),member_count_at=now() WHERE id=$1 AND platform='line'",
-    [groupId, remaining + 1],
+    `UPDATE groups SET member_count_estimate=GREATEST(COALESCE(member_count_estimate,0),$2)
+     WHERE id=$1 AND platform='line' AND (member_count IS NULL OR member_count<=$3)`,
+    [groupId, pushCost(null, remaining + 1), remaining],
   );
 }
 

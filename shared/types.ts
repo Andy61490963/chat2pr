@@ -153,6 +153,10 @@ export interface Group {
 }
 export interface DashboardGroup extends Group {
   created_at: string;
+  /** LINE 取得的群組人數，未知時以推播估值計算。 */
+  member_count?: number | null;
+  /** LINE 拒絕推播後依剩餘額度估計的成本，下次實測成功即清除。 */
+  member_count_estimate?: number | null;
   /** 近 30 天建立的修改需求與其中核准、拒絕的數量；舊伺服器沒有這個欄位。 */
   change_stats?: GroupChangeStats;
   /** 最近一則仍保留且未撤回的群組訊息收取時間。 */
