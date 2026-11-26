@@ -10,6 +10,7 @@ import { fetchLine } from "./line-http.js";
 import type { ChatReplyMessage, ChatReplyResult } from "./chat-platform.js";
 import { LineChatPlatform, lineReplyLimit } from "./line-platform.js";
 import { isProgressCommand, isTaskCommand } from "../shared/chat.js";
+import { queueUncertainReplyAlerts } from "./reply-uncertain.js";
 import { flushLineGroups } from "./line-group-push.js";
 import { flushLinePrivate } from "./line-private.js";
 import {
@@ -55,7 +56,6 @@ import {
   questionByQuote,
 } from "./answers.js";
 import {
-  importantLineGroupNotice,
   lineQuotaBlocked,
   lineQuotaUsage,
   markQuotaExhausted,
@@ -124,6 +124,7 @@ interface Ack {
   claim?: GroupReplyClaim;
 }
 export class Line {
+  private backfilledReplyAlerts = false;
   private readonly unusedReplies = new Map<string, { token: string; expiresAt: number }>();
 
   constructor(
@@ -634,15 +635,13 @@ export class Line {
     const { ids } = result;
     if (!ids) {
       const blamed = replyRejected(result.status, result.message) ? 1 : 0;
-      const { rows } = await c.query<{ id: string; task_id: string | null; group_name: string }>(
-        `WITH settled AS (UPDATE notifications SET sent_at=NULL,reply_failures=reply_failures+$3,
+      const { rows } = await c.query<{ id: string }>(
+        `UPDATE notifications SET sent_at=NULL,reply_failures=reply_failures+$3,
            line_reply_policy=CASE WHEN $8 THEN 'manual' ELSE line_reply_policy END,
            line_reply_uncertain_at=CASE WHEN $8 THEN now() ELSE line_reply_uncertain_at END,
            last_error=CASE WHEN reply_failures+$3>=$4 THEN $5 ELSE $2 END
          WHERE id=ANY($1::uuid[]) AND sent_at=$6 AND last_error=$7 AND sent_message_id IS NULL
-         RETURNING id,task_id,kind,text,group_id)
-         SELECT n.id,n.task_id,g.name AS group_name FROM settled n JOIN groups g ON g.id=n.group_id
-         WHERE $8 AND ${importantLineGroupNotice}`,
+         RETURNING id`,
         [
           claim.ids,
           replyFailedNote,
@@ -654,14 +653,7 @@ export class Line {
           result.possiblyDelivered === true,
         ],
       );
-      for (const notice of rows) {
-        const text = `LINE 未確認重要回覆是否送達「${redact(notice.group_name)}」。請到群組聊天室查看，必要時代為轉達。`;
-        await c.query(
-          `INSERT INTO notifications(task_id,kind,dedupe_key,text) VALUES($1,'reply_uncertain',$2,$3)
-           ON CONFLICT(dedupe_key) DO NOTHING`,
-          [notice.task_id, `reply_uncertain:${notice.id}`, text],
-        );
-      }
+      if (result.possiblyDelivered && rows.length) await queueUncertainReplyAlerts(c, rows.map((row) => row.id));
       return;
     }
     for (const [i, id] of claim.ids.entries())
@@ -747,6 +739,10 @@ export class Line {
   async flushNotifications() {
     // LINE 與 Discord 停在「補送中」且已逾時的通知都放回待送。LINE 額度用完時也要回收。
     await reclaimStaleClaims(this.db);
+    if (!this.backfilledReplyAlerts) {
+      await this.db.transaction((c) => queueUncertainReplyAlerts(c));
+      this.backfilledReplyAlerts = true;
+    }
     const discord = typeof this.discord === "function" ? this.discord() : this.discord;
     const results = await Promise.allSettled([
       withLinePushLock(this.db, async () => {
