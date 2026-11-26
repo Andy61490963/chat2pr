@@ -129,14 +129,14 @@ function fakeRequest(immediate: boolean) {
   return { req, stream, upgrade };
 }
 
-async function readWorkerLines(lines: string[]) {
+async function readStderrChunks(chunks: string[]) {
   const { c, runId, container } = fixture();
   const { stream } = fakeRequest(true);
   vi.spyOn(c, "finishContainer").mockResolvedValue();
   const observed = vi.fn();
   const rejected = vi.fn();
   vi.mocked(c.docker.modem.demuxStream).mockImplementation((_stream, _stdout, stderr) => {
-    for (const line of lines) stderr.write(`AGENTFLOW_EVENT ${line}\n`);
+    for (const chunk of chunks) stderr.write(chunk);
   });
   Object.assign(container, {
     wait: async () => {
@@ -150,7 +150,11 @@ async function readWorkerLines(lines: string[]) {
   });
   expect(result.exitCode).toBe(0);
   expect(observed.mock.calls.shift()).toEqual([{ kind: "container", containerId: container.id }]);
-  return { events: observed.mock.calls.map(([event]) => event), rejected: rejected.mock.calls };
+  return { events: observed.mock.calls.map(([event]) => event), rejected: rejected.mock.calls, stderr: result.stderr };
+}
+
+function readWorkerLines(lines: string[]) {
+  return readStderrChunks(lines.map((line) => `AGENTFLOW_EVENT ${line}\n`));
 }
 
 it("工作端七種事件經容器入口保留，包含未取得結束碼的指令與空白回覆", async () => {
@@ -213,6 +217,37 @@ it("容器拒收保留種類、未知種類及格式錯誤，通知只含固定�
     ["未知", "種類不符"], ["message", "欄位不符"], ["command_end", "欄位不符"], ["files", "欄位不符"],
     ["thread", "欄位不符"], ["thread", "欄位不符"], ["thread", "欄位不符"], ["未知", "無法解析"],
   ]);
+});
+
+it("分段接收含六千個跳脫字元的工作端訊息仍可還原原文", async () => {
+  const detail = "\u0001".repeat(6000);
+  const line = `AGENTFLOW_EVENT ${JSON.stringify({ kind: "message", detail })}\n`;
+  const result = await readStderrChunks([line.slice(0, 25000), line.slice(25000)]);
+  expect(result.events.map((event) => event.kind)).toEqual(["message"]);
+  expect(result.events[0].detail === detail).toBe(true);
+  expect(result.rejected).toEqual([]);
+  expect(result.stderr).toBe("");
+});
+
+it("過長的容器事件分段抵達只拒收一次，保留下一筆事件與一般錯誤", async () => {
+  const valid = { kind: "message", detail: "後續回覆" };
+  const result = await readStderrChunks([
+    'AGENTFLOW_EVENT {"detail":"',
+    "x".repeat(32 * 1024),
+    "x".repeat(32 * 1024),
+    "不應出現在紀錄的尾段",
+    `\nAGENTFLOW_EVENT ${JSON.stringify(valid)}\n範例診斷\n`,
+  ]);
+  expect(result.rejected).toEqual([["未知", "欄位不符"]]);
+  expect(result.events).toEqual([valid]);
+  expect(result.stderr).toBe("範例診斷\n");
+});
+
+it("容器事件在輸出結尾缺少完整 JSON 時只拒收一次", async () => {
+  const result = await readStderrChunks(['AGENTFLOW_EVENT {"detail":', '"未完成']);
+  expect(result.events).toEqual([]);
+  expect(result.rejected).toEqual([["未知", "無法解析"]]);
+  expect(result.stderr).toBe("");
 });
 
 it("連線整理的容器停用日誌驅動程式並保留即時附接輸出", async () => {
