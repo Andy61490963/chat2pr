@@ -1,8 +1,8 @@
 import { useId, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { ReviewItem } from "../../shared/review-queue.js";
-import { groupPlatformLabels } from "../../shared/status-glossary.js";
+import { pickListReviewId, type ReviewItem } from "../../shared/review-queue.js";
+import { groupPlatformLabels, inboxStatusLabels } from "../../shared/status-glossary.js";
 import type { Task } from "../../shared/types.js";
 import { ago, type Detail, type State } from "./shared";
 
@@ -52,6 +52,13 @@ function waitingLabel(since: string | null) {
   return relative === "剛剛" ? "剛開始等待" : `等了 ${relative.replace(/前$/, "")}`;
 }
 
+function openAction(status: string) {
+  if (status === inboxStatusLabels.answer) return "回答補問";
+  if (status === inboxStatusLabels.chooseProject) return "選專案";
+  if (status === inboxStatusLabels.fix(inboxStatusLabels.retry)) return "重試";
+  return "查看";
+}
+
 export function ReviewKeyboardHint() {
   return (
     <span className="ml-auto hidden text-xs text-muted-foreground lg:pointer-fine:inline [@media(any-pointer:coarse)]:hidden!">
@@ -80,31 +87,43 @@ export function ReviewQueue({
 }) {
   const queueId = useId();
   const tasks = new Map(state.tasks.map((task) => [task.id, task]));
+  const projects = new Map(state.projects.map((project) => [project.id, project.name]));
+  const riskyLists = new Set(state.pickLists?.filter((list) => list.items.some((entry) => entry.riskReasons?.length))
+    .map((list) => pickListReviewId(list.id)));
   const tabbable = selected ?? items[0]?.id;
   return (
     <div className="min-w-0">
       {batchControls}
       <ul role="list" aria-label="待決策佇列" className="work-ledger divide-y">
         {items.map((item, index) => {
-          const candidate = quickApproval(tasks.get(item.id), state, admin);
+          const task = tasks.get(item.id);
+          const candidate = quickApproval(task, state, admin);
           const approval = candidate && (!detail || detail.task.id !== item.id || matchesApproval(candidate, detail))
             ? candidate : null;
           const check = checkbox(item);
           const titleId = `${queueId}-title-${item.id}`;
+          const current = detail?.task.id === item.id ? detail.task : task;
+          const risky = Boolean(task?.risk_reasons?.length || task?.pending_paths?.length ||
+            current?.risk_reasons?.length || current?.pending_paths?.length || riskyLists.has(item.id));
+          const project = current?.project_id ? projects.get(current.project_id) : undefined;
+          const target = project && [project, current?.target_branch].filter(Boolean).join("／");
+          const source = [item.group, item.platform ? groupPlatformLabels[item.platform] : "平台未記錄", target].filter(Boolean).join(" ");
           return (
             <li key={item.id} className={cn(
-              "flex min-w-0 items-center pr-2",
+              "grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] grid-rows-[2.5rem_2.75rem] items-center py-1 pr-2 lg:grid-rows-[1.25rem_2rem] lg:py-1.5",
               selected === item.id && "bg-primary-soft shadow-[inset_3px_0_var(--primary)]",
-              !check && "pl-3",
             )}>
-              {check}
+              {check && <div className="z-1 col-start-1 row-start-1 lg:row-span-2">{check}</div>}
               <button
                 type="button"
                 data-review-row={item.id}
                 aria-current={selected === item.id ? "true" : undefined}
                 aria-keyshortcuts="j k ArrowUp ArrowDown Enter Alt+Enter"
                 tabIndex={tabbable === item.id ? 0 : -1}
-                className="grid min-h-11 min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-1.5 gap-y-1 rounded-sm py-2.5 pr-2 text-left outline-none hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-foreground"
+                className={cn(
+                  "col-span-full row-span-2 row-start-1 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-subgrid items-center gap-x-2 self-stretch rounded-sm pl-3 text-left outline-none hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-foreground",
+                  check && "lg:pl-11",
+                )}
                 onClick={() => choose(item.id, "click")}
                 onKeyDown={(event) => {
                   if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey ||
@@ -125,23 +144,21 @@ export function ReviewQueue({
                     ?.focus();
                 }}
               >
-                {/* 固定欄位：左欄標題與來源，右欄等待時間與狀態；讀屏順序維持標題、來源、狀態、等待時間。 */}
-                <span id={titleId} className="col-start-1 row-start-1 line-clamp-2 text-base leading-snug font-semibold [overflow-wrap:anywhere]">
+                <span id={titleId} title={item.title} className={cn(
+                  "col-span-full row-start-1 line-clamp-2 min-w-0 text-base leading-5 font-semibold [overflow-wrap:anywhere] lg:col-span-1 lg:block lg:truncate",
+                  check && "ml-8 lg:ml-0",
+                )}>
                   {item.title}
                 </span>
-                <span className="col-start-1 row-start-2 flex min-w-0 flex-wrap items-baseline gap-x-1.5 text-xs text-muted-foreground">
-                  <span className="max-w-full truncate">{item.group}</span>
-                  <span>{item.platform ? groupPlatformLabels[item.platform] : "平台未記錄"}</span>
-                  {approval && (
-                    <span className="basis-full font-medium text-foreground [overflow-wrap:anywhere]">
-                      {approval.projectName}／{approval.body.target_branch}
+                <span className="col-start-1 row-start-2 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground lg:col-span-full lg:mr-[4.5rem]">
+                  {risky && (
+                    <span className="shrink-0 rounded bg-warn-soft px-1 py-0.5 font-medium text-warn">
+                      {inboxStatusLabels.risk}
                     </span>
                   )}
+                  <span title={source} className="truncate">{source}</span>
                 </span>
-                <span data-review-status className="col-start-2 row-start-2 justify-self-end rounded-md border bg-card px-1.5 py-0.5 text-xs font-medium whitespace-nowrap">
-                  {item.status}
-                </span>
-                <span data-review-waiting className="col-start-2 row-start-1 justify-self-end text-xs whitespace-nowrap text-muted-foreground tabular-nums">
+                <span data-review-waiting className="col-start-2 row-start-2 mr-[4.5rem] justify-self-end text-xs whitespace-nowrap text-muted-foreground tabular-nums lg:row-start-1 lg:mr-0">
                   {waitingLabel(item.waitingSince)}
                 </span>
               </button>
@@ -149,10 +166,10 @@ export function ReviewQueue({
                 type="button" variant={approval ? "default" : "secondary"} size="sm"
                 aria-describedby={titleId}
                 disabled={busy || (!!approval && checking)}
-                className="min-h-11 w-[4.25rem] px-1 text-xs lg:min-h-8"
+                className="z-1 col-start-3 row-start-2 min-h-11 w-16 justify-self-end px-1 text-xs lg:min-h-8"
                 onClick={() => approval ? decide(approval) : choose(item.id, "click")}
               >
-                {approval ? "核准修改" : "開啟審核"}
+                {approval ? "核准修改" : openAction(item.status)}
               </Button>
             </li>
           );

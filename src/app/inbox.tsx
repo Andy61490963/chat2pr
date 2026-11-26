@@ -1,7 +1,6 @@
 import {
   groupPlatformLabels,
   inboxStatusLabels,
-  notificationLabels,
   taskListLabels,
   taskStatusFilterLabels,
   type EndReason,
@@ -60,8 +59,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
-  segmentedItemClass,
-  segmentedListClass,
   Tabs,
   TabsContent,
   TabsList,
@@ -432,43 +429,44 @@ export function InboxView({
       }}
       className="work-surface min-w-0 gap-3 md:gap-4"
     >
-      <div className="flex min-w-0 items-center justify-between gap-1 border-b sm:gap-3">
-        <TabsList aria-label="收件匣分類" className="h-auto min-w-0 justify-start gap-0 overflow-x-auto rounded-none bg-transparent p-0">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-0.5 border-b sm:gap-x-3">
+        <TabsList aria-label="收件匣分類" className="h-auto max-w-full flex-none justify-start gap-0 overflow-x-auto rounded-none bg-transparent p-0">
           {categories.map(({ value, label, count }) => (
             <TabsTrigger
               key={value}
               value={value}
-              className="min-h-11 flex-none gap-0.5 rounded-none border-0 border-b-2 border-transparent px-1 text-xs data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none sm:gap-1.5 sm:px-3 sm:text-sm dark:data-[state=active]:border-primary"
+              className="min-h-11 flex-none gap-0.5 rounded-none border-0 border-b-2 border-transparent px-0.5 text-xs data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none sm:gap-1.5 sm:px-3 sm:text-sm dark:data-[state=active]:border-primary"
             >
               {label}{" "}<span className="rounded bg-muted px-1 text-xs tabular-nums">{count}</span>
             </TabsTrigger>
           ))}
         </TabsList>
-        {activeTab === "decisions" && items.length > 0 && (
-          <div role="group" aria-label="待決策排序" className="shrink-0">
-            <select
-              aria-label="待決策排序"
-              className="min-h-11 rounded-md bg-transparent text-xs sm:hidden"
-              value={sort}
-              onChange={(event) => setSort(event.target.value === "newest" ? "newest" : "oldest")}
-            >
-              <option value="oldest">等最久</option>
-              <option value="newest">最新</option>
-            </select>
-            <div className={cn(segmentedListClass, "hidden sm:inline-flex")}>
-              {(["oldest", "newest"] as const).map((value) => (
-                <button
-                  key={value}
-                  type="button"
-                  aria-pressed={sort === value}
-                  data-state={sort === value ? "active" : "inactive"}
-                  className={cn(segmentedItemClass, "flex-none")}
-                  onClick={() => setSort(value)}
-                >
-                  {value === "oldest" ? "等最久" : "最新"}
-                </button>
-              ))}
-            </div>
+        {activeTab === "decisions" && (items.length > 0 || stuckTasks.length > 0) && (
+          <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-x-0.5 sm:gap-x-3">
+            {items.length > 0 && <ReviewKeyboardHint />}
+            {stuckTasks.length > 0 && (
+              <button
+                type="button"
+                title={`卡住的任務 ${stuckTasksTotal}`}
+                className={cn("inline-flex min-h-11 min-w-11 items-center justify-center gap-1 whitespace-nowrap rounded-sm text-xs font-medium hover:underline", batchFocus)}
+                onClick={() => stuckHeading.current?.focus()}
+              >
+                <CircleAlert aria-hidden="true" className="size-3.5 text-warn" />
+                <span className="sr-only sm:not-sr-only">卡住的任務</span>{" "}
+                <span className="tabular-nums">{stuckTasksTotal}</span>
+              </button>
+            )}
+            {items.length > 0 && (
+              <select
+                aria-label="待決策排序"
+                className={cn("min-h-11 min-w-11 rounded-md border border-input bg-background pl-0.5 text-xs text-foreground sm:px-1.5 lg:pointer-fine:min-h-8 [@media(any-pointer:coarse)]:min-h-11!", batchFocus)}
+                value={sort}
+                onChange={(event) => setSort(event.target.value === "newest" ? "newest" : "oldest")}
+              >
+                <option value="oldest">等最久</option>
+                <option value="newest">最新</option>
+              </select>
+            )}
           </div>
         )}
       </div>
@@ -480,28 +478,6 @@ export function InboxView({
         aria-label="待決策佇列"
         className={batchFocus}
       >
-        {(!clear || stuckTasks.length > 0) && (
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-x-3">
-            {!clear && (
-              <TaskSectionTitle id="inbox-todo" open={() => showTasks("todo")}>
-                {notificationLabels.action}
-              </TaskSectionTitle>
-            )}
-            <div className="ml-auto flex items-center gap-4">
-              {items.length > 0 && <ReviewKeyboardHint />}
-              {stuckTasks.length > 0 && (
-                <button
-                  type="button"
-                  className={cn("work-touch inline-flex items-center gap-2 text-sm underline underline-offset-4", batchFocus)}
-                  onClick={() => stuckHeading.current?.focus()}
-                >
-                  <CircleAlert aria-hidden="true" className="size-4 text-warn" />
-                  卡住的任務 <span className="tabular-nums">{stuckTasksTotal}</span>
-                </button>
-              )}
-            </div>
-          </div>
-        )}
         {activeTab === "decisions" && (!stuckTasks.length || items.length > 0 || confirmEnd) && <ReviewWorkbench
           items={items}
           sort={sort}

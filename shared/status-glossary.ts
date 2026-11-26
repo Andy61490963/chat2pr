@@ -177,6 +177,7 @@ export const inboxStatusLabels = {
   chooseProject: "等你決定：選專案",
   review: "等你決定：確認需求",
   approveChange: "等你核准修改",
+  risk: "有風險",
   chooseOption: "等你決定：選方案",
   chooseTasks: "等你決定：挑選任務",
   amend: "等你補充：修改需求",
