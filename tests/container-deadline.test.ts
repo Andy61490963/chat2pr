@@ -7,6 +7,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Containers } from "../server/containers.js";
 import { SourceCache } from "../server/source-cache.js";
 
+// @ts-expect-error 工作容器採用原生 ESM，無需 TypeScript 編譯。
+import { observeTurn } from "../worker/observe.mjs";
+
 vi.mock("node:http", async (original) => ({
   ...(await original<typeof import("node:http")>()),
   request: vi.fn(),
@@ -126,29 +129,14 @@ function fakeRequest(immediate: boolean) {
   return { req, stream, upgrade };
 }
 
-it("容器只回報工作端的七種事件，階段結束與其他執行器事件一律略過", async () => {
+async function readWorkerLines(lines: string[]) {
   const { c, runId, container } = fixture();
   const { stream } = fakeRequest(true);
   vi.spyOn(c, "finishContainer").mockResolvedValue();
   const observed = vi.fn();
-  const workerEvents = [
-    { kind: "thread", threadId: randomUUID() },
-    { kind: "usage", detail: '{"input_tokens":2,"output_tokens":1}' },
-    { kind: "error", detail: "範例錯誤" },
-    { kind: "command_start", detail: "範例命令" },
-    { kind: "command_end", detail: "範例命令完成", exitCode: 0 },
-    { kind: "message", detail: "範例回覆" },
-    { kind: "files", detail: "[]" },
-  ];
-  const otherKinds = [
-    "phase", "phase_end", "container", "observer_error", "observer_restored",
-    "truncated", "upstream_retry", "unknown",
-  ];
+  const rejected = vi.fn();
   vi.mocked(c.docker.modem.demuxStream).mockImplementation((_stream, _stdout, stderr) => {
-    for (const event of [...otherKinds.map((kind) => ({ kind })), ...workerEvents]) {
-      const input = event.kind === "message" ? { ...event, containerId: container.id, exitCode: 1 } : event;
-      stderr.write(`AGENTFLOW_EVENT ${JSON.stringify(input)}\n`);
-    }
+    for (const line of lines) stderr.write(`AGENTFLOW_EVENT ${line}\n`);
   });
   Object.assign(container, {
     wait: async () => {
@@ -157,12 +145,73 @@ it("容器只回報工作端的七種事件，階段結束與其他執行器事�
       return { StatusCode: 0 };
     },
   });
-
-  const result = await c.phase(runId, "fake", ["node"], "none", "{}", 1000, false, false, observed);
+  const result = await c.phase(runId, "fake", ["node"], "none", "{}", 1000, false, false, observed, {
+    onRejectedWorkerEvent: rejected,
+  });
   expect(result.exitCode).toBe(0);
-  expect(observed.mock.calls.map(([event]) => event)).toEqual([
-    { kind: "container", containerId: container.id },
-    ...workerEvents,
+  expect(observed.mock.calls.shift()).toEqual([{ kind: "container", containerId: container.id }]);
+  return { events: observed.mock.calls.map(([event]) => event), rejected: rejected.mock.calls };
+}
+
+it("工作端七種事件經容器入口保留，包含未取得結束碼的指令與空白回覆", async () => {
+  const command = { id: "item_0", type: "command_execution", command: "pwd", aggregated_output: "" };
+  const changes = [{ path: "example.txt", kind: "add" }];
+  const usage = { input_tokens: 12, cached_input_tokens: 0, output_tokens: 4 };
+  const events = [
+    { type: "thread.started", thread_id: "thread_example-01" },
+    { type: "turn.started" },
+    { type: "item.started", item: { ...command, status: "in_progress", exit_code: null } },
+    { type: "item.completed", item: { ...command, status: "failed", exit_code: null } },
+    { type: "item.started", item: { ...command, id: "item_1", status: "in_progress" } },
+    { type: "item.completed", item: { ...command, id: "item_1", status: "completed", exit_code: 0, aggregated_output: "/example" } },
+    { type: "item.completed", item: { id: "item_2", type: "file_change", changes, status: "completed" } },
+    { type: "item.completed", item: { id: "item_3", type: "agent_message", text: "" } },
+    { type: "item.completed", item: { id: "item_4", type: "error", message: "範例錯誤" } },
+    { type: "error", message: "" },
+    { type: "turn.completed", usage },
+  ];
+  const lines: string[] = [];
+  await observeTurn({ runStreamed: async () => ({ events }) }, "範例工作", {}, (event: unknown) => {
+    lines.push(JSON.stringify(event));
+  });
+  const result = await readWorkerLines(lines);
+  expect(result.events).toStrictEqual([
+    { kind: "thread", threadId: "thread_example-01" },
+    { kind: "command_start", detail: "pwd\n", exitCode: null },
+    { kind: "command_end", detail: "pwd\n", exitCode: null },
+    { kind: "command_start", detail: "pwd\n" },
+    { kind: "command_end", detail: "pwd\n/example", exitCode: 0 },
+    { kind: "files", detail: JSON.stringify(changes) },
+    { kind: "message", detail: "" },
+    { kind: "error", detail: "範例錯誤" },
+    { kind: "error", detail: "" },
+    { kind: "usage", detail: JSON.stringify(usage) },
+  ]);
+  expect(result.rejected).toEqual([]);
+});
+
+it("容器拒收保留種類、未知種類及格式錯誤，通知只含固定種類與原因", async () => {
+  const reserved = ["phase", "phase_end", "container", "observer_error", "observer_restored", "truncated", "upstream_retry"];
+  const invalid = [
+    { kind: "範例未知種類" },
+    { kind: "message", detail: "範例文字", exitCode: 1 },
+    { kind: "command_end", detail: "範例文字", exitCode: "失敗" },
+    { kind: "files" },
+    { kind: "thread", threadId: "" },
+    { kind: "thread", threadId: "範例\n識別碼" },
+    { kind: "thread", threadId: "x".repeat(2048) },
+  ];
+  const result = await readWorkerLines([
+    ...reserved.map((kind) => JSON.stringify({ kind })),
+    ...invalid.map((event) => JSON.stringify(event)),
+    "{",
+    JSON.stringify({ kind: "message", detail: "後續回覆" }),
+  ]);
+  expect(result.events).toEqual([{ kind: "message", detail: "後續回覆" }]);
+  expect(result.rejected).toEqual([
+    ...reserved.map(() => ["未知", "種類不符"]),
+    ["未知", "種類不符"], ["message", "欄位不符"], ["command_end", "欄位不符"], ["files", "欄位不符"],
+    ["thread", "欄位不符"], ["thread", "欄位不符"], ["thread", "欄位不符"], ["未知", "無法解析"],
   ]);
 });
 
