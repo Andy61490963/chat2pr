@@ -256,3 +256,20 @@ it("兩分鐘內已回答的補問不再推播舊問題與按鈕", async () => {
   expect(pushes).toHaveLength(1);
   expect(await db.one("SELECT last_error FROM notifications WHERE task_id=$1", [id])).toEqual({ last_error: "已過期，未補送" });
 });
+
+it("LINE 拒收含錯誤內容的整批時，分開送出正常答案，只讓壞訊息累計三次失敗", async () => {
+  const pushes = lineApi(async (body) => body.messages.some((m) => m.text === "錯誤內容")
+    ? Response.json({ message: "Invalid message" }, { status: 400 })
+    : Response.json({ sentMessages: body.messages.map((_, i) => ({ id: `Valid${i}` })) }));
+  const expected = ["第一題答案", "錯誤內容", "第三題答案", "第四題答案", "第五題答案"];
+  for (const text of expected) await notice("group_answered", text);
+  for (let i = 0; i < 10; i++) {
+    await flush();
+    await db.query("UPDATE notifications SET sent_at=now()-interval '2 minutes' WHERE sent_message_id IS NOT NULL");
+  }
+  expect(pushes[0].messages.map((m) => m.text)).toEqual(expected);
+  expect(await db.query("SELECT text FROM notifications WHERE sent_message_id IS NOT NULL ORDER BY created_at"))
+    .toEqual(expected.filter((text) => text !== "錯誤內容").map((text) => ({ text })));
+  expect(await db.one("SELECT sent_at,attempts FROM notifications WHERE text='錯誤內容'")).toEqual({ sent_at: null, attempts: 3 });
+  expect(pushes.filter((p) => p.messages.length === 1 && p.messages[0].text === "錯誤內容")).toHaveLength(3);
+});
