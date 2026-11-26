@@ -39,8 +39,8 @@ it("訂閱工作只帶階段能力，不需要或回傳主登入檔", () => {
   expect(options.config.model_providers.agentflow).toMatchObject({
     requires_openai_auth: false,
     supports_websockets: false,
-    request_max_retries: 0,
-    stream_max_retries: 0,
+    request_max_retries: 4,
+    stream_max_retries: 4,
   });
   expect(options.env).not.toHaveProperty("HTTPS_PROXY");
   expect(options.config.shell_environment_policy.set).not.toHaveProperty(
@@ -52,6 +52,15 @@ it("訂閱工作只帶階段能力，不需要或回傳主登入檔", () => {
   expect(() => providerOptions({ mode: "subscription" }, {})).toThrow(
     "有限推論授權",
   );
+});
+it("API 計費模式維持單次請求與串流，不啟用訂閱重試", () => {
+  const options = providerOptions({
+    mode: "api", token: "SyntheticPhase123", proxyUrl: "http://relay/v1",
+  }, {});
+  expect(options.config.model_providers.agentflow).toMatchObject({
+    request_max_retries: 0,
+    stream_max_retries: 0,
+  });
 });
 it("worker串流等待受當階段剩餘期限約束，不能默認五分鐘或超過30分鐘", () => {
   for (const [timeoutMs, expected] of [
