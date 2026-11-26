@@ -3,6 +3,7 @@ import { XIcon } from "lucide-react";
 import { Dialog as SheetPrimitive } from "radix-ui";
 import { cn } from "@/lib/utils";
 import { useDialogFocus } from "./use-dialog-focus";
+import { dialogOverlayClass } from "./dialog";
 
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
   return <SheetPrimitive.Root data-slot="sheet" {...props} />;
@@ -27,13 +28,13 @@ function SheetContent({
     <SheetPrimitive.Portal data-slot="sheet-portal">
       <SheetPrimitive.Overlay
         data-slot="sheet-overlay"
-        className="fixed inset-0 z-50 bg-black/50 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0"
+        className={dialogOverlayClass}
       />
       <SheetPrimitive.Content
         data-slot="sheet-content"
         {...focus}
         className={cn(
-          "fixed z-50 flex flex-col bg-popover text-popover-foreground shadow-raised [--surface:var(--popover)] transition ease-in-out data-[state=closed]:animate-out data-[state=closed]:duration-200 data-[state=open]:animate-in data-[state=open]:duration-300",
+          "fixed z-50 flex flex-col bg-popover text-popover-foreground shadow-raised surface-popover transition ease-in-out data-[state=closed]:animate-out data-[state=closed]:duration-200 data-[state=open]:animate-in data-[state=open]:duration-300",
           side === "right" &&
             "inset-y-0 right-0 h-full w-full border-l border-border-raised data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-xl",
           side === "left" &&

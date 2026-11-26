@@ -1,4 +1,14 @@
 import {
+  DataList,
+  DataListFrame,
+  DataListHeader,
+  EmptyState,
+  InlineNotice,
+  ListRow,
+  ListRowButton,
+  Toolbar,
+} from "@/components/ui/layout";
+import {
   groupLabels,
   groupPageText,
   groupPlatformLabels,
@@ -38,7 +48,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { type Request, type Run, type State, date, Empty } from "./shared";
+import { type Request, type Run, type State, date } from "./shared";
 import { pickSettings } from "./settings";
 import { ConfirmButton } from "./confirm";
 import { useGuard, useUnsaved } from "./unsaved";
@@ -125,7 +135,7 @@ function MemoryItem({
     return (
       <li>
         <form
-          className="grid gap-2 p-3 sm:grid-cols-[1fr_11rem_auto]"
+          className="grid gap-2 p-3 sm:grid-cols-form-action"
           onSubmit={(e) => {
             e.preventDefault();
             void run(async () => {
@@ -183,8 +193,8 @@ function MemoryItem({
   return (
     <li className="flex items-start gap-2 py-2.5 pr-1.5 pl-3">
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="text-sm [overflow-wrap:anywhere]">{m.content}</span>
-        <span className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+        <span className="text-sm wrap-anywhere">{m.content}</span>
+        <span className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs text-muted-foreground wrap-anywhere">
           <span className={m.source === "ai" ? "text-info" : undefined}>
             {memorySource[m.source] ?? "群組要求"}
           </span>
@@ -255,10 +265,10 @@ export function GroupsView({
   if (!state.groups.length)
     return (
       <Card>
-        <Empty icon={<MessageSquare />} title="還沒有群組">
+        <EmptyState icon={<MessageSquare />} title="還沒有群組">
           把機器人加入 LINE 群組或 Discord
           伺服器，再在群組或文字頻道傳一則訊息。
-        </Empty>
+        </EmptyState>
       </Card>
     );
   // 機器人已離開的群組放在頁尾，仍可查看紀錄。
@@ -273,7 +283,7 @@ export function GroupsView({
   const halted = states.filter((status) => status === "stopped").length;
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-3">
+      <Toolbar className="gap-3">
         <label htmlFor="group-platform" className="text-sm font-medium">
           聊天平台
         </label>
@@ -296,7 +306,7 @@ export function GroupsView({
             </SelectItem>
           </SelectContent>
         </Select>
-      </div>
+      </Toolbar>
       <p role="status" className="text-sm text-muted-foreground">
         共 {present.length} 個群組，{ready} 個{groupLabels.ready}
         {stuck > 0 && `，${stuck} 個${groupLabels.unbound}`}
@@ -308,15 +318,15 @@ export function GroupsView({
         </p>
       )}
       {matches.length === 0 && (
-        <Empty icon={<MessageSquare />} title="這個平台還沒有群組">
+        <EmptyState icon={<MessageSquare />} title="這個平台還沒有群組">
           把機器人加入群組或伺服器，並傳一則訊息。
-        </Empty>
+        </EmptyState>
       )}
       {present.length > 0 && (
         <GroupList groups={present} state={state} onOpen={setOpenId} />
       )}
       {departed.length > 0 && (
-        <details className="rounded-xl border bg-card px-4 text-card-foreground shadow-card">
+        <details className="rounded-md border bg-card px-4 text-card-foreground">
           <summary className="min-h-11 cursor-pointer py-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
             {groupPageText.departed(departed.length)}
           </summary>
@@ -350,7 +360,7 @@ export function GroupsView({
             }}
           >
             <SheetHeader>
-              <SheetTitle className="text-lg [overflow-wrap:anywhere]">
+              <SheetTitle className="text-lg wrap-anywhere">
                 {groupName(open)}
               </SheetTitle>
               <SheetDescription>
@@ -391,18 +401,15 @@ function GroupList({
 }) {
   return (
     <div className="@container">
-      <div className="@3xl:rounded-xl @3xl:border @3xl:bg-card @3xl:text-card-foreground @3xl:shadow-card">
-        <div
-          aria-hidden="true"
-          className="hidden grid-cols-[minmax(0,1.6fr)_8rem_minmax(0,2fr)_5rem_7rem] gap-4 border-b px-5 py-2.5 text-xs text-muted-foreground @3xl:grid"
-        >
+      <DataListFrame>
+        <DataListHeader columns="group">
           <span>群組</span>
           <span>觸發方式</span>
           <span>可修改的專案</span>
           <span>記憶</span>
           <span className="text-right">狀態</span>
-        </div>
-        <ul role="list" className="grid gap-3 @3xl:block @3xl:divide-y">
+        </DataListHeader>
+        <DataList variant="responsive" role="list">
           {groups.map((g) => {
             const projects = state.projects.filter((p) =>
               g.project_ids.includes(p.id),
@@ -411,17 +418,11 @@ function GroupList({
               (m) => m.group_id === g.id,
             ).length;
             return (
-              <li
-                key={g.id}
-                className="rounded-xl border bg-card text-card-foreground shadow-card @3xl:rounded-none @3xl:border-0 @3xl:shadow-none"
-              >
-                <button
-                  className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-2 rounded-[inherit] px-5 py-3 text-left transition-colors hover:bg-muted/40 @3xl:grid-cols-[minmax(0,1.6fr)_8rem_minmax(0,2fr)_5rem_7rem] @3xl:items-center"
-                  onClick={() => onOpen(g.id)}
-                >
+              <ListRow key={g.id} variant="responsive">
+                <ListRowButton columns="group" onClick={() => onOpen(g.id)}>
                   <span className="flex min-w-0 flex-col gap-1">
                     <span className="flex flex-wrap items-center gap-2 font-medium">
-                      <span className="[overflow-wrap:anywhere]">
+                      <span className="wrap-anywhere">
                         {groupName(g)}
                       </span>
                       <Badge variant="secondary">
@@ -461,7 +462,7 @@ function GroupList({
                   </span>
                   <span
                     className={cn(
-                      "col-span-2 text-sm [overflow-wrap:anywhere] @3xl:col-auto",
+                      "col-span-2 text-sm wrap-anywhere @3xl:col-auto",
                       !projects.length && "text-warn",
                     )}
                   >
@@ -480,12 +481,12 @@ function GroupList({
                     <span className="sr-only">狀態</span>
                     <GroupStatusBadge group={g} state={state} />
                   </span>
-                </button>
-              </li>
+                </ListRowButton>
+              </ListRow>
             );
           })}
-        </ul>
-      </div>
+        </DataList>
+      </DataListFrame>
     </div>
   );
 }
@@ -558,10 +559,10 @@ function GroupCard({
   return (
     <div className="flex flex-col gap-5">
       {g.left_at && (
-        <p className="rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">
+        <InlineNotice as="p" tone="danger" className="text-xs">
           機器人已在 {date(g.left_at)}{" "}
           離開這個群組，收不到新訊息。把機器人重新邀請進群組後，再回來這裡啟用。
-        </p>
+        </InlineNotice>
       )}
       <div className="flex items-center gap-3">
         <label className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -589,15 +590,15 @@ function GroupCard({
         </div>
       )}
       {g.enabled && !usable(g, state) && (
-        <p className="rounded-lg bg-warn-soft px-3 py-2 text-xs text-warn">
+        <InlineNotice as="p" tone="warn" className="text-xs">
           {noProjectHint}
-        </p>
+        </InlineNotice>
       )}
       {parked.length > 0 && (
-        <p className="rounded-lg bg-danger-soft px-3 py-2 text-xs text-danger">
+        <InlineNotice as="p" tone="danger" className="text-xs">
           專案{parked.map((p) => `「${p.name}」`).join("")}
           的儲存庫找不到，暫時從這個群組解除綁定；接回後會自動綁回來。
-        </p>
+        </InlineNotice>
       )}
       <div className="grid gap-2">
         <label className="text-sm font-medium" htmlFor={`mode-${g.id}`}>
@@ -654,11 +655,11 @@ function GroupCard({
           {g.trigger_mode === "auto" &&
             triggerMode === "auto" &&
             mostlyRejected(g.change_stats) && (
-              <p className="rounded-lg bg-warn-soft px-3 py-2 text-xs leading-relaxed text-warn">
+              <InlineNotice as="p" tone="warn" className="text-xs leading-relaxed">
                 {groupChangeStatsText.hint(
                   g.platform === "discord" ? "指令或提及機器人" : "指令與引用追問",
                 )}
-              </p>
+              </InlineNotice>
             )}
         </div>
       )}
@@ -728,7 +729,7 @@ function GroupCard({
         )}
       </div>
       {g.triage_error && (
-        <div className="flex flex-wrap items-center gap-2 rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">
+        <InlineNotice tone="danger" className="flex flex-wrap items-center gap-2">
           <AlertCircle className="size-4" />
           {g.triage_error}（已失敗 {g.triage_failures} 次）
           <Button
@@ -745,7 +746,7 @@ function GroupCard({
           >
             重新辨識
           </Button>
-        </div>
+        </InlineNotice>
       )}
       <div className="flex flex-col gap-2">
         <h3
@@ -786,7 +787,7 @@ function GroupCard({
           )}
         </div>
         {dirty && (dropsPending || bounced > 0) && (
-          <ul className="flex list-disc flex-col gap-1 rounded-lg bg-warn-soft py-2 pr-3 pl-7 text-xs text-warn">
+          <ul className="flex list-disc flex-col gap-1 rounded-md bg-warn-soft py-2 pr-3 pl-7 text-xs text-warn">
             {dropsPending && (
               <li>
                 這個群組有訊息還在等辨識；儲存後這些訊息不會被辨識成需求，需要的話請在群組重新提出。
@@ -867,7 +868,7 @@ function GroupCard({
           </label>
         </div>
         {memories.length ? (
-          <ul className="flex flex-col divide-y rounded-lg border">
+          <DataList variant="bordered">
             {memories.map((m) => (
               <MemoryItem
                 key={`${m.id}-${m.content}-${m.project_id}`}
@@ -879,12 +880,12 @@ function GroupCard({
                 request={request}
               />
             ))}
-          </ul>
+          </DataList>
         ) : (
           <p className="text-sm text-muted-foreground">還沒有記憶。</p>
         )}
         <form
-          className="grid gap-2 sm:grid-cols-[1fr_11rem_auto]"
+          className="grid gap-2 sm:grid-cols-form-action"
           onSubmit={(e) => {
             e.preventDefault();
             void run(async () => {

@@ -1,3 +1,4 @@
+import { Toolbar } from "@/components/ui/layout";
 import {
   Children,
   isValidElement,
@@ -33,8 +34,7 @@ function Diagram({ source }: { source: string }) {
   useEffect(() => {
     let active = true;
     const host = document.createElement("div");
-    host.style.cssText =
-      "position:fixed;left:-20000px;top:0;width:2400px;visibility:hidden";
+    host.className = "report-measure";
     document.body.append(host);
     setDrawing(null);
     setFailed(false);
@@ -88,7 +88,7 @@ function Diagram({ source }: { source: string }) {
     };
   }, [source, id]);
   const controls = (
-    <div className="flex flex-wrap gap-2">
+    <Toolbar>
       <Button
         size="xs"
         variant="outline"
@@ -109,27 +109,24 @@ function Diagram({ source }: { source: string }) {
         重設
       </Button>
       <span className="text-xs self-center">{Math.round(zoom * 100)}%</span>
-    </div>
+    </Toolbar>
   );
   const graphic = drawing && (
     <div
-      className="overflow-auto max-h-[70vh] bg-white p-3"
+      className="max-h-media overflow-auto bg-diagram p-3"
       tabIndex={0}
       aria-label="流程圖，可橫向捲動"
     >
       <img
         src={drawing.url}
         alt="簡易流程圖，說明請見下方文字"
-        style={{
-          width: drawing.width * zoom,
-          maxWidth: "none",
-          marginInline: "auto",
-        }}
+        className="mx-auto max-w-none"
+        style={{ width: drawing.width * zoom }}
       />
     </div>
   );
   return (
-    <div className="my-3 min-w-0 rounded-lg border p-3 space-y-3">
+    <div className="my-3 min-w-0 rounded-md border p-3 space-y-3">
       {failed ? (
         <div role="status">
           <p>流程圖無法顯示，請參考報告的文字說明。</p>
@@ -140,7 +137,7 @@ function Diagram({ source }: { source: string }) {
         </div>
       ) : drawing ? (
         <>
-          <div className="flex flex-wrap justify-between gap-2">
+          <Toolbar className="justify-between">
             {controls}
             <Button
               size="xs"
@@ -149,7 +146,7 @@ function Diagram({ source }: { source: string }) {
             >
               全螢幕
             </Button>
-          </div>
+          </Toolbar>
           <p className="text-xs text-muted-foreground">
             圖形可左右捲動，也可全螢幕查看。
           </p>
@@ -160,7 +157,7 @@ function Diagram({ source }: { source: string }) {
       )}
       <Dialog open={expanded} onOpenChange={setExpanded}>
         <DialogContent
-          className="w-[96vw] max-w-[96vw] sm:max-w-[96vw]"
+          className="w-media-dialog max-w-media-dialog sm:max-w-media-dialog"
           onEscapeKeyDown={(event) => {
             event.preventDefault();
             event.stopImmediatePropagation();
@@ -221,7 +218,7 @@ function Picture({
       <span className="block text-xs text-muted-foreground">{provenance}</span>
       <Dialog open={expanded} onOpenChange={setExpanded}>
         <DialogContent
-          className="w-[96vw] max-w-[96vw] sm:max-w-[96vw]"
+          className="w-media-dialog max-w-media-dialog sm:max-w-media-dialog"
           onEscapeKeyDown={(event) => {
             event.preventDefault();
             event.stopImmediatePropagation();
@@ -230,7 +227,7 @@ function Picture({
         >
           <DialogTitle>{image.caption}</DialogTitle>
           <DialogDescription>{provenance}</DialogDescription>
-          <div className="overflow-auto max-h-[75vh]">
+          <div className="overflow-auto max-h-media">
             <img
               className="mx-auto"
               src={url}
@@ -329,7 +326,7 @@ export function QueryReport({
     [taskId, available],
   );
   return (
-    <div className="query-report min-w-0 rounded-lg border bg-muted/20 px-4 py-3">
+    <div className="query-report min-w-0 rounded-md border bg-muted/20 px-4 py-3">
       <Markdown
         remarkPlugins={[remarkGfm, remarkReportSections]}
         skipHtml

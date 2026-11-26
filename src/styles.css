@@ -5,10 +5,8 @@
    一個畫面只有一個主要動作用實心強調色，其他動作用外框或文字按鈕。 */
 @custom-variant dark (&:is(.dark *));
 
-/* 三層表面：頁面（紙）→ 卡片 → 浮起（選單、對話框、側欄抽屜）。
-   淺色靠淡邊框加柔和陰影分層；深色靠表面亮度一層比一層亮，陰影只輔助浮起層。 */
+/* 頁面、清單與浮層各有表面色；平面用細邊框分隔，只有浮層投影。 */
 :root {
-  --radius: 0.5rem;
   --background: #f3f1eb;
   --foreground: #1b2220;
   --card: #fdfcf9;
@@ -17,7 +15,6 @@
   --muted-foreground: #55605d;
   --border: #e0dbd0;
   --border-raised: #cfc8ba;
-  --shadow-card-value: 0 1px 2px rgb(56 44 24 / 0.05), 0 1px 1px rgb(56 44 24 / 0.03);
   --shadow-raised-value: 0 12px 32px -8px rgb(40 30 14 / 0.2), 0 2px 6px rgb(40 30 14 / 0.08);
   --primary: #0b6d4b;
   --primary-hover: #095b3f;
@@ -43,7 +40,6 @@
   --muted-foreground: #a5b0ac;
   --border: #313937;
   --border-raised: #3d4744;
-  --shadow-card-value: 0 0 0 transparent;
   --shadow-raised-value: 0 16px 40px -12px rgb(0 0 0 / 0.7);
   --primary: #5cc79c;
   --primary-hover: #78d8b2;
@@ -82,6 +78,8 @@
   --brand-foreground: var(--foreground);
   --info: var(--muted-foreground);
   --info-soft: var(--muted);
+  --overlay: rgb(0 0 0 / 0.5);
+  --diagram: #fff;
 }
 
 @theme inline {
@@ -89,15 +87,35 @@
     "Noto Sans TC Variable", "Microsoft JhengHei", "PingFang TC", ui-sans-serif,
     system-ui, sans-serif;
   --font-numeric: "Inter Variable", var(--font-sans);
+  --spacing: 0.25rem;
+  --container-diagram-measure: 150rem;
+  --text-caption: 0.75rem;
   --text-xs: 0.8125rem;
-  --text-sm: 0.9375rem;
-  --text-base: 0.9375rem;
+  --text-sm: 0.875rem;
+  --text-base: 0.875rem;
   --text-lg: 1.125rem;
-  --text-2xl: 1.5rem;
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --text-xl: 1.25rem;
+  --text-2xl: 1.25rem;
+  --leading-heading: 1.3;
+  --leading-label: 1.4;
+  --leading-body: 1.5;
+  --text-caption--line-height: var(--leading-label);
+  --text-xs--line-height: var(--leading-label);
+  --text-sm--line-height: var(--leading-body);
+  --text-base--line-height: var(--leading-body);
+  --text-lg--line-height: var(--leading-heading);
+  --text-xl--line-height: var(--leading-heading);
+  --text-2xl--line-height: var(--leading-heading);
+  --radius-none: 0;
+  --radius-xs: 0.125rem;
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  /* 凍結頁面仍用舊尺寸，遷移期間也遵守六像素上限。 */
+  --radius-lg: var(--radius-md);
+  --radius-xl: var(--radius-md);
+  --radius-2xl: var(--radius-md);
+  --focus-width: 2px;
+  --focus-offset: 2px;
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -106,8 +124,10 @@
   --color-border-raised: var(--border-raised);
   --color-surface: var(--surface, var(--background));
   --color-primary-soft: var(--primary-soft);
-  --shadow-card: var(--shadow-card-value);
+  --shadow-card: none;
   --shadow-raised: var(--shadow-raised-value);
+  --color-overlay: var(--overlay);
+  --color-diagram: var(--diagram);
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-hover: var(--primary-hover);
@@ -154,7 +174,7 @@
     color-scheme: dark;
   }
   body {
-    @apply bg-background font-sans text-foreground antialiased;
+    @apply bg-background font-sans text-sm text-foreground antialiased;
   }
   svg.lucide {
     stroke-width: 1.75;
@@ -162,8 +182,69 @@
 }
 
 :focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
+  @apply focus-frame;
+}
+
+@utility focus-frame {
+  outline: var(--focus-width) solid var(--ring);
+  outline-offset: var(--focus-offset);
+}
+
+@utility grid-cols-action {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+@utility grid-cols-group {
+  grid-template-columns: minmax(0, 1.6fr) --spacing(32) minmax(0, 2fr) --spacing(20) --spacing(28);
+}
+@utility grid-cols-project {
+  grid-template-columns: minmax(0, 2fr) --spacing(24) minmax(0, 1.2fr) minmax(0, 1.2fr) --spacing(30);
+}
+@utility grid-cols-form-action {
+  grid-template-columns: minmax(0, 1fr) --spacing(40) auto;
+}
+@utility grid-cols-status-options {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, --spacing(32)), 1fr));
+}
+@utility grid-cols-task-tabs {
+  grid-template-columns: minmax(0, 1.6fr) repeat(2, minmax(0, 1fr));
+}
+@utility grid-cols-description {
+  grid-template-columns: max-content minmax(0, 1fr);
+}
+@utility grid-cols-description-pairs {
+  grid-template-columns: max-content minmax(0, max-content) max-content minmax(0, 1fr);
+}
+@utility max-w-overlay {
+  max-width: calc(100vw - --spacing(8));
+}
+@utility max-h-notifications {
+  max-height: min(--spacing(104), calc(var(--radix-dropdown-menu-content-available-height) - --spacing(20)));
+}
+@utility max-h-media {
+  max-height: 75vh;
+}
+@utility w-media-dialog {
+  width: 96vw;
+}
+@utility max-w-media-dialog {
+  max-width: 96vw;
+}
+@utility max-h-sheet {
+  max-height: 85dvh;
+}
+@utility pb-safe {
+  padding-bottom: max(--spacing(4), env(safe-area-inset-bottom));
+}
+@utility overflow-anchor-none {
+  overflow-anchor: none;
+}
+
+/* 站別點的中空底色跟著最近一層表面，包含透過 Portal 開啟的浮層。 */
+@utility surface-card {
+  --surface: var(--card);
+}
+@utility surface-popover {
+  --surface: var(--popover);
 }
 
 /* 數字（等待時間、筆數、額度、時間、金額）一律 tabular-nums：等寬字對齊欄位。 */
@@ -174,36 +255,32 @@
 /* 字級只有四級：頁面標題、區塊標題、內文（text-sm）、輔助文字（text-xs）。
    小標（heading-label）是輔助文字級的欄位名稱。 */
 @utility heading-page {
-  font-size: 1.5rem;
-  line-height: 1.3;
+  font-size: var(--text-xl);
+  line-height: var(--leading-heading);
   font-weight: 600;
   letter-spacing: -0.01em;
-  @media (width >= 48rem) {
-    font-size: 1.625rem;
-  }
 }
 
 @utility heading-section {
   font-size: var(--text-lg);
-  line-height: 1.4;
+  line-height: var(--leading-heading);
   font-weight: 600;
 }
 
 @utility heading-label {
   font-size: var(--text-xs);
-  line-height: 1.4;
+  line-height: var(--leading-label);
   font-weight: 500;
   color: var(--muted-foreground);
 }
 
-/* 卡片層：清單與卡片共用同一組背景、淡邊框、圓角與陰影。
+/* 清單與卡片共用同一組背景、淡邊框與圓角。
    --surface 讓裡面的元件（例如站別軌道的空心點）知道自己放在哪一層上。 */
 .work-ledger {
   --surface: var(--card);
   border: 1px solid var(--border);
-  border-radius: var(--radius-xl);
+  border-radius: var(--radius-md);
   background: var(--card);
-  box-shadow: var(--shadow-card-value);
 }
 
 /* 不裁切內容（審核面板的標頭要能黏在視窗頂端），改讓第一列與最後一列的底色跟著圓角。 */
@@ -220,9 +297,9 @@
 .work-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 0.5rem 1rem;
+  gap: --spacing(2) --spacing(4);
   width: 100%;
-  padding: 0.875rem 0.75rem;
+  padding: --spacing(3) --spacing(3);
   align-items: start;
   text-align: start;
   border-bottom: 1px solid var(--border);
@@ -238,14 +315,14 @@ button.work-row:hover {
 
 @media (min-width: 48rem) {
   .work-row {
-    grid-template-columns: minmax(0, 1fr) minmax(11rem, 30%);
+    grid-template-columns: minmax(0, 1fr) minmax(--spacing(44), 30%);
   }
 }
 
 .station-track {
   --station-color: var(--muted-foreground);
   display: grid;
-  gap: 0.375rem;
+  gap: --spacing(1.5);
   min-width: 0;
 }
 
@@ -261,7 +338,7 @@ button.work-row:hover {
 
 .station-rail {
   display: flex;
-  width: min(100%, 11rem);
+  width: min(100%, --spacing(44));
   min-width: 0;
 }
 
@@ -277,13 +354,13 @@ button.work-row:hover {
   grid-template-columns: minmax(0, 1fr);
   justify-items: center;
   align-content: start;
-  gap: 0.375rem;
+  gap: --spacing(1.5);
   text-align: center;
 }
 
 .station:not(:first-child)::before {
   position: absolute;
-  top: 5px;
+  top: calc((--spacing(3) - 1px) / 2);
   right: 50%;
   width: 100%;
   border-top: 1px solid var(--muted-foreground);
@@ -292,10 +369,10 @@ button.work-row:hover {
 
 .station-dot {
   z-index: 0;
-  width: 12px;
-  height: 12px;
+  width: --spacing(3);
+  height: --spacing(3);
   border: 1px solid var(--muted-foreground);
-  border-radius: 50%;
+  border-radius: var(--radius-md);
   background: var(--surface, var(--background));
 }
 
@@ -326,13 +403,13 @@ button.work-row:hover {
 .work-surface [data-slot="tabs-trigger"][data-state="active"] {
   background: var(--muted);
   border-color: transparent transparent var(--foreground);
-  border-radius: 4px 4px 0 0;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   box-shadow: none;
   font-weight: 600;
 }
 
 .work-surface [data-slot="tabs-trigger"]:focus-visible {
-  outline-offset: -2px;
+  outline-offset: calc(-1 * var(--focus-offset));
 }
 
 @media (max-width: 47.99rem) {
@@ -346,13 +423,13 @@ button.work-row:hover {
   [data-slot="tabs-trigger"],
   [data-slot="dropdown-menu-item"],
   .work-touch {
-    min-width: 44px;
-    min-height: 44px;
+    min-width: --spacing(11);
+    min-height: --spacing(11);
   }
 
   .work-surface [data-slot="tabs-list"] {
     height: auto;
-    min-height: 50px;
+    min-height: --spacing(12);
   }
 }
 

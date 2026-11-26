@@ -1,3 +1,4 @@
+import { InlineNotice } from "@/components/ui/layout";
 import { useCallback, useEffect, useState } from "react";
 import type { CheckEnvironmentPolicy } from "../../shared/check-environment";
 import { Button } from "@/components/ui/button";
@@ -74,17 +75,14 @@ export function CheckEnvironmentCard({
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {error && (
-          <p
-            role="alert"
-            className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
-          >
+          <InlineNotice as="p" tone="danger" role="alert">
             {error}
-          </p>
+          </InlineNotice>
         )}
         {note && (
-          <p role="status" className="rounded-lg bg-muted px-3 py-2 text-sm">
+          <InlineNotice as="p" tone="muted" role="status">
             {note}
-          </p>
+          </InlineNotice>
         )}
         {data && (
           <form

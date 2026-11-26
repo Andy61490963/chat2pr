@@ -1,3 +1,4 @@
+import { DataList, ListRow, SectionHeader } from "@/components/ui/layout";
 import type { Memory } from "../../shared/types.js";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -43,7 +44,7 @@ export function MemoryOverview({
         </CardDescription>
       </CardHeader>
       <CardContent className="flex flex-col gap-5">
-        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border bg-border sm:grid-cols-4">
+        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border bg-border sm:grid-cols-4">
           {[
             ["群組記憶", state.memories.length],
             ["AI 自動記住", bySource("ai")],
@@ -59,22 +60,25 @@ export function MemoryOverview({
           ))}
         </div>
         <section aria-labelledby="recent-group-memory-title" className="flex flex-col gap-2">
-          <div className="flex items-center justify-between">
-            <h3 id="recent-group-memory-title" className="text-xs font-medium text-muted-foreground">
-              最近新增的群組記憶
-            </h3>
-            <Button variant="link" size="sm" className="min-h-11" onClick={() => go("groups")}>
-              選擇要編輯的群組
-            </Button>
-          </div>
+          <SectionHeader
+            as="h3"
+            id="recent-group-memory-title"
+            action={
+              <Button variant="link" size="sm" className="min-h-11" onClick={() => go("groups")}>
+                選擇要編輯的群組
+              </Button>
+            }
+          >
+            最近新增的群組記憶
+          </SectionHeader>
           {recent.length ? (
-            <ul className="divide-y rounded-lg border">
+            <DataList variant="bordered">
               {recent.map((m) => (
-                <li key={m.id} className="flex flex-col gap-0.5 px-3 py-2.5">
-                  <span className="text-sm [overflow-wrap:anywhere]">
+                <ListRow key={m.id} className="flex flex-col gap-0.5">
+                  <span className="text-sm wrap-anywhere">
                     {m.content}
                   </span>
-                  <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                  <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs text-muted-foreground wrap-anywhere">
                     <span>
                       {state.groups.find((g) => g.id === m.group_id)?.name ??
                         "群組"}
@@ -98,34 +102,36 @@ export function MemoryOverview({
                         </span>
                       )}
                   </div>
-                </li>
+                </ListRow>
               ))}
-            </ul>
+            </DataList>
           ) : (
             <p className="text-sm text-muted-foreground">還沒有群組記憶。</p>
           )}
         </section>
         <section className="flex flex-col gap-2">
-          <div className="flex items-center justify-between">
-            <h3 className="text-xs font-medium text-muted-foreground">
-              專案記憶
-            </h3>
-            <Button variant="link" size="sm" onClick={() => go("projects")}>
-              到專案管理
-            </Button>
-          </div>
+          <SectionHeader
+            as="h3"
+            action={
+              <Button variant="link" size="sm" onClick={() => go("projects")}>
+                到專案管理
+              </Button>
+            }
+          >
+            專案記憶
+          </SectionHeader>
           {state.knowledge.length ? (
-            <ul className="divide-y rounded-lg border">
+            <DataList variant="bordered">
               {state.knowledge.map((k) => (
-                <li
+                <ListRow
                   key={k.id}
-                  className="flex items-center gap-3 px-3 py-2.5 text-sm"
+                  className="flex items-center gap-3 text-sm"
                 >
                   <span className="flex min-w-0 flex-1 flex-col">
-                    <span className="[overflow-wrap:anywhere]">
+                    <span className="wrap-anywhere">
                       {k.content}
                     </span>
-                    <span className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                    <span className="flex flex-wrap items-baseline gap-x-3 gap-y-1 text-xs text-muted-foreground wrap-anywhere">
                       <span>
                         {state.projects.find((p) => p.id === k.project_id)
                           ?.name ?? "專案"}
@@ -136,9 +142,9 @@ export function MemoryOverview({
                   <Badge variant={k.status === "merged" ? "good" : "secondary"}>
                     {knowledgeStatus[k.status]}
                   </Badge>
-                </li>
+                </ListRow>
               ))}
-            </ul>
+            </DataList>
           ) : (
             <p className="text-sm text-muted-foreground">還沒有專案記憶。</p>
           )}

@@ -1,3 +1,5 @@
+import { EmptyState, InlineNotice, Toolbar } from "@/components/ui/layout";
+import { NativeSelect } from "@/components/ui/select";
 import {
   useCallback,
   useEffect,
@@ -51,10 +53,10 @@ type Trial = {
 };
 const trialLabel = { ok: "正常", alert: "異常", error: "執行失敗" };
 const trialTone = {
-  ok: "bg-good-soft text-good",
-  alert: "bg-danger-soft text-danger",
-  error: "bg-warn-soft text-warn",
-};
+  ok: "good",
+  alert: "danger",
+  error: "warn",
+} as const;
 type Note = { text: string; tone: "info" | "error" };
 
 const hhmm = (v: string) =>
@@ -125,7 +127,7 @@ function RecentRuns({ runs }: { runs: CheckRunView[] }) {
                 role="img"
                 aria-label={`${date(r.started_at)} ${trialLabel[r.outcome]}`}
                 title={`${date(r.started_at)} ${trialLabel[r.outcome]}`}
-                className={`block size-3 rounded-full ${dotTone[r.outcome]}`}
+                className={`block size-3 rounded-sm ${dotTone[r.outcome]}`}
               />
             </li>
           ))}
@@ -135,7 +137,7 @@ function RecentRuns({ runs }: { runs: CheckRunView[] }) {
         {shown.map((r) => (
           <li
             key={r.id}
-            className={`flex flex-wrap gap-x-3 gap-y-1 [overflow-wrap:anywhere] ${runTone[r.outcome]}`}
+            className={`flex flex-wrap gap-x-3 gap-y-1 wrap-anywhere ${runTone[r.outcome]}`}
           >
             <time className="tabular-nums" dateTime={r.started_at}>
               {date(r.started_at)}
@@ -284,8 +286,6 @@ const toBody = (d: Draft) => ({
   investigate: d.investigate,
 });
 
-const field = "rounded-md border bg-background px-2 py-1.5 text-sm";
-
 /**
  * 新增或修改表單。由父層以檢查 id 當 key：換成另一個檢查時重新掛載、欄位換成該檢查的內容；
  * 有未存修改時向 useUnsaved 回報，切換或取消前由父層先詢問。
@@ -351,7 +351,7 @@ function CheckForm({
       }}
     >
       <div className="grid gap-3 sm:grid-cols-2">
-        <Label className="flex flex-col gap-1">
+        <Label layout="stacked">
           名稱
           <Input
             value={d.name}
@@ -360,10 +360,9 @@ function CheckForm({
             placeholder="機台狀態回報是否中斷"
           />
         </Label>
-        <Label className="flex flex-col gap-1">
+        <Label layout="stacked">
           通知群組
-          <select
-            className={field}
+          <NativeSelect
             value={d.group_id}
             onChange={(e) => set("group_id", e.target.value)}
           >
@@ -373,24 +372,22 @@ function CheckForm({
                 {g.name}
               </option>
             ))}
-          </select>
+          </NativeSelect>
         </Label>
-        <Label className="flex flex-col gap-1">
+        <Label layout="stacked">
           檢查方式
-          <select
-            className={field}
+          <NativeSelect
             value={d.kind}
             onChange={(e) => set("kind", e.target.value as Draft["kind"])}
           >
             <option value="sql">SQL 唯讀查詢（使用專案登記的資料庫）</option>
             <option value="http">HTTP 健康檢查</option>
             <option value="tcp">TCP 連線</option>
-          </select>
+          </NativeSelect>
         </Label>
-        <Label className="flex flex-col gap-1">
+        <Label layout="stacked">
           專案{d.kind === "sql" ? "（必填）" : "（選填，用於異常時請 AI 調查）"}
-          <select
-            className={field}
+          <NativeSelect
             value={d.project_id}
             onChange={(e) => set("project_id", e.target.value)}
           >
@@ -401,7 +398,7 @@ function CheckForm({
                 {noConnection(p.id) ? "（未登記資料庫連線）" : ""}
               </option>
             ))}
-          </select>
+          </NativeSelect>
           {d.project_id && noConnection(d.project_id) && (
             <span className="text-xs font-normal text-danger">
               這個專案還沒有登記資料庫連線：可以先儲存，但要先到
@@ -413,7 +410,7 @@ function CheckForm({
           )}
         </Label>
       </div>
-      <Label className="flex flex-col gap-1">
+      <Label layout="stacked">
         {d.kind === "sql"
           ? "SELECT 查詢（只能讀取，會在一定回滾的交易中執行）"
           : d.kind === "http"
@@ -438,7 +435,7 @@ function CheckForm({
         )}
       </Label>
       {d.kind === "sql" && (
-        <div className="flex flex-wrap items-end gap-2 text-sm">
+        <Toolbar className="items-end text-sm">
           <span>當第一列的</span>
           <Input
             className="w-32"
@@ -446,15 +443,14 @@ function CheckForm({
             onChange={(e) => set("column", e.target.value)}
             placeholder="欄位（$rows=筆數）"
           />
-          <select
-            className={field}
+          <NativeSelect
             value={d.op}
             onChange={(e) => set("op", e.target.value as Draft["op"])}
           >
             {([">", ">=", "<", "<=", "=", "!="] as const).map((o) => (
               <option key={o}>{o}</option>
             ))}
-          </select>
+          </NativeSelect>
           <Input
             className="w-24"
             value={d.value}
@@ -467,10 +463,10 @@ function CheckForm({
             onChange={(e) => set("listColumn", e.target.value)}
             placeholder="欄位（選填）"
           />
-        </div>
+        </Toolbar>
       )}
       {d.kind === "http" && (
-        <Label className="flex flex-col gap-1">
+        <Label layout="stacked">
           回應需包含的文字（選填；非 2xx、逾時或不包含就算異常）
           <Input
             value={d.contains}
@@ -478,15 +474,14 @@ function CheckForm({
           />
         </Label>
       )}
-      <div className="flex flex-wrap items-center gap-2 text-sm">
-        <select
-          className={field}
+      <Toolbar className="text-sm">
+        <NativeSelect
           value={d.mode}
           onChange={(e) => set("mode", e.target.value as Draft["mode"])}
         >
           <option value="interval">固定間隔</option>
           <option value="daily">每天固定時間</option>
-        </select>
+        </NativeSelect>
         {d.mode === "interval" ? (
           <>
             每{" "}
@@ -510,18 +505,17 @@ function CheckForm({
             （臺北時間）
           </>
         )}
-      </div>
-      <div className="flex flex-wrap items-center gap-2 text-sm">
+      </Toolbar>
+      <Toolbar className="text-sm">
         通知
-        <select
-          className={field}
+        <NativeSelect
           value={d.notify}
           onChange={(e) => set("notify", e.target.value as Draft["notify"])}
         >
           <option value="both">群組與管理者私訊</option>
           <option value="group">只發群組</option>
           <option value="admin">只私訊管理者</option>
-        </select>
+        </NativeSelect>
         靜音時段（只通知管理者）
         <Input
           className="w-20"
@@ -536,9 +530,9 @@ function CheckForm({
           onChange={(e) => set("quiet_to", e.target.value)}
           placeholder="07:00"
         />
-      </div>
+      </Toolbar>
       <div className="grid gap-3 sm:grid-cols-2">
-        <Label className="flex flex-col gap-1">
+        <Label layout="stacked">
           異常時的訊息（選填）
           <Input
             value={d.alert_text}
@@ -546,7 +540,7 @@ function CheckForm({
             placeholder="有機台超過 30 分鐘沒有回報"
           />
         </Label>
-        <Label className="flex flex-col gap-1">
+        <Label layout="stacked">
           恢復時的訊息（選填）
           <Input
             value={d.recovered_text}
@@ -555,7 +549,7 @@ function CheckForm({
           />
         </Label>
       </div>
-      <Label className="flex flex-col gap-1">
+      <Label layout="stacked">
         判斷依據（給核准者看）
         <Textarea
           rows={2}
@@ -720,11 +714,7 @@ export function ChecksView({
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           {[...issues.values()].map(({ issue, count }) => (
-            <div
-              key={issue.kind}
-              role="status"
-              className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
-            >
+            <InlineNotice tone="danger" key={issue.kind} role="status">
               <p className="font-medium">
                 定期檢查因系統設定問題暫停執行：{issue.label}。
               </p>
@@ -732,29 +722,20 @@ export function ChecksView({
                 {issue.fix}（受影響的檢查：{count}{" "}
                 個，檢查狀態不變、不計入連續失敗）
               </p>
-            </div>
+            </InlineNotice>
           ))}
           {note &&
             (note.tone === "error" ? (
-              <p
-                role="alert"
-                className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
-              >
+              <InlineNotice as="p" tone="danger" role="alert">
                 {note.text}
-              </p>
+              </InlineNotice>
             ) : (
-              <p
-                role="status"
-                className="rounded-lg bg-muted px-3 py-2 text-sm"
-              >
+              <InlineNotice as="p" tone="muted" role="status">
                 {note.text}
-              </p>
+              </InlineNotice>
             ))}
           {loadError && (
-            <div
-              role="alert"
-              className="flex flex-wrap items-center gap-2 rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
-            >
+            <InlineNotice tone="danger" role="alert" className="flex flex-wrap items-center gap-2">
               <span className="min-w-0 flex-1">
                 {checks === null
                   ? `讀不到定期檢查：${loadError}`
@@ -763,7 +744,7 @@ export function ChecksView({
               <Button size="sm" variant="outline" onClick={() => void load()}>
                 重試
               </Button>
-            </div>
+            </InlineNotice>
           )}
           {editing && (
             <CheckForm
@@ -791,20 +772,19 @@ export function ChecksView({
             <p className="text-sm text-muted-foreground">載入中…</p>
           )}
           {checks !== null && !checks.length && !editing && (
-            <div className="space-y-2 rounded-lg border px-4 py-5 text-sm">
-              <p className="font-medium">{checkListLabels.empty}</p>
-              <p className="text-muted-foreground">
+            <EmptyState title={checkListLabels.empty}>
+              <p>
                 {admin
                   ? "按「新增定期檢查」建立第一項檢查。"
                   : "在綁定專案的 LINE 群組輸入「/任務」提出檢查需求。"}
               </p>
-              <p className="text-muted-foreground">
+              <p>
                 例如每小時檢查一次示範服務是否能連線。
               </p>
-            </div>
+            </EmptyState>
           )}
           {!!rows.length && (
-            <div role="group" aria-label="檢查篩選" className="flex flex-wrap gap-2">
+            <Toolbar role="group" aria-label="檢查篩選">
               <Button
                 className="min-h-11"
                 variant={attentionOnly ? "outline" : "default"}
@@ -821,7 +801,7 @@ export function ChecksView({
               >
                 {checkListLabels.attention}
               </Button>
-            </div>
+            </Toolbar>
           )}
           {!!rows.length && !visibleRows.length && (
             <p role="status" className="text-sm text-muted-foreground">
@@ -833,14 +813,14 @@ export function ChecksView({
               const tried =
                 trials[c.id]?.version === c.version ? trials[c.id] : null;
               return (
-                <li key={c.id} className="rounded-lg border">
+                <li key={c.id} className="rounded-md border">
                   <button
                     type="button"
                     className="flex min-h-11 w-full flex-wrap items-center gap-2 px-3 py-2 text-left"
                     aria-expanded={open === c.id}
                     onClick={() => setOpen(open === c.id ? null : c.id)}
                   >
-                    <span className="min-w-0 grow basis-40 font-medium [overflow-wrap:anywhere]">
+                    <span className="min-w-0 grow basis-40 font-medium wrap-anywhere">
                       {c.name}
                     </span>
                     <Badge variant={stateLabel[c.state][1]}>
@@ -857,7 +837,7 @@ export function ChecksView({
                         {checkAttentionLabels.system}
                       </Badge>
                     )}
-                    <span className="flex w-full flex-wrap gap-x-2 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                    <span className="flex w-full flex-wrap gap-x-2 text-xs text-muted-foreground wrap-anywhere">
                       <span>{kindLabel[c.kind]}</span>
                       <span>{schedule(c)}</span>
                       <span>{groupName(c.group_id)}</span>
@@ -872,7 +852,7 @@ export function ChecksView({
                         </p>
                       )}
                       {c.missing_connection && (
-                        <p className="rounded-lg bg-danger-soft px-3 py-2 text-danger">
+                        <InlineNotice as="p" tone="danger">
                           這個專案還沒有登記資料庫連線，檢查無法執行，也不能核准或恢復。
                           <a
                             href="/projects"
@@ -881,12 +861,10 @@ export function ChecksView({
                           >
                             前往專案頁設定資料庫連線
                           </a>
-                        </p>
+                        </InlineNotice>
                       )}
                       {host && (
-                        <p
-                          className={`rounded-lg px-3 py-2 ${host.overdue ? "bg-danger-soft text-danger" : "bg-warn-soft text-warn"}`}
-                        >
+                        <InlineNotice as="p" tone={host.overdue ? "danger" : "warn"}>
                           系統暫時無法執行（{host.reason}）
                           {c.next_run_at
                             ? `，將於 ${hhmm(c.next_run_at)} 重試`
@@ -894,19 +872,19 @@ export function ChecksView({
                           。這類問題不計入連續失敗，恢復後自動繼續。
                           {host.overdue &&
                             `已超過 ${hostUnavailableAlertHours} 小時，請到系統頁確認執行器與 Docker。`}
-                        </p>
+                        </InlineNotice>
                       )}
                       {c.system_issue && (
-                        <p className="rounded-lg bg-warn-soft px-3 py-2 text-warn">
+                        <InlineNotice as="p" tone="warn">
                           等待系統問題排除（{c.system_issue.label}）
                           {c.next_run_at
                             ? `，將於 ${date(c.next_run_at)} 重試`
                             : ""}
                           。這類問題不計入連續失敗，檢查狀態不變。
                           {c.system_issue.fix}
-                        </p>
+                        </InlineNotice>
                       )}
-                      <p className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                      <p className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground wrap-anywhere">
                         <span>
                           上次：{c.last_run_at ? ago(c.last_run_at) : "尚未執行"}
                         </span>
@@ -928,20 +906,17 @@ export function ChecksView({
                       )}
                       <RecentRuns key={c.id} runs={runs} />
                       {admin && tried && (
-                        <p
-                          role="status"
-                          className={`rounded-lg px-3 py-2 ${trialTone[tried.outcome]}`}
-                        >
+                        <InlineNotice as="p" tone={trialTone[tried.outcome]} role="status">
                           試跑結果（{date(tried.at)}）：
                           {trialLabel[tried.outcome]}，{tried.summary}
                           {c.status === "awaiting_approval" &&
                             (tried.outcome === "ok"
                               ? "　試跑正常，可以核准。"
                               : "　試跑未通過，建議先修改。")}
-                        </p>
+                        </InlineNotice>
                       )}
                       {admin && (
-                        <div className="flex flex-wrap gap-2">
+                        <Toolbar>
                           <Button
                             size="sm"
                             variant="outline"
@@ -1051,7 +1026,7 @@ export function ChecksView({
                           >
                             刪除
                           </ConfirmButton>
-                        </div>
+                        </Toolbar>
                       )}
                     </div>
                   )}

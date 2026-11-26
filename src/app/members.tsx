@@ -1,3 +1,4 @@
+import { DataList, InlineNotice } from "@/components/ui/layout";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Trash2, UserPlus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -225,7 +226,7 @@ export function MembersView({
         </CardHeader>
         <CardContent>
           <form
-            className="grid gap-2 sm:grid-cols-[1fr_9rem_auto]"
+            className="grid gap-2 sm:grid-cols-form-action"
             onSubmit={(e) => {
               e.preventDefault();
               void act(
@@ -266,13 +267,13 @@ export function MembersView({
             </Button>
           </form>
           <dl className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
-            <div className="rounded-lg border px-3 py-2.5">
+            <div className="rounded-md border px-3 py-2.5">
               <dt className="font-medium">{memberRoleLabels.member}</dt>
               <dd className="text-muted-foreground">
                 查看收件匣、任務與聊天室，可以核准、結束任務、採用方案、修改這一題與重試任務。
               </dd>
             </div>
-            <div className="rounded-lg border px-3 py-2.5">
+            <div className="rounded-md border px-3 py-2.5">
               <dt className="font-medium">{memberRoleLabels.admin}</dt>
               <dd className="text-muted-foreground">
                 另外可以{memberRoleText.adminPermissions}。
@@ -286,11 +287,11 @@ export function MembersView({
           <CardTitle>成員名單</CardTitle>
         </CardHeader>
         {error && (
-          <p className="m-4 rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">
+          <InlineNotice as="p" tone="danger" className="m-4">
             {error}
-          </p>
+          </InlineNotice>
         )}
-        <ul className="divide-y">
+        <DataList>
           {(members ?? []).map((m) => (
             <li key={m.github_id} className="flex items-center gap-3 px-5 py-3">
               <Initials name={m.login} className="size-8 text-xs" />
@@ -346,7 +347,7 @@ export function MembersView({
               目前只有你。在上方加入同事的 GitHub 帳號。
             </li>
           )}
-        </ul>
+        </DataList>
       </Card>
     </div>
   );

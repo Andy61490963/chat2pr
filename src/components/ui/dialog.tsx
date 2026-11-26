@@ -11,6 +11,13 @@ const ControlledDialog = React.createContext<
   ((open: boolean) => void) | undefined
 >(undefined);
 
+export const dialogOverlayClass =
+  "fixed inset-0 z-50 bg-overlay data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0";
+export const dialogContentClass =
+  "fixed top-1/2 left-1/2 z-50 -translate-x-1/2 -translate-y-1/2 text-popover-foreground shadow-raised surface-popover duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95";
+export const dialogPanelClass =
+  "grid w-full max-w-overlay gap-4 rounded-md border border-border-raised bg-popover p-6 sm:max-w-lg";
+
 function Dialog({
   children,
   ...props
@@ -58,10 +65,7 @@ function DialogOverlay({
   return (
     <DialogPrimitive.Overlay
       data-slot="dialog-overlay"
-      className={cn(
-        "fixed inset-0 z-50 bg-black/50 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0",
-        className,
-      )}
+      className={cn(dialogOverlayClass, className)}
       {...props}
     />
   );
@@ -119,9 +123,8 @@ function DialogContent({
         onEscapeKeyDown={onEscapeKeyDown}
         {...focus}
         className={cn(
-          "fixed top-[50%] left-[50%] z-50 translate-x-[-50%] translate-y-[-50%] text-popover-foreground shadow-raised [--surface:var(--popover)] duration-200 outline-none data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95",
-          layout === "default" &&
-            "grid w-full max-w-[calc(100%-2rem)] gap-4 rounded-xl border border-border-raised bg-popover p-6 sm:max-w-lg",
+          dialogContentClass,
+          layout === "default" && dialogPanelClass,
           className,
         )}
         {...props}
@@ -130,7 +133,7 @@ function DialogContent({
         {showCloseButton && (
           <DialogPrimitive.Close
             data-slot="dialog-close"
-            className="absolute top-4 right-4 rounded-xs opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
+            className="work-touch absolute top-1 right-1 grid place-items-center rounded-xs md:top-4 md:right-4 opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4"
           >
             <XIcon />
             <span className="sr-only">關閉</span>

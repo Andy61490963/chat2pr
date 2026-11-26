@@ -1,3 +1,4 @@
+import { DataList, InlineNotice, ListRow } from "@/components/ui/layout";
 import { useCallback, useEffect, useState } from "react";
 import type { Capacity } from "../../shared/capacity.js";
 import { phaseLabels } from "../../shared/observation.js";
@@ -67,23 +68,17 @@ export function CapacityCard({ request }: { request: Request }) {
       </CardHeader>
       <CardContent className="flex flex-col gap-5">
         {error && (
-          <p
-            role="alert"
-            className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
-          >
+          <InlineNotice as="p" tone="danger" role="alert">
             {error}
-          </p>
+          </InlineNotice>
         )}
         {data?.hold && (
-          <div
-            role="status"
-            className="flex flex-col gap-1 rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn"
-          >
+          <InlineNotice tone="warn" role="status" className="flex flex-col gap-1">
             <p>{data.hold}</p>
             {data.holdKind === "memory" && (
               <p className="text-xs">{memoryAdvice}</p>
             )}
-          </div>
+          </InlineNotice>
         )}
         {data && (
           <>
@@ -152,11 +147,11 @@ export function CapacityCard({ request }: { request: Request }) {
                 執行中（{data.running.length}／{data.maxRuns}）
               </h3>
               {data.running.length ? (
-                <ul className="divide-y rounded-lg border">
+                <DataList variant="bordered">
                   {data.running.map((r) => (
-                    <li
+                    <ListRow
                       key={r.id}
-                      className="flex items-center gap-3 px-3 py-2.5 text-sm"
+                      className="flex items-center gap-3 text-sm"
                     >
                       <Badge variant={r.mode === "query" ? "info" : "default"}>
                         {kind(r.mode)}
@@ -170,9 +165,9 @@ export function CapacityCard({ request }: { request: Request }) {
                           開始
                         </span>
                       </span>
-                    </li>
+                    </ListRow>
                   ))}
-                </ul>
+                </DataList>
               ) : (
                 <p className="text-sm text-muted-foreground">
                   目前沒有任務在執行。
@@ -184,11 +179,11 @@ export function CapacityCard({ request }: { request: Request }) {
                 排隊順序
               </h3>
               {data.queued.length ? (
-                <ol className="divide-y rounded-lg border">
+                <DataList as="ol" variant="bordered">
                   {data.queued.map((t, i) => (
-                    <li
+                    <ListRow
                       key={t.id}
-                      className="flex items-center gap-3 px-3 py-2.5 text-sm"
+                      className="flex items-center gap-3 text-sm"
                     >
                       <span className="w-6 text-right tabular-nums text-muted-foreground">
                         {i + 1}
@@ -211,13 +206,13 @@ export function CapacityCard({ request }: { request: Request }) {
                       <Badge
                         variant={t.code === "next" ? "good" : "warn"}
                         title={t.reason}
-                        className="max-w-[45%]"
+                        className="max-w-1/2"
                       >
                         <span className="truncate">{t.reason}</span>
                       </Badge>
-                    </li>
+                    </ListRow>
                   ))}
-                </ol>
+                </DataList>
               ) : (
                 <p className="text-sm text-muted-foreground">
                   沒有排隊中的任務。

@@ -1,3 +1,11 @@
+import {
+  DataList,
+  InlineNotice,
+  ListRow,
+  SectionHeader,
+  Toolbar,
+} from "@/components/ui/layout";
+import { NativeSelect } from "@/components/ui/select";
 import { useCallback, useEffect, useState } from "react";
 import type { FrictionMetrics } from "../../shared/friction";
 import {
@@ -80,7 +88,7 @@ export function FrictionCard({
     <Card>
       <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex flex-col gap-1">
-          <h2 className="leading-none font-semibold">使用摩擦</h2>
+          <SectionHeader>使用摩擦</SectionHeader>
           <CardDescription>
             {data
               ? `近 ${data.days} 天建立的 ${data.tasks} 件任務`
@@ -89,20 +97,18 @@ export function FrictionCard({
                 : "讀取中…"}
           </CardDescription>
         </div>
-        <div className="flex flex-wrap gap-2 text-sm">
-          <select
+        <Toolbar className="text-sm">
+          <NativeSelect
             aria-label="期間"
-            className="work-touch rounded-md border bg-background px-2 py-1"
             value={days}
             onChange={(e) => setDays(Number(e.target.value))}
           >
             <option value={7}>近 7 天</option>
             <option value={30}>近 30 天</option>
             <option value={90}>近 90 天</option>
-          </select>
-          <select
+          </NativeSelect>
+          <NativeSelect
             aria-label="群組"
-            className="work-touch min-w-0 max-w-full rounded-md border bg-background px-2 py-1"
             value={group}
             onChange={(e) => setGroup(e.target.value)}
           >
@@ -112,30 +118,27 @@ export function FrictionCard({
                 {g.name}
               </option>
             ))}
-          </select>
-        </div>
+          </NativeSelect>
+        </Toolbar>
       </CardHeader>
       <CardContent>
         {error && (
-          <p
-            role="alert"
-            className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
-          >
+          <InlineNotice as="p" tone="danger" role="alert">
             {error}
-          </p>
+          </InlineNotice>
         )}
-        <ul className="divide-y rounded-lg border">
+        <DataList variant="bordered">
           {rows.map(([label, value, hint]) => (
-            <li
+            <ListRow
               key={label}
-              className="flex flex-col gap-0.5 px-3 py-2 sm:flex-row sm:items-center sm:gap-4"
+              className="flex flex-col gap-0.5 sm:flex-row sm:items-center sm:gap-4"
             >
               <span className="text-sm font-medium sm:w-40">{label}</span>
               <span className="text-sm tabular-nums sm:w-32">{value}</span>
               <span className="text-xs text-muted-foreground">{hint}</span>
-            </li>
+            </ListRow>
           ))}
-        </ul>
+        </DataList>
       </CardContent>
     </Card>
   );

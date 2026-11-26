@@ -12,10 +12,10 @@ function DescriptionList({
     <dl
       data-slot="description-list"
       className={cn(
-        "grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-sm",
+        "grid grid-cols-description gap-x-4 gap-y-1.5 text-sm",
         pairs === 2 &&
           // 第一組的值只佔內容寬度，第二組緊跟在後（用左內距分組），兩組不會被拉到畫面兩端。
-          "sm:grid-cols-[max-content_minmax(0,max-content)_max-content_minmax(0,1fr)] sm:[&>*:nth-child(even)>dt]:pl-6",
+          "sm:grid-cols-description-pairs sm:[&>*:nth-child(even)>dt]:pl-6",
         className,
       )}
       {...props}
@@ -42,7 +42,7 @@ function DescriptionItem({
       <dt className="text-muted-foreground">{label}</dt>
       <dd
         className={cn(
-          "min-w-0 text-foreground [overflow-wrap:anywhere]",
+          "min-w-0 text-foreground wrap-anywhere",
           numeric && "tabular-nums",
         )}
       >

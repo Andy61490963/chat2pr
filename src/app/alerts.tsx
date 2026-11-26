@@ -1,3 +1,4 @@
+import { InlineNotice } from "@/components/ui/layout";
 import {
   notificationLabels,
   projectLabels,
@@ -344,7 +345,7 @@ export function AlertBell({
           {unread > 0 && (
             <span
               aria-hidden
-              className="absolute top-1 right-1 min-w-4 rounded-full bg-foreground px-1 text-[10px] leading-4 font-semibold text-background tabular-nums"
+              className="absolute top-1 right-1 min-w-4 rounded-sm bg-foreground px-1 text-caption leading-4 font-semibold text-background tabular-nums"
             >
               {unread > 9 ? "9+" : unread}
             </span>
@@ -354,7 +355,7 @@ export function AlertBell({
       <DropdownMenuContent
         align="end"
         collisionPadding={12}
-        className="w-[22rem] max-w-[calc(100vw-2rem)] p-0"
+        className="w-88 max-w-overlay p-0"
         onCloseAutoFocus={(event) => {
           onCloseAutoFocus?.(event);
           const task = taskAfterMenu.current;
@@ -379,18 +380,15 @@ export function AlertBell({
           )}
         </div>
         {quota && (
-          <p
-            role="status"
-            className="flex gap-2 border-b bg-warn-soft px-3 py-2 text-xs text-warn"
-          >
+          <InlineNotice as="p" tone="warn" role="status" className="flex gap-2 border-b text-xs">
             <Unplug className="mt-0.5 size-4 shrink-0" />
-            <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+            <span className="min-w-0 flex-1 wrap-anywhere">
               {quota.text}
             </span>
-          </p>
+          </InlineNotice>
         )}
         {/* 每則通知都是選單項目：鍵盤開啟鈴鐺後方向鍵可選、Enter 開啟。 */}
-        <div className="max-h-[min(26rem,calc(var(--radix-dropdown-menu-content-available-height)-5rem))] overflow-y-auto">
+        <div className="max-h-notifications overflow-y-auto">
           {menuAlerts.length ? (
             menuAlerts.map((a) => {
               const k = kindOf(a.kind);
@@ -439,7 +437,7 @@ export function AlertBell({
                     )}
                     <span
                       className={cn(
-                        "text-xs text-muted-foreground [overflow-wrap:anywhere]",
+                        "text-xs text-muted-foreground wrap-anywhere",
                         a.kind !== "service_down" && "line-clamp-2",
                       )}
                     >
@@ -452,7 +450,7 @@ export function AlertBell({
                       />
                     )}
                     {why && (
-                      <span className="text-[11px] text-muted-foreground">
+                      <span className="text-xs text-muted-foreground">
                         {why}
                       </span>
                     )}

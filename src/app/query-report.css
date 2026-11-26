@@ -1,103 +1,94 @@
+@reference "../styles.css";
+
+/* 圖解在獨立的隱藏區量寬。縮放依產出的 SVG 尺寸計算。 */
+.report-measure {
+  @apply invisible fixed top-0 right-full w-diagram-measure;
+}
+
 .query-report {
-  font-size: 0.875rem;
-  line-height: 1.8;
-  overflow-wrap: anywhere;
+  @apply text-sm leading-relaxed wrap-anywhere;
 }
-.query-report h1,
-.query-report h2,
-.query-report h3,
-.query-report h4 {
-  font-weight: 650;
-  line-height: 1.5;
-  margin: 1.4em 0 0.65em;
+
+.query-report :is(h1, h2, h3, h4) {
+  @apply mt-5 mb-2 leading-snug font-semibold;
 }
+
 .query-report h1 {
-  font-size: 1.3rem;
+  @apply heading-page;
 }
+
 .query-report h2 {
-  font-size: 1.1rem;
-  border-bottom: 1px solid var(--border);
-  padding-bottom: 0.4em;
+  @apply heading-section border-b pb-1;
 }
+
 .query-report h3 {
-  font-size: 1rem;
+  @apply text-base;
 }
+
 .query-report > :first-child {
-  margin-top: 0;
+  @apply mt-0;
 }
+
 .query-report .report-paragraph {
-  margin: 0.7em 0;
-  white-space: pre-line;
+  @apply my-2 whitespace-pre-line;
 }
-.query-report ul,
-.query-report ol {
-  padding-left: 1.5em;
-  margin: 0.65em 0;
+
+.query-report :is(ul, ol) {
+  @apply my-2 pl-6;
 }
+
 .query-report ul {
-  list-style: disc;
+  @apply list-disc;
 }
+
 .query-report ol {
-  list-style: decimal;
+  @apply list-decimal;
 }
+
 .query-report li {
-  margin: 0.3em 0;
+  @apply my-1;
 }
+
 .query-report a {
-  text-decoration: underline;
-  text-underline-offset: 3px;
+  @apply underline underline-offset-2;
 }
+
 .query-report pre {
-  white-space: pre;
-  overflow: auto;
-  padding: 0.8rem;
-  background: var(--muted);
-  border-radius: 0.4rem;
-  margin: 0.8em 0;
+  @apply my-3 overflow-auto rounded-md bg-muted p-3 whitespace-pre;
 }
+
 .query-report code {
-  font-size: 0.8rem;
-  background: var(--muted);
-  padding: 0.1em 0.25em;
-  border-radius: 0.2em;
+  @apply rounded-xs bg-muted px-1 text-xs;
 }
+
 .query-report pre code {
-  padding: 0;
+  @apply p-0;
 }
+
 .query-report table {
-  border-collapse: collapse;
-  min-width: 100%;
-  margin: 0.8em 0;
+  @apply my-3 min-w-full border-collapse;
 }
-.query-report th,
-.query-report td {
-  padding: 0.5em 0.75em;
-  border: 1px solid var(--border);
-  text-align: left;
+
+.query-report :is(th, td) {
+  @apply border px-3 py-2 text-left;
 }
+
 .query-report th {
-  background: var(--muted);
-  white-space: nowrap;
+  @apply bg-muted whitespace-nowrap;
 }
+
 .query-report blockquote {
-  border-left: 3px solid var(--border);
-  padding-left: 1em;
-  color: var(--muted-foreground);
+  @apply border-l-2 pl-4 text-muted-foreground;
 }
+
 .query-report summary {
-  cursor: pointer;
+  @apply cursor-pointer;
 }
+
 .query-report .report-details {
-  border-top: 1px solid var(--border);
-  margin-top: 1rem;
-  padding-top: 0.75rem;
+  @apply mt-4 border-t pt-3;
 }
+
 .query-report .report-details > summary {
-  font-weight: 600;
-  padding: 0.5rem 0;
-}
-.query-report .report-details > summary:focus-visible {
-  outline: 2px solid var(--ring);
-  outline-offset: 2px;
-  border-radius: 0.25rem;
+  @apply rounded-sm py-2 font-semibold;
 }

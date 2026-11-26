@@ -1,3 +1,4 @@
+import { EmptyState, Toolbar } from "@/components/ui/layout";
 import { GroupStatusBadge } from "./groups";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
@@ -43,7 +44,6 @@ import {
   type Request,
   type State,
   date,
-  Empty,
   Initials,
   message,
   StatusIcon,
@@ -123,13 +123,13 @@ export function ChatView({
       </p>
       {!group ? (
         <Card>
-          <Empty icon={<MessageSquare />} title="還沒有聊天室">
+          <EmptyState icon={<MessageSquare />} title="還沒有聊天室">
             把機器人加入群組，傳送訊息後即可查看。
-          </Empty>
+          </EmptyState>
         </Card>
       ) : (
         <>
-          <div className="flex shrink-0 flex-wrap items-center gap-3">
+          <Toolbar className="shrink-0 gap-3">
             <Select value={group.id} onValueChange={setSelected}>
               <SelectTrigger
                 aria-label="選擇聊天室"
@@ -164,7 +164,7 @@ export function ChatView({
               <Settings2 />
               設定觸發方式
             </Button>
-          </div>
+          </Toolbar>
           <Timeline
             key={group.id}
             groupId={group.id}
@@ -302,7 +302,7 @@ function Timeline({
           role="region"
           aria-label="聊天室訊息捲動區"
           tabIndex={0}
-          className="min-h-0 flex-1 overflow-y-auto overscroll-contain [overflow-anchor:none]"
+          className="min-h-0 flex-1 overflow-y-auto overscroll-contain overflow-anchor-none"
         >
           {loading && !rows.length && (
             <p className="flex items-center gap-2 p-5 text-sm">
@@ -323,9 +323,9 @@ function Timeline({
             </div>
           )}
           {!loading && !error && !items.length && (
-            <Empty icon={<MessageSquare />} title="還沒有收到訊息">
+            <EmptyState icon={<MessageSquare />} title="還沒有收到訊息">
               這個群組的新訊息會自動出現在這裡。
-            </Empty>
+            </EmptyState>
           )}
           {next && (
             <Button
@@ -380,7 +380,7 @@ function Timeline({
                         </span>
                       )}
                     </div>
-                    <div className="w-fit max-w-full space-y-2 rounded-xl rounded-tl-sm border bg-muted/40 px-3.5 py-3 sm:max-w-[85%]">
+                    <div className="w-fit max-w-full space-y-2 rounded-md rounded-tl-sm border bg-muted/40 px-3.5 py-3 sm:max-w-5/6">
                       {m.availability !== "readable" ? (
                         <p className="text-sm text-muted-foreground">
                           {m.availability === "revoked"
@@ -398,7 +398,7 @@ function Timeline({
                                   <span className="font-medium">
                                     回覆 {m.quoted_sender ?? "成員"}：
                                   </span>
-                                  <span className="line-clamp-2 [overflow-wrap:anywhere]">
+                                  <span className="line-clamp-2 wrap-anywhere">
                                     {chatText(m.quoted_text, platform)}
                                   </span>
                                 </>
@@ -429,7 +429,7 @@ function Timeline({
                             </p>
                           )}
                           {m.text && (
-                            <p className="whitespace-pre-wrap break-words text-sm leading-relaxed [overflow-wrap:anywhere]">
+                            <p className="whitespace-pre-wrap break-words text-sm leading-relaxed wrap-anywhere">
                               {chatText(m.text, platform)}
                             </p>
                           )}
@@ -437,11 +437,11 @@ function Timeline({
                             <button
                               aria-label="放大圖片"
                               onClick={() => setPreview(m.id)}
-                              className="block min-h-11 min-w-11 rounded-lg focus-visible:outline-2 focus-visible:outline-ring"
+                              className="block min-h-11 min-w-11 rounded-md focus-visible:outline-2 focus-visible:outline-ring"
                             >
                               <img
                                 loading="lazy"
-                                className="max-h-64 max-w-full rounded-lg object-contain"
+                                className="max-h-64 max-w-full rounded-md object-contain"
                                 src={`/api/messages/${encodeURIComponent(m.id)}/image`}
                                 alt="群組圖片"
                               />
@@ -470,7 +470,7 @@ function Timeline({
                         {m.tasks.map((t) => (
                           <button
                             key={t.id}
-                            className="flex max-w-full items-center gap-2 rounded-lg border bg-card py-1.5 pr-3 pl-1.5 text-left text-sm transition-colors hover:border-brand/40"
+                            className="flex max-w-full items-center gap-2 rounded-md border bg-card py-1.5 pr-3 pl-1.5 text-left text-sm transition-colors hover:border-brand/40"
                             onClick={() => open(t.id)}
                           >
                             <StatusIcon small status={t.status} />
@@ -505,7 +505,7 @@ function Timeline({
           </DialogDescription>
           {shown && (
             <img
-              className="max-h-[75vh] w-full object-contain"
+              className="max-h-media w-full object-contain"
               src={`/api/messages/${encodeURIComponent(shown.id)}/image`}
               alt="放大的群組圖片"
             />
@@ -525,7 +525,7 @@ function BotItem({ b, open }: { b: BotMessage; open: (id: string) => void }) {
     <li id={`chat-bot-${b.id}`} className="flex min-w-0 gap-3">
       <span
         aria-hidden
-        className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-full bg-brand-soft text-brand-foreground"
+        className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-sm bg-brand-soft text-brand-foreground"
       >
         <Bot className="size-4" />
       </span>
@@ -536,16 +536,16 @@ function BotItem({ b, open }: { b: BotMessage; open: (id: string) => void }) {
           <span>{groupKindLabels[b.kind] ?? "群組訊息"}</span>
           <Badge variant={deliveryVariant(d)}>{deliveryLabel(d)}</Badge>
         </div>
-        <div className="w-fit max-w-full space-y-2 rounded-xl rounded-tl-sm border border-brand/30 bg-brand-soft/60 px-3.5 py-3 sm:max-w-[85%]">
+        <div className="w-fit max-w-full space-y-2 rounded-md rounded-tl-sm border border-brand/30 bg-brand-soft/60 px-3.5 py-3 sm:max-w-5/6">
           {b.text === null ? (
             <p className="text-sm text-muted-foreground">原文已到期</p>
           ) : (
-            <p className="whitespace-pre-wrap break-words text-sm leading-relaxed [overflow-wrap:anywhere]">
+            <p className="whitespace-pre-wrap break-words text-sm leading-relaxed wrap-anywhere">
               {b.text}
             </p>
           )}
           {d.status !== "sent" && (
-            <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
+            <p className="text-xs text-muted-foreground wrap-anywhere">
               {d.note}
             </p>
           )}
@@ -556,7 +556,7 @@ function BotItem({ b, open }: { b: BotMessage; open: (id: string) => void }) {
         {b.task_id && b.task_title && (
           <div className="mt-2">
             <button
-              className="flex min-h-11 max-w-full items-center gap-2 rounded-lg border bg-card py-1.5 pr-3 pl-2.5 text-left text-sm transition-colors hover:border-brand/40"
+              className="flex min-h-11 max-w-full items-center gap-2 rounded-md border bg-card py-1.5 pr-3 pl-2.5 text-left text-sm transition-colors hover:border-brand/40"
               onClick={() => open(b.task_id!)}
             >
               <span className="min-w-0 truncate font-medium">

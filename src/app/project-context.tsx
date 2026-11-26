@@ -1,3 +1,4 @@
+import { InlineNotice, Toolbar } from "@/components/ui/layout";
 import { useEffect, useState } from "react";
 import type { Project } from "../../shared/types.js";
 import {
@@ -72,7 +73,7 @@ export function ProjectContextEditor({
     }, "專案資訊已儲存");
   return (
     <section
-      className="space-y-4 rounded-lg border p-4"
+      className="space-y-4 rounded-md border p-4"
       aria-label="專案資訊與環境"
     >
       <div>
@@ -81,7 +82,7 @@ export function ProjectContextEditor({
           這裡的內容會給 AI 讀。帳密請填在「連線與權限」，那裡會加密保存。
         </p>
         {project.context_updated_at && (
-          <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+          <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground wrap-anywhere">
             <span>
               {project.context_updated_by} 更新於{" "}
               <time dateTime={project.context_updated_at}>
@@ -93,7 +94,7 @@ export function ProjectContextEditor({
         )}
       </div>
       {pending && (
-        <div className="space-y-3 rounded-lg bg-warn-soft p-3" role="status">
+        <InlineNotice tone="warn" className="space-y-3 p-3" role="status">
           <h4 className="font-medium">還需要你提供一點資訊</h4>
           <p className="text-sm whitespace-pre-wrap">
             {pending.reason.length > 240
@@ -165,7 +166,7 @@ export function ProjectContextEditor({
           >
             送出回答並繼續驗證
           </Button>
-        </div>
+        </InlineNotice>
       )}
       {(
         Object.entries(contextFields) as [
@@ -190,7 +191,7 @@ export function ProjectContextEditor({
           資料已被更新，你的草稿仍保留。請先複製需要保留的內容，再按「重新載入資料」檢視新版。
         </p>
       )}
-      <div className="flex flex-wrap gap-2">
+      <Toolbar>
         <Button
           variant="outline"
           disabled={busy || !dirty}
@@ -213,7 +214,7 @@ export function ProjectContextEditor({
         >
           重新載入資料
         </Button>
-      </div>
+      </Toolbar>
       <p className="text-xs text-muted-foreground">
         更新資訊會清除舊驗證，相關任務需重新確認；既有登入、網路與人工審核限制仍適用。
       </p>

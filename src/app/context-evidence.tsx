@@ -16,9 +16,9 @@ export function TaskContextEvidence({ detail }: { detail: Detail }) {
               : "需求的圖片參考"}
           </h3>
           {detail.images.map((image) => (
-            <details key={image.id} className="rounded-lg border p-3 text-sm">
+            <details key={image.id} className="rounded-md border p-3 text-sm">
               <summary className="cursor-pointer">
-                <span className="inline-flex max-w-full flex-wrap gap-x-3 gap-y-1 [overflow-wrap:anywhere]">
+                <span className="inline-flex max-w-full flex-wrap gap-x-3 gap-y-1 wrap-anywhere">
                   <span>
                     {image.origin === "rag" ? "向量檢索找回" : "直接引用"}
                   </span>
@@ -68,7 +68,7 @@ export function TaskContextEvidence({ detail }: { detail: Detail }) {
         </section>
       )}
       {!!detail.contextEvidence?.length && (
-        <details className="min-w-0 rounded-lg border p-3 text-sm">
+        <details className="min-w-0 rounded-md border p-3 text-sm">
           <summary className="cursor-pointer">
             上下文來源證據（{detail.contextEvidence.length} 筆）
           </summary>
