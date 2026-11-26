@@ -8,7 +8,7 @@ import { ago, type Detail, type State } from "./shared";
 
 function simpleChange(task: Task) {
   return task.mode === "change" && task.status === "awaiting_approval" &&
-    !task.question && task.missing?.length === 0 && task.suggestions?.length === 0 &&
+    !task.last_error && !task.question && task.missing?.length === 0 && task.suggestions?.length === 0 &&
     task.risk_reasons?.length === 0 && task.pending_paths?.length === 0 &&
     !task.assumptions?.length && !task.baseline_repair && !task.check_draft &&
     !task.project_routing?.relatedProjects?.length &&
@@ -70,7 +70,7 @@ export function ReviewKeyboardHint() {
 export type SelectionMode = "move" | "enter" | "click";
 
 export function ReviewQueue({
-  items, selected, desktop, choose, decide, busy, checking, state, admin, detail, batchControls, checkbox,
+  items, selected, desktop, choose, decide, busy, checking, state, admin, detail, rowErrors, batchControls, checkbox,
 }: {
   items: readonly ReviewItem[];
   selected: string | null;
@@ -82,6 +82,7 @@ export function ReviewQueue({
   state: State;
   admin: boolean;
   detail?: Detail;
+  rowErrors: Readonly<Record<string, string>>;
   batchControls?: ReactNode;
   checkbox: (item: ReviewItem) => ReactNode;
 }) {
@@ -94,11 +95,12 @@ export function ReviewQueue({
   return (
     <div className="min-w-0">
       {batchControls}
-      <ul role="list" aria-label="待決策佇列" className="work-ledger grid auto-rows-fr divide-y">
+      <ul role="list" aria-label="待決策佇列" className={cn("work-ledger grid divide-y", !items.some(({ id }) => rowErrors[id]) && "auto-rows-fr")}>
         {items.map((item, index) => {
           const task = tasks.get(item.id);
           const candidate = quickApproval(task, state, admin);
-          const approval = candidate && (!detail || detail.task.id !== item.id || matchesApproval(candidate, detail))
+          const error = rowErrors[item.id];
+          const approval = candidate && !error && (!detail || detail.task.id !== item.id || matchesApproval(candidate, detail))
             ? candidate : null;
           const check = checkbox(item);
           const titleId = `${queueId}-title-${item.id}`;
@@ -168,6 +170,7 @@ export function ReviewQueue({
               >
                 {approval ? "核准修改" : openAction(item.status)}
               </Button>
+              {error && <p role="alert" className="col-span-full row-start-3 px-3 py-1 text-sm text-danger [overflow-wrap:anywhere]">{error}</p>}
             </li>
           );
         })}

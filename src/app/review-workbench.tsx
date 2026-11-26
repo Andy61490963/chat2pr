@@ -24,7 +24,7 @@ import { PickListForm } from "./pick-list";
 import {
   matchesApproval, quickApproval, ReviewQueue, type QuickApproval, type SelectionMode,
 } from "./review-queue-list";
-import { Empty, message, type Act, type Detail, type State } from "./shared";
+import { Empty, message, type Detail, type State } from "./shared";
 import {
   TaskReviewPanel,
   type TaskReviewPanelProps,
@@ -43,7 +43,10 @@ function subscribeToReviewLayout(onChange: () => void) {
 export type ReviewActions = Pick<
   TaskReviewPanelProps,
   "act" | "answer" | "followup" | "go" | "open" | "relink" | "repairBaseline"
-> & { verifyQuickActor: () => Promise<boolean> };
+> & {
+  verifyQuickActor: () => Promise<boolean>;
+  approveFromQueue: (task: Detail["task"], body: QuickApproval["body"], onError: (text: string) => void) => Promise<boolean>;
+};
 
 type DetailResult = { id: string; detail?: Detail; error?: string };
 
@@ -66,7 +69,6 @@ export function ReviewWorkbench({
   actionError,
   loadTaskDetail,
   actions,
-  quickAct,
   resolvePickList,
   batchControls,
   checkbox,
@@ -84,7 +86,6 @@ export function ReviewWorkbench({
   actionError?: string;
   loadTaskDetail: (id: string) => Promise<Detail>;
   actions: ReviewActions;
-  quickAct: Act;
   resolvePickList: (list: PickList, ids: string[]) => Promise<boolean>;
   batchControls?: ReactNode;
   checkbox: (item: ReviewItem) => ReactNode;
@@ -93,6 +94,7 @@ export function ReviewWorkbench({
   const desktop = useSyncExternalStore(subscribeToReviewLayout, isDesktopWidth);
   const guard = useGuard();
   const [checking, setChecking] = useState(false);
+  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
   const [queueCursor, setQueueCursor] = useState<string | null>(null);
   const [actorChanged, setActorChanged] = useState(false);
   const [quickNotice, setQuickNotice] = useState<{ id: string; text: string } | null>(null);
@@ -302,7 +304,9 @@ export function ReviewWorkbench({
         reviewInstead("案件與清單不同，尚未核准。請重新確認目前的需求、專案與分支。", fresh);
         return;
       }
-      await finish(id, () => quickAct(fresh.task, "approve", expected.body, "已確認專案並核准，開始排程"), "advance", initialSelection);
+      await finish(id, () => actions.approveFromQueue(fresh.task, expected.body, (text) => {
+        setRowErrors((errors) => ({ ...errors, [id]: text }));
+      }), "advance", initialSelection);
     } catch (cause) {
       if (stillHere()) reviewInstead(`無法重新確認案件，尚未核准。${readError(cause)} 請重新載入後再試。`);
     } finally {
@@ -451,7 +455,7 @@ export function ReviewWorkbench({
         if (target !== button) {
           if (!event.currentTarget.contains(target) || target.closest<HTMLElement>("[data-review-row]")?.dataset.reviewRow !== item.id) return;
           const approval = quickApproval(state.tasks.find((task) => task.id === item.id), state, admin && !actorChanged);
-          if (approval && detail && matchesApproval(approval, detail)) startApproval(approval);
+          if (!rowErrors[item.id] && approval && detail && matchesApproval(approval, detail)) startApproval(approval);
           else choose(item.id, "enter");
           return;
         }
@@ -481,6 +485,7 @@ export function ReviewWorkbench({
           admin={admin && !actorChanged}
           detail={detail}
           decide={startApproval}
+          rowErrors={rowErrors}
           desktop={desktop}
           choose={choose}
           batchControls={batchControls}

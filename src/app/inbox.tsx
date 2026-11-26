@@ -485,8 +485,8 @@ export function InboxView({
           </div>
         )}
       </div>
-      <TabsContent value="decisions" className="grid min-w-0 gap-3 md:gap-4">
       {!items.length && !stuckTasks.length && onboarding}
+      <TabsContent value="decisions" className="grid min-w-0 gap-3 md:gap-4">
       <section
         ref={decisionSection}
         tabIndex={-1}
@@ -506,7 +506,6 @@ export function InboxView({
           actionError={reviewError}
           loadTaskDetail={loadTaskDetail}
           actions={reviewActions}
-          quickAct={act}
           resolvePickList={resolvePickList}
           empty={
             !items.length ? (
@@ -650,7 +649,9 @@ export function InboxView({
           </ul>
         </section>
       )}
-      {(items.length > 0 || stuckTasks.length > 0) && onboarding}
+      <Button variant="link" className="justify-self-start" onClick={() => showTasks("todo")}>
+        查看需要你處理的任務
+      </Button>
       {/* 等待額度的工作會自動繼續，不需要決定；放在較低調的段落，只說明什麼時候恢復。 */}
       {held.length > 0 && (
         <section aria-labelledby="waiting-title">
@@ -728,6 +729,7 @@ export function InboxView({
       <TabsContent value="activity">
         <ActivityFeed state={state} open={open} more={more} />
       </TabsContent>
+      {(items.length > 0 || stuckTasks.length > 0) && onboarding}
       <div className="flex flex-wrap items-center gap-x-4 border-t pt-1 text-sm text-muted-foreground">
         <button
           type="button"

@@ -1388,6 +1388,11 @@ export function App() {
                 }
                 loadTaskDetail={loadTaskDetail}
                 reviewActions={{
+                  approveFromQueue: async (task, body, onError) => {
+                    const success = await run(() => postTaskAction(task, "approve", body), "已確認專案並核准，開始排程", onError);
+                    if (!success) await refresh();
+                    return success;
+                  },
                   verifyQuickActor: async () => {
                     const current = await request<NonNullable<typeof user>>("/api/me");
                     return !!user.id && current.id === user.id && current.role === "admin" && user.role === "admin";

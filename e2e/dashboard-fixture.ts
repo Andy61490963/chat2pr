@@ -1085,6 +1085,7 @@ export const recentActivity: State["activity"] = [
 
 export const inboxReviewTime = "2026-01-10T09:00:00Z";
 export const inboxDetailUnavailable = "範例審核資料暫時無法讀取。";
+export const expiredProjectConfirmation = "目標專案尚未確認或確認已失效，請到看板確認";
 export const summaryTasks = [activityTask, rejectedTask, cancelledTask, closedPrTask];
 export const summaryActivity: State["activity"] = [activityTask, ...summaryTasks].map((entry, index) => ({
   id: 5 - index,

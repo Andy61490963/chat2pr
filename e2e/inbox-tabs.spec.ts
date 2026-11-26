@@ -1,7 +1,26 @@
 import { expect, test } from "@playwright/test";
-import { mockDashboard, mockInboxReview, reviewWorkbenchFixture, summaryActivity, summaryTasks } from "./dashboard-fixture";
+import { firstSetupHealth, group, mockDashboard, mockInboxReview, reviewWorkbenchFixture, summaryActivity, summaryTasks, unverifiedProject } from "./dashboard-fixture";
 
 test.use({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
+
+test("決定分頁可以開啟需要你處理的任務清單", async ({ page }) => {
+  await mockInboxReview(page);
+  await page.goto("/");
+  await page.getByRole("tabpanel").getByRole("button", { name: "查看需要你處理的任務" }).click({ timeout: 5000 });
+  await expect(page).toHaveURL(/\/tasks\?filter=active&status=todo$/);
+});
+
+test("尚未完成首次設定時切換每個分頁仍可找到下一步", async ({ page }) => {
+  await mockDashboard(page, { state: { health: firstSetupHealth, projects: [unverifiedProject], groups: [{ ...group, project_ids: [unverifiedProject.id] }] } });
+  await page.goto("/");
+  for (const name of [/進行中/, /待合併/, /動態/, /決定/]) {
+    const tab = page.getByRole("tab", { name });
+    await tab.click();
+    await expect(tab).toHaveAttribute("aria-selected", "true");
+    await expect(page.getByRole("heading", { name: "開始使用" })).toBeVisible();
+    await expect(page.getByText("群組已綁定可派工的專案", { exact: true })).toBeVisible();
+  }
+});
 
 test("分類筆數只顯示一次，切換分頁才列出對應的全部工作與動態", async ({ page }) => {
   const working = summaryTasks.slice(0, 3);

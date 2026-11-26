@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { Detail } from "../src/app/shared";
 import {
-  cancelledTask, exampleMember, group, inboxDetailUnavailable, mockInboxReview,
+  cancelledTask, exampleMember, expiredProjectConfirmation, group, inboxDetailUnavailable, mockInboxReview,
   project, projectSectionsState, reviewWorkbenchFixture,
 } from "./dashboard-fixture";
 
@@ -55,6 +55,7 @@ test("列上核准先重讀未選取的任務，只送一次確認過的目標�
 });
 
 const changes: Record<string, (detail: Detail) => Detail> = {
+  專案確認失效: (detail) => ({ ...detail, task: { ...detail.task, last_error: expiredProjectConfirmation } }),
   新增風險: (detail) => ({ ...detail, task: { ...detail.task, risk_reasons: cancelledTask.risk_reasons } }),
   需求版本變更: (detail) => ({ ...detail, task: { ...detail.task, version: detail.task.version + 1 } }),
   專案不符: (detail) => ({ ...detail, task: { ...detail.task, project_id: projectSectionsState.projects[0].id } }),
@@ -116,15 +117,18 @@ test("重讀失敗會保留伺服器原因，不送出核准", async ({ page }) 
   expect(writes).toEqual([]);
 });
 
-test("送出核准被伺服器拒絕時保留原因與佇列，不誤報成功", async ({ page }) => {
-  const { tasks: [first, , , current] } = await mockInboxReview(page);
-  await page.route(`**/api/tasks/${current.id}/actions`, (route) =>
-    route.fulfill({ status: 409, json: { error: inboxDetailUnavailable } }));
+test("送出核准遇到版本衝突會在該列保留原因並重新整理佇列", async ({ page }) => {
+  const { state, tasks: [first, , , current, removed] } = await mockInboxReview(page);
+  await page.route(`**/api/tasks/${current.id}/actions`, (route) => {
+    state.tasks = state.tasks.filter(({ id }) => id !== removed.id);
+    return route.fulfill({ status: 409, json: { error: "需求版本已更新" } });
+  });
   await page.goto("/");
   await row(page, current.title).getByRole("button", quickName).click();
-  await expect(page.getByRole("alert").filter({ hasText: inboxDetailUnavailable })).toBeVisible();
+  await expect(row(page, current.title).getByRole("alert")).toContainText("需求版本已更新");
+  await expect(row(page, removed.title)).toHaveCount(0);
   await expect(panel(page).getByRole("heading", { name: first.title })).toBeVisible();
-  await expect(row(page, current.title).getByRole("button", quickName)).toBeEnabled();
+  await expect(row(page, current.title).getByRole("button", { name: "查看", exact: true })).toBeEnabled();
   await expect(page.getByRole("status").filter({ hasText: /已.*核准/ })).toHaveCount(0);
 });
 
@@ -147,19 +151,20 @@ test("手機從清單核准後留在清單，選取下一筆並可按 Enter 開�
   await expect(page.getByRole("dialog", { name: next.title })).toBeVisible();
 });
 
-for (const scenario of ["成員", "有風險", "查詢", "回答補問", "選專案", "重試"] as const) {
+for (const scenario of ["成員", "專案確認失效", "有風險", "查詢", "回答補問", "選專案", "重試"] as const) {
   test(`${scenario}在列上只能開啟審核，不會直接送出`, async ({ page }) => {
     const { tasks, state } = await mockInboxReview(page);
-    const current = tasks[({ 成員: 3, 有風險: 3, 查詢: 3, 回答補問: 1, 選專案: 2, 重試: 6 })[scenario]];
+    const current = tasks[({ 成員: 3, 專案確認失效: 3, 有風險: 3, 查詢: 3, 回答補問: 1, 選專案: 2, 重試: 6 })[scenario]];
     if (scenario === "成員") {
       await page.route("**/api/me", (route) => route.fulfill({ json: {
         id: exampleMember.github_id, login: exampleMember.login, csrf: "DemoMember1",
         role: exampleMember.role, owner: false,
       } }));
     }
-    if (scenario === "有風險" || scenario === "查詢") {
+    if (scenario === "有風險" || scenario === "查詢" || scenario === "專案確認失效") {
       const changed = scenario === "查詢"
         ? { ...current, mode: "query" as const }
+        : scenario === "專案確認失效" ? { ...current, last_error: expiredProjectConfirmation }
         : { ...current, risk_reasons: cancelledTask.risk_reasons };
       state.tasks = state.tasks.map((entry) => entry.id === current.id ? changed : entry);
       const detail = { ...reviewWorkbenchFixture().details.get(current.id)!, task: changed };
@@ -169,13 +174,14 @@ for (const scenario of ["成員", "有風險", "查詢", "回答補問", "選專
     await page.goto("/");
     const target = row(page, current.title);
     await expect(target.getByRole("button", quickName)).toHaveCount(0);
-    const action = { 成員: "查看", 有風險: "查看", 查詢: "查看", 回答補問: "回答補問", 選專案: "選專案", 重試: "重試" }[scenario];
+    const action = { 成員: "查看", 專案確認失效: "查看", 有風險: "查看", 查詢: "查看", 回答補問: "回答補問", 選專案: "選專案", 重試: "重試" }[scenario];
     const open = target.getByRole("button", { name: action, exact: true });
     await expect(target.getByText(/^等你/)).toHaveCount(0);
     await expect(target.getByText("有風險", { exact: true })).toHaveCount(scenario === "有風險" ? 1 : 0);
     await expect(open).toHaveAttribute("data-variant", "secondary");
     await open.click();
     await expect(panel(page).getByRole("heading", { name: current.title })).toBeVisible();
+    if (scenario === "專案確認失效") await expect(panel(page).getByText(expiredProjectConfirmation)).toBeVisible();
     expect(writes).toEqual([]);
   });
 }
