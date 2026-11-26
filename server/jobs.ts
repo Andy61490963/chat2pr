@@ -570,6 +570,7 @@ export async function startJobs(
   await scheduleTriage();
   return {
     boss,
+    line,
     enqueueValidation: validationQueue.enqueue,
     validationProgress: validationQueue.progress,
     stop: async () => {

@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
   claimingNote,
@@ -18,6 +17,7 @@ import {
   quotaShortForGroup,
 } from "../shared/line-quota.js";
 import * as server from "../server/group-replies.js";
+import { LinePushRejected, LineQuotaExhausted } from "../server/line-quota.js";
 import { discordDeliveryNotes } from "../shared/status-glossary.js";
 
 const sentAt = "2026-11-18T01:00:00.000Z";
@@ -263,13 +263,7 @@ describe("群組訊息送達狀態", () => {
     expect(replyFailedNote).toBe(server.replyFailedNote);
     expect(replyGaveUpNote).toBe(server.replyGaveUpNote);
     expect(supersededNote).toBe(server.supersededNote);
-    // 總開關關閉與一般限流的字直接寫在 flushNotifications 裡。
-    const line = readFileSync(
-      new URL("../server/line.ts", import.meta.url),
-      "utf8",
-    );
-    expect(line).toContain(`last_error='${repliesOffNote}'`);
-    expect(line).toContain(`"${rateLimitedPrefix}`);
-    expect(line).toContain("quotaExhaustedDetail");
+    expect(state({ last_error: String(new LinePushRejected(429)) }).reason).toBe("rate");
+    expect(state({ last_error: new LineQuotaExhausted().message }).reason).toBe("quota");
   });
 });

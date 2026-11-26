@@ -10,7 +10,7 @@ export function notificationView(kind: string): NotificationView | null {
   if (kind.startsWith("repo_") || kind.startsWith("project_"))
     return "projects";
   if (kind === "check" || kind === "group_check") return "checks";
-  if (kind === "triage" || kind.startsWith("group_")) return "groups";
+  if (kind === "triage" || kind === "reply_uncertain" || kind.startsWith("group_")) return "groups";
   if (kind.startsWith("service_")) return "settings";
   if (kind.startsWith("disk_")) return "system";
   return null;

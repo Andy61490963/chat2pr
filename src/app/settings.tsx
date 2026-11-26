@@ -4,7 +4,7 @@ import { Check, Copy, RefreshCw, Send } from "lucide-react";
 import type { NotificationFailures, Settings } from "../../shared/types.js";
 import { ConnectionSecrets } from "./connection-secrets";
 import { linePushService } from "../../shared/group-delivery.js";
-import { LINE_QUOTA, linePushPanel } from "../../shared/line-quota.js";
+import { LINE_QUOTA, linePushPanel, pushCost } from "../../shared/line-quota.js";
 import {
   lineGroupReserveLabel,
   linePrivateDefaults,
@@ -1052,6 +1052,16 @@ export function SettingsView({
     s.line_group_reserve_percent ??
     linePrivateDefaults.line_group_reserve_percent;
   const push = linePushPanel(state.health, failures, reserve);
+  const estimatedGroups = state.groups.filter((g) =>
+    g.platform === "line" && !g.left_at && g.reply_mode !== "off" &&
+    (g.member_count == null || (g.member_count_estimate ?? 0) > g.member_count)
+  );
+  const idleEstimates = estimatedGroups.filter((g) => !g.has_pending_line_push);
+  const estimateRow = (g: (typeof estimatedGroups)[number]) => (
+    <p key={g.id} className="break-words text-sm text-muted-foreground">
+      {g.name}：{g.member_count == null ? "目前人數未知" : `上次查得 ${g.member_count} 人`}，以 {pushCost(g.member_count ?? null, g.member_count_estimate)} 人估算每次推播用量。
+    </p>
+  );
   const [allServicesOpen, setAllServicesOpen] = useState(false);
   const serviceRows = services
     .filter((i) => !i.mode || i.mode === s.ai_mode)
@@ -1221,8 +1231,8 @@ export function SettingsView({
               LINE 推播（群組回覆與私訊）
             </CardTitle>
             <CardDescription>
-              過去 {linePrivateDigestMinutes}{" "}
-              分鐘未送出摘要時，新通知會立即送出。接下來累積的通知會在上一則送出滿{" "}
+              管理者私訊在過去 {linePrivateDigestMinutes}{" "}
+              分鐘未送出摘要時會立即送出。接下來累積的私訊會在上一則送出滿{" "}
               {linePrivateDigestMinutes} 分鐘時合併送出，每則最多列 5
               件，完整通知在看板鈴鐺。
             </CardDescription>
@@ -1232,6 +1242,18 @@ export function SettingsView({
               <p className="text-sm text-muted-foreground tabular-nums">
                 {push.usage}
               </p>
+            )}
+            {push.forecast && (
+              <p className="text-sm text-muted-foreground">{push.forecast}</p>
+            )}
+            {estimatedGroups.filter((g) => g.has_pending_line_push).map(estimateRow)}
+            {idleEstimates.length > 0 && (
+              <details className="text-sm">
+                <summary className="min-h-11 cursor-pointer py-3">
+                  其他群組的推播估值（{idleEstimates.length}）
+                </summary>
+                {idleEstimates.map(estimateRow)}
+              </details>
             )}
             {push.notice && (s.admin_line_id || push.blocked) && (
               <p

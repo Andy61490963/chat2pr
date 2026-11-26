@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type Ref } from "react";
+import { useId, useRef, useState, type ReactElement, type ReactNode, type Ref } from "react";
 import { ChevronRight, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox, Label, Textarea } from "@/components/ui/form-controls";
@@ -67,6 +67,7 @@ export function AssignProject({
   onBound,
   onPrimaryMount,
   inWorkbench = false,
+  renderSubmit = (button) => <div className="flex flex-wrap gap-2">{button}</div>,
 }: {
   task: Task;
   state: State;
@@ -78,6 +79,7 @@ export function AssignProject({
   onBound?: () => unknown;
   onPrimaryMount?: (button: HTMLButtonElement | null) => void;
   inWorkbench?: boolean;
+  renderSubmit?: (button: ReactElement) => ReactNode;
 }) {
   const group = state.groups.find((g) => g.id === t.group_id);
   const bound = state.projects.filter((p) => group?.project_ids.includes(p.id));
@@ -299,7 +301,7 @@ export function AssignProject({
           <span className="min-w-0">記住：{rule}</span>
         </Label>
       )}
-      <div className="flex flex-wrap gap-2">
+      {renderSubmit(
         <Button
           ref={onPrimaryMount}
           variant={
@@ -323,9 +325,9 @@ export function AssignProject({
           }
         >
           指定專案
-        </Button>
-        {/* 「結束任務」由審核面板的動作列提供，這裡不再放一個，避免同一畫面出現兩個。 */}
-      </div>
+        </Button>,
+      )}
+      {/* 「結束任務」由審核面板的動作列提供，這裡不再放一個，避免同一畫面出現兩個。 */}
     </div>
   );
 }

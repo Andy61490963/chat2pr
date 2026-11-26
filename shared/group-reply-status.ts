@@ -29,7 +29,7 @@ export function groupReplyStatus(
     );
     return {
       replies: true,
-      text: `只會即時回覆「收到」等訊息，本月推播額度已用完，預計 ${(month % 12) + 1}/1 重置，你可打 /進度 補看`,
+      text: `本月推播額度已用完。「收到」照常回覆，群組有人發言時會帶出待送的重要通知。預計 ${(month % 12) + 1}/1 重置，你也可打 /進度 補看`,
     };
   }
   return {

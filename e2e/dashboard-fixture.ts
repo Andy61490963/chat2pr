@@ -31,7 +31,6 @@ import {
   discordServiceText,
   projectDescriptionPreselection,
 } from "../shared/status-glossary";
-import type { ActivityEvent } from "../shared/activity-groups";
 import type { PickList } from "../shared/pick-list";
 import type { StuckTask } from "../shared/stuck-tasks";
 
@@ -147,6 +146,9 @@ export const project: Project = {
 export const group: DashboardGroup = {
   id: "group-demo",
   platform: "line",
+  member_count: null,
+  member_count_estimate: null,
+  has_pending_line_push: false,
   name: "測試群組",
   project_ids: [project.id],
   enabled: true,
@@ -880,9 +882,12 @@ export const discordOnlySetup: Pick<
 
 const reviewImageId = "demo-review-image";
 const reviewImagePath = `/api/messages/${reviewImageId}/image`;
+const demoReportImage = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAUAAAADABAMAAACHeaf1AAAAMFBMVEUhTFXm6ub//vgnfHXVjTXa49+arqe/49XT2dHI1c7prFykt69VgoP3+POrjFWu0sf+TNx5AAAACXBIWXMAAAsTAAALEwEAmpwYAAAC1ElEQVR4nO2dMW/TUBSF7wRSFYXeBTHQ5UGlBJGFJ7HAhDx1jGSWLkUVWbKwZQQ6MXdjQ6iTRyQ6F1hYyy/gJ7CxItdxLENqx7lxfIzPt71YjT6de+97yZOiioIjCo4oOKLgiIIjCo4oOKLgiIIjCo4oOKItEbx9IVD0XuQF74D5ifTe5gTvChxfcoJHAseNnCBchUV6OUEBRCnYxQR7v2cxry9QBW9d+c1mvwRU8OaVnsxeNWbVj36uKvi9+BCv6XCMoqhMUOaC87PwWt7U4dePokWEZYIlfrpbh+BOFEUfkBPcqSDYSA/2S0sc6zU5xVHZkDQt2C/eZuA36h76UQeFUtAIE7TCBK0wwY0m6ABRChphglaYoBUmaIUJWmGCVpigFSYImWCQkns1XOu9KFhPgqGNICUMw44Kdn1Iht+enkILHnv/GFlw6L33p8CCD2PBr84dTpYyHTcteC8WfOTc+XLByScKBi0v8RB9SNyx909WfS9u1K086qrQEUGfQsE18UxQ2YOOU1yE55Aoh8RxSKCGJKyIT0G9PPLVBAdnByc2wdIi2kp8FgQHyIKD+NEJsOCD+NHHZd+L81+JGxO8Hz96tvTqI3frQcGgrSUeoA+JQ99mHPxGXQUKZjDBhCSN4mXQfA9ScAETzGAPJiRpzBecYnf9kBRnBJCgp+BqMMGO9mD4z3VLpWWwjcsjbEGHXmJHwZVhgq3swcNJAZ8BBM+LBKcUdO0vcRUomMEEE5I05gv2oOOQVNgH/9oA8Y66KQX9f1PiKlAwgwkmJGnMF+xBt82fToabvZvZFK6bgrUQrvVXFMxgglbCbvXg/ruUsXVZj+DzxefIl9aljdYK7r9PGVuXNrY4JOtBQStM0AoTtMIErTBBK0ywWwn+cHCM2iW45+C4zAniRTjSvOAemOHosm3/SAoWUXBEwREFRxQcUXBEwREFRxQcUXCkaYEy/gDbCYSWnOY7AQAAAABJRU5ErkJggg==",
+  "base64",
+);
 
-export function reviewWorkbenchFixture() {
-  const now = Date.now();
+export function reviewWorkbenchFixture(now = Date.now()) {
   const tasks = Array.from({ length: 26 }, (_, index): Task => {
     const kind = index % 3;
     const created = new Date(now - (26 - index) * 25 * 60_000).toISOString();
@@ -1017,18 +1022,19 @@ const activityTaskFields = {
   task_title: activityTask.title,
   task_mode: activityTask.mode,
 };
+const noActivityTask = { task_id: null, task_title: null, task_mode: null };
 export const unchangedCleanup =
   "Docker 定期清理：刪除 0 個舊映像標籤；0 個懸空映像；建置快取 0.0 GB；映像共釋放 0.0 GB";
 export const changedCleanup = unchangedCleanup.replace("刪除 0", "刪除 1");
-export const derivedImageCleanup: ActivityEvent = {
+export const derivedImageCleanup: State["activity"][number] = {
   id: 7,
-  task_id: null,
+  ...noActivityTask,
   kind: "derived_image_cleanup",
   detail: "已清除 2 個基底過舊的衍生映像，約釋放 3.0 GB",
   created_at: "2026-01-10T08:31:00Z",
 };
 export const repeatedActivity = "管理者 小林 更新示範專案的設定";
-export const recentActivity: ActivityEvent[] = [
+export const recentActivity: State["activity"] = [
   {
     ...activityTaskFields,
     id: 6,
@@ -1038,21 +1044,21 @@ export const recentActivity: ActivityEvent[] = [
   },
   {
     id: 5,
-    task_id: null,
+    ...noActivityTask,
     kind: "settings",
     detail: repeatedActivity,
     created_at: "2026-01-10T08:25:00Z",
   },
   {
     id: 4,
-    task_id: null,
+    ...noActivityTask,
     kind: "docker_cleanup",
     detail: changedCleanup,
     created_at: "2026-01-10T08:24:00Z",
   },
   {
     id: 3,
-    task_id: null,
+    ...noActivityTask,
     kind: "docker_cleanup",
     detail: unchangedCleanup,
     created_at: "2026-01-10T08:23:00Z",
@@ -1066,7 +1072,7 @@ export const recentActivity: ActivityEvent[] = [
   },
   {
     id: 1,
-    task_id: null,
+    ...noActivityTask,
     kind: "settings",
     detail: repeatedActivity,
     created_at: "2026-01-10T08:15:00Z",
@@ -1079,6 +1085,71 @@ export const recentActivity: ActivityEvent[] = [
     created_at: "2026-01-10T08:10:00Z",
   },
 ];
+
+export const inboxReviewTime = "2026-01-10T09:00:00Z";
+export const inboxDetailUnavailable = "範例審核資料暫時無法讀取。";
+export const expiredProjectConfirmation = "目標專案尚未確認或確認已失效，請到看板確認";
+export const summaryTasks = [activityTask, rejectedTask, cancelledTask, closedPrTask];
+export const summaryActivity: State["activity"] = [activityTask, ...summaryTasks].map((entry, index) => ({
+  id: 5 - index,
+  task_id: entry.id,
+  task_title: entry.title,
+  task_mode: entry.mode,
+  kind: "attempt",
+  detail: entry.mode === "query" ? "開始調查" : "開始程式修改",
+  created_at: new Date(Date.parse(inboxReviewTime) - index * 60_000).toISOString(),
+}));
+
+export async function mockInboxReview(page: Page) {
+  const fixture = reviewWorkbenchFixture(Date.parse(inboxReviewTime));
+  const titles = [
+    "顯示匯出報表的日期範圍", "確認月份篩選的預設值", "為示範清單選擇專案",
+    "整理月底對帳明細", "查詢匯出的資料筆數", "指定收據樣式的專案",
+    "重新產生示範月報", "確認是否列出停用項目", "選擇通知設定的專案", "保留上次查詢的月份",
+  ];
+  const tasks = titles.map((title, index): Task => {
+    const entry = fixture.tasks[index];
+    return {
+      ...entry, title,
+      ...(index === 0 ? { created_at: "2026-01-09T08:00:00Z" } : {}),
+      ...(index === 6 ? {
+        status: "failed", updated_at: entry.created_at, last_error: "範例服務暫時沒有回應。",
+      } : {}),
+    };
+  });
+  const state: State = {
+    ...fixture.state,
+    tasks,
+    pickLists: [],
+    stuckTasks: [{ ...stuckTasks[1], taskId: tasks[0].id, title: tasks[0].title }],
+    stuckTasksTotal: 1,
+    health: [
+      ...fixture.state.health.filter(({ name }) => !exhaustedPushHealth.some((entry) => entry.name === name)),
+      ...exhaustedPushHealth,
+    ],
+    activity: recentActivity,
+  };
+  const sourceEnd = "最後一項請保留原來的欄位順序。";
+  const longSource = [
+    "請幫示範專案整理月底的對帳明細，方便各組逐項核對。",
+    ...Array.from({ length: 12 }, (_, index) =>
+      `第 ${index + 1} 組使用範例表單。請分列日期、分類、筆數與小計，讓核對的人能回去找到原始紀錄。`,
+    ),
+    sourceEnd,
+  ].join("\n");
+  const details = Object.fromEntries(tasks.map((entry, index) => {
+    const base = fixture.details.get(entry.id)!;
+    const sources = index === 3
+      ? fixture.details.get(tasks[0].id)!.sources.map((source) =>
+          source.type === "text" && source.availability === "readable" ? { ...source, text: longSource } : source)
+      : base.sources;
+    return [`/api/tasks/${entry.id}`, { ...base, task: entry, sources } satisfies Detail];
+  }));
+  await page.clock.setFixedTime(new Date(inboxReviewTime));
+  await mockDashboard(page, { state: { ...state }, routes: details });
+  await page.route(/\/api\/state(\?|$)/, (route) => route.fulfill({ json: state }));
+  return { state, tasks, sourceEnd };
+}
 
 export async function mockDashboard(
   page: Page,
@@ -1186,6 +1257,9 @@ export async function mockDashboard(
       },
     });
   });
+  await page.context().route(reviewImagePath, (route) =>
+    route.fulfill({ contentType: "image/png", body: demoReportImage }),
+  );
   await page.route("**/*", async (route) => {
     const request = route.request();
     const { hostname, pathname } = new URL(request.url());
@@ -1196,13 +1270,7 @@ export async function mockDashboard(
       return route.fulfill({ json: routes[pathname] });
     }
     if (request.method() === "GET" && pathname === reviewImagePath) {
-      return route.fulfill({
-        contentType: "image/png",
-        body: Buffer.from(
-          "iVBORw0KGgoAAAANSUhEUgAAAPAAAAFoAQAAAABBbEulAAAAIklEQVR4nO3BMQEAAADCoPVPbQhfoAAAAAAAAAAAAACA1wArmAAB3qaDtgAAAABJRU5ErkJggg==",
-          "base64",
-        ),
-      });
+      return route.fallback();
     }
     if (request.method() === "PUT" && pathname === "/api/secrets") {
       if (!(routes["/api/me"] as { owner?: boolean }).owner)

@@ -134,6 +134,7 @@ const kinds: Record<
     tone: "text-danger",
     label: "Docker 磁碟空間不足",
   },
+  reply_uncertain: { icon: CircleAlert, tone: "text-warn", label: notificationLabels.replyUncertain },
   line_backlog: {
     icon: Unplug,
     tone: "text-warn",

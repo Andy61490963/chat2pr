@@ -61,7 +61,7 @@ import {
 import { cn } from "@/lib/utils";
 import { GroupsView } from "./app/groups";
 import { ChatView } from "./app/chat";
-import { InboxView } from "./app/inbox";
+import { InboxReadState, InboxView } from "./app/inbox";
 import { pickListReviewId } from "../shared/review-queue.js";
 import { ProjectForm, ProjectsView } from "./app/projects";
 import { saveProject } from "./app/project-form";
@@ -121,7 +121,6 @@ const views = [
     label: "收件匣",
     icon: Inbox,
     section: "工作區",
-    hint: "需要你決定的事、進行中的工作與最新動態",
   },
   {
     id: "tasks",
@@ -235,6 +234,7 @@ export function App() {
     [lineQuotaHelpOpen, setLineQuotaHelpOpen] = useState(false),
     [state, setState] = useState<State | null>(null),
     [user, setUser] = useState<{
+      id: string;
       csrf: string;
       login: string;
       role?: "admin" | "member";
@@ -313,18 +313,18 @@ export function App() {
   const guard = useGuard();
   // 動態只載入最近的一部分；按「載入更多」才加大範圍。
   const activityLimit = useRef(80);
-  const refresh = useCallback(async () => {
+  const refreshSnapshot = useCallback(async () => {
     try {
-      setState(
-        await request<State>(`/api/state?activity=${activityLimit.current}`),
-      );
+      const snapshot = await request<State>(`/api/state?activity=${activityLimit.current}`);
+      setState(snapshot);
       setError("");
-      return true;
+      return snapshot;
     } catch (e) {
       setError(message(e));
-      return false;
+      return null;
     }
   }, [request]);
+  const refresh = useCallback(async () => (await refreshSnapshot()) !== null, [refreshSnapshot]);
   // 通道停了會回 502／530 的 HTML 頁：當成暫時連不上（configured=null），
   // 登入頁給「重新連線」，不要叫使用者去執行 npm run setup。
   const connect = useCallback(async (signal?: AbortSignal) => {
@@ -592,7 +592,7 @@ export function App() {
   const run = async <T,>(
     fn: () => Promise<T>,
     done: string | ((result: T) => string) = "已儲存",
-    onError = (text: string) => setToast({ text, error: true }),
+    onError: (text: string) => void | Promise<void> = (text) => setToast({ text, error: true }),
   ) => {
     setBusy(true);
     try {
@@ -601,7 +601,7 @@ export function App() {
         const result = await fn();
         toastText = typeof done === "function" ? done(result) : done;
       } catch (e) {
-        onError(message(e));
+        await onError(message(e));
         return false;
       }
       setToast({ text: toastText });
@@ -846,6 +846,14 @@ export function App() {
   );
   const visible = views.filter((v) => admin || v.section === "工作區");
   const current = visible.find((v) => v.id === view) ?? visible[0];
+  const inbox = current.id === "inbox";
+  const quotaSummary = lineQuota && (
+    <>
+      <BellOff aria-hidden="true" className={cn("size-4 shrink-0", inbox ? "text-warn" : "mt-0.5")} />
+      <span>LINE 本月推播額度已用完<span className={inbox ? "max-md:hidden" : undefined}>，你仍可在看板查看通知。</span></span>
+    </>
+  );
+  const noticeError = inbox && !state ? "" : error;
   const morePages = visible.filter((v) => v.section === "管理");
   const moreIsCurrent = current.section === "管理";
   const hostHold = state?.diskDispatchPaused
@@ -917,7 +925,7 @@ export function App() {
       visible: true,
     },
     offline && { key: "offline", visible: true },
-    error && { key: "error", visible: true },
+    noticeError && { key: "error", visible: true },
   ].filter((notice) => typeof notice === "object" && notice !== null);
   const noticeCount = notices.filter((notice) => notice.visible).length;
   const noticeIncident = notices.length
@@ -1084,6 +1092,9 @@ export function App() {
       <main
         className={cn(
           "mx-auto w-full max-w-6xl px-4 pt-5 pb-28 md:px-8 md:pt-7 md:pb-12",
+          inbox && "pt-3 md:pt-4",
+          inbox && lineQuota && noticeCount === 1 &&
+            "[&>:has(#line-quota-help)]:mb-2 [&>:has(#line-quota-help)]:border-border [&>:has(#line-quota-help)]:bg-transparent [&>:has(#line-quota-help)]:text-foreground",
           current.id === "chat" &&
             "flex h-full min-h-0 flex-col overflow-hidden pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:pb-6",
         )}
@@ -1091,6 +1102,7 @@ export function App() {
         <header
           className={cn(
             "mb-7 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3",
+            inbox && "mb-3 items-center md:mb-4",
             current.id === "chat" && "mb-4 shrink-0",
           )}
         >
@@ -1272,26 +1284,27 @@ export function App() {
             </p>
           )}
           {lineQuota && (
-            <div className="px-2 text-sm">
-              <div className="flex flex-wrap items-center gap-x-2">
-                <p
-                  role="status"
-                  className="flex flex-[1_1_9rem] items-start gap-2 py-2"
-                >
-                  <BellOff
-                    aria-hidden="true"
-                    className="mt-0.5 size-4 shrink-0"
-                  />
-                  <span>LINE 本月推播額度已用完，你仍可在看板查看通知。</span>
-                </p>
+            <div className={cn("px-2 text-sm", inbox && "px-0")}>
+              <div role={inbox ? "status" : undefined} className="flex flex-wrap items-center gap-x-2">
+                {!inbox && (
+                  <p role="status" className="flex flex-[1_1_9rem] items-start gap-2 py-2">
+                    {quotaSummary}
+                  </p>
+                )}
                 <button
                   type="button"
                   aria-expanded={lineQuotaHelpOpen}
                   aria-controls="line-quota-help"
                   onClick={() => setLineQuotaHelpOpen((open) => !open)}
-                  className="work-touch inline-flex items-center font-medium underline underline-offset-4"
+                  className={cn(
+                    "work-touch inline-flex items-center",
+                    inbox && "w-full gap-1.5 rounded-sm py-1 text-left focus-visible:outline-2 focus-visible:outline-ring",
+                  )}
                 >
-                  {lineQuotaHelpOpen ? "收起說明" : "怎麼辦"}
+                  {inbox && quotaSummary}
+                  <span className="ml-auto shrink-0 font-medium underline underline-offset-4">
+                    {lineQuotaHelpOpen ? "收起說明" : "怎麼辦"}
+                  </span>
                 </button>
               </div>
               <div
@@ -1299,6 +1312,7 @@ export function App() {
                 hidden={!lineQuotaHelpOpen}
                 className="pb-2"
               >
+                {inbox && <p className="md:hidden">你仍可在看板查看通知。</p>}
                 <p>
                   額度通常在下個月初重置，你可以先從任務詳情複製結果貼回群組，或在群組輸入
                   /進度 取回。
@@ -1316,7 +1330,9 @@ export function App() {
             >
               <WifiOff className="size-4 shrink-0" />
               <span className="min-w-0 flex-1">
-                即時更新中斷了，正在重新連線；畫面可能不是最新狀態。
+                {inbox && state
+                  ? "即時更新中斷，正在重新連線。收件匣仍顯示上次讀取的內容。"
+                  : "即時更新中斷了，正在重新連線；畫面可能不是最新狀態。"}
               </span>
               <Button
                 variant="outline"
@@ -1327,13 +1343,13 @@ export function App() {
               </Button>
             </p>
           )}
-          {error && (
+          {noticeError && (
             <p
               role="alert"
               className="flex flex-wrap items-center gap-2 px-2 py-2 text-sm text-danger"
             >
               <AlertCircle className="size-4 shrink-0" />
-              <span className="min-w-0 flex-1">{error}</span>
+              <span className="min-w-0 flex-1">{noticeError}</span>
               <Button
                 variant="outline"
                 size="xs"
@@ -1345,9 +1361,13 @@ export function App() {
           )}
         </PageNotices>
         {!state ? (
-          <div className="flex min-h-60 items-center justify-center gap-2 text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" /> 載入中…
-          </div>
+          inbox ? (
+            <InboxReadState error={error} retry={refresh} />
+          ) : (
+            <div className="flex min-h-60 items-center justify-center gap-2 text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" /> 載入中…
+            </div>
+          )
         ) : (
           <>
             {current.id === "inbox" && (
@@ -1368,6 +1388,16 @@ export function App() {
                 }
                 loadTaskDetail={loadTaskDetail}
                 reviewActions={{
+                  approveFromQueue: (task, body, onError) =>
+                    run(() => postTaskAction(task, "approve", body), "已確認專案並核准，開始排程", async (text) => {
+                      const snapshot = await refreshSnapshot();
+                      const updated = snapshot?.tasks.find(({ id }) => id === task.id);
+                      if (!snapshot || updated) onError(text, updated);
+                    }),
+                  verifyQuickActor: async () => {
+                    const current = await request<NonNullable<typeof user>>("/api/me");
+                    return !!user.id && current.id === user.id && current.role === "admin" && user.role === "admin";
+                  },
                   go,
                   open: showTask,
                   followup: followupTask,
