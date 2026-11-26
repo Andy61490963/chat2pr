@@ -481,7 +481,7 @@ for (const width of [1440, 375]) {
         section.getByText(task.project_routing!.reason, { exact: true }),
       ).toHaveCount(0);
       await expect(section.getByText(/請先選擇專案|待確認專案/)).toHaveCount(0);
-      const submit = section.getByRole("button", {
+      const submit = (width === 375 ? review : section).getByRole("button", {
         name: "指定專案",
         exact: true,
       });

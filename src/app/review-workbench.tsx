@@ -398,6 +398,7 @@ export function ReviewWorkbench({
     <div
       ref={panel}
       data-review-id={item.id}
+      data-review-version={detail?.task.version ?? list?.version}
       className={cn("min-w-0 [&_a[data-slot=button]]:max-lg:min-h-11 [&_button]:max-w-full [&_button]:whitespace-normal [&_button]:max-lg:min-h-11 [&_select]:max-lg:min-h-11 [&_summary]:max-lg:min-h-11", list && "max-lg:flex max-lg:h-full max-lg:flex-col")}
     >
       {(!desktop || !detail) && actionNotice && (
@@ -499,17 +500,28 @@ export function ReviewWorkbench({
       ref={workbench}
       tabIndex={-1}
       onKeyDownCapture={(event) => {
-        if (event.key !== "Enter" || !event.altKey || event.ctrlKey || event.metaKey ||
-            event.shiftKey || event.nativeEvent.isComposing) return;
-        event.preventDefault();
-        if (busy || suspended || event.repeat) return;
+        if (event.ctrlKey || event.metaKey || event.shiftKey || event.nativeEvent.isComposing) return;
         const target = event.target;
         const button = primary.current;
-        if (!(target instanceof HTMLElement) || !event.currentTarget.contains(target) ||
-            !button?.isConnected || button.disabled || button.getAttribute("aria-disabled") === "true") return;
+        if (!event.altKey && target === button && (event.key === "j" || event.key === "k")) {
+          event.preventDefault();
+          const neighbor = event.key === "j" ? next : previous;
+          if (neighbor && !busy && !suspended && !event.repeat) choose(neighbor.id, "enter");
+          return;
+        }
+        if (event.key !== "Enter" || !event.altKey) return;
+        event.preventDefault();
+        if (busy || suspended || event.repeat || !(target instanceof HTMLElement) || !button) return;
         if (!item || panel.current?.dataset.reviewId !== item.id) return;
-        if (target !== button && target.closest<HTMLElement>("[data-review-row]")?.dataset.reviewRow !== item.id) return;
-        button.click();
+        if (target !== button && (!event.currentTarget.contains(target) || target.closest<HTMLElement>("[data-review-row]")?.dataset.reviewRow !== item.id)) return;
+        if (button.disabled || button.getAttribute("aria-disabled") === "true") return;
+        const version = panel.current.dataset.reviewVersion;
+        const activate = () => {
+          if (button === primary.current && button.isConnected && latestId.current === item.id &&
+              panel.current?.dataset.reviewVersion === version && !button.disabled && button.getAttribute("aria-disabled") !== "true") button.click();
+        };
+        if (item.kind === "task") guard(activate, { prefixes: ["task"] });
+        else activate();
       }}
       className={cn(
         "min-w-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground",
@@ -587,7 +599,13 @@ export function ReviewWorkbench({
             <div key={item.id} className="min-h-0 flex-1 overflow-y-auto">
               {content}
             </div>
-            <div ref={setActionDock} className="shrink-0 bg-card" />
+            <div ref={setActionDock} className="shrink-0 bg-card">
+              {!list && !detail && !error && keepScroll.current && (
+                <p role="status" className="grid min-h-28 place-items-center border-t p-4 text-sm text-muted-foreground">
+                  正在讀取下一筆
+                </p>
+              )}
+            </div>
           </SheetContent>
         </Sheet>
       )}

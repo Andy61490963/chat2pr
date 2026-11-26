@@ -413,6 +413,7 @@ export function TaskReviewPanel({
     t.status === "awaiting_approval" &&
     !t.project_id &&
     !canAnswer;
+  const dockProjectSubmit = assignPrimary && !!actionDock;
   const amendButton = canAmend && (
     <Button
       variant={amendPrimary ? "default" : "outline"}
@@ -688,6 +689,7 @@ export function TaskReviewPanel({
             onPrimaryMount={
               assignPrimary && !amendPrimary ? onPrimaryMount : undefined
             }
+            renderSubmit={dockProjectSubmit ? renderActions : undefined}
           />
         )}
       </section>
@@ -851,7 +853,7 @@ export function TaskReviewPanel({
       />
     </>
   );
-  const actions = (
+  const actionBar = (projectSubmit?: ReactNode) => (
     <>
       {(t.status === "awaiting_approval" ||
         ["failed", "budget_wait", "queued", "running", "reviewing"].includes(
@@ -863,6 +865,7 @@ export function TaskReviewPanel({
             inWorkbench && "mt-0 bg-surface px-4 py-3 max-lg:grid max-lg:max-h-[45dvh] max-lg:grid-cols-2 max-lg:gap-2 max-lg:overflow-y-auto max-lg:pb-[max(0.75rem,env(safe-area-inset-bottom))] max-lg:[&>button]:h-auto max-lg:[&>button]:min-h-11 max-lg:[&>button]:min-w-0 max-lg:[&>button]:whitespace-normal max-lg:[&>[data-variant=default]]:col-span-full lg:border-t-0 lg:border-b lg:pt-1",
           )}
         >
+          {projectSubmit}
           {canAnswer && (
             <Button ref={onPrimaryMount} onClick={focusAnswer}>
               {taskClarificationLabels.action}
@@ -993,6 +996,10 @@ export function TaskReviewPanel({
       )}
     </>
   );
+  function renderActions(projectSubmit?: ReactNode) {
+    const bar = actionBar(projectSubmit);
+    return actionDock ? createPortal(bar, actionDock) : bar;
+  }
   const metadata = (
     <DescriptionList pairs={2} className="max-w-xl text-xs">
       {(
@@ -1076,7 +1083,7 @@ export function TaskReviewPanel({
         <div className="rounded-t-[inherit] bg-surface lg:sticky lg:top-4 lg:z-10">
           {actionNotice}
           {header}
-          {actionDock ? createPortal(actions, actionDock) : actions}
+          {!dockProjectSubmit && renderActions()}
         </div>
       ) : header}
       <div
@@ -1628,7 +1635,7 @@ export function TaskReviewPanel({
           )}
         </Tabs>
       </div>
-      {!inWorkbench && actions}
+      {!inWorkbench && actionBar()}
     </>
   );
 }
