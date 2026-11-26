@@ -43,6 +43,7 @@ import { askInGroup } from "../server/answers.js";
 import { approvalNotice } from "../server/project-routing.js";
 import { dueTriageGroups } from "../server/triage-window.js";
 import { GitHub } from "../server/github.js";
+import { deliveryLabel, deliveryNotice } from "../shared/group-delivery.js";
 import { expiredNote, quotaExhaustedDetail } from "../shared/line-quota.js";
 import {
   expireStaleNotifications,
@@ -1049,6 +1050,7 @@ describe("用 reply token 取回與說實話", () => {
   let replyStatus: number;
   let replyMessage: string;
   let replyTimeout: boolean;
+  let connectRefused: boolean;
   beforeEach(async () => {
     await clearHealth();
     pushes = [];
@@ -1056,6 +1058,7 @@ describe("用 reply token 取回與說實話", () => {
     replyStatus = 200;
     replyMessage = "Invalid reply token";
     replyTimeout = false;
+    connectRefused = false;
     push = async () =>
       Response.json({ message: "Too many requests" }, { status: 429 });
     // 模擬 LINE：reply 成功時依序回傳每則訊息的 ID（reply-第幾次-第幾則）。
@@ -1070,6 +1073,8 @@ describe("用 reply token 取回與說實話", () => {
         if (url.endsWith("/v2/bot/message/reply")) {
           replyCalls.push({ token: body.replyToken, messages: body.messages });
           const n = replyCalls.length;
+          if (connectRefused)
+            throw new TypeError("fetch failed", { cause: Object.assign(new Error(), { code: "ECONNREFUSED" }) });
           if (replyTimeout)
             throw new DOMException(
               "The operation was aborted due to timeout",
@@ -1615,7 +1620,7 @@ describe("用 reply token 取回與說實話", () => {
     expect(await failures(flaky)).toBe(0);
     expect(await notice(flaky)).toMatchObject({
       sent_at: null,
-      last_error: replyFailedNote,
+      sent_message_id: null,
     });
     replyTimeout = false;
     await send("p7", "/進度");
@@ -1752,6 +1757,71 @@ describe("用 reply token 取回與說實話", () => {
     expect((await notice(answer)).sent_message_id).toBe("reply-1-1");
     await line.flushNotifications();
     expect(pushes).toHaveLength(0);
+  });
+
+  it.each([
+    { firstMessage: "早安", cause: "逾時", status: 200 },
+    { firstMessage: "/進度", cause: "逾時", status: 200 },
+    { firstMessage: "早安", cause: "伺服器錯誤", status: 503 },
+  ])("「$firstMessage」的免費回覆發生$cause 後，只有成員再次輸入 /進度 可取回", async ({ firstMessage, status }) => {
+    await settings();
+    const id = await answeredTask("示範回答");
+    replyTimeout = status === 200;
+    replyStatus = status;
+    await send("initial", firstMessage);
+    expect(lastReply().join("\n")).toContain("示範回答");
+    replyTimeout = false;
+    replyStatus = 200;
+    await line.flushNotifications();
+    expect(pushes).toHaveLength(0);
+    await send("ordinary", "午安");
+    expect(replyCalls).toHaveLength(1);
+
+    replyStatus = 400;
+    await send("expiredToken", "/進度");
+    expect(lastReply().join("\n")).toContain("示範回答");
+    await line.flushNotifications();
+    expect(pushes).toHaveLength(0);
+    expect(replyCalls).toHaveLength(2);
+    const chat = await app.inject({ url: "/api/groups/group-a/messages", headers });
+    const { delivery } = chat.json().bot_messages.find((m: { task_id: string }) => m.task_id === id);
+    expect(deliveryLabel(delivery)).toBe("送達待確認");
+    expect(deliveryNotice(delivery, "group_answered")).toContain("/進度");
+
+    replyStatus = 200;
+    await send("retrieve", "/進度");
+    expect(lastReply()[0]).not.toContain("先前沒送到");
+    expect(lastReply()[1]).toContain("示範回答");
+    expect((await notice(id)).sent_message_id).toBe("reply-3-1");
+    await send("done", "/進度");
+    expect(lastReply()).toHaveLength(1);
+  });
+
+  it("免費回覆建立連線遭拒時，排程仍能推播該則回答", async () => {
+    await settings();
+    const id = await answeredTask("連線恢復後的回答");
+    connectRefused = true;
+    await send("connect", "早安");
+    connectRefused = false;
+    push = async () => Response.json({ sentMessages: [{ id: "ExamplePush1" }] });
+    await line.flushNotifications();
+    expect(pushes).toHaveLength(1);
+    expect(pushes[0].text).toContain("連線恢復後的回答");
+    expect((await notice(id)).sent_message_id).toBe("ExamplePush1");
+  });
+
+  it("額度充足的摘要提示可用 /進度 取回，其餘結果可在群組再發言前推播", async () => {
+    await settings();
+    await db.query("INSERT INTO service_health(name,ok,detail) VALUES('line_quota',true,'本月已用 12／上限 200 則')");
+    for (let i = 1; i <= 6; i++) await answeredTask(`虛構結果${i}`);
+    push = async () => Response.json({ sentMessages: [{ id: "ExamplePush2" }] });
+    await send("summary", "早安");
+    const summary = lastReply().at(-1)!;
+    expect(summary).toContain("虛構結果6");
+    expect(summary).toContain("/進度");
+    expect(summary).not.toContain("下次群組發言時會繼續補送");
+    await line.flushNotifications();
+    expect(pushes.map((call) => call.text).join("\n")).toContain("虛構結果6");
   });
 
   it("重要結果超過五則時，同一個回覆也會摘要其餘項目，仍可取回可引用的原訊息", async () => {
