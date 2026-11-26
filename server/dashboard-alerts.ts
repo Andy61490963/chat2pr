@@ -1,5 +1,6 @@
 import { taskGroups } from "../shared/types.js";
 import type { Database } from "./db.js";
+import { groupReplyStillUncertain } from "./reply-uncertain.js";
 import { notificationProject } from "./notification-project.js";
 import { liveStuckNotice } from "./stuck-tasks.js";
 
@@ -10,6 +11,7 @@ export function dashboardAlerts(db: Database, admin: boolean) {
        SELECT n.id,n.kind,n.created_at,p.id AS project_id,t.status,
          CASE
            WHEN NOT $1 AND n.task_id IS NULL AND n.group_id IS NULL THEN false
+           WHEN n.kind='reply_uncertain' THEN ${groupReplyStillUncertain}
            WHEN n.kind IN ('approval','risk','input_required','ready')
              AND split_part(n.dedupe_key,':',3) ~ '^[0-9]+$'
              AND split_part(n.dedupe_key,':',3)<>t.version::text THEN false
@@ -37,15 +39,17 @@ export function dashboardAlerts(db: Database, admin: boolean) {
            WHEN n.kind='stuck_tasks' THEN ${liveStuckNotice}
            WHEN n.kind IN ('group_waiting','budget','group_received','auto_resume','group_resumed') THEN false
          END AS action,
-         coalesce('task:'||n.task_id,n.kind||':'||coalesce(p.id::text,g.id,h.name),n.id::text) AS action_key
+         CASE WHEN n.kind='reply_uncertain' THEN n.dedupe_key
+           ELSE coalesce('task:'||n.task_id,n.kind||':'||coalesce(p.id::text,g.id,h.name),n.id::text) END AS action_key
        FROM notifications n
        LEFT JOIN tasks t ON t.id=n.task_id
        LEFT JOIN projects p ON $1 AND p.id=(${notificationProject})
        LEFT JOIN groups g ON $1 AND n.kind='group_new' AND g.id=split_part(n.dedupe_key,':',2)
        LEFT JOIN service_health h ON $1 AND n.kind='service_down' AND h.name=split_part(n.dedupe_key,':',2)
+       WHERE $1 OR n.kind<>'reply_uncertain'
      ), actionable AS (
        SELECT DISTINCT ON (action_key) id,created_at,project_id,
-         CASE WHEN status=ANY($2::text[]) THEN 'inbox' ELSE 'action' END AS disposition
+         CASE WHEN kind<>'reply_uncertain' AND status=ANY($2::text[]) THEN 'inbox' ELSE 'action' END AS disposition
        FROM classified WHERE action
        ORDER BY action_key,(kind IN ('input_required','group_question')) DESC,
          (kind NOT IN ('group_received','group_failed','group_ready')) DESC,created_at DESC,id DESC

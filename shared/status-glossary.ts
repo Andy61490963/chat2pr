@@ -61,6 +61,8 @@ export const groupDeliveryText = {
   closedNotice: "結束通知",
   quota: "LINE 本月推播額度已用完",
   groupSize: "LINE 剩餘推播額度不夠這個群組的人數",
+  quotaPriority: "剩餘推播額度保留給重要通知，群組發言時會以免費回覆補送，也可輸入 /進度 取回",
+  botLeft: "機器人已離開群組，未送出",
   lineRate: "LINE 暫時限制推播速度",
   lineRejected: "LINE 沒有收下這則訊息",
   lineError: "LINE 回應錯誤",
@@ -76,6 +78,9 @@ export const groupDeliveryText = {
   superseded: "已有較新的回覆",
   retry: "系統會再試",
   replyFailed: "透過 /進度 補送失敗",
+  replyUncertain: "LINE 未確認是否已送達",
+  replyUncertainLabel: "送達待確認",
+  manualProgress: "需要時可請群組成員輸入 /進度 取回",
   forward: "需要時請在看板查看並轉達",
   tryProgress: "可請群組成員用 /進度 取回，或在看板查看並轉達",
   enableReplies: "如需恢復通知，請確認群組回覆設定",
@@ -276,6 +281,7 @@ export const projectQuotaWaitPrefix = `${statusLabels.budget_wait}｜`;
 
 export const notificationLabels = {
   action: "需要你處理",
+  replyUncertain: "群組回覆待確認",
   privatePushPaused: "私訊暫停",
   serviceDown: "服務異常",
   serviceUp: "服務已恢復",

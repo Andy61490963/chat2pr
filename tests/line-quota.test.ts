@@ -37,7 +37,7 @@ describe("LINE 查詢錯誤只留下安全訊息", () => {
       one: async () => ({ member_count: 7, fresh: false }),
       query,
     } as unknown as Database;
-    expect(await groupMemberCount(db, "group-demo", "虛構權杖")).toBe(7);
+    expect(await groupMemberCount(db, "group-demo", "ExampleToken")).toEqual({ members: 7, cost: 7 });
     expect(query).toHaveBeenCalledOnce();
     expect(query.mock.calls[0][1]).toEqual(["group-demo"]);
   });
@@ -55,9 +55,9 @@ describe("剩餘額度對群組人數", () => {
     expect(quotaRemaining(quotaUsageOf(quotaExhaustedDetail))).toBeNull();
     expect(quotaRemaining({ limit: null, used: 5 })).toBe(Infinity);
   });
-  it("群組推播依人數計費，人數未知時當 1 則；私訊 1 則", () => {
+  it("群組人數未知時先估八人，私訊仍計一人", () => {
     expect(pushCost(8)).toBe(8);
-    expect(pushCost(null)).toBe(1);
+    expect(pushCost(null)).toBe(8);
     expect(pushCost(undefined)).toBe(1);
     expect(pushCost(0)).toBe(1);
     // 剩 5 則、群組 8 人：不夠；私訊只要 1 則。
@@ -104,6 +104,50 @@ describe("辨識 LINE 每月推播額度用完", () => {
 describe("設定頁的 LINE 推播卡片", () => {
   const failures = { direct: 2, group: 3, stale: 4 };
 
+  describe("預估推播額度用完日", () => {
+    afterEach(() => vi.useRealTimers());
+
+    function panel(detail: string, checked_at = "2028-02-09T16:00:00Z", ok = true) {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2028-02-11T12:00:00+08:00"));
+      const sample = { name: "line_quota", ok, detail, checked_at };
+      return linePushPanel([sample], failures);
+    }
+
+    it("依最近查核日和本月日均用量估算，閏年的月底也能顯示", () => {
+      expect(panel("本月已用 100／上限 200 則")).toMatchObject({
+        usage: "本月已用 100／上限 200",
+        forecast: "按本月平均每日用量，預估 2 月 20 日用完。",
+      });
+      expect(panel("本月已用 70／上限 200 則")).toMatchObject({
+        forecast: "按本月平均每日用量，預估 2 月 29 日用完。",
+      });
+      expect(panel("本月已用 60／上限 200 則")).toMatchObject({
+        forecast: "按本月平均每日用量，預估本月不會用完。",
+      });
+    });
+
+    it("用量不足以估算時保留用量說明，不列出推測日期", () => {
+      for (const sample of [
+        panel("本月已用 0／上限 200 則"),
+        panel("本月已用 100 則，方案沒有推播上限"),
+        panel("尚未查到用量"),
+        panel("無法連線至 LINE（上次查到本月已用 100／上限 200 則）"),
+        panel("本月已用 100／上限 200 則", "無效日期"),
+        panel("本月已用 200／上限 200 則", undefined, false),
+      ]) {
+        expect(sample).toMatchObject({ forecast: null });
+      }
+    });
+
+    it("跨月後尚未取得新用量時不沿用上月的數字或日期", () => {
+      expect(panel("本月已用 100／上限 200 則", "2028-01-31T15:59:00Z")).toMatchObject({
+        usage: "尚未取得本月推播用量",
+        forecast: null,
+      });
+    });
+  });
+
   it("額度用完時顯示用量與額度說明，停用重送與測試通知", () => {
     const panel = linePushPanel(
       [
@@ -120,6 +164,7 @@ describe("設定頁的 LINE 推播卡片", () => {
     expect(panel.notice).toContain(
       "LINE 本月推播額度已用完，額度恢復前重送也會失敗",
     );
+    expect(panel.notice).toContain("群組有人發言時，會在回覆中帶上待送的重要通知摘要");
     expect(panel.retryDisabled).toBe(true);
     expect(panel.testDisabled).toBe(true);
     expect(panel.failedText).toContain("額度恢復前重送也會失敗");

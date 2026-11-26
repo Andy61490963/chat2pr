@@ -141,6 +141,12 @@ ALTER TABLE notifications ADD COLUMN IF NOT EXISTS discord_thread_id text;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS discord_thread_id text;
 -- 私訊摘要先保存批次，再對 LINE 推播；重試同一批沿用同一個 LINE 重試鍵。
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_digest_id uuid;
+-- free 可隨群組發言送出。manual 可用 /進度 取回；重要免費回覆送達未確認時，冷卻五分鐘後可隨新發言再補送一次。
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_reply_policy text CHECK (line_reply_policy IN ('free','manual'));
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_reply_uncertain_at timestamptz;
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_reply_alert_id uuid REFERENCES notifications(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS notifications_reply_alert ON notifications(line_reply_alert_id) WHERE line_reply_alert_id IS NOT NULL;
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_reply_retry_count integer NOT NULL DEFAULT 0;
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_outage_started_at timestamptz;
 CREATE TABLE IF NOT EXISTS service_health (name text PRIMARY KEY, ok boolean NOT NULL, detail text NOT NULL, checked_at timestamptz NOT NULL DEFAULT now());
 ALTER TABLE service_health ADD COLUMN IF NOT EXISTS probe_info jsonb;
@@ -496,6 +502,7 @@ ALTER TABLE groups ADD COLUMN IF NOT EXISTS name_synced_at timestamptz;
 -- 群組推播依人數計費：快取群組人數，判斷剩餘推播額度夠不夠送；24 小時更新一次，讀不到時為 NULL（未知）。
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS member_count integer;
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS member_count_at timestamptz;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS member_count_estimate integer;
 -- 查詢任務：只調查並回覆，不修改程式、不開 PR；調查結果存在 answer。
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS mode text NOT NULL DEFAULT 'change';
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS answer text;

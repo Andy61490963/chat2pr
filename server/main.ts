@@ -22,6 +22,7 @@ const app = await buildApp(
   undefined,
   jobs.validationProgress,
   () => void discord.refresh(),
+  jobs.line,
 );
 await app.listen({ port: config().port, host: config().host });
 await discord.refresh();

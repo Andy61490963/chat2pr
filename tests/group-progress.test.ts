@@ -74,7 +74,6 @@ describe("「收到」依狀態選文字", () => {
     triageStopped: false,
     noProject: false,
     aiQuotaOut: false,
-    undelivered: 0,
   };
   it("正常狀態維持原本的 commandAck／followupAck", () => {
     expect(ackFor(normal)).toBe(commandAck);
@@ -110,14 +109,6 @@ describe("「收到」依狀態選文字", () => {
       expect(text).not.toContain("處理完會在這裡回報");
       expect(text).toContain("不用重新提出");
     }
-  });
-  it("有沒送達的回覆時只加一句提示，不附完整內容", () => {
-    expect(ackFor({ ...normal, undelivered: 2 })).toBe(
-      `${commandAck}\n有 2 則先前沒送達的回覆，打 /進度 取回。`,
-    );
-    expect(ackFor({ ...normal, paused: true, undelivered: 1 })).toBe(
-      `${pausedAck}\n有 1 則先前沒送達的回覆，打 /進度 取回。`,
-    );
   });
 });
 

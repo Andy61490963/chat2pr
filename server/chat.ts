@@ -7,7 +7,7 @@ import { memberNames } from "./line-members.js";
 import { displayMessageText } from "./message-sources.js";
 import type { ChatMessage, ChatPage } from "../shared/chat.js";
 import type { Group } from "../shared/types.js";
-import { type BotMessage, deliveryState } from "../shared/group-delivery.js";
+import { type BotMessage, type DeliveryRow, deliveryState } from "../shared/group-delivery.js";
 import { lineQuotaBlocked } from "./line-quota.js";
 
 /**
@@ -31,21 +31,17 @@ async function botMessages(
   /** 機器人訊息自己的游標：只取比這則通知舊的（同時間以 id 排序），用於超過 botLimit 的接續頁。 */
   botBefore: string | null = null,
 ): Promise<BotMessage[]> {
-  const rows = await db.query<{
+  const rows = await db.query<DeliveryRow & {
     id: string;
     kind: string;
     task_id: string | null;
     task_title: string | null;
     created_at: string;
     text: string | null;
-    sent_at: string | null;
-    has_message_id: boolean;
-    attempts: number;
-    last_error: string | null;
   }>(
     `SELECT n.id,n.kind,n.task_id,t.title AS task_title,n.created_at,
        CASE WHEN n.created_at>message_retention_cutoff() THEN left(n.text,4500) END AS text,
-       n.sent_at,n.sent_message_id IS NOT NULL AS has_message_id,n.attempts,n.last_error
+       n.sent_at,n.sent_message_id IS NOT NULL AS has_message_id,n.attempts,n.last_error,n.line_reply_policy
      FROM notifications n LEFT JOIN tasks t ON t.id=n.task_id AND t.group_id=n.group_id
      WHERE n.group_id=$1
        AND ($2::text IS NULL OR n.created_at<(SELECT received_at FROM messages WHERE id=$2 AND group_id=$1))
