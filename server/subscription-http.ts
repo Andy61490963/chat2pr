@@ -2,6 +2,13 @@ import { request as httpsRequest } from "node:https";
 import type { IncomingMessage } from "node:http";
 import { Readable } from "node:stream";
 import { AppError } from "./policy.js";
+import type { UpstreamFailure } from "../shared/upstream-failure.js";
+
+export class SubscriptionTransportError extends AppError {
+  constructor(status: number, message: string, readonly kind: UpstreamFailure["kind"], readonly upstreamStatus?: number) {
+    super(status, message);
+  }
+}
 
 export const SUBSCRIPTION_RESPONSES_URL =
   "https://chatgpt.com/backend-api/codex/responses";
@@ -17,9 +24,9 @@ export function createSubscriptionTransport(
       typeof options.body !== "string" ||
       !options.signal
     )
-      throw new AppError(400, "訂閱上游請求格式無效");
+      throw new SubscriptionTransportError(400, "訂閱上游請求格式無效", "invalid_request");
     const signal = options.signal;
-    if (signal.aborted) throw new AppError(408, "訂閱階段已取消或超過期限");
+    if (signal.aborted) throw new SubscriptionTransportError(408, "訂閱階段已取消或超過期限", "phase_cancelled");
     return new Promise<Response>((resolve, reject) => {
       let incoming: IncomingMessage | undefined,
         settled = false;
@@ -33,7 +40,7 @@ export function createSubscriptionTransport(
         incoming?.destroy();
         outgoing.destroy();
       };
-      const abort = () => fail(new AppError(408, "訂閱階段已取消或超過期限"));
+      const abort = () => fail(new SubscriptionTransportError(408, "訂閱階段已取消或超過期限", "phase_cancelled"));
       const outgoing = request(
         new URL(SUBSCRIPTION_RESPONSES_URL),
         {
@@ -49,7 +56,7 @@ export function createSubscriptionTransport(
           }
           const status = response.statusCode ?? 502;
           if (status >= 300 && status < 400) {
-            fail(new AppError(502, "訂閱上游不接受重新導向"));
+            fail(new SubscriptionTransportError(502, "訂閱上游不接受重新導向", "redirect", status));
             return;
           }
           // 不傳遞上游任意標頭、Location、statusText 或錯誤字串。
@@ -70,11 +77,11 @@ export function createSubscriptionTransport(
             settled = true;
             resolve(result);
           } catch {
-            fail(new AppError(502, "訂閱上游回應格式無效"));
+            fail(new SubscriptionTransportError(502, "訂閱上游回應格式無效", "invalid_stream", response.statusCode));
           }
         },
       );
-      outgoing.once("error", () => fail(new AppError(502, "訂閱上游連線失敗")));
+      outgoing.once("error", () => fail(new SubscriptionTransportError(502, "訂閱上游連線失敗", "connection")));
       signal.addEventListener("abort", abort, { once: true });
       if (signal.aborted) {
         abort();
@@ -83,7 +90,7 @@ export function createSubscriptionTransport(
       try {
         outgoing.end(options.body);
       } catch {
-        fail(new AppError(502, "訂閱上游傳送失敗"));
+        fail(new SubscriptionTransportError(502, "訂閱上游傳送失敗", "connection"));
       }
     });
   };

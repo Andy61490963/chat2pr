@@ -211,6 +211,12 @@ describe("測試階段失敗時保留失敗測試的錯誤區塊（執行紀錄�
     stderr: "Node.js v24.0.0",
   };
 
+  it("訂閱失敗時階段結束只記代理類別與數字，不採用容器輸出", () => {
+    const diagnostic = phaseEndEvents("code", { ...result, stderr: "虛構的輸出", upstreamFailure: { kind: "upstream_http", status: 500 } });
+    expect(diagnostic).toEqual([{ kind: "phase_end", exitCode: 1, detail: expect.stringMatching(/upstream_http.*500/) }]);
+    expect(diagnostic[0].detail).not.toContain("虛構的輸出");
+  });
+
   it("失敗時另存一筆錯誤區塊，結尾照舊保存在階段結束", () => {
     const events = phaseEndEvents("test", result);
     expect(events.map((e) => e.kind)).toEqual(["message", "phase_end"]);

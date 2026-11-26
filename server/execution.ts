@@ -44,6 +44,7 @@ import { config, flowSubscriptionOrigin, secrets, token } from "./config.js";
 import { hash } from "./auth.js";
 import { AppError, classifyRisk, redact, taipeiDay } from "./policy.js";
 import { subscriptionLimited } from "./triage.js";
+import { parseUpstreamFailure, type UpstreamFailure } from "../shared/upstream-failure.js";
 import {
   classifyFailure,
   failureDigest,
@@ -177,6 +178,7 @@ export function isTransientValidationFailure(error: unknown) {
   return "status" in error && [502, 503, 504].includes(Number(error.status));
 }
 export interface PhaseResult {
+  upstreamFailure?: UpstreamFailure;
   observations?: RunEvent[];
   /** 可信執行器在啟動 Codex 前回報的 SQL 審查複驗失敗。 */
   sqlReviewFailure?: true;
@@ -992,6 +994,7 @@ export class Execution {
       repairing = false,
       localSeq = 0,
       cursor = 0;
+    let upstreamFailure: UpstreamFailure | undefined;
     let pollPending: Promise<void> | undefined,
       observerLost = false;
     const record = async (kind: string, detail?: string, exitCode?: number) => {
@@ -1448,6 +1451,8 @@ export class Execution {
             : "SQL Server 審查複驗未通過";
           throw new AppError(422, `${reason}（退出碼 ${r.exitCode}）\n${redact(r.stderr).slice(-4000)}`);
         }
+        if (subscription && (name === "code" || name === "review") && r.exitCode !== 0)
+          upstreamFailure = parseUpstreamFailure(r.upstreamFailure);
         return r;
       };
       let setup: { plan: SetupPlan; cached: boolean } | undefined;
@@ -2407,6 +2412,7 @@ ${querySummary(answer)}`,
         currentPhase,
         "task",
         failureProject,
+        upstreamFailure,
       );
       // 逾時要說出時間花在哪個階段，管理者才知道該縮小哪一部分（#256）。
       const longest = timedOut ? await this.longestPhase(runId) : "";

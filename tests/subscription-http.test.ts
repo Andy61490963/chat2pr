@@ -87,7 +87,11 @@ it("不跟隨重導也不回顯Location或上游原因", async () => {
     res.writeHead(302, { location: "https://example.invalid/synthetic-main" });
     res.end("synthetic-main");
   });
-  await expect(f.send()).rejects.toThrow("不接受重新導向");
+    await expect(f.send()).rejects.toMatchObject({
+      message: "訂閱上游不接受重新導向",
+      statusCode: 502,
+      upstreamStatus: 302,
+    });
   expect(f.calls).toHaveLength(1);
 });
 it("錯誤目的地、方法或無phase signal不送出網路請求", async () => {
