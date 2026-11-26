@@ -143,6 +143,7 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS discord_thread_id text;
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_digest_id uuid;
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_outage_started_at timestamptz;
 CREATE TABLE IF NOT EXISTS service_health (name text PRIMARY KEY, ok boolean NOT NULL, detail text NOT NULL, checked_at timestamptz NOT NULL DEFAULT now());
+ALTER TABLE service_health ADD COLUMN IF NOT EXISTS probe_info jsonb;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS config_version integer NOT NULL DEFAULT 1;
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS triage_failures integer NOT NULL DEFAULT 0;
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS triage_error text;
@@ -819,3 +820,22 @@ CREATE TABLE IF NOT EXISTS baseline_passes (
 );
 -- 「修復目標分支」任務（#248）：只能從基底驗證失敗的任務建立，可以在基底為紅時開始，結束時的關卡不變。
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS baseline_repair boolean NOT NULL DEFAULT false;
+
+CREATE TABLE IF NOT EXISTS task_stalls (
+ episode text PRIMARY KEY, task_id uuid NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+ version integer NOT NULL, status text NOT NULL, reason text NOT NULL, action_label text NOT NULL,
+ target text NOT NULL CHECK(target IN ('task','system')), since timestamptz NOT NULL, notice_id uuid
+);
+CREATE INDEX IF NOT EXISTS task_stalls_notice ON task_stalls(notice_id) WHERE notice_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS inference_probe_budget (
+ id boolean PRIMARY KEY CHECK(id), day date NOT NULL, attempts integer NOT NULL CONSTRAINT inference_probe_count CHECK(attempts BETWEEN 0 AND 8)
+);
+DO $$ BEGIN
+ IF EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='inference_probe_budget'::regclass AND conname='inference_probe_budget_attempts_check') THEN
+   ALTER TABLE inference_probe_budget DROP CONSTRAINT inference_probe_budget_attempts_check,
+     ADD CONSTRAINT inference_probe_count CHECK(attempts BETWEEN 0 AND 8);
+ END IF;
+END $$;
+ALTER TABLE inference_probe_budget ADD COLUMN IF NOT EXISTS reserved_at timestamptz;
+ALTER TABLE inference_probe_budget ADD COLUMN IF NOT EXISTS early_attempts integer NOT NULL DEFAULT 0 CHECK(early_attempts BETWEEN 0 AND 2);
+CREATE INDEX IF NOT EXISTS audit_task_failure ON audit(task_id,created_at DESC,id DESC) WHERE kind='error';

@@ -1,6 +1,8 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { Transform } from "node:stream";
+import { z } from "zod";
+import { maxCodexReserve, subscriptionQuotaHold, unknownSubscriptionQuota, type SubscriptionUsage } from "../shared/subscription-quota.js";
 import {
   isRetryableUpstreamFailure,
   parseUpstreamFailure,
@@ -8,6 +10,7 @@ import {
   type UpstreamFailure,
 } from "../shared/upstream-failure.js";
 import { AppError } from "./policy.js";
+import { runnerRequest } from "./runner-http.js";
 import {
   subscriptionFetch,
   SubscriptionTransportError,
@@ -21,8 +24,10 @@ export interface SubscriptionIdentity {
   secrets: string[];
   models: string[];
   defaultModel: string;
+  quota?: SubscriptionUsage;
 }
 interface Run {
+  completedProbeOverLimit?: boolean;
   deadline: number;
   requests: number;
   inputBytes: number;
@@ -32,6 +37,7 @@ interface Run {
 }
 interface Capability {
   failure?: UpstreamFailure;
+  inferenceCompleted: boolean;
   consecutiveFailures: number;
   onRetry?: (event: { kind: "upstream_retry"; detail: string }) => void;
   recordFailure: (failure: UpstreamFailure) => void;
@@ -41,6 +47,7 @@ interface Capability {
   model: string;
   deadline: number;
   identity: SubscriptionIdentity;
+  probeReservePercent?: number;
   controller?: AbortController;
   timer: NodeJS.Timeout;
 }
@@ -54,8 +61,20 @@ export const subscriptionLimits = {
   frameBytes: 8 * 1024 * 1024,
   lifetimeMs: 30 * 60 * 1000,
 };
+const probeLimits = { inputTokens: 128, outputTokens: 64, deltaBytes: 256, responseBytes: 64 * 1024, timeoutMs: 45000 };
+const hasText = (value: unknown) => typeof value === "string" && value.trim().length > 0;
+function messageHasText(item: unknown) {
+  return item !== null && typeof item === "object" && "type" in item && item.type === "message"
+    && "content" in item && Array.isArray(item.content)
+    && item.content.some((part) => part?.type === "output_text" && hasText(part.text));
+}
+const ProbeInput = z.strictObject({
+  model: z.string().regex(/^[\w.-]{1,80}$/).nullable(),
+  reservePercent: z.number().int().min(0).max(maxCodexReserve),
+});
+type ProbeResult = { ok: true } | { ok: false; failure: UpstreamFailure } | { ok: false; skipped: "output_limit" };
 const digest = (s: string) => createHash("sha256").update(s).digest("hex");
-class BrokerError extends AppError {
+export class BrokerError extends AppError {
   constructor(status: number, message: string, readonly kind?: UpstreamFailure["kind"]) {
     super(status, message);
   }
@@ -249,16 +268,22 @@ export class SubscriptionBroker {
   private now() {
     return this.options.now?.() ?? Date.now();
   }
-  private async credentials(refresh: boolean) {
+  private async credentials(refresh: boolean, probeReservePercent?: number) {
+    let identity: SubscriptionIdentity;
     try {
-      return await this.options.credentials(refresh);
+      identity = await this.options.credentials(refresh);
     } catch (error) {
       const known = knownError(error, credentialErrors);
       if (known) throw known;
       throw refresh
         ? safeError(502, connectionMessage, "auth")
-        : safeError(503, "訂閱登入讀取失敗，未使用其他計費方式");
+        : safeError(503, "訂閱登入讀取失敗，未使用其他計費方式", "auth");
     }
+    if (probeReservePercent !== undefined) {
+      const hold = subscriptionQuotaHold(identity.quota ?? { allowed: null }, probeReservePercent);
+      if (hold) throw safeError(429, hold, hold === unknownSubscriptionQuota ? "quota_unavailable" : "quota");
+    }
+    return identity;
   }
   async issue(input: {
     runId: string;
@@ -266,19 +291,19 @@ export class SubscriptionBroker {
     model?: string;
     deadline: number;
     onRetry?: Capability["onRetry"];
-  }) {
+  }, probeReservePercent?: number) {
     if (
       !/^[a-f0-9-]{36}$/.test(input.runId) ||
       !["triage", "code", "review"].includes(input.phase)
     )
-      throw safeError(400, "訂閱階段識別錯誤");
+      throw safeError(400, "訂閱階段識別錯誤", "invalid_request");
     const started = this.now();
     const deadline = Math.min(
       input.deadline,
       started + subscriptionLimits.lifetimeMs,
     );
     if (!Number.isFinite(deadline) || deadline <= started)
-      throw safeError(408, "訂閱階段已超過期限");
+      throw safeError(408, "訂閱階段已超過期限", "phase_deadline");
     for (const [id, run] of this.runs)
       if (
         run.deadline + subscriptionLimits.lifetimeMs < started &&
@@ -286,7 +311,7 @@ export class SubscriptionBroker {
       )
         this.runs.delete(id);
     if (!this.runs.has(input.runId) && this.runs.size >= 256)
-      throw safeError(429, "訂閱工作記錄已達上限");
+      throw safeError(429, "訂閱工作記錄已達上限", "usage_limit");
     const run = this.runs.get(input.runId) ?? {
       deadline,
       requests: 0,
@@ -298,7 +323,8 @@ export class SubscriptionBroker {
     this.runs.set(input.runId, run);
     run.deadline = Math.min(run.deadline, deadline);
     if (run.revoked || run.deadline <= started || run.capabilities.size)
-      throw safeError(409, "訂閱工作已取消、逾時或已有進行中的階段");
+      throw safeError(409, "訂閱工作已取消、逾時或已有進行中的階段",
+        run.revoked ? "phase_cancelled" : run.deadline <= started ? "phase_deadline" : "concurrent_request");
     // 在等待登入刷新時也先保留此 run，避免重複 issue 越過階段鎖。
     const token = randomBytes(32).toString("hex"),
       key = digest(token);
@@ -312,16 +338,14 @@ export class SubscriptionBroker {
     this.issuing.set(key, { runId: input.runId, controller, timer });
     try {
       const identity = await interruptible(
-        this.credentials(false),
+        this.credentials(false, probeReservePercent),
         controller.signal,
       );
       const model = input.model || identity.defaultModel;
-      if (
-        !identity.accessToken ||
-        !identity.accountId ||
-        !identity.models.includes(model)
-      )
-        throw safeError(403, "訂閱登入或指定模型不可用");
+      if (!identity.accessToken || !identity.accountId)
+        throw safeError(403, "訂閱登入或指定模型不可用", "auth");
+      if (!identity.models.includes(model))
+        throw safeError(403, "訂閱登入或指定模型不可用", "model_denied");
       if (run.revoked || run.deadline <= this.now())
         throw safeError(408, "訂閱階段已取消或超過期限");
       const phaseId = randomUUID();
@@ -333,8 +357,10 @@ export class SubscriptionBroker {
         model,
         deadline: run.deadline,
         identity,
+        probeReservePercent,
         timer,
         consecutiveFailures: 0,
+        inferenceCompleted: false,
         onRetry: input.onRetry,
         recordFailure(value) {
           // 並行請求被拒時，進行中的原請求仍可能回報真正的失敗原因。
@@ -347,14 +373,19 @@ export class SubscriptionBroker {
         model,
         basePath: `/v1/${input.runId}/${phaseId}`,
         failure: (): UpstreamFailure | undefined => cap.failure && { ...cap.failure },
+        inferenceCompleted: () => cap.inferenceCompleted && !cap.failure,
         revoke: () => this.revokePhase(key),
       };
     } catch (error) {
       clearTimeout(timer);
       this.issuing.delete(key);
       run.capabilities.delete(key);
-      if (error instanceof BrokerError) throw error;
-      throw safeError(503, "訂閱登入讀取失敗，未使用其他計費方式");
+      if (error instanceof BrokerError) {
+        if (error.statusCode === 408 && !error.kind)
+          throw safeError(408, error.message, run.revoked ? "phase_cancelled" : "phase_deadline");
+        throw error;
+      }
+      throw safeError(503, "訂閱登入讀取失敗，未使用其他計費方式", "auth");
     }
   }
   private revokePhase(key: string, reason?: UpstreamFailure) {
@@ -395,6 +426,52 @@ export class SubscriptionBroker {
           revoked: run.revoked,
         }
       : undefined;
+  }
+  registerRunnerProbe(runner: FastifyInstance, brokerPort: number) {
+    let active = false;
+    runner.post("/codex/inference-probe", { bodyLimit: 512 }, async (req): Promise<ProbeResult> => {
+      const input = ProbeInput.safeParse(req.body);
+      if (!input.success) throw safeError(400, "請提供有效的訂閱模型與個人保留比例");
+      if (active) return { ok: false, failure: { kind: "concurrent_request" } };
+      active = true;
+      try {
+        return await this.probe(brokerPort, input.data);
+      } finally {
+        active = false;
+      }
+    });
+  }
+  private async probe(brokerPort: number, input: z.infer<typeof ProbeInput>): Promise<ProbeResult> {
+    const runId = randomUUID();
+    const deadline = this.now() + probeLimits.timeoutMs;
+    let lease: Awaited<ReturnType<SubscriptionBroker["issue"]>> | undefined;
+    try {
+      lease = await this.issue({ runId, phase: "code", model: input.model ?? undefined, deadline }, input.reservePercent);
+      const response = await runnerRequest(`http://127.0.0.1:${brokerPort}${lease.basePath}/responses`, {
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${lease.token}` },
+        body: JSON.stringify({
+          model: lease.model, store: false, stream: true, instructions: "只輸出數字 1。",
+          reasoning: { effort: "low" },
+          input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "1" }] }],
+        }),
+        timeoutMs: Math.max(1, deadline - this.now()),
+        maxResponseBytes: probeLimits.responseBytes,
+      });
+      const failure = lease.failure();
+      if (failure?.kind === "output_limit" && this.runs.get(runId)?.completedProbeOverLimit)
+        return { ok: false, skipped: "output_limit" };
+      if (failure) return { ok: false, failure };
+      if (response.status === 200 && lease.inferenceCompleted()) return { ok: true };
+      return { ok: false, failure: { kind: "connection" } };
+    } catch (error) {
+      const kind = this.now() >= deadline || (error instanceof Error && error.name === "TimeoutError")
+        ? "phase_deadline"
+        : error instanceof BrokerError ? error.kind ?? (error.statusCode === 408 ? "phase_cancelled" : "connection") : "connection";
+      return { ok: false, failure: lease?.failure() ?? { kind } };
+    } finally {
+      this.revoke(runId);
+      this.runs.delete(runId);
+    }
   }
   register(app: FastifyInstance) {
     app.post<{ Params: { runId: string; phaseId: string } }>(
@@ -471,6 +548,7 @@ export class SubscriptionBroker {
             },
           };
           cap.failure = undefined;
+          cap.inferenceCompleted = false;
           this.incoming.set(req, incoming);
         },
         preParsing: async (req, _reply, payload) => {
@@ -586,8 +664,11 @@ export class SubscriptionBroker {
         body.store = false;
         body.stream = true;
         body.prompt_cache_key = cap.runId;
+        const probe = cap.probeReservePercent !== undefined;
         const serialized = JSON.stringify(body);
-        let complete = false;
+        let completedTokens: number | undefined;
+        let outputText = false;
+        let probeDeltaBytes = 0;
         let tail = "";
         const events: unknown[] = [];
         let upstreamStatus: number | undefined;
@@ -637,7 +718,7 @@ export class SubscriptionBroker {
             await response.body?.cancel();
             const previous = cap.identity.accessToken;
             cap.identity = await interruptible(
-              this.credentials(true),
+              this.credentials(true, cap.probeReservePercent),
               controller.signal,
             );
             for (const secret of [
@@ -686,7 +767,7 @@ export class SubscriptionBroker {
             if (controller.signal.aborted || cap.deadline <= this.now())
               throw phaseError();
             bytes += chunk.byteLength;
-            if (bytes > subscriptionLimits.responseBytes)
+            if (bytes > (probe ? probeLimits.responseBytes : subscriptionLimits.responseBytes))
               throw safeError(429, "訂閱回應超過用量上限", "response_limit");
             tail += decoder.decode(chunk, { stream: true });
             const frames = tail.split(/\r?\n\r?\n/);
@@ -730,12 +811,28 @@ export class SubscriptionBroker {
                   quota ? "quota" : "stream_error",
                 );
               }
+              const truncatedProbe = probe && event.type === "response.incomplete" && event.response?.incomplete_details?.reason === "max_output_tokens";
+              if (truncatedProbe && !event.response?.usage)
+                throw safeError(429, "訂閱探測已達輸出上限", "output_limit");
+              if (probe && event.type.endsWith(".delta") && typeof event.delta === "string") {
+                probeDeltaBytes += Buffer.byteLength(event.delta);
+                if (probeDeltaBytes >= probeLimits.deltaBytes) {
+                  cap.recordFailure({ kind: "output_limit", status: upstreamStatus });
+                  controller.abort();
+                  throw safeError(429, "訂閱探測已達串流文字上限", "output_limit");
+                }
+              }
+              if (!outputText)
+                outputText = (event.type === "response.output_text.delta" && hasText(event.delta))
+                  || (event.type === "response.output_text.done" && hasText(event.text))
+                  || (event.type === "response.output_item.done" && messageHasText(event.item))
+                  || (event.type === "response.completed" && Array.isArray(event.response?.output) && event.response.output.some(messageHasText));
               if (event.type === "response.completed" || event.type === "response.incomplete") {
                 const u = event.response?.usage;
                 if (
                   !u ||
                   !Number.isSafeInteger(u.output_tokens) ||
-                  u.output_tokens < 0 ||
+                  u.output_tokens < (probe && event.type === "response.completed" ? 1 : 0) ||
                   !Number.isSafeInteger(u.input_tokens) ||
                   u.input_tokens < 0 ||
                   (u.input_tokens_details?.cached_tokens !== undefined &&
@@ -746,18 +843,22 @@ export class SubscriptionBroker {
                       u.input_tokens_details.cached_tokens > u.input_tokens))
                 )
                   throw safeError(502, "訂閱回應缺少有效用量", "invalid_usage");
-                if (complete) throw safeError(502, "訂閱回應重複完成", "duplicate_completion");
+                if (completedTokens !== undefined) throw safeError(502, "訂閱回應重複完成", "duplicate_completion");
                 run.outputTokens += u.output_tokens;
-                if (run.outputTokens > subscriptionLimits.outputTokens)
+                if (probe && u.input_tokens > probeLimits.inputTokens)
+                  throw safeError(429, "訂閱探測已達輸入用量上限", "usage_limit");
+                if (truncatedProbe || run.outputTokens > (probe ? probeLimits.outputTokens : subscriptionLimits.outputTokens)) {
+                  if (probe && event.type === "response.completed") run.completedProbeOverLimit = true;
                   throw safeError(429, "訂閱工作已達應用程式用量上限", "output_limit");
+                }
                 if (event.type === "response.incomplete")
                   throw safeError(502, "訂閱推論串流回報錯誤", "stream_error");
-                complete = true;
+                completedTokens = u.output_tokens;
               }
               events.push(event);
             }
           }
-          if (!complete || tail.trim())
+          if (completedTokens === undefined || tail.trim())
             throw safeError(502, "訂閱串流在完成前中斷", "stream_interrupted");
           if (
             controller.signal.aborted ||
@@ -767,6 +868,8 @@ export class SubscriptionBroker {
             throw phaseError();
           if (containsCredential(events, secrets))
             throw protectedDataError();
+          if (probe && !outputText)
+            throw safeError(502, "訂閱探測沒有收到輸出文字", "missing_body");
           fallbackKind = undefined;
           // 有界緩衝至完成後才釋出，避免錯誤、半個 token 或偽完成事件先到工作容器。
           reply.hijack();
@@ -778,6 +881,7 @@ export class SubscriptionBroker {
             reply.raw.write(`data: ${JSON.stringify(event)}\n\n`);
           state.successful = true;
           reply.raw.end();
+          cap.inferenceCompleted = outputText && completedTokens > 0;
         } catch (error) {
           let publicError =
             error instanceof BrokerError

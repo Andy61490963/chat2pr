@@ -19,6 +19,7 @@ import {
 } from "./line-quota.js";
 import { LineChatPlatform } from "./line-platform.js";
 import { redact } from "./policy.js";
+import { liveStuckNotice } from "./stuck-tasks.js";
 
 export const privateActionKinds = [
   "connection_secrets_updated",
@@ -28,6 +29,7 @@ export const privateActionKinds = [
   "project_input",
   "failed",
   "interrupted",
+  "stuck_tasks",
   "triage",
   "publish_race",
 ] as const;
@@ -55,6 +57,7 @@ export async function prepareDigest(db: Database, mode: LinePrivateMode) {
          last_error=CASE WHEN n.created_at<$5::timestamptz-interval '24 hours' THEN $1 ELSE '已留在看板鈴鐺' END
        WHERE n.group_id IS NULL AND n.sent_at IS NULL AND (
          n.created_at<$5::timestamptz-interval '24 hours'
+         OR (n.kind='stuck_tasks' AND NOT ${liveStuckNotice})
          OR (NOT $2 AND NOT (n.kind=ANY($3::text[]) OR n.kind='service_down'))
          OR (n.kind='service_down' AND NOT EXISTS (
            SELECT 1 FROM service_health h WHERE h.name=split_part(n.dedupe_key,':',2)

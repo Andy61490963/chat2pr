@@ -45,6 +45,7 @@ const failureDescriptions = [
 ];
 
 export function serviceDownText(name: string, label: string, detail: string) {
+  if (name === "codex_inference") return `${notificationLabels.serviceDown}：${label}。${detail}`;
   const explanation =
     name === "tunnel"
       ? "外部連不到看板，群組訊息也可能送不進來。可能是主機網路中斷或入口程序停止。請確認主機網路與維持入口的程序是否正常。"

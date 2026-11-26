@@ -367,6 +367,12 @@ export const connectionStatusLabels = {
   unchecked: "未檢查",
 } as const;
 
+export const inferenceStatusLabels = {
+  healthy: "正常",
+  failed: "異常",
+  unknown: "未確認",
+} as const;
+
 export const systemStatusLabels = {
   attention: taskStatusFilterLabels.todo,
   runner: {
