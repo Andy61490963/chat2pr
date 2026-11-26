@@ -28,6 +28,18 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 375, height: 812 
     test.describe(label, () => {
       test.use({ viewport, colorScheme, reducedMotion: "reduce", timezoneId: "Asia/Taipei" });
 
+      test("列上快速核准截圖", async ({ page }, info) => {
+        const { tasks } = await mockInboxReview(page);
+        await page.goto("/");
+        const row = page.getByRole("list", { name: "待決策佇列" })
+          .getByRole("listitem").filter({ hasText: tasks[0].title });
+        const approve = row.getByRole("button", { name: /核准修改/ });
+        await expect(approve).toBeEnabled();
+        await approve.focus();
+        await expect(approve).toBeInViewport();
+        await capture(page, info, `${label}-列上快速核准`);
+      });
+
       test("收件匣六種狀態截圖", async ({ page }, info) => {
         const { tasks, state } = await mockInboxReview(page);
         const [first, , , long] = tasks;
