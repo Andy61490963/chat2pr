@@ -110,3 +110,22 @@ it("推播回應中斷後沿用同批重試鍵，新進度不會混進已收件�
   expect(await db.query("SELECT sent_message_id FROM notifications WHERE sent_at IS NOT NULL ORDER BY created_at"))
     .toEqual([{ sent_message_id: "Accepted0" }, { sent_message_id: "Accepted1" }]);
 });
+
+it("帶常見答案的補問放在批次末尾，下一題仍有自己的按鈕", async () => {
+  const pushes = lineApi();
+  await notice("group_merged", "第一份修改已合併");
+  await notice("group_question", "請選擇表單");
+  await notice("group_question", "請選擇日期");
+  await db.query(`UPDATE notifications SET quick_replies=$1::jsonb WHERE kind='group_question'`, [
+    JSON.stringify([{ label: "第一項", displayText: "選第一項", data: "ExampleAnswer" }]),
+  ]);
+  await flush();
+  expect(pushes).toHaveLength(1);
+  expect(pushes[0].messages.map((m) => m.text)).toEqual(["第一份修改已合併", "請選擇表單"]);
+  expect(pushes[0].messages.at(-1)).toMatchObject({
+    quickReply: { items: [{ action: { type: "postback", data: "ExampleAnswer" } }] },
+  });
+  await db.query("UPDATE notifications SET sent_at=now()-interval '2 minutes' WHERE sent_message_id IS NOT NULL");
+  await flush();
+  expect(pushes[1].messages).toEqual([expect.objectContaining({ text: "請選擇日期", quickReply: expect.anything() })]);
+});
