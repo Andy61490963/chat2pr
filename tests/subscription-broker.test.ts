@@ -188,6 +188,21 @@ describe("訂閱主憑證隔離與有限階段能力", () => {
     expect(f.broker.usage(f.runId)).toMatchObject({ outputTokens: subscriptionLimits.outputTokens + 1 });
   });
 
+  it.each(["完整事件", "未收完的事件"])("串流中斷時，%s 含有受保護資料就撤銷授權", async (part) => {
+    const frame = `data: ${JSON.stringify({ type: "response.output_text.delta", delta: identity.accessToken })}`;
+    const f = await fixture({
+      credentials: async () => identity,
+      upstreamFetch: async () => new Response(part === "完整事件" ? frame + "\n\n" : frame, {
+        headers: { "content-type": "text/event-stream" },
+      }),
+    });
+    const response = await f.send();
+    expect(response.statusCode).toBe(502);
+    expect(response.body).not.toContain(identity.accessToken);
+    expect(f.lease.failure()).toStrictEqual({ kind: "protected_data", status: 200 });
+    expect((await f.send()).statusCode).toBe(403);
+  });
+
   it("刷新時查不到額度仍拒絕新推論，並記下最後的上游狀態", async () => {
     const sample = await fixture({
       credentials: async (refresh) => {
