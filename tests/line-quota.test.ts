@@ -164,6 +164,7 @@ describe("設定頁的 LINE 推播卡片", () => {
     expect(panel.notice).toContain(
       "LINE 本月推播額度已用完，額度恢復前重送也會失敗",
     );
+    expect(panel.notice).toContain("群組有人發言時，會在回覆中帶上待送的重要通知摘要");
     expect(panel.retryDisabled).toBe(true);
     expect(panel.testDisabled).toBe(true);
     expect(panel.failedText).toContain("額度恢復前重送也會失敗");
