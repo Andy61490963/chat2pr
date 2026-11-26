@@ -60,9 +60,11 @@ export function quotaRemaining(
     : Math.max(0, usage.limit - usage.used);
 }
 
-/** 剩餘兩成起只推重要通知。用量未知或方案無上限時照原設定送出。 */
-export function lineQuotaLow(usage: { limit: number | null; used: number } | null) {
-  return usage !== null && usage.limit !== null && usage.used * 5 >= usage.limit * 4;
+/** 已達八成或這次推播會跨過八成時，額度留給重要通知。 */
+export function lineQuotaLow(usage: { limit: number | null; used: number } | null, cost = 0) {
+  if (usage?.limit == null) return false;
+  const threshold = usage.limit * 4;
+  return usage.used * 5 >= threshold || (usage.used + cost) * 5 > threshold;
 }
 
 /**

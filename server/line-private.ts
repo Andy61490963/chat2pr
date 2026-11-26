@@ -134,7 +134,7 @@ export async function flushLinePrivate(db: Database, access: string) {
   const digest = await prepareDigest(
     db,
     settings.line_private_mode ?? linePrivateDefaults.line_private_mode,
-    lineQuotaLow(usage),
+    lineQuotaLow(usage, 1),
   );
   if (!digest) return;
 

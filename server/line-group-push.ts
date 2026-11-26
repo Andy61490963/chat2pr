@@ -149,7 +149,7 @@ export async function flushLineGroups(db: Database, access: string) {
       continue;
     }
     await expireQuotaHeld(db.pool, group_id);
-    const batch = await claimBatch(db, group_id, lineQuotaLow(usage));
+    const batch = await claimBatch(db, group_id, lineQuotaLow(usage, pushCost(count)));
     if (!batch) continue;
     let result: Awaited<ReturnType<typeof platform.pushGroupBatch>> | undefined;
     try {
