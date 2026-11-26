@@ -1,6 +1,7 @@
 import { taskGroups } from "../shared/types.js";
 import type { Database } from "./db.js";
 import { notificationProject } from "./notification-project.js";
+import { liveStuckNotice } from "./stuck-tasks.js";
 
 /** 依目前狀態判斷通知是否仍待處理，歷史通知與 LINE 投遞紀錄照常保留。 */
 export function dashboardAlerts(db: Database, admin: boolean) {
@@ -29,6 +30,7 @@ export function dashboardAlerts(db: Database, admin: boolean) {
              -- 已綁專案卻停用的群組是管理者刻意停用，不再算待設定的新群組。
              AND NOT EXISTS(SELECT 1 FROM group_projects gp WHERE gp.group_id=g.id)
            WHEN n.kind='service_down' AND h.name IS NOT NULL THEN NOT coalesce(h.notified_ok,h.ok)
+           WHEN n.kind='stuck_tasks' THEN ${liveStuckNotice}
            WHEN n.kind IN ('group_waiting','budget','group_received','auto_resume','group_resumed') THEN false
          END AS action,
          coalesce('task:'||n.task_id,n.kind||':'||coalesce(p.id::text,g.id,h.name),n.id::text) AS action_key

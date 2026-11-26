@@ -1,4 +1,5 @@
 import { dashboardAlerts } from "./dashboard-alerts.js";
+import { stuckTasks } from "./stuck-tasks.js";
 import { pickLists, registerPickLists } from "./pick-lists.js";
 import { createFollowup, relinkTask } from "./followup.js";
 import { createBaselineRepair } from "./baseline.js";
@@ -42,6 +43,7 @@ import { registerConnectionSecrets } from "./secrets-api.js";
 import { registerMembers } from "./members.js";
 import { registerCapacity } from "./capacity-api.js";
 import { checkIntegrations } from "./integrations.js";
+import { systemHealth } from "./inference-health.js";
 import { registerChat } from "./chat.js";
 import { registerProjectContext } from "./project-context.js";
 import { registerProjectDatabase } from "./project-database.js";
@@ -540,6 +542,7 @@ export async function buildApp(
       failures,
       validations,
       pendingLists,
+      stalls,
     ] = await Promise.all([
       diskPaused(db),
       // 看板的分頁數字與統計卡用資料庫的實際數量，不受清單載入範圍影響。
@@ -595,7 +598,7 @@ export async function buildApp(
         [limits.tasks, unfinishedStatuses, UNFINISHED_LIMIT],
       ),
       budget.summary(),
-      db.query("SELECT * FROM service_health ORDER BY name"),
+      systemHealth(db),
       // 無任務的管理稽核可能含私訊內容；分頁資料與上方總數必須使用相同條件。
       db.query(
         "SELECT a.*,t.title AS task_title,t.mode AS task_mode FROM audit a LEFT JOIN tasks t ON t.id=a.task_id WHERE $2::boolean OR a.task_id IS NOT NULL ORDER BY a.id DESC LIMIT $1",
@@ -621,15 +624,14 @@ export async function buildApp(
       ),
       validationProgress?.() ?? [],
       admin ? pickLists(db) : [],
+      stuckTasks(db),
     ]);
     const progressByProject = new Map(
       validations.map((entry) => [entry.id, entry]),
     );
     const s = secrets();
     // 推播額度用完時，鈴鐺清單頂端放一行提示；鈴鐺讀資料庫，不需要推播。
-    const quota = (
-      health as { name: string; ok: boolean; checked_at: string }[]
-    ).find((h) => h.name === LINE_QUOTA && !h.ok);
+    const quota = health.find((h) => h.name === LINE_QUOTA && !h.ok);
     return {
       settings: {
         ...settings,
@@ -675,6 +677,7 @@ export async function buildApp(
       groups,
       tasks: tasks.map(withTaskEnd),
       pickLists: pendingLists,
+      stuckTasks: stalls,
       rag,
       usage: { ...usage, runs_today: runsToday.count },
       diskDispatchPaused,
@@ -1761,7 +1764,7 @@ export async function buildApp(
   app.post("/api/integrations/check", async (req) => {
     await requireAdmin(db, req);
     await checkIntegrations(db, github, embedder);
-    return db.query("SELECT * FROM service_health");
+    return systemHealth(db);
   });
   if (existsSync(resolve("dist/web"))) {
     await app.register(serveStatic, { root: resolve("dist/web") });

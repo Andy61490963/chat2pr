@@ -2,10 +2,11 @@ import { taskListQuery, type TaskStatusFilter } from "./task-list.js";
 import type { SettingsTab } from "./settings-tabs.js";
 
 export type NotificationView =
-  "projects" | "groups" | "settings" | "checks" | "system";
+  "projects" | "groups" | "settings" | "checks" | "system" | "inbox";
 
 /** 沒有對應任務的通知要帶管理者去哪一頁；看板鈴鐺與 LINE 私訊連結共用。 */
 export function notificationView(kind: string): NotificationView | null {
+  if (kind === "stuck_tasks") return "inbox";
   if (kind.startsWith("repo_") || kind.startsWith("project_"))
     return "projects";
   if (kind === "check" || kind === "group_check") return "checks";

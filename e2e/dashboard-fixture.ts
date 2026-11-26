@@ -33,6 +33,7 @@ import {
 } from "../shared/status-glossary";
 import type { ActivityEvent } from "../shared/activity-groups";
 import type { PickList } from "../shared/pick-list";
+import type { StuckTask } from "../shared/stuck-tasks";
 
 const timestamp = "2026-01-01T00:00:00Z";
 const bindingVersion = 1;
@@ -426,6 +427,23 @@ export const task: Task = {
   updated_at: timestamp,
 };
 
+export const stuckTasks = [
+  {
+    taskId: "26700000-0000-4000-8000-000000000001",
+    title: "產生示範專案的月報",
+    reason: "同時執行數已滿，正在等待工作結束。",
+    actionLabel: "查看執行容量",
+    target: "system",
+  },
+  {
+    taskId: task.id,
+    title: task.title,
+    reason: "已等待人工審核滿一天，尚未決定是否派工。",
+    actionLabel: "查看待審需求",
+    target: "task",
+  },
+] satisfies StuckTask[];
+
 const endedAt = "2026-11-20T02:30:00.000Z";
 export const rejectedTask: Task = {
   ...task,
@@ -723,6 +741,7 @@ export const answeredDetail: Detail = {
 };
 
 export const defaultState: State = {
+  stuckTasks: [],
   connectionSecrets: {
     lineSecret: { configured: true, updatedAt: null },
     lineToken: { configured: true, updatedAt: timestamp },
@@ -796,6 +815,11 @@ export const firstSetupHealth: State["health"] = [
     checked_at: timestamp,
   })),
   { name: "line", ok: true, detail: "LINE 連線正常", checked_at: timestamp },
+];
+
+export const failedInferenceHealth: State["health"] = [
+  ...firstSetupHealth.filter(({ name }) => name !== "codex"),
+  { name: "codex", ok: false, detail: "訂閱上游回應失敗（上游 HTTP 502）", checked_at: timestamp },
 ];
 
 export const discordOnlySetup: Pick<

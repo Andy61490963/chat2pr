@@ -30,6 +30,7 @@ import type { DiskLevel } from "../../shared/docker-disk.js";
 import { entryText, type EntryKind } from "../../shared/entry.js";
 import { phaseLabels } from "../../shared/observation.js";
 import {
+  connectionStatusLabels,
   systemStatusLabels,
   workerImageLabels,
   workerImageStatus,
@@ -45,6 +46,7 @@ import {
 import { EgressCard } from "./egress";
 import { CheckEnvironmentCard } from "./check-environments";
 import { FrictionCard } from "./friction";
+import { subscriptionGateName } from "../../shared/subscription-quota.js";
 
 type ContainerStatus = {
   name: string;
@@ -173,12 +175,16 @@ export function SystemView({
       status: workerImageStatus(image.current, usedBy.length > 0),
     };
   });
+  const subscription = state.settings.ai_mode === "subscription";
+  const inference = state.health.find(row => row.name === "codex");
+  const gate = state.health.find(row => row.name === subscriptionGateName);
+  const inferenceIssue = subscription && (inference?.ok === false || gate?.ok === false);
   const counts: Record<SystemTab, number> = {
     execution: Number(
       !state.settings.paused &&
         !state.diskDispatchPaused &&
         !!memoryHold(state),
-    ),
+    ) + Number(inferenceIssue),
     disk: diskAttentionCount({
       probeFailed: stale,
       services: services.map(({ condition }) => condition),
@@ -230,6 +236,22 @@ export function SystemView({
         className="space-y-6"
       >
         <CapacityCard request={request} />
+        {subscription && (
+          <Card role="region" aria-labelledby="codex-inference-title">
+            <CardHeader>
+              <h2 id="codex-inference-title" className="font-semibold">Codex 訂閱推論</h2>
+              <CardDescription>透過工作使用的訂閱代理送出短推論，不計每日派工次數。</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm [overflow-wrap:anywhere]">
+              <Badge variant={inferenceIssue ? "danger" : inference?.ok ? "good" : "secondary"}>
+                {inferenceIssue ? connectionStatusLabels.needsAttention : inference?.ok ? connectionStatusLabels.healthy : connectionStatusLabels.unchecked}
+              </Badge>
+              <p>{inference?.detail ?? "尚未完成真實推論檢查。"}</p>
+              {gate && !gate.ok && gate.detail !== inference?.detail && <p>{gate.detail}</p>}
+              {inference && <p className="text-muted-foreground">最後確認 {ago(inference.checked_at)}</p>}
+            </CardContent>
+          </Card>
+        )}
         {admin && <FrictionCard state={state} request={request} />}
       </TabsContent>
       <TabsContent

@@ -214,7 +214,7 @@ const writeUrl = (view: View, task: string | null, push = true) => {
 const vital: Record<string, string> = {
   line: "LINE",
   github: "GitHub App",
-  codex: "Codex 訂閱登入",
+  codex: "Codex 訂閱推論",
   openai: "OpenAI API",
   runner: "隔離執行器",
   tunnel: "HTTPS 入口",
@@ -852,7 +852,8 @@ export function App() {
     : memoryHold(state);
   const reserve = state?.settings.codex_reserve_percent ?? 0;
   const accountSnapshot = typeof account === "object" ? account : null;
-  const quotaCheck = state?.health.find((h) => h.name === subscriptionGateName);
+  const gate = state?.health.find((h) => h.name === subscriptionGateName);
+  const quotaCheck = gate && "quota" in gate ? gate.quota : gate;
   const subscriptionHold = !subscription
     ? null
     : reserve > 0 &&

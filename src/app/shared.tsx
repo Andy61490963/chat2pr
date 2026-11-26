@@ -66,6 +66,7 @@ export type View =
   | "members"
   | "settings";
 export type Health = {
+  quota?: { ok: boolean; detail: string; checked_at: string } | null;
   name: string;
   ok: boolean;
   detail: string;
@@ -83,6 +84,7 @@ export type Audit = {
   task_mode?: Task["mode"] | null;
 };
 export type State = {
+  stuckTasks?: import("../../shared/stuck-tasks.js").StuckTask[];
   connectionSecrets?: import("../../shared/connection-secrets.js").ConnectionSecretStatus;
   pickLists?: import("../../shared/pick-list.js").PickList[];
   settings: Settings;

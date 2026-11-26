@@ -50,6 +50,7 @@ export function subscriptionIdentity(codexHome: string) {
           ),
           models: account.models.map((m) => m.id),
           defaultModel: account.models.find((m) => m.isDefault)?.id ?? "",
+          quota: { allowed: account.allowed, limits: account.limits },
         };
         cached = { at: Date.now(), identity };
         return identity;

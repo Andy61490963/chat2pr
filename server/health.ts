@@ -3,12 +3,14 @@ import type { Database } from "./db.js";
 import { lineServiceOutageMinutes } from "../shared/line-private.js";
 import { serviceDownText } from "../shared/service-health-text.js";
 import { notificationLabels } from "../shared/status-glossary.js";
+import type { UpstreamFailure } from "../shared/upstream-failure.js";
 
 // 會讓收訊、派工或通知停擺的服務；其餘項目只在設定頁顯示。
 const critical: Record<string, string> = {
   line: "LINE",
   github: "GitHub App",
   codex: "Codex 訂閱登入",
+  codex_inference: "Codex 訂閱推論",
   openai: "OpenAI API",
   runner: "隔離執行器",
   tunnel: "HTTPS 入口",
@@ -30,9 +32,10 @@ const minute = 60_000;
  * 入口：部署重啟與 Cloudflare 短暫 502 約一分鐘內恢復。
  * 主機資源：記憶體暫停派工至少維持 5 分鐘穩定期（見 capacity.ts），短暫低點不值得通知。
  */
-const noticeDelay: Partial<Record<string, number>> = {
+export const noticeDelay: Readonly<Record<string, number>> = {
   tunnel: 5 * minute,
   host_resources: 10 * minute,
+  stuck_tasks: 10 * minute,
 };
 
 export function healthTransition(
@@ -44,7 +47,7 @@ export function healthTransition(
   confirm: boolean,
 ) {
   const label = critical[name];
-  const baseline = before.notified_ok ?? before.ok;
+  const baseline = before.notified_ok ?? (name === "codex_inference" && before.reading_ok === null ? true : before.ok);
   const confirmed = !confirm || before.reading_ok === ok;
   let notifiedOk = baseline;
   let outageStartedAt = before.outage_started_at;
@@ -114,14 +117,17 @@ export async function recordHealth(
   name: string,
   ok: boolean,
   detail: string,
-  options: { confirm?: boolean; silent?: boolean; trackOutage?: boolean } = {},
+  options: {
+    confirm?: boolean; silent?: boolean; trackOutage?: boolean;
+    probe?: { model: string | null; latencyMs: number | null; failure?: UpstreamFailure };
+  } = {},
 ) {
   if (options.silent || !Object.hasOwn(critical, name)) {
     await db.query(
-      `INSERT INTO service_health(name,ok,detail,reading_ok,outage_started_at)
-       VALUES($1,$2,$3,$4,CASE WHEN $5 AND NOT $2 THEN now() END)
+      `INSERT INTO service_health(name,ok,detail,reading_ok,outage_started_at,probe_info)
+       VALUES($1,$2,$3,$4,CASE WHEN $5 AND NOT $2 THEN now() END,$6)
        ON CONFLICT(name) DO UPDATE SET ok=$2,detail=$3,checked_at=now(),
-       reading_ok=coalesce($4,service_health.reading_ok),
+       reading_ok=coalesce($4,service_health.reading_ok),probe_info=excluded.probe_info,
        outage_started_at=CASE WHEN NOT $5 THEN service_health.outage_started_at
          WHEN $2 THEN NULL
          ELSE coalesce(service_health.outage_started_at,now()) END`,
@@ -131,6 +137,7 @@ export async function recordHealth(
         detail,
         options.silent ? null : ok,
         options.trackOutage ?? false,
+        options.probe,
       ],
     );
     return;
@@ -140,11 +147,11 @@ export async function recordHealth(
   await db.transaction(async (c) => {
     // 有通知門檻的項目剛啟動時也要等中斷確認並達門檻，才改變通知基準。
     const inserted = await c.query(
-      `INSERT INTO service_health(name,ok,detail,reading_ok,notified_ok)
-       VALUES($1,$2,$3,$2,$4) ON CONFLICT(name) DO NOTHING RETURNING name`,
-      [name, ok, detail, Object.hasOwn(noticeDelay, name) || ok],
+      `INSERT INTO service_health(name,ok,detail,reading_ok,notified_ok,probe_info)
+       VALUES($1,$2,$3,$2,$4,$5) ON CONFLICT(name) DO NOTHING RETURNING name`,
+      [name, ok, detail, name === "codex_inference" || Object.hasOwn(noticeDelay, name) || ok, options.probe],
     );
-    if (inserted.rowCount) return;
+    if (inserted.rowCount && (name !== "codex_inference" || ok)) return;
     const {
       rows: [before],
     } = await c.query<HealthReading>(
@@ -172,7 +179,7 @@ export async function recordHealth(
     );
     await c.query(
       `UPDATE service_health SET ok=$2,detail=$3,reading_ok=$2,checked_at=$4,
-       notified_ok=$5,outage_started_at=$6,line_outage_confirmed=$7 WHERE name=$1`,
+       notified_ok=$5,outage_started_at=$6,line_outage_confirmed=$7,probe_info=$8 WHERE name=$1`,
       [
         name,
         ok,
@@ -181,6 +188,7 @@ export async function recordHealth(
         notifiedOk,
         outageStartedAt,
         lineOutageConfirmed,
+        options.probe,
       ],
     );
     if (briefOutage) {

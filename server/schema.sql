@@ -141,6 +141,7 @@ ALTER TABLE tasks ADD COLUMN IF NOT EXISTS discord_thread_id text;
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_digest_id uuid;
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_outage_started_at timestamptz;
 CREATE TABLE IF NOT EXISTS service_health (name text PRIMARY KEY, ok boolean NOT NULL, detail text NOT NULL, checked_at timestamptz NOT NULL DEFAULT now());
+ALTER TABLE service_health ADD COLUMN IF NOT EXISTS probe_info jsonb;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS config_version integer NOT NULL DEFAULT 1;
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS triage_failures integer NOT NULL DEFAULT 0;
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS triage_error text;
@@ -814,3 +815,11 @@ CREATE TABLE IF NOT EXISTS baseline_passes (
 );
 -- 「修復目標分支」任務（#248）：只能從基底驗證失敗的任務建立，可以在基底為紅時開始，結束時的關卡不變。
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS baseline_repair boolean NOT NULL DEFAULT false;
+
+CREATE TABLE IF NOT EXISTS task_stalls (
+ episode text PRIMARY KEY, task_id uuid NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+ version integer NOT NULL, status text NOT NULL, reason text NOT NULL, action_label text NOT NULL,
+ target text NOT NULL CHECK(target IN ('task','system')), since timestamptz NOT NULL, notice_id uuid
+);
+CREATE INDEX IF NOT EXISTS task_stalls_notice ON task_stalls(notice_id) WHERE notice_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS audit_task_failure ON audit(task_id,created_at DESC,id DESC) WHERE kind='error';

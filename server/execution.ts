@@ -271,7 +271,32 @@ async function resumableCandidate(
     return undefined;
   return { ...candidate, run: last.id, files };
 }
-class RunnerResponseError extends AppError {}
+class RunnerResponseError extends AppError {
+  constructor(status: number, message: string, readonly upstreamFailure?: UpstreamFailure) {
+    super(status, message);
+  }
+}
+
+export class RunInferenceDiagnostics {
+  failure?: UpstreamFailure;
+
+  async phase(subscription: boolean, name: string, pending: Promise<PhaseResult>) {
+    if (!subscription || (name !== "code" && name !== "review")) return pending;
+    try {
+      const result = await pending;
+      if (result.exitCode !== 0 && !result.sqlReviewFailure)
+        this.failure = parseUpstreamFailure(result.upstreamFailure);
+      return result;
+    } catch (error) {
+      if (error instanceof RunnerResponseError) this.failure = error.upstreamFailure;
+      throw error;
+    }
+  }
+
+  finish(request?: () => void) {
+    if (this.failure) request?.();
+  }
+}
 
 export class HttpRunner implements Runner {
   constructor(
@@ -363,7 +388,7 @@ export class HttpRunner implements Runner {
     return this.response(r) as T;
   }
   private response(r: { status: number; body: string }) {
-    let data: { error?: string };
+    let data: { error?: string; upstreamFailure?: unknown };
     try {
       data = JSON.parse(r.body);
     } catch {
@@ -373,6 +398,7 @@ export class HttpRunner implements Runner {
       throw new RunnerResponseError(
         r.status,
         typeof data?.error === "string" ? data.error : "執行器連線失敗",
+        parseUpstreamFailure(data?.upstreamFailure),
       );
     return data;
   }
@@ -389,6 +415,7 @@ export class Execution {
     private budget: Budget,
     private runner: Runner,
     private retrieval = new Retrieval(db),
+    private requestInferenceProbe?: () => void,
   ) {
     this.subscriptionGate = new SubscriptionGate(
       db,
@@ -994,7 +1021,7 @@ export class Execution {
       repairing = false,
       localSeq = 0,
       cursor = 0;
-    let upstreamFailure: UpstreamFailure | undefined;
+    const inference = new RunInferenceDiagnostics();
     let pollPending: Promise<void> | undefined,
       observerLost = false;
     const record = async (kind: string, detail?: string, exitCode?: number) => {
@@ -1390,8 +1417,7 @@ export class Execution {
           [runId, name, ["code", "review"].includes(name)],
         );
         const phaseTimeoutMs = Math.max(1000, deadline - Date.now());
-        let r = await this.runner
-          .call<PhaseResult>(
+        const pendingPhase = this.runner.call<PhaseResult>(
             "phase",
             {
               runId,
@@ -1413,7 +1439,8 @@ export class Execution {
               ...extra,
             },
             phaseTimeoutMs,
-          )
+          );
+        let r = await inference.phase(subscription, name, pendingPhase)
           .catch(async (error: unknown) => {
             if (
               subscription &&
@@ -1450,8 +1477,6 @@ export class Execution {
             : "SQL Server 審查複驗未通過";
           throw new AppError(422, `${reason}（退出碼 ${r.exitCode}）\n${redact(r.stderr).slice(-4000)}`);
         }
-        if (subscription && (name === "code" || name === "review") && r.exitCode !== 0)
-          upstreamFailure = parseUpstreamFailure(r.upstreamFailure);
         return r;
       };
       let setup: { plan: SetupPlan; cached: boolean } | undefined;
@@ -2411,7 +2436,7 @@ ${querySummary(answer)}`,
         currentPhase,
         "task",
         failureProject,
-        upstreamFailure,
+        inference.failure,
       );
       // 逾時要說出時間花在哪個階段，管理者才知道該縮小哪一部分（#256）。
       const longest = timedOut ? await this.longestPhase(runId) : "";
@@ -2521,6 +2546,7 @@ ${querySummary(answer)}`,
       );
     } finally {
       if (monitor) clearInterval(monitor);
+      inference.finish(this.requestInferenceProbe);
       await pollPending;
       if (runId) {
         await poll();

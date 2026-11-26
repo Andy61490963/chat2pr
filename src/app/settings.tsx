@@ -172,8 +172,8 @@ const services = [
   { key: "github", name: "GitHub App", hint: "讀取專案、建立 Issue 與 PR" },
   {
     key: "codex",
-    name: "Codex 訂閱登入",
-    hint: "訂閱模式的 AI",
+    name: "Codex 訂閱推論",
+    hint: "啟動、每六小時及訂閱工作失敗後檢查；每次一筆短推論，不計入每日派工次數。",
     mode: "subscription",
   },
   { key: "openai", name: "OpenAI API", hint: "API 模式的 AI", mode: "api" },

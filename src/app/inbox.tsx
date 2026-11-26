@@ -257,6 +257,7 @@ export function InboxView({
   const held = state.tasks.filter((t) => waitingStatuses.includes(t.status));
   const movingCount = countOf(state, moving);
   const readyCount = countOf(state, readyStatuses);
+  const stuckTasks = state.stuckTasks ?? [];
   const lists = admin ? (state.pickLists ?? []) : [];
   const items = reviewItems(needs, lists, state.groups, admin);
   const canBatch = admin && items.length > 1;
@@ -358,8 +359,42 @@ export function InboxView({
         clear ? "gap-4" : "gap-7",
       )}
     >
+      {stuckTasks.length > 0 && (
+        <section aria-labelledby="inbox-stuck">
+          <SectionTitle count={stuckTasks.length}>
+            <span id="inbox-stuck">卡住的任務</span>
+          </SectionTitle>
+          <ul className="work-ledger">
+            {stuckTasks.map(({ taskId, title, reason, actionLabel, target }) => {
+              const needsAdmin = target === "system" && !admin;
+              return (
+                <li key={taskId} className="work-row">
+                  <div className="grid min-w-0 gap-1 [overflow-wrap:anywhere] md:grid-cols-2 md:gap-4">
+                    <span className="font-semibold">{title}</span>
+                    <div className="text-sm">
+                      <p>{reason}</p>
+                      {needsAdmin && <p>請管理者查看系統。</p>}
+                    </div>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className={cn(batchControl, "justify-self-start md:justify-self-end")}
+                    onClick={() => target === "system" && admin ? go("system") : open(taskId)}
+                  >
+                    {needsAdmin ? "查看任務" : actionLabel}
+                    <span className="sr-only">：{title}</span>
+                  </Button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
       {!items.length && onboarding}
       <section
+        hidden={stuckTasks.length > 0 && items.length === 0 && !confirmEnd}
         ref={decisionSection}
         tabIndex={-1}
         aria-labelledby="inbox-todo"
