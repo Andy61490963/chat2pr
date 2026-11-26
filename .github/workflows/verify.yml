@@ -15,7 +15,17 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium --only-shell
-      - run: npm run test:e2e
+      - run: npm run test:e2e -- --workers=2
+        env:
+          E2E_PORT: 5336
+      - name: 保留收件匣桌面與手機截圖
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: inbox-a-shots
+          path: test-results/**/[13]*x*.png
+          if-no-files-found: warn
+          retention-days: 14
       - name: 保存訂閱推論異常與通知的驗收截圖
         if: github.event_name == 'pull_request'
         uses: actions/upload-artifact@v4
