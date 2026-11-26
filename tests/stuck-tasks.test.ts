@@ -14,10 +14,14 @@ let headers: Awaited<ReturnType<typeof session>>;
 
 const scan = (minutes: number) => checkStuckTasks(db, at(minutes));
 
-async function inbox() {
+async function inboxState() {
   const response = await app.inject({ url: "/api/state?tasks=1", headers });
   expect(response.statusCode).toBe(200);
-  return response.json().stuckTasks;
+  return response.json();
+}
+
+async function inbox() {
+  return (await inboxState()).stuckTasks;
 }
 
 async function task(status: TaskStatus, title = "示範任務", minutes = 0) {
@@ -67,7 +71,30 @@ afterAll(async () => { await app.close(); await db.close(); });
 describe("卡住任務的收件匣與管理者通知", () => {
   it("登入才可讀取，沒有卡住的任務時回傳空清單", async () => {
     expect((await app.inject({ url: "/api/state" })).statusCode).toBe(401);
-    expect(await inbox()).toEqual([]);
+    expect(await inboxState()).toMatchObject({ stuckTasks: [], stuckTasksTotal: 0 });
+  });
+
+  it("先列最久卡住的二十筆，總數包含未列出的任務但不含已解除的任務", async () => {
+    await db.query(
+      `INSERT INTO tasks(group_id,project_id,title,summary,status,dedupe_key,updated_at)
+       SELECT 'group-a',$1,'示範任務'||num,'示範需求','awaiting_approval',gen_random_uuid()::text,
+         $2::timestamptz+num*interval '1 minute' FROM generate_series(1,22) AS num`,
+      [project, at(-1500)],
+    );
+    await scan(0);
+    const first = await inboxState();
+    expect(first.stuckTasks).toHaveLength(20);
+    expect(first.stuckTasksTotal).toBe(22);
+    expect(first.stuckTasks[0]).toEqual({
+      taskId: expect.any(String), title: "示範任務1", reason: expect.stringContaining("審核"), target: "task", actionLabel: "查看待審需求",
+    });
+    expect(first.stuckTasks[19].title).toBe("示範任務20");
+    await db.query("UPDATE tasks SET status='cancelled' WHERE id=$1", [first.stuckTasks[0].taskId]);
+    const next = await inboxState();
+    expect(next.stuckTasksTotal).toBe(21);
+    expect(next.stuckTasks).toHaveLength(20);
+    expect(next.stuckTasks[0].title).toBe("示範任務2");
+    expect(next.stuckTasks[19].title).toBe("示範任務21");
   });
 
   it("排隊滿十分鐘才顯示，分別指出暫停派工、記憶體不足、執行器異常與專案停用", async () => {
@@ -170,6 +197,18 @@ describe("卡住任務的收件匣與管理者通知", () => {
     expect(await inbox()).toEqual([]);
   });
 
+  it("同專案連敗只計算過去二十四小時內結束的執行", async () => {
+    const id = await task("failed");
+    for (const minute of [-1442, -5, -3]) await run(id, minute, "failed", "connection");
+    await scan(0);
+    expect(await inbox()).toEqual([]);
+    await run(id, -1, "failed", "connection");
+    await scan(0);
+    expect(await inbox()).toMatchObject([{ taskId: id, reason: expect.stringContaining("最近 3 次") }]);
+    await scan(1441);
+    expect(await inbox()).toEqual([]);
+  });
+
   it("非訂閱失敗只比對該次執行期間的結束稽核，不把舊分類或原始錯誤送到收件匣", async () => {
     const id = await task("failed");
     for (const minute of [-9, -6, -3]) {
@@ -192,7 +231,27 @@ describe("卡住任務的收件匣與管理者通知", () => {
     expect(await inbox()).toEqual([]);
   });
 
-  it("原因需連續十分鐘，短暫異常不送；同批只發一則管理者摘要，持續卡住不重送", async () => {
+  it("同一任務持續排隊時換原因不重算十分鐘，更新下一步但不重送通知", async () => {
+    const id = await task("queued", "示範查詢", -11);
+    const notices = () => db.query("SELECT text FROM notifications WHERE kind='stuck_tasks'");
+    await db.query("UPDATE projects SET enabled=false WHERE id=$1", [project]);
+    await db.query(`UPDATE settings SET value=value || '{"paused":true}' WHERE id=1`);
+    await scan(0);
+    expect(await inbox()).toMatchObject([{ taskId: id, reason: expect.stringContaining("暫停"), target: "system" }]);
+    await db.query(`UPDATE settings SET value=value || '{"paused":false}' WHERE id=1`);
+    await scan(9);
+    expect(await inbox()).toMatchObject([{ taskId: id, reason: "專案已停用", target: "task", actionLabel: "查看任務與綁定" }]);
+    expect(await notices()).toHaveLength(0);
+    await scan(10);
+    expect(await notices()).toMatchObject([{ text: expect.stringContaining("專案已停用") }]);
+    await db.query(`UPDATE settings SET value=value || '{"paused":true}' WHERE id=1`);
+    await scan(11);
+    await scan(21);
+    expect(await inbox()).toMatchObject([{ taskId: id, reason: expect.stringContaining("暫停"), target: "system", actionLabel: "查看派工狀態" }]);
+    expect(await notices()).toHaveLength(1);
+  });
+
+  it("狀態需連續卡住十分鐘，短暫異常不送；同批只發一則管理者摘要，持續卡住不重送", async () => {
     await task("awaiting_approval", "示範甲", -1440);
     await task("awaiting_approval", "示範乙", -1440);
     const notices = () => db.query("SELECT text,group_id FROM notifications WHERE kind='stuck_tasks'");

@@ -102,7 +102,7 @@ test("舊版未回傳提醒時仍可使用收件匣，更新後新增和解除�
   let reported: typeof stuckTasks | undefined;
   await page.route(/\/api\/state(\?|$)/, (route) =>
     route.fulfill({
-      json: { ...defaultState, tasks: [], stuckTasks: reported },
+      json: { ...defaultState, tasks: [], stuckTasks: reported, stuckTasksTotal: reported?.length },
     }),
   );
   await page.goto("/");
@@ -166,11 +166,18 @@ test("系統執行分頁在訂閱帳戶可用但推論失敗時顯示上游原�
   await expect(
     inference.getByRole("heading", { name: "Codex 訂閱推論" }),
   ).toBeVisible();
-  await expect(inference.getByText("需處理", { exact: true })).toBeVisible();
+  await expect(inference.getByText("異常", { exact: true })).toBeVisible();
   await expect(inference.getByText(detail, { exact: true })).toBeVisible();
-  await inference.screenshot({ path: test.info().outputPath("推論異常.png"), animations: "disabled" });
+  await expect(page.getByText(/Codex 訂閱推論\s*連線異常，恢復前相關功能會停擺/)).toBeVisible();
+  await page.screenshot({ path: test.info().outputPath("推論異常.png"), fullPage: true, animations: "disabled" });
   await page.getByRole("button", { name: /^通知(?:，|$)/ }).click();
   const menu = page.getByRole("menu");
   await expect(menu.getByText(text, { exact: true })).toBeVisible();
   await menu.screenshot({ path: test.info().outputPath("異常通知.png"), animations: "disabled" });
+  await page.goto("/settings?tab=connections");
+  const service = page.getByRole("listitem").filter({
+    has: page.getByText("Codex 訂閱推論", { exact: true }),
+  });
+  await expect(service.getByText("異常", { exact: true })).toBeVisible();
+  await expect(service).toContainText(detail);
 });

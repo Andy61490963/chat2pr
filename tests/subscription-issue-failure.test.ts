@@ -8,6 +8,8 @@ import type { SubscriptionIdentity } from "../server/subscription-broker.js";
 
 const fixture = vi.hoisted(() => ({
   runner: undefined as FastifyInstance | undefined,
+  broker: undefined as FastifyInstance | undefined,
+  upstream: vi.fn<() => Promise<Response>>(),
   key: "SyntheticRunner123456789012345678901234",
   credentials: vi.fn<() => Promise<SubscriptionIdentity>>(),
   container: vi.fn(),
@@ -19,6 +21,7 @@ vi.mock("fastify", async (load) => {
     vi.spyOn(app, "listen").mockImplementation(async () => {
       await app.ready();
       if (app.hasRoute({ method: "POST", url: "/phase" })) fixture.runner = app;
+      if (app.hasRoute({ method: "POST", url: "/v1/:runId/:phaseId/responses" })) fixture.broker = app;
       return "http://runner.invalid";
     });
     return app;
@@ -32,6 +35,9 @@ vi.mock("../server/check-environments.js", () => ({
   CheckEnvironments: class { cleanupAll = async () => {}; },
 }));
 vi.mock("../server/subscription-identity.js", () => ({ subscriptionIdentity: () => fixture.credentials }));
+vi.mock("../server/subscription-http.js", async (load) => ({
+  ...await load<typeof import("../server/subscription-http.js")>(), subscriptionFetch: fixture.upstream,
+}));
 vi.mock("node:fs", async (load) => ({
   ...await load<typeof import("node:fs")>(),
   readFileSync: (file: string) => {
@@ -54,8 +60,8 @@ beforeAll(async () => {
   try { await import("../server/runner-main.js"); }
   finally { startupLog.mockRestore(); }
 });
-afterAll(async () => { await fixture.runner?.close(); vi.unstubAllEnvs(); });
-beforeEach(() => { fixture.credentials.mockReset(); fixture.container.mockReset(); });
+afterAll(async () => { await fixture.runner?.close(); await fixture.broker?.close(); vi.unstubAllEnvs(); });
+beforeEach(() => { fixture.credentials.mockReset(); fixture.container.mockReset(); fixture.upstream.mockReset(); });
 
 const identity = {
   accessToken: "SyntheticAccess1234", accountId: "SyntheticAccount1234", secrets: [],
@@ -71,6 +77,83 @@ function work(phase: string, job = { mode: "subscription" }) {
   return { runId: randomUUID(), image: "test-worker", phase, job, timeoutMs: 10000 };
 }
 
+const current = async () => {};
+const recovered = async () => {};
+
+it.each(["code", "review"])("%s 只有本階段代理真的傳回完成的推論才回報恢復", async (phase) => {
+  fixture.credentials.mockResolvedValue(identity);
+  const recoveredWork = vi.fn(async () => {});
+  const result = { exitCode: 0, stdout: "推論成功", stderr: "" };
+  const diagnostics = new RunInferenceDiagnostics();
+  const body = work(phase);
+  const run = () => diagnostics.phase(true, phase, runner.call<PhaseResult>("phase", body), current, recoveredWork);
+  fixture.container.mockResolvedValue(result);
+  await run();
+  expect(recoveredWork).not.toHaveBeenCalled();
+  fixture.container.mockImplementation(async (_id, _image, _command, _net, input: string) => {
+    const job = JSON.parse(input);
+    await fixture.broker!.inject({
+      method: "POST", url: new URL(job.proxyUrl).pathname + "/responses",
+      headers: { authorization: `Bearer ${job.token}` },
+      payload: { model: job.model, input: [], stream: true, store: false },
+    });
+    return result;
+  });
+  const reply = (output: number, text: string, tail = "") => new Response(
+    `data: ${JSON.stringify({ type: "response.completed", response: { output: [{ type: "message", content: [{ type: "output_text", text }] }], usage: { input_tokens: 3, output_tokens: output } } })}\n\n${tail}`,
+    { headers: { "content-type": "text/event-stream" } },
+  );
+  fixture.upstream.mockResolvedValueOnce(reply(0, "完成")).mockResolvedValueOnce(reply(2, ""))
+    .mockResolvedValueOnce(reply(2, "完成", "截斷")).mockResolvedValueOnce(reply(2, "完成"));
+  await run();
+  await run();
+  await run();
+  expect(recoveredWork).not.toHaveBeenCalled();
+  await run();
+  expect(recoveredWork).toHaveBeenCalledTimes(1);
+  fixture.container.mockResolvedValue(result);
+  await run();
+  expect(recoveredWork).toHaveBeenCalledTimes(1);
+  expect(fixture.upstream).toHaveBeenCalledTimes(4);
+});
+
+it.each([
+  ["期限已到", "階段失敗"], ["需求版本已改變", "授權失敗"], ["需求版本已改變", "階段成功"],
+] as const)("%s 時以實際停止原因優先，%s 不得觸發補測或恢復", async (stop, source) => {
+  const diagnostics = new RunInferenceDiagnostics();
+  const recover = vi.fn(async () => {});
+  const probe = vi.fn();
+  const transport = new HttpRunner(() => fixture.key, async () => ({
+    status: 502, body: JSON.stringify({ error: "上游未回應", upstreamFailure: { kind: "upstream_http", status: 502 } }),
+  }));
+  const phase = source === "授權失敗" ? transport.call<PhaseResult>("phase", work("code"))
+    : Promise.resolve<PhaseResult>(source === "階段成功"
+      ? { exitCode: 0, stdout: "", stderr: "", inferenceCompleted: true }
+      : { exitCode: 1, stdout: "", stderr: "", upstreamFailure: { kind: "upstream_http", status: 502 } });
+  await expect(diagnostics.phase(true, "code", phase, async () => { throw new Error(stop); }, recover)).rejects.toThrow(stop);
+  expect(diagnostics.failure).toBeUndefined();
+  diagnostics.finish(probe);
+  expect(probe).not.toHaveBeenCalled();
+  expect(recover).not.toHaveBeenCalled();
+});
+
+it("健康讀數無法寫入仍交回原本的工作結果，不觸發補測也不公開錯誤原文", async () => {
+  const diagnostics = new RunInferenceDiagnostics();
+  const request = vi.fn();
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const result: PhaseResult = { exitCode: 0, stdout: "修改完成", stderr: "", inferenceCompleted: true };
+  try {
+    await expect(diagnostics.phase(true, "code", Promise.resolve(result), current,
+      async () => { throw new Error("SyntheticPrivate1234"); })).resolves.toBe(result);
+    diagnostics.finish(request);
+    expect(request).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls.flat().join(" ")).not.toContain("SyntheticPrivate1234");
+  } finally {
+    warn.mockRestore();
+  }
+});
+
 it.each([
   ["code", "auth", 503, new Error("SyntheticPrivate1234"), "訂閱登入讀取失敗，未使用其他計費方式"],
   ["review", "quota_unavailable", 429, new AppError(429, "無法確認訂閱額度，暫停新的推論"), "無法確認訂閱額度，暫停新的推論"],
@@ -82,7 +165,7 @@ it.each([
   const body = work(phase);
   const request = vi.fn();
   const diagnostics = new RunInferenceDiagnostics();
-  await expect(diagnostics.phase(true, phase, runner.call<PhaseResult>("phase", body))).rejects.toMatchObject({
+  await expect(diagnostics.phase(true, phase, runner.call<PhaseResult>("phase", body), current, recovered)).rejects.toMatchObject({
     message, statusCode, upstreamFailure: { kind },
   });
   expect(await runner.observations(body.runId, 0)).toContainEqual(expect.objectContaining({
@@ -103,7 +186,7 @@ it.each([
     status: 503, body: JSON.stringify({ error: "執行器無法完成工作", upstreamFailure }),
   }));
   const diagnostics = new RunInferenceDiagnostics();
-  await expect(diagnostics.phase(subscription, phase, transport.call<PhaseResult>("phase", work(phase))))
+  await expect(diagnostics.phase(subscription, phase, transport.call<PhaseResult>("phase", work(phase)), current, recovered))
     .rejects.toMatchObject({ statusCode: 503 });
   const request = vi.fn();
   diagnostics.finish(request);
@@ -116,7 +199,7 @@ it("一般容器錯誤即使文字或狀態相同，也不當成訂閱代理的�
   const body = work("code");
   const request = vi.fn();
   const diagnostics = new RunInferenceDiagnostics();
-  const error = await diagnostics.phase(true, "code", runner.call<PhaseResult>("phase", body)).catch((reason: Error) => reason);
+  const error = await diagnostics.phase(true, "code", runner.call<PhaseResult>("phase", body), current, recovered).catch((reason: Error) => reason);
   expect(error).toMatchObject({ statusCode: 503 });
   expect(error).not.toMatchObject({ upstreamFailure: expect.anything() });
   expect(await runner.observations(body.runId, 0)).not.toContainEqual(expect.objectContaining({ detail: "auth" }));

@@ -258,6 +258,7 @@ export function InboxView({
   const movingCount = countOf(state, moving);
   const readyCount = countOf(state, readyStatuses);
   const stuckTasks = state.stuckTasks ?? [];
+  const stuckTasksTotal = state.stuckTasksTotal ?? stuckTasks.length;
   const lists = admin ? (state.pickLists ?? []) : [];
   const items = reviewItems(needs, lists, state.groups, admin);
   const canBatch = admin && items.length > 1;
@@ -361,9 +362,12 @@ export function InboxView({
     >
       {stuckTasks.length > 0 && (
         <section aria-labelledby="inbox-stuck">
-          <SectionTitle count={stuckTasks.length}>
+          <SectionTitle count={stuckTasksTotal}>
             <span id="inbox-stuck">卡住的任務</span>
           </SectionTitle>
+          {stuckTasksTotal > stuckTasks.length && (
+            <p className="text-sm text-muted-foreground">依卡住時間先後，顯示前 {stuckTasks.length} 筆。</p>
+          )}
           <ul className="work-ledger">
             {stuckTasks.map(({ taskId, title, reason, actionLabel, target }) => {
               const needsAdmin = target === "system" && !admin;

@@ -12,29 +12,31 @@ import { lineServiceOutageMinutes } from "../shared/line-private.js";
 const inference = "codex_inference";
 const interval = 6 * 3600_000;
 type Prerequisite = { ok: boolean; detail: string; checked_at: Date };
-type Reading = Prerequisite & { name: string; quota?: Prerequisite | null };
+type Reading = Prerequisite & { name: string; quota?: Prerequisite | null; inferenceStatus?: 'healthy' | 'failed' | 'unknown' };
+const deferred = 'codex_probe_deferred';
+const confirmation = lineServiceOutageMinutes * 60000;
+const recoveryInterval = 2 * 3600000;
+type Observation = { ok: boolean; checked_at: Date; outage_started_at: Date | null };
 
-export function visibleHealth(rows: Reading[], now = Date.now()) {
+export function visibleHealth(rows: Reading[], now = Date.now(), skipped = '') {
   const probe = rows.find((row) => row.name === inference);
-  const visible = rows.filter((row) => row.name !== inference);
+  const hold = rows.find(row => row.name === deferred);
+  const host = rows.find(row => row.name === 'host_resources');
+  const gate = rows.find(row => row.name === subscriptionGateName);
+  const login = rows.find(row => row.name === 'codex');
+  const reason = skipped || (gate && !gate.ok ? gate.detail : '') || (login && !login.ok ? login.detail : '') || (host && !host.ok ? host.detail : '') ||
+    (hold && (!probe || Number(hold.checked_at) > Number(probe.checked_at)) ? hold.detail : '');
+  const visible = rows.filter((row) => row.name !== inference && row.name !== deferred);
   for (const name of ["codex", subscriptionGateName]) {
     const index = visible.findIndex((row) => row.name === name);
     const prerequisite = visible[index];
-    if (prerequisite?.ok === false || (!probe && !prerequisite)) continue;
-    const reading = probe
-      ? probe.ok && now - Number(probe.checked_at) > interval + 120_000
-        ? {
-            ...probe,
-            ok: false,
-            detail: "真實推論讀數已過期，請確認派工與主機記憶體狀態。",
-          }
-        : probe
-      : {
-          ...prerequisite,
-          ok: false,
-          detail: "尚未完成真實推論檢查，登入或額度正常不代表可推論。",
-        };
-    const result: Reading = { ...reading, name };
+    const unknown = reason || (!probe ? '尚未完成目前模型的真實推論檢查。' : now - Number(probe.checked_at) > interval + 120000 ? '真實推論讀數已過期。' : '');
+    const result: Reading = {
+      ...probe,
+      name, ok: !unknown && !!probe?.ok, inferenceStatus: unknown ? 'unknown' : probe?.ok ? 'healthy' : 'failed',
+      detail: unknown ? `${unknown}${probe ? ` 上次真實讀數：${probe.detail}` : ''}` : probe!.detail,
+      checked_at: probe?.checked_at ?? prerequisite?.checked_at ?? hold?.checked_at ?? new Date(now),
+    };
     if (name === subscriptionGateName)
       result.quota = prerequisite
         ? {
@@ -50,10 +52,24 @@ export function visibleHealth(rows: Reading[], now = Date.now()) {
 }
 
 export async function systemHealth(db: Database) {
-  return visibleHealth(
-    await db.query<Reading>(`SELECT h.* FROM service_health h WHERE name<>'codex_inference' OR
+  const [rows, settings] = await Promise.all([
+    db.query<Reading>(`SELECT h.* FROM service_health h WHERE name NOT IN ('codex_inference','codex_probe_deferred') OR
       (probe_info->>'model') IS NOT DISTINCT FROM (SELECT value->>'codex_model' FROM settings WHERE id=1) ORDER BY name`),
-  );
+    db.settings(),
+  ]);
+  if (settings.ai_mode === 'api') return rows.filter(row => row.name !== inference && row.name !== deferred);
+  return visibleHealth(rows, Date.now(), settings.paused ? '派工暫停中，未送出推論。' : '');
+}
+
+export function lastInference(db: Database, model: string | null) {
+  return db.one<Observation>(`SELECT ok,checked_at,outage_started_at FROM service_health WHERE name=$1
+    AND reading_ok IS NOT NULL AND (probe_info->>'model') IS NOT DISTINCT FROM $2`, [inference, model]);
+}
+
+export async function recordWorkInference(db: Database, model: string | null, started: Date) {
+  await recordHealth(db, inference, true, '已從實際訂閱工作的成功推論確認可用。', {
+    inferenceObservation: { model, started }, probe: { model, latencyMs: null },
+  });
 }
 
 type Capacity = { known: boolean; hold: string | null };
@@ -76,44 +92,42 @@ export async function readCapacity(
 }
 
 export class InferenceSchedule {
-  private next = 0;
-  private pending = true;
+  private retryAfter = 0;
+  private requestedAt = -Infinity;
+  private probing = false;
   private active?: Promise<void>;
-  constructor(private now = Date.now) {}
+  private last?: Observation;
+  constructor(private now = Date.now, private read?: (model: string | null) => Promise<Observation | undefined>) {}
 
   request() {
-    this.pending = true;
+    if (!this.probing) this.requestedAt = this.now();
   }
 
   private model?: string | null;
-  private failedSince?: number;
   tick(
-    probe: () => Promise<boolean | "failed" | "unavailable">,
+    probe: (early: boolean) => Promise<boolean | "failed" | "unavailable">,
     model: string | null = null,
   ) {
-    if (model !== this.model) {
-      this.model = model;
-      this.failedSince = undefined;
-      this.request();
-    }
-    if (this.active || (!this.pending && this.now() < this.next))
-      return this.active;
-    this.pending = false;
-    this.active = probe()
-      .then((completed) => {
-        if (completed === "failed") {
-          this.failedSince ??= this.now();
-          const confirmation =
-            this.failedSince + lineServiceOutageMinutes * 60000;
-          this.next =
-            confirmation > this.now() ? confirmation : this.now() + interval;
-        } else if (completed === "unavailable") this.next = this.now() + 60000;
-        else if (completed) {
-          this.failedSince = undefined;
-          this.next = this.now() + interval;
-        } else this.pending = true;
-      })
+    if (this.active) return this.active;
+    if (model !== this.model) { this.model = model; this.last = undefined; this.retryAfter = 0; }
+    if (this.now() < this.retryAfter) return;
+    this.active = (async () => {
+      const last = this.read ? await this.read(model) : this.last;
+      if (last) {
+        const elapsedOutage = Number(last.checked_at) - Number(last.outage_started_at ?? last.checked_at);
+        const repeat = last.ok ? (this.requestedAt >= Number(last.checked_at) ? confirmation : interval) :
+          elapsedOutage < confirmation ? confirmation : elapsedOutage < recoveryInterval ? recoveryInterval : interval;
+        if (this.now() < Number(last.checked_at) + repeat) return;
+      }
+      this.probing = true;
+      const completed = await probe(!!last?.ok && this.now() < Number(last.checked_at) + interval);
+      if (completed === 'unavailable') { this.retryAfter = this.now() + 60000; return; }
+      if (!completed) return;
+      this.requestedAt = -Infinity;
+      this.last = { ok: completed === true, checked_at: new Date(this.now()), outage_started_at: completed === true ? null : last?.outage_started_at ?? new Date(this.now()) };
+    })()
       .finally(() => {
+        this.probing = false;
         this.active = undefined;
       });
     return this.active;
@@ -129,6 +143,7 @@ export async function probeInference(
   runner: Runner,
   revision: string,
   capacity = () => readCapacity(db, runner),
+  early = false,
 ) {
   const eligible = async () => {
     const snapshot = await db.settingsSnapshot();
@@ -143,23 +158,27 @@ export async function probeInference(
   if (sample.hold) return false;
   const settings = await eligible();
   if (!settings) return false;
+  const model = settings.codex_model ?? null;
+  const skip = async (detail: string) => {
+    await recordHealth(db, deferred, false, detail, { silent: true, probe: { model, latencyMs: null } });
+    return 'unavailable' as const;
+  };
   if (!sample.known) {
-    await recordHealth(
-      db,
-      inference,
-      false,
-      "讀不到主機資源，未送出真實推論；一分鐘後再檢查。",
-      { silent: true, probe: { model: settings.codex_model ?? null, latencyMs: null } },
-    );
-    return "unavailable" as const;
+    return skip('讀不到主機資源，未送出真實推論；一分鐘後再檢查。');
   }
-  const reservation = await db.one(`INSERT INTO inference_probe_budget AS budget(id,day,attempts)
-    VALUES(true,(now() AT TIME ZONE 'Asia/Taipei')::date,1)
-    ON CONFLICT(id) DO UPDATE SET day=excluded.day,
+  const reservation = await db.one(`INSERT INTO inference_probe_budget AS budget(id,day,attempts,reserved_at,early_attempts)
+    VALUES(true,(now() AT TIME ZONE 'Asia/Taipei')::date,1,now(),$3)
+    ON CONFLICT(id) DO UPDATE SET day=excluded.day,reserved_at=now(),
+      early_attempts=CASE WHEN budget.day<excluded.day THEN $3 ELSE budget.early_attempts+$3 END,
       attempts=CASE WHEN budget.day<excluded.day THEN 1 ELSE budget.attempts+1 END
-    WHERE budget.day<excluded.day OR (budget.day=excluded.day AND budget.attempts<8)
-    RETURNING attempts`);
-  if (!reservation) return "unavailable" as const;
+    WHERE (budget.reserved_at IS NULL OR budget.reserved_at<=now()-interval '15 minutes') AND
+    (budget.day<excluded.day OR (budget.day=excluded.day AND budget.early_attempts+$3<=2 AND budget.attempts<CASE WHEN EXISTS (
+      SELECT 1 FROM service_health WHERE name=$1 AND NOT ok AND (probe_info->>'model') IS NOT DISTINCT FROM $2
+    ) THEN 8 ELSE 6 END)) RETURNING attempts`, [inference, model, early ? 1 : 0]);
+  if (!reservation) {
+    const wait = await db.one<{ cooling: boolean }>("SELECT reserved_at>now()-interval '15 minutes' AS cooling FROM inference_probe_budget WHERE id");
+    return skip(wait?.cooling ? '兩次探測至少相隔十五分鐘，等待下次確認。' : early ? '今日提早補測的次數已用完，仍會依原排程確認推論。' : '今日可用的推論探測次數已用完，最後兩次僅供異常後確認。');
+  }
   const started = Date.now();
   let ok = false;
   let detail: string;
@@ -176,15 +195,18 @@ export async function probeInference(
     );
     ok = result.ok === true;
     failure = parseUpstreamFailure(result.failure);
+    if (!ok && failure && ['quota','quota_unavailable','concurrent_request'].includes(failure.kind) && failure.status === undefined)
+      return skip(`${upstreamFailureText(failure)}，未送出真實推論。`);
     const latency = Date.now() - sent;
     detail = ok
       ? `真實推論成功，耗時 ${latency} 毫秒。`
       : `真實推論未通過：${failure ? upstreamFailureText(failure) : "未取得有效的完成回應"}。耗時 ${latency} 毫秒，請檢查訂閱代理。`;
   } catch {
-    detail = `無法完成真實推論檢查，耗時 ${Date.now() - started} 毫秒。請確認執行器與主機資源連線。`;
+    return skip('無法取得推論檢查結果，請確認執行器與主機資源連線。');
   }
   if (!(await eligible())) return false;
   await recordHealth(db, inference, ok, detail, {
+    inferenceObservation: { model, started: new Date(started) },
     probe: {
       model: settings.codex_model ?? null,
       latencyMs: Date.now() - started,

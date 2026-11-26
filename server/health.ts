@@ -24,6 +24,7 @@ type HealthReading = {
   checked_at: Date;
   outage_started_at: Date | null;
   line_outage_confirmed?: boolean;
+  probe_info?: { started?: string } | null;
 };
 
 const minute = 60_000;
@@ -33,6 +34,7 @@ const minute = 60_000;
  * 主機資源：記憶體暫停派工至少維持 5 分鐘穩定期（見 capacity.ts），短暫低點不值得通知。
  */
 export const noticeDelay: Readonly<Record<string, number>> = {
+  codex_inference: lineServiceOutageMinutes * minute,
   tunnel: 5 * minute,
   host_resources: 10 * minute,
   stuck_tasks: 10 * minute,
@@ -79,7 +81,7 @@ export function healthTransition(
         kind: "service_up",
         text: `${notificationLabels.serviceUp}：${label}`,
       };
-    } else if (delay && outageStartedAt && duration >= delay) {
+    } else if (name !== "codex_inference" && delay && outageStartedAt && duration >= delay) {
       // 異常通知前就恢復，但中斷已達門檻：補一則說明中斷多久。
       notice = {
         kind: "service_up",
@@ -120,8 +122,11 @@ export async function recordHealth(
   options: {
     confirm?: boolean; silent?: boolean; trackOutage?: boolean;
     probe?: { model: string | null; latencyMs: number | null; failure?: UpstreamFailure };
+    inferenceObservation?: { model: string | null; started: Date };
   } = {},
 ) {
+  const observation = options.inferenceObservation;
+  if (name === "codex_inference" && (!observation || options.silent)) return;
   if (options.silent || !Object.hasOwn(critical, name)) {
     await db.query(
       `INSERT INTO service_health(name,ok,detail,reading_ok,outage_started_at,probe_info)
@@ -145,19 +150,33 @@ export async function recordHealth(
 
   // 同一服務的探測依資料列鎖序列化，狀態與通知一起提交。
   await db.transaction(async (c) => {
+    if (observation) {
+      const eligible = await c.query(
+        `SELECT id FROM settings WHERE id=1 AND value->>'ai_mode'='subscription'
+         AND (value->>'codex_model') IS NOT DISTINCT FROM $1::text
+         AND $2::timestamptz >= coalesce((value->>'inference_configured_at')::timestamptz,'-infinity')
+         FOR SHARE`,
+        [observation.model, observation.started],
+      );
+      if (!eligible.rowCount) return;
+    }
+    const probe = observation ? { ...options.probe, ...observation } : options.probe;
     // 有通知門檻的項目剛啟動時也要等中斷確認並達門檻，才改變通知基準。
     const inserted = await c.query(
-      `INSERT INTO service_health(name,ok,detail,reading_ok,notified_ok,probe_info)
-       VALUES($1,$2,$3,$2,$4,$5) ON CONFLICT(name) DO NOTHING RETURNING name`,
-      [name, ok, detail, name === "codex_inference" || Object.hasOwn(noticeDelay, name) || ok, options.probe],
+      `INSERT INTO service_health(name,ok,detail,reading_ok,notified_ok,probe_info,outage_started_at)
+       VALUES($1,$2,$3,$2,$4,$5,CASE WHEN $1='codex_inference' AND NOT $2 THEN clock_timestamp() END)
+       ON CONFLICT(name) DO NOTHING RETURNING name`,
+      [name, ok, detail, Object.hasOwn(noticeDelay, name) || ok, probe],
     );
-    if (inserted.rowCount && (name !== "codex_inference" || ok)) return;
+    if (inserted.rowCount) return;
     const {
       rows: [before],
     } = await c.query<HealthReading>(
       "SELECT * FROM service_health WHERE name=$1 FOR UPDATE",
       [name],
     );
+    if (observation && before.probe_info?.started &&
+        Date.parse(before.probe_info.started) >= observation.started.getTime()) return;
     const {
       rows: [{ observed_at: observedAt }],
     } = await c.query<{ observed_at: Date }>(
@@ -188,7 +207,7 @@ export async function recordHealth(
         notifiedOk,
         outageStartedAt,
         lineOutageConfirmed,
-        options.probe,
+        probe,
       ],
     );
     if (briefOutage) {
