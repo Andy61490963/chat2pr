@@ -429,20 +429,20 @@ export function InboxView({
       }}
       className="work-surface min-w-0 gap-3 md:gap-4"
     >
-      <div className="flex min-w-0 flex-wrap items-center gap-x-0.5 border-b sm:gap-x-3">
-        <TabsList aria-label="收件匣分類" className="h-auto max-w-full flex-none justify-start gap-0 overflow-x-auto rounded-none bg-transparent p-0">
+      <div className="flex min-w-0 flex-col border-b sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-3">
+        <TabsList aria-label="收件匣分類" className="inbox-category-tabs h-auto max-w-full flex-none justify-start gap-2 overflow-x-auto rounded-none bg-transparent p-0 sm:gap-0">
           {categories.map(({ value, label, count }) => (
             <TabsTrigger
               key={value}
               value={value}
-              className="min-h-11 min-w-11 flex-none gap-0.5 rounded-none border-0 border-b-2 border-transparent px-0 text-xs data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none sm:gap-1.5 sm:px-3 sm:text-sm dark:data-[state=active]:border-primary"
+              className="min-h-11 min-w-11 flex-none gap-1.5 rounded-none border-0 border-b-2 border-transparent px-1.5 text-xs data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none sm:px-3 sm:text-sm dark:data-[state=active]:border-primary"
             >
               {label}{" "}<span className="rounded text-xs tabular-nums sm:bg-muted sm:px-1">{count}</span>
             </TabsTrigger>
           ))}
         </TabsList>
         {activeTab === "decisions" && (items.length > 0 || stuckTasks.length > 0) && (
-          <div className="ml-auto flex max-w-full flex-wrap items-center justify-end gap-x-0.5 sm:gap-x-3">
+          <div className="flex max-w-full items-center justify-between gap-x-2 sm:ml-auto sm:flex-wrap sm:justify-end sm:gap-x-3">
             {items.length > 0 && <ReviewKeyboardHint />}
             {stuckTasks.length > 0 && (
               <button
@@ -459,7 +459,7 @@ export function InboxView({
             {items.length > 0 && (
               <select
                 aria-label="待決策排序"
-                className={cn("min-h-11 min-w-11 rounded-md border border-input bg-background pl-0.5 text-xs text-foreground sm:px-1.5 lg:pointer-fine:min-h-8 [@media(any-pointer:coarse)]:min-h-11!", batchFocus)}
+                className={cn("ml-auto min-h-11 min-w-11 rounded-md border border-input bg-background px-1.5 text-xs text-foreground sm:ml-0 lg:pointer-fine:min-h-8 [@media(any-pointer:coarse)]:min-h-11!", batchFocus)}
                 value={sort}
                 onChange={(event) => setSort(event.target.value === "newest" ? "newest" : "oldest")}
               >

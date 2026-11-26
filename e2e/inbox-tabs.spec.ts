@@ -65,7 +65,7 @@ test("鍵盤提示、卡住任務與排序都在分類右側，切換分類不�
   await expect(first).toContainText(tasks.at(-1)!.title);
 });
 
-test("手機首屏四個分類、排序與卡住任務捷徑同列且能完整點按", async ({ page }) => {
+test("手機首屏分類保留間距，第二列完整顯示卡住捷徑與排序", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await mockInboxReview(page);
   await page.goto("/");
@@ -77,20 +77,59 @@ test("手機首屏四個分類、排序與卡住任務捷徑同列且能完整�
   expect(stuckLabel.width).toBeGreaterThanOrEqual(50);
   await expect(page.getByRole("heading", { name: "需要你處理" })).toHaveCount(0);
   const firstTab = (await tabs.first().boundingBox())!;
-  let previousRight = firstTab.x;
-  for (const control of [...await tabs.all(), stuck, sort]) {
+  let previousRight = firstTab.x - 8;
+  for (const control of await tabs.all()) {
     await expect(control).toBeInViewport({ ratio: 1 });
     const box = (await control.boundingBox())!;
     expect(box.width).toBeGreaterThanOrEqual(44);
     expect(box.height).toBeGreaterThanOrEqual(44);
-    expect(box.x).toBeGreaterThanOrEqual(previousRight - 1);
+    const gap = await control.evaluate((tab) => {
+      const text = document.createRange();
+      text.selectNodeContents(tab.firstChild!);
+      return tab.lastElementChild!.getBoundingClientRect().left - text.getBoundingClientRect().right;
+    });
+    expect(gap).toBeGreaterThanOrEqual(4);
+    expect(box.x - previousRight).toBeGreaterThanOrEqual(8);
     expect(Math.abs((box.y + box.height / 2) - (firstTab.y + firstTab.height / 2))).toBeLessThan(3);
     previousRight = box.x + box.width;
   }
+  for (const control of [stuck, sort]) {
+    await expect(control).toBeInViewport({ ratio: 1 });
+    const box = (await control.boundingBox())!;
+    expect(box.height).toBeGreaterThanOrEqual(44);
+    expect(box.y).toBeGreaterThanOrEqual(firstTab.y + firstTab.height);
+  }
+  const shortcut = (await stuck.boundingBox())!;
+  const sorting = (await sort.boundingBox())!;
+  expect(sorting.y).toBe(shortcut.y);
+  expect(sorting.x).toBeGreaterThan(shortcut.x + shortcut.width);
   await sort.selectOption({ label: "最新" });
   await expect(sort).toHaveValue("newest");
   await stuck.click();
   await expect(page.getByRole("heading", { name: "卡住的任務" })).toBeFocused();
+});
+
+test.describe("手機審核面板的焦點", () => {
+  test.use({ viewport: { width: 375, height: 812 }, hasTouch: true });
+  for (const input of ["點按", "滑鼠", "Enter", "直接連結"] as const) {
+    test(`${input}開啟時只有鍵盤顯示焦點框`, async ({ page }) => {
+      const { tasks } = await mockInboxReview(page);
+      const task = tasks[3];
+      await page.goto(input === "直接連結" ? `/?review=${task.id}` : "/");
+      const row = page.locator(`[data-review-row="${task.id}"]`);
+      if (input === "點按") await row.tap();
+      if (input === "滑鼠") await row.click();
+      if (input === "Enter") await row.press("Enter");
+      const dialog = page.getByRole("dialog");
+      await expect(dialog.getByRole("button", { name: /確認專案與分支並核准修改/ })).toBeEnabled();
+      await expect.poll(() => dialog.evaluate((sheet) => {
+        const active = document.activeElement;
+        if (!active || !sheet.contains(active)) return null;
+        const style = getComputedStyle(active);
+        return active.matches(":focus-visible") && ((parseFloat(style.outlineWidth) > 0 && style.outlineStyle !== "none") || style.boxShadow !== "none");
+      })).toBe(input === "Enter");
+    });
+  }
 });
 
 test("勾選後才出現批次操作，全選、清除及取消最後一筆都更新操作列", async ({ page }) => {

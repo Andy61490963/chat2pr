@@ -109,6 +109,7 @@ export function ReviewWorkbench({
   const detail = result?.id === taskId ? result.detail : undefined;
   const error = result?.id === taskId ? result.error : undefined;
   const latestId = useRef(reviewId);
+  const sheetTitle = useRef<HTMLHeadingElement>(null);
   latestId.current = reviewId;
   const latest = useRef({ state, admin, busy, suspended, loadTaskDetail });
   latest.current = { state, admin, busy, suspended, loadTaskDetail };
@@ -510,12 +511,16 @@ export function ReviewWorkbench({
             aria-describedby={undefined}
             className="w-full max-w-none overflow-hidden sm:max-w-none"
             showCloseButton={false}
+            onOpenAutoFocus={(event) => {
+              event.preventDefault();
+              sheetTitle.current?.focus({ preventScroll: true });
+            }}
             onCloseAutoFocus={(event) => {
               event.preventDefault();
               if (document.activeElement === document.body) focusQueue(item.id);
             }}
           >
-            <SheetTitle className="sr-only">{item.title}</SheetTitle>
+            <SheetTitle ref={sheetTitle} tabIndex={-1} className="sr-only focus:outline-none!">{item.title}</SheetTitle>
             <nav
               aria-label="案件導覽"
               className="flex shrink-0 flex-wrap gap-1 border-b px-2 py-1"
