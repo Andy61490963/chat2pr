@@ -42,15 +42,16 @@ describe("LINE 私訊摘要的送出時機", () => {
     vi.stubGlobal("fetch", push);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    await db.query("DELETE FROM service_health WHERE name='line_quota'");
   });
 
   it.each([
-    { used: 159, includeRecovery: true },
-    { used: 160, includeRecovery: false },
-  ])("全通知私訊在已用 $used／200 時按重要性使用剩餘額度", async ({ used, includeRecovery }) => {
+    { used: 159, includeNewGroup: true },
+    { used: 160, includeNewGroup: false },
+  ])("全通知私訊在已用 $used／200 時按重要性使用剩餘額度", async ({ used, includeNewGroup }) => {
     await db.query("UPDATE settings SET value=value || '{\"line_private_mode\":\"all\"}'::jsonb WHERE id=1");
     await db.query(
       "INSERT INTO service_health(name,ok,detail) VALUES('line_quota',true,$1) ON CONFLICT(name) DO UPDATE SET ok=true,detail=EXCLUDED.detail",
@@ -65,7 +66,25 @@ describe("LINE 私訊摘要的送出時機", () => {
     expect(pushedText(0)).toContain("示範任務失敗，需要你處理");
     expect(pushedText(0)).toContain("示範查詢已有答案");
     expect(pushedText(0)).toContain("示範修改已建立 PR");
-    expect(pushedText(0).includes("範例群組剛加入")).toBe(includeRecovery);
+    expect(pushedText(0).includes("範例群組剛加入")).toBe(includeNewGroup);
+  });
+
+  it("低額度的全通知私訊保留定期檢查異常及需排除的系統設定問題", async () => {
+    await db.query("UPDATE settings SET value=value || '{\"line_private_mode\":\"all\"}'::jsonb WHERE id=1");
+    await db.query(
+      "INSERT INTO service_health(name,ok,detail) VALUES('line_quota',true,'本月已用 165／上限 200 則') ON CONFLICT(name) DO UPDATE SET ok=true,detail=EXCLUDED.detail",
+    );
+    await db.query(
+      `INSERT INTO notifications(kind,dedupe_key,text,created_at) VALUES
+       ('check','check:demo:1','⚠️ 示範服務異常',$1),
+       ('check','check:demo:2','示範服務已恢復',$1),
+       ('check','check-system:demo','定期檢查因系統設定問題暫停執行',$1)`, [new Date()],
+    );
+    await flushLinePrivate(db, "testToken123");
+    expect(push).toHaveBeenCalledTimes(1);
+    expect(pushedText(0)).toContain("示範服務異常");
+    expect(pushedText(0)).toContain("定期檢查因系統設定問題暫停執行");
+    expect(pushedText(0)).not.toContain("示範服務已恢復");
   });
 
   it("第一件立即送出，第二、三件在上一則送出滿 10 分鐘時合併", async () => {

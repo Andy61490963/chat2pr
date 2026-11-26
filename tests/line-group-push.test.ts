@@ -232,3 +232,20 @@ it("通知原有的失敗次數不同時，每個重試鍵始終對應同一份�
   expect(pushes).toHaveLength(2);
   expect(changed).toEqual([]);
 });
+
+it("兩分鐘內已回答的補問不再推播舊問題與按鈕", async () => {
+  const pushes = lineApi();
+  await notice("group_ready", "第一件完成的修改");
+  await flush();
+  const { id } = (await db.one<{ id: string }>(`INSERT INTO tasks(group_id,title,summary,acceptance,status,question,dedupe_key)
+    VALUES('group-a','範例問題','摘要','[]','awaiting_approval','{"text":"哪個表單？","choices":["第一項"]}','ExampleQuestion') RETURNING id`))!;
+  await db.query(`INSERT INTO notifications(task_id,kind,dedupe_key,text,group_id,quick_replies)
+    VALUES($1::uuid,'group_question','group:question:'||$1::uuid||':1','哪個表單？','group-a',$2::jsonb)`,
+    [id, JSON.stringify([{ label: "第一項", data: "ExampleAnswer", displayText: "第一項" }])]);
+  await flush();
+  await db.query("UPDATE tasks SET question=NULL,status='queued' WHERE id=$1", [id]);
+  await db.query("UPDATE notifications SET sent_at=now()-interval '2 minutes' WHERE kind='group_ready'");
+  await flush();
+  expect(pushes).toHaveLength(1);
+  expect(await db.one("SELECT last_error FROM notifications WHERE task_id=$1", [id])).toEqual({ last_error: "已過期，未補送" });
+});
