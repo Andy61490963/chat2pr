@@ -68,6 +68,10 @@ export const eventLabels: Record<string, string> = {
   upstream_retry: "訂閱上游重試",
 };
 
+export function runEventKind(event: Pick<RunEvent, "kind" | "detail">) {
+  return event.kind;
+}
+
 /** 自動修復那次「Codex 修改程式」的階段說明；舊紀錄沒有時，以之前出現過「評估驗證結果」判斷。 */
 export const repairPhaseDetail = "自動修復";
 /** 執行紀錄的「各階段花費時間」分組；收集差異與評估驗證結果算進前一個階段（#256）。 */
