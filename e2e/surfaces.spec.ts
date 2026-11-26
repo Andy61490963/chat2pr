@@ -317,9 +317,9 @@ test("在設定頁的手機畫面查看 LINE 本月用量、上限與預估用�
   await mockDashboard(page, {
     state: {
       groups: [
-        { ...group, name: "範例甲群" },
-        { ...group, id: "SampleGroupB", name: "範例乙群", member_count_estimate: 12 },
-        { ...group, id: "SampleGroupC", name: "範例丙群", member_count: 2 },
+        { ...group, name: "範例甲群", has_pending_line_push: true },
+        { ...group, id: "SampleGroupB", name: "範例乙群", has_pending_line_push: true, member_count: 4, member_count_estimate: 12 },
+        { ...group, id: "SampleGroupC", name: "範例丙群", member_count: null },
       ],
       health: [{
         name: "line_quota",
@@ -334,8 +334,10 @@ test("在設定頁的手機畫面查看 LINE 本月用量、上限與預估用�
   await expect(card.getByText("本月已用 100／上限 200", { exact: true })).toBeVisible();
   await expect(card.getByText("按本月平均每日用量，預估 2 月 20 日用完。")).toBeVisible();
   await expect(card.getByText(/範例甲群.*人數未知，以 8 人估算/)).toBeVisible();
-  await expect(card.getByText(/範例乙群.*人數未知，以 12 人估算/)).toBeVisible();
-  await expect(card.getByText(/範例丙群.*人數未知/)).toHaveCount(0);
+  await expect(card.getByText(/範例乙群.*上次查得 4 人.*以 12 人估算/)).toBeVisible();
+  await expect(card.getByText(/範例丙群.*人數未知/)).toBeHidden();
+  await card.getByText("其他群組的推播估值（1）").click();
+  await expect(card.getByText(/範例丙群.*人數未知，以 8 人估算/)).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
 });
 

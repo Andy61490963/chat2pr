@@ -92,3 +92,15 @@ describe("群組近 30 天的修改需求數", () => {
     );
   });
 });
+
+it("設定頁只展開有待付費推播的群組估值", async () => {
+  await db.query(`INSERT INTO notifications(kind,dedupe_key,text,group_id,sent_at,line_reply_policy) VALUES
+    ('group_ready','samplepending','範例待送','group-a',NULL,NULL),
+    ('group_ready','samplesent','範例已送','group-b',now(),NULL),
+    ('group_waiting','samplefree','範例免費回覆','group-b',NULL,'free')`);
+  const state = (await app.inject({ url: "/api/state", headers: await session() })).json();
+  expect(state.groups).toEqual(expect.arrayContaining([
+    expect.objectContaining({ id: "group-a", has_pending_line_push: true }),
+    expect.objectContaining({ id: "group-b", has_pending_line_push: false }),
+  ]));
+});
