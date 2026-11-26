@@ -335,17 +335,6 @@ button.work-row:hover {
   outline-offset: -2px;
 }
 
-@media (width < 40rem) {
-  .inbox-category-tabs {
-    animation: inbox-tabs-edge linear both;
-    animation-timeline: scroll(self inline);
-  }
-  @keyframes inbox-tabs-edge {
-    0%, 99% { mask-image: linear-gradient(to right, black calc(100% - 12px), transparent); }
-    100% { mask-image: none; }
-  }
-}
-
 @media (max-width: 47.99rem) {
   .station:not([data-state="current"]) .station-name {
     display: none;

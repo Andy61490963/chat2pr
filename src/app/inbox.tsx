@@ -21,7 +21,7 @@ import {
   groupActivity,
   type ActivityGroup,
 } from "../../shared/activity-groups.js";
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { PickList } from "../../shared/pick-list.js";
 import { ReviewWorkbench, type ReviewActions } from "./review-workbench";
 import { ReviewKeyboardHint } from "./review-queue-list";
@@ -254,6 +254,21 @@ export function InboxView({
   const [notify, setNotify] = useState(true);
   const decisionSection = useRef<HTMLElement>(null);
   const stuckHeading = useRef<HTMLHeadingElement>(null);
+  const categoryList = useRef<HTMLDivElement>(null);
+  const [moreCategories, setMoreCategories] = useState(false);
+  useEffect(() => {
+    const list = categoryList.current;
+    if (!list) return;
+    const measure = () => setMoreCategories(list.scrollWidth - list.clientWidth - list.scrollLeft > 1);
+    const resize = new ResizeObserver(measure);
+    resize.observe(list);
+    for (const tab of list.children) resize.observe(tab);
+    list.addEventListener("scroll", measure, { passive: true });
+    return () => {
+      resize.disconnect();
+      list.removeEventListener("scroll", measure);
+    };
+  }, []);
   const endButton = useRef<HTMLButtonElement>(null);
   const eligible = new Map<string, EndTaskSelection>();
   for (const { id, status, version } of needs) {
@@ -430,7 +445,7 @@ export function InboxView({
       className="work-surface min-w-0 gap-3 md:gap-4"
     >
       <div className="flex min-w-0 flex-col border-b sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-3">
-        <TabsList aria-label="收件匣分類" className="inbox-category-tabs h-auto max-w-full flex-none justify-start gap-2 overflow-x-auto rounded-none bg-transparent p-0 sm:gap-0">
+        <TabsList ref={categoryList} aria-label="收件匣分類" className={cn("h-auto max-w-full flex-none justify-start gap-2 overflow-x-auto rounded-none bg-transparent p-0 sm:gap-0", moreCategories && "max-sm:[mask-image:linear-gradient(to_right,black_calc(100%-12px),transparent)]")}>
           {categories.map(({ value, label, count }) => (
             <TabsTrigger
               key={value}
