@@ -58,7 +58,10 @@ import {
 // 必須在任何 Docker 操作（尤其啟動清理）以前拒絕不完整的隔離設定。
 validateRunnerEnvironment();
 const app = Fastify({ logger: false, bodyLimit: 80 * 1024 * 1024 });
-const containers = new Containers();
+const modelOrigin = flowSubscriptionOrigin();
+const containers = modelOrigin && process.env.ACCEPTANCE_FLOW_REAL === "0" && process.env.AGENTFLOW_INSTANCE?.startsWith("verify-266-")
+  ? new (await import("../scripts/acceptance/flows/operations-worker.js")).OperationsContainers()
+  : new Containers();
 const sourceCache = new SourceCache(containers);
 const checkEnvironments = new CheckEnvironments(containers);
 const observations = new ObservationBuffer();
@@ -66,7 +69,6 @@ const observations = new ObservationBuffer();
 // 不放在 .local：該目錄會唯讀掛載進應用程式容器。
 const codexHome = resolve(process.env.CODEX_SERVICE_HOME ?? ".codex-service");
 const authFile = join(codexHome, "auth.json");
-const modelOrigin = flowSubscriptionOrigin();
 const scripted = modelOrigin && (await import("../scripts/acceptance/flows/subscription.js")).scriptedSubscription(modelOrigin);
 const readAccount = scripted ? scripted.readAccount : readCodexAccount;
 const broker = new SubscriptionBroker({

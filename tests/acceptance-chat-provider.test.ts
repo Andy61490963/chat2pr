@@ -34,6 +34,27 @@ async function chatFixture() {
   return chat;
 }
 
+it("用完每月額度時 HTTP push 回 monthly limit，免費 reply 仍送達本群組", async () => {
+  vi.stubEnv("AGENTFLOW_INSTANCE", "verify-266-line-20");
+  vi.stubEnv("ACCEPTANCE_FLOW_REAL", "0");
+  const chat = await chatFixture();
+  const line = new LineChatPlatform("Fixtureline");
+  await chat.setLineQuotaExhausted(true);
+  const quota = await fetchLineQuota("Fixtureline");
+  expect(quota.used).toBe(quota.limit);
+  const push = await fetch("https://api.line.me/v2/bot/message/push", { method: "POST",
+    headers: { "content-type": "application/json" }, body: JSON.stringify({ to: "C-lantern", messages: [{ type: "text", text: "推送" }] }) });
+  expect(push.status).toBe(429);
+  expect(await push.json()).toMatchObject({ message: expect.stringMatching(/monthly limit/i) });
+  chat.registerLineReply("Fixturefree", "C-lantern");
+  expect((await line.replyToMessage({ replyToken: "Fixturefree" }, ["收到"])).status).toBe(200);
+  expect(await chat.groupMessages("C-lantern")).toEqual(["收到"]);
+  await chat.setLineQuotaExhausted(false);
+  expect((await fetchLineQuota("Fixtureline")).used).toBe(0);
+  vi.stubEnv("ACCEPTANCE_FLOW_REAL", "1");
+  await expect(chat.setLineQuotaExhausted(true)).rejects.toThrow("固定劇本");
+});
+
 it("LINE 批次回覆與 Discord 頻道發送按群組保留送達順序，重送不重複入帳", async () => {
   const chat = await chatFixture();
   const line = new LineChatPlatform("Fixtureline");

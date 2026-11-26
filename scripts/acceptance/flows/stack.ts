@@ -273,13 +273,45 @@ export async function startFlowStack(options: FlowStackOptions) {
   let creating = false;
   let runnerStarted = false;
   let runner: ReturnType<typeof launchRunner> | undefined;
-  async function cleanup() {
+  async function stopRunner() {
     if (runner) {
       if (running(runner.child)) runner.child.kill();
       if (!await Promise.race([runner.exited.then(() => true), delay(10000, false, { ref: false })]))
         throw new Error("無法確認本次主機執行器已停止");
       runner = undefined;
     }
+  }
+  async function startRunner() {
+    runner = launchRunner({ ...hostEnvironment(), ...env });
+    runnerStarted ||= !!runner.child.pid;
+    if (!await Promise.race([runner.listening, delay(45000, false, { ref: false })]) || !running(runner.child))
+      throw new Error("本次主機執行器未完成監聽");
+    if (!await acceptanceRunnerReady(env.RUNNER_URL, runnerKey, instance, 5000) || !running(runner.child))
+      throw new Error("本次主機執行器未通過健康檢查");
+    return z.int().positive().parse(runner.child.pid);
+  }
+  async function restart(runId: string) {
+    if (real || !runner || !running(runner.child)) throw new Error("沒有可重啟的本次固定劇本執行器");
+    z.uuid().parse(runId);
+    if (run(["volume", "inspect", "--format", `{{index .Labels "${ownerLabel}"}}`, `${instance}_database`]) !== owner ||
+        !listed(run, "container", [`label=${instanceLabel}=${instance}`, "label=io.agentflow.managed=true",
+          `label=io.agentflow.run=${runId}`, "status=running"]).length)
+      throw new Error("無法確認本實例與指定工作容器的歸屬");
+    const previousPid = z.int().positive().parse(runner.child.pid);
+    await stopRunner();
+    for (const port of [ports.runner, ports.broker]) await assertPortFree(port);
+    const pid = await startRunner();
+    return { instance, previousPid, pid };
+  }
+  let restarting: ReturnType<typeof restart> | undefined;
+  async function restartRunner(runId: string) {
+    if (closing || restarting) throw new Error("執行器正在重啟或驗收環境正在關閉");
+    restarting = restart(runId);
+    try { return await restarting; } finally { restarting = undefined; }
+  }
+  async function cleanup() {
+    await restarting?.catch(() => {});
+    await stopRunner();
     const current = await lstat(dir, { bigint: true });
     if (!current.isDirectory() || current.ino !== created.ino || current.dev !== created.dev ||
         (await realpath(dir)) !== dir || dirname(dir) !== scratch)
@@ -327,13 +359,8 @@ export async function startFlowStack(options: FlowStackOptions) {
     if (real) copyAcceptanceLogin(env.CODEX_SERVICE_HOME, true);
     else await writeFile(join(env.CODEX_SERVICE_HOME, "auth.json"),
       JSON.stringify({ tokens: { access_token: "AcceptanceModelToken266", account_id: "AcceptanceAccount266" } }), { flag: "wx" });
-    runner = launchRunner({ ...hostEnvironment(), ...env });
-    runnerStarted = !!runner.child.pid;
-    if (!await Promise.race([runner.listening, delay(45000, false, { ref: false })]) || !running(runner.child))
-      throw new Error("本次主機執行器未完成監聽");
-    if (!await acceptanceRunnerReady(env.RUNNER_URL, runnerKey, instance, 5000) || !running(runner.child))
-      throw new Error("本次主機執行器未通過健康檢查");
-    return { instance, dir, env: { ...env }, runnerKey, close };
+    await startRunner();
+    return { instance, dir, env: { ...env }, runnerKey, restartRunner, close };
   } catch (error) {
     try { await close(); }
     catch (cleanupError) { throw new AggregateError([error, cleanupError], "驗收啟動失敗且清理未完成"); }

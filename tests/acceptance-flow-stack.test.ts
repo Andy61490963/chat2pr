@@ -83,7 +83,7 @@ describe.skipIf(process.platform !== "win32")("隔離流程生命週期", () => 
       childEnv = opts.env;
       const stdout = new PassThrough();
       const child = Object.assign(new EventEmitter(), {
-        stdout, pid: 12345, exitCode: null as number | null, signalCode: null,
+        stdout, pid: 12345 + host.spawn.mock.calls.length, exitCode: null as number | null, signalCode: null,
         kill: vi.fn((): boolean => { child.exitCode = 0; stdout.end(); child.emit("close"); return true; }),
       });
       stopped = child.kill;
@@ -131,6 +131,7 @@ describe.skipIf(process.platform !== "win32")("隔離流程生命週期", () => 
           const [type, key, val] = args[i + 1].split("=");
           if (type === "label") found = found.filter(r => r.labels[key] === val);
           else if (type === "name") found = found.filter(r => new RegExp(key).test(r.name));
+          else if (type === "status") expect(key).toBe("running");
           else throw new Error("非預期篩選");
         }
         return found.map(r => r.id).join("\n");
@@ -159,6 +160,29 @@ describe.skipIf(process.platform !== "win32")("隔離流程生命週期", () => 
   });
   afterEach(async () => {
     await rm(scratch, { recursive: true, force: true });
+  });
+
+  it("重啟只更換持有的 runner 子程序，核對工作、獨占卷、新程序健康與清理", async () => {
+    const stack = await startFlowStack(input);
+    const runId = "26600000-0000-4000-8000-000000000016";
+    const original = stopped;
+    try {
+      add("container", "另一個工作", { [instanceLabel]: "verify-266-other", "io.agentflow.managed": "true", "io.agentflow.run": runId });
+      await expect(stack.restartRunner(runId)).rejects.toThrow("歸屬");
+      expect(original).not.toHaveBeenCalled();
+      add("container", "本輪工作", { [instanceLabel]: instance, "io.agentflow.managed": "true", "io.agentflow.run": runId });
+      const restarting = stack.restartRunner(runId);
+      await expect(stack.restartRunner(runId)).rejects.toThrow("正在重啟");
+      const receipt = await restarting;
+      expect(receipt.instance).toBe(instance);
+      expect(receipt.pid).not.toBe(receipt.previousPid);
+      expect(original).toHaveBeenCalledOnce();
+      expect(host.spawn).toHaveBeenCalledTimes(2);
+      expect(host.health).toHaveBeenCalledTimes(2);
+    } finally { await stack.close(); }
+    expect(stopped).toHaveBeenCalledOnce();
+    expect(resources.map(r => r.name)).toContain("另一個工作");
+    await expect(stack.restartRunner(runId)).rejects.toThrow("關閉");
   });
 
   it("交回就緒的獨立環境，只用假訂閱憑證，重複關閉保留其他實例", async () => {

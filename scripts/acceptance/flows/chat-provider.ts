@@ -171,6 +171,7 @@ export async function startChatProvider() {
   const quota = 10000;
   const memberCount = 1;
   let used = 0;
+  let quotaExhausted = false;
   const line = "/v2/bot";
   const profile = (userId: string) => ({ userId, displayName: "驗收成員" });
   app.get(line + "/info", () => ({
@@ -198,7 +199,7 @@ export async function startChatProvider() {
     );
   }
   app.get(line + "/message/quota", () => ({ type: "limited", value: quota }));
-  app.get(line + "/message/quota/consumption", () => ({ totalUsage: used }));
+  app.get(line + "/message/quota/consumption", () => ({ totalUsage: quotaExhausted ? quota : used }));
   function acceptLine(
     kind: "push" | "reply",
     groupId: string,
@@ -225,7 +226,7 @@ export async function startChatProvider() {
           .header("x-line-accepted-request-id", accepted)
           .send({});
     }
-    if (used + memberCount > quota)
+    if (quotaExhausted || used + memberCount > quota)
       return res
         .code(429)
         .send({ message: "You have reached your monthly limit." });
@@ -391,6 +392,12 @@ export async function startChatProvider() {
   };
   return {
     origin,
+    async setLineQuotaExhausted(value: boolean) {
+      requireAcceptance();
+      if (!instanceName().startsWith("verify-266-") || process.env.ACCEPTANCE_FLOW_REAL !== "0")
+        throw new Error("LINE 額度故障僅可用於固定劇本");
+      quotaExhausted = value;
+    },
     discord: new DiscordChatPlatform(rest),
     get records(): readonly ChatDelivery[] {
       return records.slice();

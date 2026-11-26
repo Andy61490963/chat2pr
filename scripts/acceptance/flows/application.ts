@@ -5,13 +5,15 @@ import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
 import type { FastifyInstance } from "fastify";
 import type { Database } from "../../../server/db.js";
-import type { DiscordGateway } from "../../../server/discord.js";
+import type { DiscordGateway, DiscordMessageEvent } from "../../../server/discord.js";
 import type { HttpRunner, Runner } from "../../../server/execution.js";
 import { discordId } from "../../../server/chat-platform.js";
 import { acceptanceRunnerReady } from "../setup-config.js";
 import { basicFixture, type BasicFlowContext } from "./basic.js";
 import type { startChatProvider } from "./chat-provider.js";
 import type { createGitHubProvider } from "./github-provider.js";
+import type { OperationsControls } from "./operations.js";
+import { operationsInstance, operationsPhaseInput, type WorkerFault } from "./operations-worker.js";
 
 type Chat = Awaited<ReturnType<typeof startChatProvider>>;
 type GitHubProvider = Awaited<ReturnType<typeof createGitHubProvider>>;
@@ -20,6 +22,9 @@ export interface FlowApplicationOptions {
   github: GitHubProvider;
   chat: Chat;
   workerImage: string;
+  autoSetup?: boolean;
+  setModelSteps?: OperationsControls["setModelSteps"];
+  restartRunner?: OperationsControls["restartRunner"];
 }
 
 const required = z.string().min(1);
@@ -184,6 +189,31 @@ export function archiveRunner(http: HttpRunner): Runner {
   };
 }
 
+/** 只縮小本輪的資源讀數，其他 runner 呼叫及實際安全限制都沿用原本的傳輸。 */
+export function operationsRunner(base: Runner) {
+  let ceiling: number | null = null, fault: WorkerFault = null;
+  const runner: Runner = {
+    ...base,
+    async call<T>(path: string, body: unknown, timeoutMs?: number) {
+      const result = await base.call<T>(path, operationsPhaseInput(fault, path, body), timeoutMs);
+      if (path !== "resources" || ceiling === null) return result;
+      operationsInstance();
+      const { memFreeMb } = z.object({ memFreeMb: z.number().nonnegative() }).parse(result);
+      return Object.assign({}, result, { memFreeMb: Math.min(ceiling, memFreeMb) });
+    },
+  };
+  return { runner,
+    async setMemoryCeiling(mb: number | null) {
+      operationsInstance();
+      ceiling = z.int().nonnegative().nullable().parse(mb);
+    },
+    async setWorkerFault(value: WorkerFault) {
+      operationsInstance();
+      fault = z.enum(["install", "create"]).nullable().parse(value);
+    },
+  };
+}
+
 function fixtureGateway(chat: Chat) {
   let callbacks: Parameters<DiscordGateway["start"]>[1] | undefined;
   const adapter: DiscordGateway = {
@@ -210,6 +240,16 @@ function fixtureGateway(chat: Chat) {
   };
   return {
     adapter, dispatch,
+    async event(event: DiscordMessageEvent) {
+      operationsInstance();
+      if (!callbacks) throw new Error("Discord 接收器尚未啟動");
+      const d = basicFixture.discord;
+      const group = event.type === "create" ? (event.parentChannel ?? event.channel) : event.channel;
+      if (group !== d.channelId || ("botId" in event && event.botId !== d.applicationId) ||
+          (event.type === "create" && event.author.id !== d.userId))
+        throw new Error("Discord 事件不屬於驗收頻道");
+      await callbacks.event(event);
+    },
     async ready() {
       if (!callbacks) throw new Error("Discord 接收器尚未啟動");
       await callbacks.health("connected");
@@ -235,7 +275,8 @@ export async function pollFlowStep<T>(label: string, probe: () => Promise<T | un
   }
 }
 
-async function prepareProject(db: Database, admin: Awaited<ReturnType<typeof login>>, repo: string, image: string) {
+export async function prepareProject(db: Pick<Database, "settings" | "one" | "query">,
+  admin: Awaited<ReturnType<typeof login>>, repo: string, image: string, autoSetup: boolean) {
   await admin("POST", "/api/integrations/check");
   await admin("PUT", "/api/settings", {
     ...await db.settings(), paused: false, code_downloads: false, auto_memory: false,
@@ -243,7 +284,7 @@ async function prepareProject(db: Database, admin: Awaited<ReturnType<typeof log
   });
   const { id } = z.object({ id: z.uuid() }).parse(await admin("POST", "/api/projects", {
     name: basicFixture.project, repo, base_branch: basicFixture.branch, image,
-    enabled: false, setup_mode: "manual", sql_server: "never", sensitive_paths: [],
+    enabled: false, setup_mode: autoSetup ? "auto" : "manual", sql_server: "never", sensitive_paths: [],
     install_command: "npm ci --offline --ignore-scripts --no-audit --no-fund", test_command: "npm test",
   }));
   await admin("POST", `/api/projects/${id}/validate`);
@@ -270,7 +311,7 @@ async function prepareProject(db: Database, admin: Awaited<ReturnType<typeof log
 let active = false;
 
 /** 主控先套用 stack.env，再提供同一輪的 GitHub 及聊天替身。close 後由主控清理 stack。 */
-export async function startFlowApplication({ github, chat, workerImage }: FlowApplicationOptions) {
+export async function startFlowApplication({ github, chat, workerImage, autoSetup = false, restartRunner, setModelSteps }: FlowApplicationOptions) {
   if (active) throw new Error("同一程序已有使用驗收路由的 app");
   active = true;
   const resources = new AsyncDisposableStack();
@@ -319,7 +360,7 @@ export async function startFlowApplication({ github, chat, workerImage }: FlowAp
     resources.defer(() => discord.stop());
     await gateway.ready();
     const { HttpRunner } = await import("../../../server/execution.js");
-    const runner = archiveRunner(new HttpRunner());
+    const { runner, setMemoryCeiling, setWorkerFault } = operationsRunner(archiveRunner(new HttpRunner()));
     const { startJobs } = await import("../../../server/jobs.js");
     const jobs = await startJobs(db, { discord: chat.discord, runner });
     resources.defer(() => jobs.stop());
@@ -329,7 +370,7 @@ export async function startFlowApplication({ github, chat, workerImage }: FlowAp
     await app.listen({ host: "127.0.0.1", port: Number(new URL(env.origin).port) });
     const admin = await login(app, env.origin, env.adminId, oauth.authorize);
     const repository = github.fixture.repo;
-    const projectId = await prepareProject(db, admin, repository, workerImage);
+    const projectId = await prepareProject(db, admin, repository, workerImage, autoSetup);
     const ctx: BasicFlowContext = {
       db, projectId, repository, admin, poll: pollFlowStep,
       lineSecret: s.lineSecret, githubWebhookSecret: s.githubWebhookSecret,
@@ -337,9 +378,9 @@ export async function startFlowApplication({ github, chat, workerImage }: FlowAp
       async webhook(request) {
         if (request.url === "/webhooks/line") {
           const body = z.object({ events: z.array(z.object({
-            replyToken: required, source: z.object({ groupId: required }),
+            replyToken: required.optional(), source: z.object({ groupId: required }),
           })) }).parse(JSON.parse(request.payload));
-          for (const event of body.events) chat.registerLineReply(event.replyToken, event.source.groupId);
+          for (const event of body.events) if (event.replyToken) chat.registerLineReply(event.replyToken, event.source.groupId);
         }
         const { statusCode } = await app.inject(request);
         if (statusCode === 200 && request.url === "/webhooks/github" && request.headers["x-github-event"] === "pull_request") {
@@ -358,7 +399,22 @@ export async function startFlowApplication({ github, chat, workerImage }: FlowAp
         return { statusCode };
       },
     };
-    return { ctx, db, close: () => resources.disposeAsync() };
+    const operations: OperationsControls = {
+      setMemoryCeiling, setWorkerFault, discordEvent: gateway.event,
+      setLineQuotaExhausted: chat.setLineQuotaExhausted,
+      putSettings: body => admin("PUT", "/api/settings", body),
+      async restartRunner(runId) {
+        operationsInstance();
+        if (!restartRunner) throw new Error("主控尚未接上 runner 重啟 IPC");
+        return restartRunner(z.uuid().parse(runId));
+      },
+      async setModelSteps(steps) {
+        operationsInstance();
+        if (!setModelSteps) throw new Error("主控尚未接上模型劇本 IPC");
+        await setModelSteps(steps);
+      },
+    };
+    return { ctx, db, operations, close: () => resources.disposeAsync() };
   } catch (error) {
     try { await resources.disposeAsync(); }
     catch (cleanupError) { throw new AggregateError([error, cleanupError], "驗收 app 啟動失敗且清理未完成"); }
