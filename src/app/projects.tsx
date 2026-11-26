@@ -1,4 +1,16 @@
 import {
+  DataList,
+  DataListFrame,
+  DataListHeader,
+  EmptyState,
+  InlineNotice,
+  ListRow,
+  ListRowButton,
+  SectionHeader,
+  Toolbar,
+} from "@/components/ui/layout";
+import { DescriptionItem, DescriptionList } from "@/components/ui/description-list";
+import {
   networkStatusLabels,
   projectBindingText,
   projectLabels,
@@ -50,6 +62,7 @@ import {
 } from "@/components/ui/form-controls";
 import { Input } from "@/components/ui/input";
 import {
+  NativeSelect,
   Select,
   SelectContent,
   SelectGroup,
@@ -63,7 +76,6 @@ import {
   type Request,
   type Run,
   type State,
-  Empty,
   date,
   message,
 } from "./shared";
@@ -140,31 +152,21 @@ function ProjectList({
   onOpen: (id: string) => void;
 }) {
   return (
-    <div className="@3xl:rounded-xl @3xl:border @3xl:bg-card @3xl:text-card-foreground @3xl:shadow-card">
-      <div
-        aria-hidden="true"
-        className="hidden grid-cols-[minmax(0,2fr)_6rem_minmax(0,1.2fr)_minmax(0,1.2fr)_7.5rem] gap-4 border-b px-5 py-2.5 text-xs text-muted-foreground @3xl:grid"
-      >
+    <DataListFrame>
+      <DataListHeader columns="project">
         <span>專案</span>
         <span>分支</span>
         <span>環境驗證</span>
         <span>使用群組</span>
         <span className="text-right">狀態</span>
-      </div>
-      <ul role="list" className="grid gap-3 @3xl:block @3xl:divide-y">
+      </DataListHeader>
+      <DataList variant="responsive" role="list">
         {entries.map(({ project: p, groups }) => {
           const verification = projectVerification(p);
           return (
-            <li
-              key={p.id}
-              className="rounded-xl border bg-card text-card-foreground shadow-card @3xl:rounded-none @3xl:border-0 @3xl:shadow-none"
-            >
-              <button
-                type="button"
-                className="grid min-h-11 w-full grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-2 rounded-[inherit] px-5 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-ring @3xl:grid-cols-[minmax(0,2fr)_6rem_minmax(0,1.2fr)_minmax(0,1.2fr)_7.5rem] @3xl:items-center"
-                onClick={() => onOpen(p.id)}
-              >
-                <span className="flex min-w-0 flex-col [overflow-wrap:anywhere]">
+            <ListRow key={p.id} variant="responsive">
+              <ListRowButton columns="project" onClick={() => onOpen(p.id)}>
+                <span className="flex min-w-0 flex-col wrap-anywhere">
                   <span className="font-medium">{p.name}</span>
                   <span className="font-mono text-xs text-muted-foreground">
                     {p.repo}
@@ -175,7 +177,7 @@ function ProjectList({
                     </span>
                   )}
                 </span>
-                <span className="col-span-2 text-sm [overflow-wrap:anywhere] @3xl:col-auto">
+                <span className="col-span-2 text-sm wrap-anywhere @3xl:col-auto">
                   <span className="mr-2 text-xs text-muted-foreground @3xl:sr-only">
                     分支
                   </span>
@@ -193,7 +195,7 @@ function ProjectList({
                   </span>
                   <span>{projectVerificationLabels[verification]}</span>
                 </span>
-                <span className="col-span-2 text-sm [overflow-wrap:anywhere] @3xl:col-auto">
+                <span className="col-span-2 text-sm wrap-anywhere @3xl:col-auto">
                   <span className="mr-2 text-xs text-muted-foreground @3xl:sr-only">
                     使用群組
                   </span>
@@ -203,12 +205,12 @@ function ProjectList({
                   <span className="sr-only">狀態</span>
                   <ProjectBadge project={p} bound={groups.length > 0} />
                 </span>
-              </button>
-            </li>
+              </ListRowButton>
+            </ListRow>
           );
         })}
-      </ul>
-    </div>
+      </DataList>
+    </DataListFrame>
   );
 }
 
@@ -266,7 +268,7 @@ export function ProjectsView({
   const platforms = configuredChatPlatforms(state);
   return (
     <div className="@container flex min-w-0 flex-col gap-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
+      <Toolbar className="justify-between gap-3">
         <p className="text-sm text-muted-foreground">
           共 {state.projects.length} 個專案，{sections.ready.length} 個
           {projectLabels.ready}
@@ -277,7 +279,7 @@ export function ProjectsView({
         >
           <Plus /> 新增專案
         </Button>
-      </div>
+      </Toolbar>
       {state.settings.container_network === "open" && (
         <p className="text-sm text-muted-foreground">
           工作網路：{networkStatusLabels.open}。
@@ -290,16 +292,16 @@ export function ProjectsView({
               aria-labelledby="projects-attention"
               className="grid gap-2"
             >
-              <h2 id="projects-attention" className="font-semibold">
+              <SectionHeader id="projects-attention">
                 {projectSectionLabels.attention}
-              </h2>
+              </SectionHeader>
               <ProjectList entries={sections.attention} onOpen={openProject} />
             </section>
           )}
           <section aria-labelledby="projects-ready" className="grid gap-2">
-            <h2 id="projects-ready" className="font-semibold">
+            <SectionHeader id="projects-ready">
               {projectSectionLabels.ready}
-            </h2>
+            </SectionHeader>
             {sections.ready.length ? (
               <ProjectList entries={sections.ready} onOpen={openProject} />
             ) : (
@@ -327,9 +329,9 @@ export function ProjectsView({
         </div>
       ) : (
         <Card>
-          <Empty icon={<FolderGit2 />} title="還沒有專案">
+          <EmptyState icon={<FolderGit2 />} title="還沒有專案">
             先把 GitHub App 安裝到儲存庫，再新增專案。
-          </Empty>
+          </EmptyState>
         </Card>
       )}
       {open && (
@@ -345,12 +347,12 @@ export function ProjectsView({
                   bound={boundGroups.length > 0}
                 />
               </div>
-              <SheetTitle className="text-lg [overflow-wrap:anywhere]">
+              <SheetTitle className="text-lg wrap-anywhere">
                 {open.name}
               </SheetTitle>
               <SheetDescription asChild>
                 <a
-                  className="inline-flex w-fit max-w-full items-center gap-1 font-mono text-xs [overflow-wrap:anywhere] hover:text-foreground"
+                  className="inline-flex w-fit max-w-full items-center gap-1 font-mono text-xs wrap-anywhere hover:text-foreground"
                   href={`https://github.com/${open.repo}`}
                   target="_blank"
                   rel="noreferrer"
@@ -390,7 +392,7 @@ export function ProjectsView({
                 onPointerDownCapture={() => (tabIntent.current = performance.now())}
                 onMouseDownCapture={() => (tabIntent.current = performance.now())}
                 aria-label="專案詳情"
-                className="mx-3 h-auto max-w-[calc(100%-1.5rem)] justify-start overflow-x-auto"
+                className="mx-3 h-auto w-auto min-w-0 self-stretch justify-start overflow-x-auto"
               >
                 {(Object.entries(projectTabs) as [ProjectTab, string][]).map(
                   ([value, label]) => (
@@ -428,15 +430,12 @@ export function ProjectsView({
                     {open.description ||
                       "尚未填寫說明，AI 只能依檔案結構判斷。"}
                   </p>
-                  <dl className="grid grid-cols-[4.5rem_1fr] gap-x-3 gap-y-2 text-sm">
-                    <dt className="text-muted-foreground">環境設定</dt>
-                    <dd>
+                  <DescriptionList className="gap-y-2">
+                    <DescriptionItem label="環境設定">
                       {open.setup_mode === "auto" ? "AI 自動設定" : "手動指定"}
-                    </dd>
-                    <dt className="text-muted-foreground">分支</dt>
-                    <dd>{open.base_branch}</dd>
-                    <dt className="text-muted-foreground">安裝命令</dt>
-                    <dd className="min-w-0 break-all">
+                    </DescriptionItem>
+                    <DescriptionItem label="分支">{open.base_branch}</DescriptionItem>
+                    <DescriptionItem label="安裝命令" valueClassName="break-all">
                       {(
                         open.setup_mode === "auto"
                           ? open.setup_plan?.install
@@ -456,9 +455,8 @@ export function ProjectsView({
                       ) : (
                         "未設定"
                       )}
-                    </dd>
-                    <dt className="text-muted-foreground">測試命令</dt>
-                    <dd className="min-w-0 break-all">
+                    </DescriptionItem>
+                    <DescriptionItem label="測試命令" valueClassName="break-all">
                       {(
                         open.setup_mode === "auto"
                           ? open.setup_plan?.test
@@ -476,26 +474,23 @@ export function ProjectsView({
                             : "未設定（只靠審查）"}
                         </span>
                       )}
-                    </dd>
-                    <dt className="text-muted-foreground">索引</dt>
-                    <dd className="min-w-0 break-words">
+                    </DescriptionItem>
+                    <DescriptionItem label="索引">
                       {indexStatus(open, state.settings.rag_enabled)}
-                    </dd>
-                    <dt className="text-muted-foreground">範圍</dt>
-                    <dd className="min-w-0 whitespace-pre-wrap break-all text-xs">
+                    </DescriptionItem>
+                    <DescriptionItem label="範圍" valueClassName="whitespace-pre-wrap break-all text-xs">
                       {open.index_paths?.length
                         ? open.index_paths.join("\n")
                         : "全儲存庫可索引文字"}
-                    </dd>
-                    <dt className="text-muted-foreground">群組</dt>
-                    <dd className="min-w-0 [overflow-wrap:anywhere]">
+                    </DescriptionItem>
+                    <DescriptionItem label="群組">
                       {boundGroups.map((g) => g.name).join("、") ||
                         (needsBinding ? projectLabels.unbound : "—")}
-                    </dd>
-                  </dl>
+                    </DescriptionItem>
+                  </DescriptionList>
                   {needsBinding && (
                     <section
-                      className="grid gap-2 rounded-lg bg-muted/60 p-3 text-sm"
+                      className="grid gap-2 rounded-md bg-muted/60 p-3 text-sm"
                       aria-labelledby="project-binding"
                     >
                       <h3 id="project-binding" className="font-medium">
@@ -528,7 +523,7 @@ export function ProjectsView({
                     </section>
                   )}
                   {open.repo_missing_at && (
-                    <div className="flex flex-col gap-1 rounded-lg bg-danger-soft px-3 py-2.5 text-sm text-danger">
+                    <InlineNotice tone="danger" className="flex flex-col gap-1">
                       <span className="font-medium">
                         {open.validation_error || "GitHub 上找不到這個儲存庫"}
                       </span>
@@ -543,7 +538,7 @@ export function ProjectsView({
                         如果是搬家或改名：把 GitHub App
                         安裝到新的帳號或組織後，系統會自動接回並恢復原本的設定，也可以按「重新檢查」馬上找一次；要換成另一個儲存庫，按「編輯設定」改選。確定不再使用就刪除專案。
                       </span>
-                    </div>
+                    </InlineNotice>
                   )}
                   <SheetFooter>
                     <Button
@@ -642,7 +637,7 @@ export function ProjectsView({
                         {open.setup_plan.explanation}
                       </p>
                       {open.setup_plan.systemInstall && (
-                        <div className="rounded-lg border p-3">
+                        <div className="rounded-md border p-3">
                           <p className="mb-2 text-xs font-medium text-muted-foreground">
                             系統套件（安裝前審查）
                           </p>
@@ -850,14 +845,10 @@ function ValidationError({
 }) {
   const { headline, body, detail, advice } = validationErrorParts(text);
   return (
-    <div
+    <InlineNotice
       role={tone === "failed" ? "alert" : "status"}
-      className={cn(
-        "space-y-1 whitespace-pre-wrap break-words rounded-lg px-3 py-2 text-xs",
-        tone === "failed"
-          ? "bg-danger-soft text-danger"
-          : "bg-warn-soft text-warn",
-      )}
+      tone={tone === "failed" ? "danger" : "warn"}
+      className="space-y-1 whitespace-pre-wrap break-words text-xs"
     >
       <p className="text-sm font-medium">
         {tone === "transient" ? `上次重新驗證未完成：${headline}` : headline}
@@ -874,7 +865,7 @@ function ValidationError({
       {advice.map((line, i) => (
         <p key={i}>{line}</p>
       ))}
-    </div>
+    </InlineNotice>
   );
 }
 
@@ -945,7 +936,7 @@ function ProjectKnowledge({
           {items.map((k) => (
             <li
               key={k.id}
-              className="flex items-center gap-2 rounded-lg bg-muted/60 py-2 pr-1 pl-3"
+              className="flex items-center gap-2 rounded-md bg-muted/60 py-2 pr-1 pl-3"
             >
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="text-sm">{k.content}</span>
@@ -1343,10 +1334,7 @@ export function ProjectForm({
           </Select>
         )}
         {pickRepo && repoList.error && (
-          <div
-            role="alert"
-            className="space-y-2 rounded-lg bg-danger-soft px-3 py-2.5 text-sm text-danger"
-          >
+          <InlineNotice tone="danger" role="alert" className="space-y-2">
             <p className="break-words">{repoList.error}</p>
             <Button
               type="button"
@@ -1357,7 +1345,7 @@ export function ProjectForm({
             >
               重新取得
             </Button>
-          </div>
+          </InlineNotice>
         )}
         {pickRepo && repoList.empty && (
           <p className="text-xs text-muted-foreground" role="status">
@@ -1450,29 +1438,27 @@ export function ProjectForm({
         <div className="mt-3 flex flex-col gap-4">
           <div className="flex flex-col gap-2">
             <Label htmlFor="pf-setup-mode">安裝與測試方式</Label>
-            <select
+            <NativeSelect
               id="pf-setup-mode"
-              className="h-9 rounded-md border bg-background px-2 text-sm"
               value={form.setup_mode}
               onChange={(e) => set("setup_mode", e.target.value)}
             >
               <option value="auto">AI 自動設定（建議）</option>
               <option value="manual">手動指定指令</option>
-            </select>
+            </NativeSelect>
           </div>
           {form.setup_mode === "auto" && (
             <div className="flex flex-col gap-2">
               <Label htmlFor="pf-sql-server">測試用 SQL Server</Label>
-              <select
+              <NativeSelect
                 id="pf-sql-server"
-                className="h-9 rounded-md border bg-background px-2 text-sm"
                 value={form.sql_server}
                 onChange={(e) => set("sql_server", e.target.value)}
               >
                 <option value="auto">自動判斷（建議）</option>
                 <option value="always">一律提供</option>
                 <option value="never">不提供</option>
-              </select>
+              </NativeSelect>
               <p className="text-xs text-muted-foreground">
                 自動判斷：專案檔或 CI 顯示測試需要 SQL Server 時，改用含 SQL
                 Server

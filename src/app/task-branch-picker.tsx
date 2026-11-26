@@ -1,3 +1,4 @@
+import { NativeSelect } from "@/components/ui/select";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -71,9 +72,9 @@ export function TaskBranchPicker({
             <span>GitHub 預設：{catalog.defaultBranch}</span>
           </p>
           <Label htmlFor="task-branch-options">GitHub 分支</Label>
-          <select
+          <NativeSelect
             id="task-branch-options"
-            className="h-10 w-full min-w-0 rounded-md border bg-background px-2 text-sm"
+            className="h-10 w-full min-w-0"
             value={catalog.names.includes(name) ? name : ""}
             onChange={(e) => setName(e.target.value)}
           >
@@ -84,7 +85,7 @@ export function TaskBranchPicker({
                 {n === catalog.defaultBranch ? "（GitHub 預設）" : ""}
               </option>
             ))}
-          </select>
+          </NativeSelect>
           <Label htmlFor="task-branch-name">目標分支名稱</Label>
           <Input
             id="task-branch-name"

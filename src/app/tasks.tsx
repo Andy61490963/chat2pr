@@ -1,3 +1,4 @@
+import { EmptyState, SectionHeader, Toolbar } from "@/components/ui/layout";
 import {
   taskListEmptyLabels,
   taskListLabels,
@@ -55,9 +56,7 @@ import {
   type State,
   type Request,
   countOf,
-  Empty,
   message,
-  SectionTitle,
   writeQuery,
 } from "./shared";
 
@@ -165,11 +164,11 @@ function TaskRows({
   return [...sections].map(([key, tasks]) => (
     <section key={key}>
       {by !== "none" && (
-        <SectionTitle count={tasks.length}>
+        <SectionHeader count={tasks.length} className="mb-3">
           {by === "project"
             ? (state.projects.find((p) => p.id === key)?.name ?? "未指定專案")
             : (state.groups.find((g) => g.id === key)?.name ?? "群組")}
-        </SectionTitle>
+        </SectionHeader>
       )}
       <div className="work-ledger">
         {tasks.map((task) => (
@@ -430,7 +429,7 @@ export function TasksView({
   const empty = (
     <Card>
       {emptyTab && !isHistory ? (
-        <Empty title={taskListEmptyLabels.active}>
+        <EmptyState title={taskListEmptyLabels.active}>
           <span className="flex flex-col items-center gap-3">
             有新任務或進度變動時，你會在這裡看到。
             <Button
@@ -443,9 +442,9 @@ export function TasksView({
               看已結束的任務
             </Button>
           </span>
-        </Empty>
+        </EmptyState>
       ) : !emptyTab && narrowed ? (
-        <Empty title={taskListEmptyLabels.filtered}>
+        <EmptyState title={taskListEmptyLabels.filtered}>
           <span className="flex flex-col items-center gap-3">
             你可以清除篩選，或換個字詞搜尋。
             <Button
@@ -465,9 +464,9 @@ export function TasksView({
               清除篩選
             </Button>
           </span>
-        </Empty>
+        </EmptyState>
       ) : (
-        <Empty title={taskListEmptyLabels[currentTab.id]}>
+        <EmptyState title={taskListEmptyLabels[currentTab.id]}>
           {filter === "all" ? (
             "你可以在已綁定專案的群組提出需求，整理完成後就會出現在這裡。"
           ) : (
@@ -482,7 +481,7 @@ export function TasksView({
               看全部任務
             </Button>
           )}
-        </Empty>
+        </EmptyState>
       )}
     </Card>
   );
@@ -499,7 +498,7 @@ export function TasksView({
       <legend className="mb-1 text-sm text-muted-foreground">
         你可以勾選多個狀態，未勾選時會顯示這個分頁的所有任務。
       </legend>
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,8rem),1fr))] gap-x-2 sm:flex sm:flex-wrap sm:gap-x-4">
+      <div className="grid grid-cols-status-options gap-x-2 sm:flex sm:flex-wrap sm:gap-x-4">
         {taskStatusFilterIds.map((id) => (
           <label
             key={id}
@@ -531,7 +530,7 @@ export function TasksView({
     ? {
         position: "popper" as const,
         className:
-          "max-w-(--radix-select-content-available-width) [&_[role=option]]:min-h-11 [&_[role=option]]:break-all",
+          "max-w-select-available [&_[role=option]]:min-h-11 [&_[role=option]]:break-all",
       }
     : {};
   const selectControls = (
@@ -606,7 +605,7 @@ export function TasksView({
       <div className="flex flex-col gap-3">
         <TabsList
           aria-label="任務分頁"
-          className="grid h-auto w-full grid-cols-[minmax(0,1.6fr)_repeat(2,minmax(0,1fr))] items-stretch overflow-visible sm:flex sm:flex-wrap sm:justify-start"
+          className="grid h-auto w-full grid-cols-task-tabs items-stretch overflow-visible sm:flex sm:flex-wrap sm:justify-start"
         >
           {tabs.map((f) => (
             <TabsTrigger
@@ -631,7 +630,7 @@ export function TasksView({
           ))}
         </TabsList>
         {week && (
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+          <Toolbar className="gap-x-3 gap-y-1 text-sm">
             <span>
               {statusLabels.merged}，更新於{" "}
               {mergedWeekDay(week.since).replaceAll("-", "/")} 至{" "}
@@ -647,7 +646,7 @@ export function TasksView({
             >
               清除已合併日期篩選
             </Button>
-          </div>
+          </Toolbar>
         )}
         {!emptyTab && (
           <>
@@ -670,14 +669,14 @@ export function TasksView({
                       篩選{filterCount > 0 && `（${filterCount}）`}
                     </Button>
                   </SheetTrigger>
-                  <SheetContent side="bottom" className="max-h-[85dvh]">
+                  <SheetContent side="bottom" className="max-h-sheet">
                     <SheetHeader>
                       <SheetTitle>任務篩選</SheetTitle>
                       <SheetDescription>
                         選擇條件後，任務清單會立即更新。
                       </SheetDescription>
                     </SheetHeader>
-                    <div className="grid min-h-0 grid-cols-1 gap-3 overflow-y-auto px-4 pt-3 pb-[max(1rem,env(safe-area-inset-bottom))]">
+                    <div className="grid min-h-0 grid-cols-1 gap-3 overflow-y-auto px-4 pt-3 pb-safe">
                       {statusControls}
                       {selectControls}
                     </div>

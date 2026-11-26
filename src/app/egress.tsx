@@ -1,3 +1,4 @@
+import { InlineNotice, Toolbar } from "@/components/ui/layout";
 import { useCallback, useEffect, useState } from "react";
 import {
   validateDomains,
@@ -98,20 +99,14 @@ export function EgressCard({ request }: { request: Request }) {
       </CardHeader>
       <CardContent className="flex flex-col gap-3">
         {error && (
-          <p
-            role="alert"
-            className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
-          >
+          <InlineNotice as="p" tone="danger" role="alert">
             {error}
-          </p>
+          </InlineNotice>
         )}
         {notice && (
-          <p
-            role="status"
-            className="rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground"
-          >
+          <InlineNotice as="p" tone="muted" role="status" className="text-muted-foreground">
             {notice}
-          </p>
+          </InlineNotice>
         )}
         {data && (
           <>
@@ -129,7 +124,7 @@ export function EgressCard({ request }: { request: Request }) {
                 ))}
               </ul>
             )}
-            <div className="flex flex-wrap items-center gap-3">
+            <Toolbar className="gap-3">
               <Button
                 disabled={busy || !changed || checked.errors.length > 0}
                 onClick={() => void save()}
@@ -150,7 +145,7 @@ export function EgressCard({ request }: { request: Request }) {
                 {data.custom ? "已自訂" : "使用預設清單"}，共{" "}
                 {data.domains.length} 個（最多 {data.max}）。變更會寫入稽核。
               </span>
-            </div>
+            </Toolbar>
           </>
         )}
       </CardContent>
@@ -194,7 +189,7 @@ export function InstallReviewList({ review }: { review: InstallReview }) {
 /** 單次執行的系統套件：使用的衍生映像與審查結果。 */
 export function InstallReportView({ report }: { report: InstallReport }) {
   return (
-    <section className="flex flex-col gap-2 rounded-lg border p-3">
+    <section className="flex flex-col gap-2 rounded-md border p-3">
       <h3 className="text-xs font-medium text-muted-foreground">系統套件</h3>
       <p className="text-sm break-all">
         {report.image

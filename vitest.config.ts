@@ -1,5 +1,7 @@
 import { defineConfig } from "vitest/config";
+import web from "./vite.config";
 export default defineConfig({
+  resolve: web.resolve,
   test: {
     env: {
       SECRETS_FILE: "tests/fixtures/secrets.json",

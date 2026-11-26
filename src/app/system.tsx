@@ -551,7 +551,7 @@ function ServiceRow({
       <span
         aria-hidden
         className={cn(
-          "size-2 shrink-0 rounded-full",
+          "size-2 shrink-0 shape-pill",
           tone === "idle"
             ? "bg-border"
             : tone === "good"

@@ -1,3 +1,4 @@
+import { Toolbar } from "@/components/ui/layout";
 import { useState, type Ref } from "react";
 import type { Task } from "../../shared/types";
 import { Badge } from "@/components/ui/badge";
@@ -44,7 +45,7 @@ export function TaskClarification({
       {task.question && (
         <section
           aria-label="需要你補充"
-          className="flex flex-col gap-2 rounded-lg border p-4"
+          className="flex flex-col gap-2 rounded-md border p-4"
         >
           <h3 className="text-sm font-medium">需要你補充一件事</h3>
           <p className="text-sm">{task.question.text}</p>
@@ -92,7 +93,7 @@ export function TaskClarification({
                 系統會把回答併進需求。查詢會直接繼續；修改需求會再請管理者確認。群組成員也可以在
                 LINE「回覆」機器人的提問來回答。
               </p>
-              <div className="flex flex-wrap gap-2">
+              <Toolbar>
                 <Button
                   type="submit"
                   size="sm"
@@ -100,7 +101,7 @@ export function TaskClarification({
                 >
                   送出回答
                 </Button>
-              </div>
+              </Toolbar>
             </form>
           )}
         </section>
@@ -108,7 +109,7 @@ export function TaskClarification({
       {assumptions.length > 0 && (
         <section
           aria-label="我先這樣假設"
-          className="flex flex-col gap-2 rounded-lg border p-4"
+          className="flex flex-col gap-2 rounded-md border p-4"
         >
           <h3 className="text-sm font-medium">我先這樣假設</h3>
           <p className="text-xs text-muted-foreground">

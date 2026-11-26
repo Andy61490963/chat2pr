@@ -12,13 +12,15 @@ import { cn } from "@/lib/utils";
 
 function Label({
   className,
+  layout = "inline",
   ...props
-}: React.ComponentProps<typeof LabelPrimitive.Root>) {
+}: React.ComponentProps<typeof LabelPrimitive.Root> & { layout?: "inline" | "stacked" }) {
   return (
     <LabelPrimitive.Root
       data-slot="label"
       className={cn(
         "flex items-center gap-2 text-sm leading-none font-medium select-none group-data-[disabled=true]:pointer-events-none group-data-[disabled=true]:opacity-50 peer-disabled:cursor-not-allowed peer-disabled:opacity-50",
+        layout === "stacked" && "flex-col gap-1",
         className,
       )}
       {...props}
@@ -31,7 +33,7 @@ function Textarea({ className, ...props }: React.ComponentProps<"textarea">) {
     <textarea
       data-slot="textarea"
       className={cn(
-        "flex field-sizing-content min-h-20 w-full rounded-md border border-input bg-transparent px-3 py-2 text-base shadow-xs transition-[color,box-shadow] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 md:text-sm",
+        "flex field-sizing-content min-h-20 w-full rounded-md border border-input bg-transparent px-3 py-2 text-base transition-colors outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:focus-frame disabled:cursor-not-allowed disabled:opacity-50 md:text-sm",
         className,
       )}
       {...props}
@@ -47,17 +49,16 @@ function Checkbox({
     <CheckboxPrimitive.Root
       data-slot="checkbox"
       className={cn(
-        "peer size-4 shrink-0 rounded-[4px] border border-input shadow-xs transition-shadow outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:border-primary data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground dark:data-[state=checked]:bg-primary",
+        "peer group relative grid size-4 shrink-0 place-items-center rounded-sm outline-none focus-visible:focus-frame disabled:cursor-not-allowed disabled:opacity-50 max-md:after:absolute max-md:after:left-1/2 max-md:after:top-1/2 max-md:after:size-11 max-md:after:-translate-x-1/2 max-md:after:-translate-y-1/2",
         className,
       )}
       {...props}
     >
-      <CheckboxPrimitive.Indicator
-        data-slot="checkbox-indicator"
-        className="grid place-content-center text-current"
-      >
-        <CheckIcon className="size-3.5" />
-      </CheckboxPrimitive.Indicator>
+      <span className="grid size-4 place-content-center rounded-sm border border-input group-data-[state=checked]:border-primary group-data-[state=checked]:bg-primary group-data-[state=checked]:text-primary-foreground">
+        <CheckboxPrimitive.Indicator data-slot="checkbox-indicator">
+          <CheckIcon className="size-3.5" />
+        </CheckboxPrimitive.Indicator>
+      </span>
     </CheckboxPrimitive.Root>
   );
 }
@@ -70,15 +71,17 @@ function Switch({
     <SwitchPrimitive.Root
       data-slot="switch"
       className={cn(
-        "peer inline-flex h-[1.15rem] w-8 shrink-0 items-center rounded-full border border-transparent shadow-xs transition-all outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 data-[state=checked]:bg-primary data-[state=unchecked]:bg-input dark:data-[state=unchecked]:bg-input/80",
+        "peer group inline-grid shrink-0 place-items-center rounded-md outline-none focus-visible:focus-frame disabled:cursor-not-allowed disabled:opacity-50",
         className,
       )}
       {...props}
     >
-      <SwitchPrimitive.Thumb
-        data-slot="switch-thumb"
-        className="pointer-events-none block size-4 rounded-full bg-background ring-0 transition-transform data-[state=checked]:translate-x-[calc(100%-2px)] data-[state=unchecked]:translate-x-0 dark:data-[state=checked]:bg-primary-foreground dark:data-[state=unchecked]:bg-foreground"
-      />
+      <span className="inline-flex h-5 w-8 items-center rounded-md border border-transparent bg-input group-data-[state=checked]:bg-primary dark:group-data-[state=unchecked]:bg-input/80">
+        <SwitchPrimitive.Thumb
+          data-slot="switch-thumb"
+          className="pointer-events-none block size-4 rounded-md bg-background transition-transform data-[state=checked]:translate-x-3.5 dark:data-[state=checked]:bg-primary-foreground dark:data-[state=unchecked]:bg-foreground"
+        />
+      </span>
     </SwitchPrimitive.Root>
   );
 }
@@ -94,8 +97,9 @@ function Progress({
   return (
     <ProgressPrimitive.Root
       data-slot="progress"
+      value={value}
       className={cn(
-        "relative h-2 w-full overflow-hidden rounded-full bg-primary/15",
+        "relative h-2 w-full overflow-hidden rounded-md bg-primary/15",
         className,
       )}
       {...props}
@@ -103,10 +107,10 @@ function Progress({
       <ProgressPrimitive.Indicator
         data-slot="progress-indicator"
         className={cn(
-          "h-full w-full flex-1 bg-primary transition-all",
+          "progress-offset h-full w-full flex-1 bg-primary transition-all",
           indicatorClassName,
         )}
-        style={{ transform: `translateX(-${100 - (value || 0)}%)` }}
+        style={{ "--progress-offset": `${(value || 0) - 100}%` } as React.CSSProperties}
       />
     </ProgressPrimitive.Root>
   );
@@ -147,16 +151,48 @@ function Tabs({
 
 const TabsContent = TabsPrimitive.Content;
 const segmentedListClass =
-  "inline-flex h-9 w-fit max-w-full items-center justify-center overflow-x-auto rounded-lg bg-muted p-[3px] text-muted-foreground";
+  "inline-flex h-auto w-fit max-w-full items-center justify-center max-sm:justify-start overflow-x-auto rounded-md bg-muted p-1 md:h-9 text-muted-foreground";
 const segmentedItemClass =
-  "inline-flex h-[calc(100%-1px)] flex-1 items-center justify-center gap-1.5 rounded-md border border-transparent px-2.5 py-1 text-sm font-medium whitespace-nowrap text-foreground transition-[color,box-shadow] focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1 disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-popover data-[state=active]:shadow-sm dark:text-muted-foreground dark:data-[state=active]:border-input dark:data-[state=active]:bg-background dark:data-[state=active]:text-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4";
+  "inline-flex h-full flex-1 max-sm:flex-none items-center justify-center gap-1.5 rounded-md border border-transparent px-2.5 py-1 text-sm font-medium whitespace-nowrap text-foreground transition-colors focus-visible:border-ring focus-visible:focus-frame disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-popover dark:text-muted-foreground dark:data-[state=active]:border-input dark:data-[state=active]:bg-background dark:data-[state=active]:text-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4";
 
 function TabsList({
   className,
+  ref,
   ...props
 }: React.ComponentProps<typeof TabsPrimitive.List>) {
+  const listRef = React.useRef<HTMLDivElement>(null);
+  React.useImperativeHandle(ref, () => listRef.current!, []);
+  React.useEffect(() => {
+    const list = listRef.current;
+    if (!list || list.dataset.orientation === "vertical") return;
+    // 先讓初次分頁切換完成。字型載入會改變標籤寬度，只在捲動位置未變時再對齊一次。
+    let mounted = true;
+    const frame = requestAnimationFrame(() => {
+      const start = list.scrollLeft;
+      void document.fonts.ready.then(() => {
+        if (!mounted || list.scrollLeft !== start) return;
+        const selected = list.querySelector(
+          '[role="tab"][aria-selected="true"]',
+        );
+        if (!selected || list.scrollWidth <= list.clientWidth) return;
+        const bounds = list.getBoundingClientRect();
+        const item = selected.getBoundingClientRect();
+        const padding = getComputedStyle(list);
+        const edge = bounds.left + list.clientLeft;
+        const left = edge + parseFloat(padding.paddingLeft);
+        const right = edge + list.clientWidth - parseFloat(padding.paddingRight);
+        if (item.right > right) list.scrollLeft += Math.ceil(item.right - right);
+        else if (item.left < left) list.scrollLeft += Math.floor(item.left - left);
+      });
+    });
+    return () => {
+      mounted = false;
+      cancelAnimationFrame(frame);
+    };
+  }, []);
   return (
     <TabsPrimitive.List
+      ref={listRef}
       data-slot="tabs-list"
       className={cn(segmentedListClass, className)}
       {...props}

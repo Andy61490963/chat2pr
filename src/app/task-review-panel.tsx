@@ -1392,7 +1392,7 @@ export function TaskReviewPanel({
                   />
                   <span
                     className={cn(
-                      "mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border",
+                      "mt-0.5 grid size-4 shrink-0 place-items-center shape-pill border",
                       pick === i &&
                         "border-primary bg-primary text-primary-foreground",
                     )}

@@ -1109,7 +1109,7 @@ export function SettingsView({
           >
             <span
               className={cn(
-                "size-2 shrink-0 rounded-full bg-border",
+                "size-2 shrink-0 shape-pill bg-border",
                 !quota && status === "healthy" && !stale && "bg-good",
                 stale && "bg-warn",
                 !quota && status === "failed" && "bg-danger",
