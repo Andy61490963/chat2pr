@@ -928,6 +928,27 @@ export function reviewWorkbenchFixture() {
   return { state, tasks, details, pickLists, reviewSource };
 }
 
+export async function mockInboxFlow(page: Page, empty = false) {
+  const fixture = reviewWorkbenchFixture();
+  fixture.state.health = [...fixture.state.health.filter(check => check.name !== "notifications"), ...exhaustedPushHealth];
+  fixture.state.activity = recentActivity;
+  fixture.state.stuckTasks = empty ? [] : [stuckTasks[0]];
+  const first = fixture.details.get(fixture.tasks[0].id)!;
+  first.sources[0].text = Array.from({ length: 18 }, (_, index) =>
+    `第 ${index + 1} 項：請核對示範專案的匯出欄位與顯示順序。`,
+  ).join("\n");
+  if (empty) {
+    fixture.state.tasks = [];
+    fixture.state.pickLists = [];
+  }
+  await mockDashboard(page, {
+    state: { ...fixture.state },
+    routes: Object.fromEntries([...fixture.details].map(([id, item]) => [`/api/tasks/${id}`, item])),
+  });
+  await page.route(/\/api\/state(\?|$)/, route => route.fulfill({ json: fixture.state }));
+  return fixture;
+}
+
 export function assignmentWorkbenchFixture(mode: Task["mode"]) {
   const fixture = reviewWorkbenchFixture();
   const unassigned = fixture.details.get(fixture.tasks[2].id)!;
