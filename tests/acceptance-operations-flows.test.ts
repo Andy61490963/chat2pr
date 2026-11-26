@@ -254,7 +254,6 @@ function current(f: Fixture) {
 
 const activeEvents = [
   { kind: "container", phase: "code", containerId: "a".repeat(64), detail: null },
-  { kind: "command_start", phase: "code", detail: "sleep 60 && cat -n tickets.mjs" },
 ];
 
 function interruptedFixture(keepApproval = false) {

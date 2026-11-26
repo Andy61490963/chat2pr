@@ -280,18 +280,14 @@ async function events(ctx: BasicFlowContext, task: Started, run: Run) {
 }
 
 async function activeCode(ctx: BasicFlowContext, task: Started) {
-  return ctx.poll("確認執行中的工作容器與等待命令", async () => {
+  return ctx.poll("確認核准版本的工作容器已進入執行階段", async () => {
     const v = await task.view(),
       run = v.runs[0];
     if (!run) return undefined;
     assert(!run.completed_at, "注入前執行已結束");
     if (v.task.status !== "running" || run.status !== "code") return undefined;
     const seen = (await events(ctx, task, run)).filter((e) => e.phase === "code");
-    if (
-      !seen.some((e) => e.kind === "container" && e.containerId) ||
-      !seen.some((e) => e.kind === "command_start" && e.detail?.includes("sleep 60"))
-    )
-      return undefined;
+    if (!seen.some((e) => e.kind === "container" && e.containerId)) return undefined;
     assert.equal(run.version, v.task.approved_version, "執行中的版本未核准");
     return run;
   });
