@@ -156,10 +156,42 @@ const segmentedItemClass =
 
 function TabsList({
   className,
+  ref,
   ...props
 }: React.ComponentProps<typeof TabsPrimitive.List>) {
+  const listRef = React.useRef<HTMLDivElement>(null);
+  React.useImperativeHandle(ref, () => listRef.current!, []);
+  React.useEffect(() => {
+    const list = listRef.current;
+    if (!list || list.dataset.orientation === "vertical") return;
+    // 先讓初次分頁切換完成。字型載入會改變標籤寬度，只在捲動位置未變時再對齊一次。
+    let mounted = true;
+    const frame = requestAnimationFrame(() => {
+      const start = list.scrollLeft;
+      void document.fonts.ready.then(() => {
+        if (!mounted || list.scrollLeft !== start) return;
+        const selected = list.querySelector(
+          '[role="tab"][aria-selected="true"]',
+        );
+        if (!selected || list.scrollWidth <= list.clientWidth) return;
+        const bounds = list.getBoundingClientRect();
+        const item = selected.getBoundingClientRect();
+        const padding = getComputedStyle(list);
+        const edge = bounds.left + list.clientLeft;
+        const left = edge + parseFloat(padding.paddingLeft);
+        const right = edge + list.clientWidth - parseFloat(padding.paddingRight);
+        if (item.right > right) list.scrollLeft += Math.ceil(item.right - right);
+        else if (item.left < left) list.scrollLeft += Math.floor(item.left - left);
+      });
+    });
+    return () => {
+      mounted = false;
+      cancelAnimationFrame(frame);
+    };
+  }, []);
   return (
     <TabsPrimitive.List
+      ref={listRef}
       data-slot="tabs-list"
       className={cn(segmentedListClass, className)}
       {...props}

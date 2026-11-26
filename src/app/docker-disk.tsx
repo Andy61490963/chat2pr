@@ -45,8 +45,6 @@ const levels = {
   critical: "danger",
   unknown: "secondary",
 } as const;
-const switchTouchArea =
-  "relative max-md:after:absolute max-md:after:top-1/2 max-md:after:left-1/2 max-md:after:size-11 max-md:after:-translate-1/2";
 
 const ruleHelp: Record<DiskRule, string> = {
   workspaces:
@@ -424,7 +422,6 @@ export function DockerDiskCard({
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
               <label className="work-touch flex items-center gap-2">
                 <Switch
-                  className={switchTouchArea}
                   checked={draft.pause_enabled}
                   onCheckedChange={(v) =>
                     setDraft({ ...draft, pause_enabled: v })
@@ -455,7 +452,7 @@ export function DockerDiskCard({
             </div>
             <label className="flex items-start gap-2 text-sm">
               <Switch
-                className={cn("mt-0.5", switchTouchArea)}
+                className="mt-0.5"
                 checked={draft.daily_cleanup}
                 onCheckedChange={(v) =>
                   setDraft({ ...draft, daily_cleanup: v })
@@ -481,7 +478,7 @@ export function DockerDiskCard({
                   <li key={rule} className="flex items-start gap-2 text-sm">
                     <Switch
                       id={`disk-rule-${rule}`}
-                      className={cn("mt-0.5", switchTouchArea)}
+                      className="mt-0.5"
                       checked={r.enabled}
                       onCheckedChange={(v) => setRule(rule, { enabled: v })}
                     />

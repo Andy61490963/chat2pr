@@ -1,7 +1,16 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator } from "@playwright/test";
+
+async function expectTouchTarget(control: Locator) {
+  const size = await control.evaluate((el) => ({
+    width: (el as HTMLElement).offsetWidth,
+    height: (el as HTMLElement).offsetHeight,
+  }));
+  expect(size.width).toBeGreaterThanOrEqual(44);
+  expect(size.height).toBeGreaterThanOrEqual(44);
+}
 
 for (const width of [375, 1440]) {
   for (const theme of ["light", "dark"] as const) {
@@ -47,18 +56,10 @@ for (const width of [375, 1440]) {
       const toggle = page.getByRole("switch", { name: "啟用工序" });
       await toggle.press("Space");
       await expect(toggle).toBeChecked();
+      if (width === 375) await expectTouchTarget(toggle);
       await page.getByRole("combobox", { name: "站別" }).press("Enter");
       const option = page.getByRole("option", { name: "複核站" });
-      if (width === 375) {
-        for (const control of [toggle, option]) {
-          expect(
-            await control.evaluate((el) => (el as HTMLElement).offsetHeight),
-          ).toBeGreaterThanOrEqual(44);
-          expect(
-            await control.evaluate((el) => (el as HTMLElement).offsetWidth),
-          ).toBeGreaterThanOrEqual(44);
-        }
-      }
+      if (width === 375) await expectTouchTarget(option);
       await option.press("Enter");
       await expect(page.getByRole("combobox")).toHaveText("複核站");
       await page.getByRole("tab", { name: "工序" }).focus();
