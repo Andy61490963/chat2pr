@@ -86,3 +86,50 @@ it("群組停用後，先前已排入的結果仍依原回覆設定推播", asyn
   await line.flushNotifications();
   expect(received).toEqual([{ path: "/v2/bot/message/push", texts: ["範例修改已開 PR"] }]);
 });
+
+it.each(["額度用完", "餘額不足群組人數"])("%s 時，成員用 /進度 也取得沒有建立任務的指令判讀", async (reason) => {
+  if (reason === "額度用完") {
+    await db.query("UPDATE service_health SET ok=false,detail='本月已用 200／上限 200 則' WHERE name='line_quota'");
+  } else {
+    await db.query("UPDATE groups SET member_count=40,member_count_at=now() WHERE id='group-a'");
+  }
+  await enqueue("group_triage", "指定範圍內沒有可處理的需求", null);
+  await line.flushNotifications();
+  expect(received).toHaveLength(0);
+  await line.ingest({ events: [{
+    webhookEventId: "ExampleProgress", type: "message", replyToken: "ExampleProgressReply",
+    source: { type: "group", groupId: "group-a" }, message: { type: "text", id: "ExampleProgressMessage", text: "/進度" },
+  }] });
+  expect(received).toHaveLength(1);
+  expect(received[0].texts).toContain("指定範圍內沒有可處理的需求");
+});
+
+it("單次推播的預估人數比全部餘額還大時，排隊說明一樣留給免費回覆", async () => {
+  await db.query("UPDATE service_health SET detail='本月已用 159／上限 200 則' WHERE name='line_quota'");
+  await db.query("UPDATE groups SET member_count=42,member_count_at=now() WHERE id='group-a'");
+  await enqueue("group_waiting", "這份範例需求正在排隊", "queued");
+  await line.flushNotifications();
+  await db.query("UPDATE service_health SET detail='本月已用 10／上限 200 則' WHERE name='line_quota'");
+  await line.flushNotifications();
+  expect(received).toHaveLength(0);
+  await line.ingest({ events: [{
+    webhookEventId: "ExampleHello", type: "message", replyToken: "ExampleHelloReply",
+    source: { type: "group", groupId: "group-a" }, message: { type: "text", id: "ExampleHelloMessage", text: "大家好" },
+  }] });
+  expect(received[0].texts).toContain("這份範例需求正在排隊");
+});
+
+it("低額度保留的通知用免費回覆失敗後，看板仍顯示可以怎麼取回", async () => {
+  await enqueue("group_waiting", "這份工作稍後會開始", "queued");
+  await line.flushNotifications();
+  vi.stubGlobal("fetch", async () => Response.json({ message: "Invalid reply token" }, { status: 400 }));
+  await line.ingest({ events: [{
+    webhookEventId: "ExampleRetry", type: "message", replyToken: "ExampleExpiredToken",
+    source: { type: "group", groupId: "group-a" }, message: { type: "text", id: "ExampleRetryMessage", text: "大家好" },
+  }] });
+  const row = await db.one<Parameters<typeof deliveryState>[0]>(
+    "SELECT sent_at,attempts,last_error,line_reply_policy FROM notifications WHERE kind='group_waiting'",
+  );
+  expect(deliveryState(row!, { quotaBlocked: true }))
+    .toMatchObject({ status: "pending", reason: "priority", note: expect.stringContaining("免費回覆") });
+});
