@@ -83,6 +83,20 @@ beforeEach(async () => {
   await fixture();
   await setUsage(10);
 });
+
+it("可負擔的小群組仍能收到答案，即使前面五十群都沒有足夠的估計額度", async () => {
+  await setUsage(197);
+  await db.query("UPDATE groups SET member_count=2,member_count_at=now() WHERE id='group-a'");
+  await db.query(`WITH large AS (
+    INSERT INTO groups(id,name,enabled,member_count_at)
+    SELECT 'SampleGroup'||n,'範例群組'||n,true,now() FROM generate_series(1,50) n RETURNING id
+  ) INSERT INTO notifications(kind,dedupe_key,text,group_id,created_at)
+    SELECT 'group_triage',id,'範例指令說明',id,now()-interval '1 minute' FROM large`);
+  await notice("group_answered", "人數較少群組的答案");
+  const pushes = lineApi();
+  await flush();
+  expect(pushes.map((push) => push.to)).toEqual(["group-a"]);
+});
 afterEach(async () => {
   vi.unstubAllGlobals();
   await db.query("DELETE FROM service_health WHERE name='line_quota'");
@@ -281,6 +295,33 @@ it("已領取批次遇到群組人數不足，恢復時仍用原鍵", async () =
   await setUsage(10);
   await flush();
   expect(keys).toEqual([keys[0], keys[0]]);
+});
+
+it("重試時 LINE 回報個別群組額度不足，額度恢復後仍用首次收件的鍵確認", async () => {
+  const keys: string[] = [];
+  vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    if (url.endsWith("/quota")) return Response.json({ type: "limited", value: 200 });
+    if (url.endsWith("/quota/consumption")) return Response.json({ totalUsage: 198 });
+    if (url.endsWith("/members/count")) return Response.json({ count: 4 });
+    if (!url.endsWith("/message/push")) throw new Error("未預期的請求");
+    keys.push(new Headers(init.headers).get("X-Line-Retry-Key")!);
+    if (keys.length === 1) throw new Error("模擬首次收件後遺失回應");
+    if (keys.length === 2) return Response.json({ message: "You have reached your monthly limit." }, { status: 429 });
+    return Response.json({ sentMessages: [{ id: "OriginalAnswer" }] }, {
+      status: 409, headers: { "x-line-accepted-request-id": "OriginalBatch" },
+    });
+  });
+  await notice("group_answered", "範例查詢答案");
+  await flush();
+  await flush();
+  expect(await usage()).toEqual({ detail: "本月已用 198／上限 200 則" });
+  await flush();
+  expect(keys).toHaveLength(2);
+  await setUsage(10);
+  await flush();
+  expect(keys).toEqual([keys[0], keys[0], keys[0]]);
+  expect(await db.one("SELECT sent_message_id FROM notifications WHERE kind='group_answered'"))
+    .toEqual({ sent_message_id: "OriginalAnswer" });
 });
 
 it("縮批重試確認 LINE 已收下原本整批時，中間進度也不會又用免費回覆補送", async () => {
