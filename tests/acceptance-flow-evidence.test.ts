@@ -1,8 +1,21 @@
 import { expect, it } from "vitest";
-import { checkFlowEvidence, formatFlowFailure } from "../scripts/acceptance/flows/evidence.js";
+import { checkFlowEvidence, formatFlowFailure, waitForWorkDisposal } from "../scripts/acceptance/flows/evidence.js";
 
 const clean = { stranded: 0, stale: 0, leaks: 0, resources: [] as string[], states: ["answered"], audit: ["已回答"], events: ["驗證完成"], messages: ["共五張票"] };
 const canary = "ExampleKey266";
+
+it("群組收到通知但執行器仍在清理時等待，過期後保留真正的殘留", async () => {
+  let reads = 0;
+  expect(await waitForWorkDisposal(async () => ++reads === 1 ? ["工作卷"] : [], 500, 1)).toEqual([]);
+  expect(reads).toBe(2);
+  expect(await waitForWorkDisposal(async () => ["基底卷"], 0, 1)).toEqual(["基底卷"]);
+});
+
+it("資源未回收時列出種類與名稱，並遮蔽其中的虛構金鑰", () => {
+  const detail = formatFlowFailure("結案", { ...clean, resources: [`資料卷 驗收卷${canary}`] }, [canary]);
+  expect(detail).toContain("資料卷 驗收卷[已遮蔽]");
+  expect(detail).not.toContain(canary);
+});
 
 it("四個結案條件任一不符都阻擋通過", () => {
   expect(checkFlowEvidence(clean, [canary])).toEqual([]);

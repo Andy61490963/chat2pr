@@ -5,7 +5,7 @@ import { startFlowApplication } from "./application.js";
 import { runLineQuery, runDiscordChange } from "./basic.js";
 import { startChatProvider } from "./chat-provider.js";
 import { createGitHubProvider } from "./github-provider.js";
-import { checkFlowEvidence, formatFlowFailure, readFlowEvidence } from "./evidence.js";
+import { checkFlowEvidence, formatFlowFailure, readFlowEvidence, waitForWorkDisposal } from "./evidence.js";
 
 async function resources(instance: string) {
   const docker = new Containers(instance).docker;
@@ -25,9 +25,9 @@ async function main() {
   const chat = await startChatProvider();
   let app: Awaited<ReturnType<typeof startFlowApplication>> | undefined;
   const db = new Database(process.env.DATABASE_URL!);
-  const capture = async () => {
-    const current = await resources(instance);
-    return readFlowEvidence(db, chat.records.map(row => row.text), [...current].filter(id => !baseline.has(id)), input.canaries);
+  const capture = async (wait = false) => {
+    const outstanding = async () => [...await resources(instance)].filter(id => !baseline.has(id));
+    return readFlowEvidence(db, chat.records.map(row => row.text), wait ? await waitForWorkDisposal(outstanding) : await outstanding(), input.canaries);
   };
   try {
     const github = await createGitHubProvider({ omitPullRequest: input.fault === "pr" });
@@ -42,7 +42,7 @@ async function main() {
     step = input.number === 1 ? "投遞 LINE 查詢" : "投遞 Discord 修改需求";
     const result = input.number === 1 ? await runLineQuery(ctx) : await runDiscordChange(ctx);
     step = "核對結案不變式";
-    const evidence = await capture();
+    const evidence = await capture(true);
     if (checkFlowEvidence(evidence, input.canaries).length) throw new Error("結案不變式未通過");
     const { groupMessages, ...references } = result;
     return { passed: true, references, detail: formatFlowFailure("完成", { ...evidence, messages: groupMessages }, input.canaries) };

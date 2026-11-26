@@ -1,6 +1,17 @@
+import { setTimeout as delay } from "node:timers/promises";
 import type { Database } from "../../../server/db.js";
 import { staleNotification } from "../../../server/line-quota.js";
 import { redact } from "../../../server/policy.js";
+
+export async function waitForWorkDisposal(read: () => Promise<string[]>, timeout = 25_000, interval = 500) {
+  const deadline = performance.now() + timeout;
+  for (;;) {
+    const remaining = await read();
+    const budget = deadline - performance.now();
+    if (!remaining.length || budget <= 0) return remaining;
+    await delay(Math.min(interval, budget));
+  }
+}
 
 export interface FlowEvidence {
   stranded: number;
@@ -43,5 +54,5 @@ export function checkFlowEvidence(evidence: FlowEvidence, canaries: readonly str
 export function formatFlowFailure(step: string, evidence: FlowEvidence, canaries: readonly string[]) {
   const safe = (input: string) => redact(canaries.filter(Boolean).reduce((text, key) => text.replaceAll(key, "[已遮蔽]"), input)).slice(0, 320);
   const format = (rows: readonly string[]) => rows.map(safe).join("；") || "尚無紀錄";
-  return [`步驟：${safe(step)}`, `任務：${format(evidence.states)}`, `最近稽核：${format(evidence.audit)}`, `最近執行事件：${format(evidence.events)}`, `最近群組訊息：${format(evidence.messages.slice(-5))}`, ...checkFlowEvidence(evidence, canaries)].join("\n");
+  return [`步驟：${safe(step)}`, `任務：${format(evidence.states)}`, `最近稽核：${format(evidence.audit)}`, `最近執行事件：${format(evidence.events)}`, `最近群組訊息：${format(evidence.messages.slice(-5))}`, ...checkFlowEvidence(evidence, canaries), ...(evidence.resources.length ? [`未釋放：${format(evidence.resources.slice(0, 10))}`] : [])].join("\n");
 }
