@@ -116,6 +116,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS runs_one_active_per_task ON runs(task_id) WHER
 UPDATE settings SET value='{"max_runs":2}'::jsonb || value WHERE id=1;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS outcome text;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS observed boolean NOT NULL DEFAULT false;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS upstream_failure jsonb;
 CREATE TABLE IF NOT EXISTS run_events(
  id bigserial PRIMARY KEY, run_id uuid NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
  source text NOT NULL, seq integer NOT NULL, at timestamptz NOT NULL, phase text NOT NULL,
@@ -123,6 +124,7 @@ CREATE TABLE IF NOT EXISTS run_events(
  UNIQUE(run_id,source,seq)
 );
 CREATE INDEX IF NOT EXISTS run_events_run ON run_events(run_id,id);
+ALTER TABLE run_events ADD COLUMN IF NOT EXISTS rejected_count integer;
 CREATE TABLE IF NOT EXISTS usage (
  id bigserial PRIMARY KEY, reservation_id uuid REFERENCES reservations(id), model text NOT NULL, input_tokens bigint NOT NULL,
  cached_tokens bigint NOT NULL, output_tokens bigint NOT NULL, cost numeric(12,6) NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
@@ -233,6 +235,9 @@ BEGIN
  IF NEW.revoked OR NEW.received_at<=message_retention_cutoff() THEN
   UPDATE run_events SET detail=NULL WHERE run_id IN (
    SELECT r.id FROM runs r JOIN tasks t ON t.id=r.task_id WHERE t.group_id=NEW.group_id AND NEW.id=ANY(t.source_ids)
+  );
+  UPDATE runs SET upstream_failure=NULL WHERE upstream_failure IS NOT NULL AND task_id IN (
+   SELECT t.id FROM tasks t WHERE t.group_id=NEW.group_id AND NEW.id=ANY(t.source_ids)
   );
   UPDATE runs SET result=erase_candidate_quotes(result) WHERE result ? 'candidate' AND task_id IN (
    SELECT t.id FROM tasks t WHERE t.group_id=NEW.group_id AND NEW.id=ANY(t.source_ids)
