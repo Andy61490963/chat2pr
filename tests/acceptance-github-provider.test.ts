@@ -14,7 +14,7 @@ vi.mock("../server/config.js", () => ({
 }));
 
 async function serve(options?: Parameters<typeof createGitHubProvider>[0]) {
-  const { fixture, state, handler, readPr } = await createGitHubProvider(options);
+  const { fixture, state, handler, readPr, commitFixture, mergeFixturePr } = await createGitHubProvider(options);
   const server = createServer(handler);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address();
@@ -39,7 +39,7 @@ async function serve(options?: Parameters<typeof createGitHubProvider>[0]) {
     last_error: null, mode: "change", answer: null, created_at: "2026-01-01", updated_at: "2026-01-01",
   };
   return {
-    api, github, project, task, fixture, state, origin, readPr,
+    api, github, project, task, fixture, state, origin, readPr, commitFixture, mergeFixturePr,
     parts: github.parts(fixture.repo),
     async [Symbol.asyncDispose]() {
       await new Promise<void>((resolve, reject) => {
@@ -97,6 +97,49 @@ const changes = [
   { path: summaryPath, content: summary.toString("base64"), mode: "100755" },
   { path: "tickets.test.mjs", content: null, mode: "100644" },
 ] satisfies Parameters<GitHub["publish"]>[2];
+
+it("在同一棵樹提交故障、發布修復 PR、合併後從新的 main 封存讀回修復內容", async () => {
+  await using peer = await serve();
+  const { github, project, task, fixture } = peer;
+  const broken = await peer.commitFixture({ "tickets.mjs": "故障版本", "README.md": "票務說明" });
+  expect(await github.base(project)).toBe(broken);
+  const before = await archive(peer.origin, fixture.repo, fixture.baseSha);
+  const red = await archive(peer.origin, fixture.repo, broken);
+  expect(red.get("tickets.test.mjs")).toEqual(before.get("tickets.test.mjs"));
+  expect(red.get("tickets.mjs")?.toString()).toBe("故障版本");
+  expect(before.get("tickets.mjs")?.toString()).toContain("total + tickets");
+  task.base_sha = broken;
+  task.issue_number = (await github.ensureIssue(project, task)).number;
+  const pr = await github.publish(project, task, [{
+    path: "tickets.mjs", mode: "100644", content: before.get("tickets.mjs")!.toString("base64"),
+  }], "已修復票數");
+  const merged = await peer.mergeFixturePr(pr.number);
+  expect(merged).not.toBe(broken);
+  expect(await github.base(project)).toBe(merged);
+  expect(await github.pullState(project, pr.number)).toEqual({ state: "closed", merged: true });
+  expect((await github.findPr(project, task.branch!))?.merged_at).toBeTruthy();
+  const green = await archive(peer.origin, fixture.repo, merged);
+  expect(green.get("tickets.mjs")).toEqual(before.get("tickets.mjs"));
+  expect(green.get("README.md")).toEqual(red.get("README.md"));
+  expect((await peer.readPr(pr.number))?.files).toEqual({ "tickets.mjs": before.get("tickets.mjs")!.toString() });
+  const later = await peer.commitFixture({ "README.md": "後續獨立變更" });
+  expect(await peer.mergeFixturePr(pr.number)).toBe(merged);
+  expect(await github.base(project)).toBe(later);
+});
+
+it("無效路徑、找不到的 PR 或已分歧的修復分支都不能覆寫 main", async () => {
+  await using peer = await serve();
+  const { github, project, task, fixture } = peer;
+  await expect(peer.commitFixture({ "tickets.mjs": "尚未提交", "../wrong": "無效" })).rejects.toThrow();
+  await expect(peer.mergeFixturePr(999)).rejects.toThrow();
+  expect(await github.base(project)).toBe(fixture.baseSha);
+  task.issue_number = (await github.ensureIssue(project, task)).number;
+  const pr = await github.publish(project, task, changes, "修改票數摘要");
+  const next = await peer.commitFixture({ "README.md": "另一筆更新" });
+  await expect(peer.mergeFixturePr(pr.number)).rejects.toThrow("分歧");
+  expect(await github.base(project)).toBe(next);
+  expect(await github.pullState(project, pr.number)).toEqual({ state: "open", merged: false });
+});
 
 it("Issue 重試沿用編號；PR head 的 commit、tree、blob 與封存保留實際檔案，追加後可回查舊版", async () => {
   await using peer = await serve();

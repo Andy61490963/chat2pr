@@ -107,7 +107,7 @@ async function tarball(sha: string, tree: TreeEntry[], blobs: Map<string, Buffer
 }
 
 type Issue = { number: number; title: string; body: string; state: "open" | "closed"; html_url: string };
-type Pull = Issue & { head: string; base: string; merged: boolean };
+type Pull = Issue & { head: string; base: string; merged: boolean; merge_commit_sha?: string; merged_at?: string };
 type Comment = { id: number; body: string };
 
 const issueFields = z.object({
@@ -157,6 +157,37 @@ export async function createGitHubProvider(options: { omitPullRequest?: boolean 
 
   function visiblePulls(): ReadonlyMap<number, Pull> {
     return state.omitPullRequest ? new Map<number, Pull>() : state.pulls;
+  }
+
+  async function commitFixture(changes: Readonly<Record<string, string>>) {
+    const current = git.commitAt(defaultBranch);
+    const checked = z.record(filePath, z.string()).parse(changes);
+    const entries = new Map(lookup(git.trees.get(current.tree.sha)).map(e => [e.path, e]));
+    for (const [path, content] of Object.entries(checked)) {
+      const mode = entries.get(path)?.mode ?? "100644";
+      entries.set(path, { path, mode, type: "blob", sha: git.writeBlob(Buffer.from(content)) });
+    }
+    const tree = git.writeTree([...entries.values()]);
+    if (tree === current.tree.sha) return current.sha;
+    const commit = git.writeCommit(tree, [current.sha], "更新燈會票務驗收基底");
+    git.refs.set(defaultBranch, commit.sha);
+    return commit.sha;
+  }
+
+  async function mergeFixturePr(number: number) {
+    const pull = lookup(visiblePulls().get(number));
+    if (pull.merged && pull.merge_commit_sha) return pull.merge_commit_sha;
+    requireValid(pull.state === "open" && pull.base === defaultBranch, "只能合併目標為 main 的開啟中 PR");
+    const base = git.commitAt(pull.base), head = git.commitAt(pull.head);
+    requireValid(base.sha !== head.sha && git.ancestors(head.sha).has(base.sha), "修復分支已合併或與目標分支分歧");
+    // 使用專案的 squash 合併方式。先取得實際樹與新提交，才一起更新 ref 與 PR。
+    const commit = git.writeCommit(head.tree.sha, [base.sha], `${pull.title} (#${number})`);
+    git.refs.set(pull.base, commit.sha);
+    pull.merged = true;
+    pull.state = "closed";
+    pull.merge_commit_sha = commit.sha;
+    pull.merged_at = new Date().toISOString();
+    return commit.sha;
   }
 
   function refView(branch: string) {
@@ -368,5 +399,5 @@ export async function createGitHubProvider(options: { omitPullRequest?: boolean 
       return json({ message: "驗收替身處理失敗" }, 500);
     }
   };
-  return { handler, fixture, state, readPr };
+  return { handler, fixture, state, readPr, commitFixture, mergeFixturePr };
 }
