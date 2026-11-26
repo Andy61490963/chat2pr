@@ -6,7 +6,9 @@ test("執行紀錄直接顯示代理失敗原因，四次重連被拒和其他�
 }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   const run = {
-    ...completedRun, observed: true, outcome: "failed",
+    ...completedRun,
+    observed: true,
+    outcome: "failed",
     upstream_failure: { kind: "upstream_http", status: 400 },
   };
   const reconnects = Array.from(
@@ -45,11 +47,17 @@ test("執行紀錄直接顯示代理失敗原因，四次重連被拒和其他�
   await drawer.getByRole("tab", { name: /^執行紀錄/ }).click();
   const events = drawer.getByRole("list", { name: "執行事件" });
   const observer = drawer.getByRole("region", { name: "Codex 執行紀錄" });
-  await expect(observer.getByText(/訂閱上游回應失敗（上游 HTTP 400）/)).toBeVisible();
+  await expect(
+    observer.getByText(/訂閱上游回應失敗（上游 HTTP 400）/),
+  ).toBeVisible();
   await expect(observer.getByText(/訂閱登入已失效或無法刷新/)).toHaveCount(0);
-  const end = events.getByRole("listitem").filter({ has: page.getByText("階段結束", { exact: true }) });
+  const end = events
+    .getByRole("listitem")
+    .filter({ has: page.getByText("階段結束", { exact: true }) });
   await end.getByText("檢視內容", { exact: true }).click();
-  await expect(end.getByText("auth（HTTP 401）", { exact: true })).toBeVisible();
+  await expect(
+    end.getByText("auth（HTTP 401）", { exact: true }),
+  ).toBeVisible();
 
   const retries = events.getByRole("listitem").filter({
     has: page.getByText("重連被拒（HTTP 403）", { exact: true }),
@@ -69,4 +77,42 @@ test("執行紀錄直接顯示代理失敗原因，四次重連被拒和其他�
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth),
   ).toBeLessThanOrEqual(375);
+});
+
+test("舊執行只有階段結束明細時，看板不推測訂閱失敗原因", async ({ page }) => {
+  const run = { ...completedRun, observed: true, outcome: "failed" };
+  const detailText = "auth（HTTP 401）";
+  await mockDashboard(page, {
+    routes: {
+      [`/api/tasks/${task.id}`]: { ...detail, runs: [run] },
+      [`/api/tasks/${task.id}/runs/${run.id}/events`]: {
+        events: [
+          {
+            seq: 1,
+            at: run.started_at,
+            phase: "review",
+            kind: "phase_end",
+            exitCode: 1,
+            detail: detailText,
+          },
+        ],
+        hasOlder: false,
+        nextBefore: null,
+      },
+    },
+  });
+  await page.goto(`/tasks?task=${task.id}`);
+  const drawer = page.getByRole("dialog", { name: task.title });
+  await drawer.getByRole("tab", { name: /^執行紀錄/ }).click();
+  const observer = drawer.getByRole("region", { name: "Codex 執行紀錄" });
+  const end = observer
+    .getByRole("list", { name: "執行事件" })
+    .getByRole("listitem");
+  await end.getByText("檢視內容", { exact: true }).click();
+  await expect(end.getByText(detailText, { exact: true })).toBeVisible();
+  await expect(end.getByText("階段結束", { exact: true })).toBeVisible();
+  await expect(observer.getByText("訂閱失敗原因", { exact: true })).toHaveCount(
+    0,
+  );
+  await expect(observer.getByText(/訂閱登入已失效或無法刷新/)).toHaveCount(0);
 });
