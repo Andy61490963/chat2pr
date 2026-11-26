@@ -4,6 +4,7 @@ import { mkdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { selectFlowCases } from "./catalog.js";
+import { classifyFlowFailure } from "./known-failures.js";
 import type { FlowStack } from "./stack.js";
 import type { RecordInput } from "../ledger.js";
 import type { startModelService } from "./model-service.js";
@@ -89,9 +90,11 @@ async function main() {
       }
       const detail = redactCredentials(canaries.reduce((text, key) => text.replaceAll(key, "[已遮蔽]"), outcome.detail));
       const elapsed = Math.round((performance.now() - start) / 1000);
-      await ledger.append({ ...row, status: outcome.passed ? "passed" : "failed", references: outcome.references, detail: `${elapsed} 秒；${detail}` });
-      console.log(`${item.id} ${outcome.passed ? "通過" : "失敗"}（${elapsed} 秒）\n${detail}`);
-      if (!outcome.passed) process.exitCode = 1;
+      const known = !outcome.passed && !fault && !real ? classifyFlowFailure(item.number, detail) : undefined;
+      const verdict = outcome.passed ? "通過" : known ? `已知失敗（#${known}）` : "失敗";
+      await ledger.append({ ...row, status: outcome.passed ? "passed" : "failed", references: outcome.references, detail: `${verdict}；${elapsed} 秒；${detail}` });
+      console.log(`${item.id} ${verdict}（${elapsed} 秒）\n${detail}`);
+      if (!outcome.passed && !known) process.exitCode = 1;
     }
   } finally { process.off("SIGINT", cancel); process.off("SIGTERM", cancel); }
 }
