@@ -253,7 +253,7 @@ it("已有重試批次時降至兩成，縮批仍沿用原鍵，首次收下時�
     .toEqual({ sent_message_id: "Retry0" });
 });
 
-it("等待說明已過時，原批已收件的重試只確認送達，不將舊訊息識別碼寫給答案", async () => {
+it("原批確認已送達時，看板將重試前過期的等待說明及答案都列為已送達，且不誤配識別碼", async () => {
   const accepted = new Set<string>();
   const keys: string[] = [];
   const pushes = lineApi(async (_body, key) => {
@@ -273,9 +273,35 @@ it("等待說明已過時，原批已收件的重試只確認送達，不將舊�
   expect(pushes.map((p) => p.messages.map((m) => m.text))).toEqual([["仍在等候", "範例查詢答案"], ["範例查詢答案"]]);
   expect(accepted.size).toBe(1);
   expect(keys[1]).toBe(keys[0]);
-  expect(await db.one("SELECT sent_at IS NOT NULL AS done,sent_message_id,last_error FROM notifications WHERE kind='group_answered'"))
-    .toEqual({ done: true, sent_message_id: null, last_error: null });
+  expect(await db.query("SELECT sent_at IS NOT NULL AS done,sent_message_id,last_error FROM notifications ORDER BY created_at"))
+    .toEqual(Array.from({ length: 2 }, () => ({ done: true, sent_message_id: null, last_error: null })));
   expect(await usage()).toEqual({ detail: "本月已用 10／上限 200 則" });
+});
+
+it("低額度時，停用群組仍能推播先前保留及新到的中間進度", async () => {
+  const pushes = lineApi();
+  await setUsage(165);
+  await notice("group_waiting", "先前排隊的工作");
+  await flush();
+  expect(pushes).toHaveLength(0);
+  await db.query("UPDATE groups SET enabled=false WHERE id='group-a'");
+  await notice("group_waiting", "新排隊的工作");
+  await flush();
+  expect(pushes.map((p) => p.messages.map((m) => m.text))).toEqual([["先前排隊的工作", "新排隊的工作"]]);
+});
+
+it("單則拒收等候重試時，同一輪也合併推播同群組的新答案", async () => {
+  const pushes = lineApi(async (body) => body.messages.some((m) => m.text === "有誤的通知")
+    ? Response.json({ message: "Invalid message" }, { status: 400 })
+    : Response.json({ sentMessages: body.messages.map((_, i) => ({ id: `Valid${i}` })) }));
+  await notice("group_answered", "有誤的通知");
+  await flush();
+  await notice("group_answered", "第一則新答案");
+  await notice("group_answered", "第二則新答案");
+  await flush();
+  expect(pushes.slice(1).map((p) => p.messages.map((m) => m.text))).toEqual(expect.arrayContaining([
+    ["有誤的通知"], ["第一則新答案", "第二則新答案"],
+  ]));
 });
 
 it("已領取批次遇到群組人數不足，恢復時仍用原鍵", async () => {
