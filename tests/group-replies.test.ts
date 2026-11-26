@@ -450,13 +450,13 @@ describe("LINE 每月推播額度用完", () => {
     push: () => Response;
     quota?: { limit: number | null; used: number };
   }) => {
-    const pushes: { to: string; text: string }[] = [];
+    const pushes: { to: string; texts: string[] }[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
         if (url.endsWith("/v2/bot/message/push")) {
           const body = JSON.parse(String(init?.body));
-          pushes.push({ to: body.to, text: body.messages[0].text });
+          pushes.push({ to: body.to, texts: body.messages.map((m: { text: string }) => m.text) });
           return opts.push();
         }
         if (url.endsWith("/v2/bot/message/quota") && opts.quota)
@@ -601,7 +601,7 @@ describe("LINE 每月推播額度用完", () => {
       detail: "本月已用 3／上限 200 則",
     });
     await new Line(db).flushNotifications();
-    expect(pushes.map((p) => p.text)).toEqual(["目前的問題", "剛完成的結果"]);
+    expect(pushes.map((p) => p.texts)).toEqual([["目前的問題", "剛完成的結果"]]);
     const expired = await db.query<{ text: string }>(
       "SELECT text FROM notifications WHERE group_id IS NOT NULL AND last_error='已過期，未補送' AND sent_at IS NOT NULL ORDER BY created_at",
     );
@@ -731,15 +731,17 @@ describe("LINE 每月推播額度用完", () => {
     expect(calls.members).toBe(1);
     expect(calls.pushes).toEqual(["fictional-admin"]);
 
-    // 額度夠了（例如升級方案後連線檢查寫入新用量）：照送，每則依人數累加。
+    // 額度夠了，十一則分成三批。每一批依群組人數計八則。
     await setQuota(true, "本月已用 100／上限 200 則");
     await line.flushNotifications();
-    expect(calls.pushes.filter((to) => to === "group-a")).toHaveLength(10);
-    expect((await quota())?.detail).toBe("本月已用 180／上限 200 則");
-    // 一輪最多 10 則；下一輪送出最後 1 則（8 人），剩 12 則。
-    await line.flushNotifications();
-    expect(calls.pushes.filter((to) => to === "group-a")).toHaveLength(11);
-    expect((await quota())?.detail).toBe("本月已用 188／上限 200 則");
+    expect(calls.messages.at(-1)?.messages).toHaveLength(5);
+    for (const size of [5, 1]) {
+      await db.query("UPDATE notifications SET sent_at=now()-interval '2 minutes' WHERE group_id='group-a' AND sent_at IS NOT NULL");
+      await line.flushNotifications();
+      expect(calls.messages.at(-1)?.messages).toHaveLength(size);
+    }
+    expect(calls.pushes.filter((to) => to === "group-a")).toHaveLength(3);
+    expect((await quota())?.detail).toBe("本月已用 124／上限 200 則");
   });
 
   it("群組推播撞到每月上限但額度 API 還剩 3 則：不封鎖、私訊照送；剩 0 則才封鎖並保留用量", async () => {
@@ -873,6 +875,7 @@ describe("LINE 每月推播額度用完", () => {
     expect(calls.pushes).toEqual(["group-a"]);
     expect((await quota())?.detail).toBe("本月已用 60／上限 200 則");
     await notifyGroup(db, id, "answered", "answered:another", "另一件範例結果");
+    await db.query("UPDATE notifications SET sent_at=now()-interval '2 minutes' WHERE dedupe_key='group:answered:example'");
     await line.flushNotifications();
     expect(calls.pushes).toEqual(["group-a", "group-a"]);
     expect(await directRow("direct:hold")).toMatchObject({ sent_at: null, attempts: 0 });
@@ -1182,11 +1185,11 @@ describe("用 reply token 取回與說實話", () => {
     const asking = await askingTask("匯出問題");
     const line = new Line(db);
     for (let n = 0; n < 3; n++) await line.flushNotifications();
-    expect(pushes).toHaveLength(6);
+    expect(pushes).toHaveLength(3);
     expect((await notice(answered)).attempts).toBe(3);
     // 試滿 3 次後推播不再送，只能靠 /進度 取回。
     await line.flushNotifications();
-    expect(pushes).toHaveLength(6);
+    expect(pushes).toHaveLength(3);
 
     await send("p1", "/進度");
     expect(replyCalls).toHaveLength(1);
@@ -1490,24 +1493,29 @@ describe("用 reply token 取回與說實話", () => {
   );
 
   it.each([200, 503])(
-    "補送完成或歸還前，租約仍由本輪持有（HTTP %i）",
+    "補送等待 LINE 回應時釋放資料列鎖，但下一輪仍無法重領（HTTP %i）",
     async (status) => {
       await settings();
       const id = await answeredTask("等待寫回結果的範例");
-      let unlocked: unknown[] | undefined;
+      let unlocked: number | undefined;
+      let nextClaim: string[] | undefined;
       vi.stubGlobal("fetch", async () => {
-        // 模擬回應尚未寫回的瞬間；另一個領取者只能看到沒有被鎖住的列。
-        unlocked = await db.query(
-          "SELECT id FROM notifications WHERE task_id=$1 AND last_error=$2 FOR UPDATE SKIP LOCKED",
-          [id, claimingNote],
-        );
+        await db.transaction(async (c) => {
+          unlocked = (await c.query(
+            "SELECT id FROM notifications WHERE task_id=$1 AND last_error=$2 FOR UPDATE SKIP LOCKED",
+            [id, claimingNote],
+          )).rows.length;
+          const pending = await claimPendingGroupReplies(c, "group-a", 4);
+          nextClaim = pending.replies.map((notice) => notice.id);
+        });
         return Response.json(
           { sentMessages: [{ id: "summary" }, { id: "reply-result" }] },
           { status },
         );
       });
       await send("settle-lease", "/進度");
-      expect(unlocked).toEqual([]);
+      expect(unlocked).toBe(1);
+      expect(nextClaim).toEqual([]);
       expect(await notice(id)).toMatchObject(
         status === 200
           ? { sent_message_id: "reply-result", last_error: null }
@@ -1758,6 +1766,23 @@ describe("用 reply token 取回與說實話", () => {
     expect(lastReply().join("\n")).toContain("/進度");
     await send("progress", "/進度");
     expect(lastReply().some((text) => text.includes(detailHint))).toBe(true);
+  });
+
+  it("同時有兩個補問時，回覆的最後一則保留可點的問題，另一題列在摘要等下次發言", async () => {
+    await settings();
+    const a = await askingTask("第一題");
+    const b = await askingTask("第二題");
+    await answeredTask("可先閱讀的結果");
+    await send("questions", "早安");
+    expect(lastReply().at(-1)).toContain("第一題");
+    expect(replyCalls[0].messages.at(-1)).toHaveProperty("quickReply.items");
+    expect(lastReply().join("\n")).toContain("第二題");
+    expect(lastReply().join("\n")).toContain("可先閱讀的結果");
+    expect((await notice(a.id)).sent_message_id).not.toBeNull();
+    expect((await notice(b.id)).sent_at).toBeNull();
+    await send("next", "還有嗎");
+    expect(lastReply().at(-1)).toContain("第二題");
+    expect(replyCalls[1].messages.at(-1)).toHaveProperty("quickReply.items");
   });
 
   it("一般發言後一分鐘內排入的通知優先用還沒用過的回覆，之後不重用權杖", async () => {
