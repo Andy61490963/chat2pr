@@ -102,6 +102,19 @@ it("剩兩成只推補問、PR、答案及失敗，較早的進度不會擋住�
   expect(pushes).toHaveLength(1);
 });
 
+it("大群組的一筆中間進度不能花掉最後兩成而擋住另一群的答案", async () => {
+  await setUsage(159);
+  await db.query("UPDATE groups SET member_count=41,member_count_at=now() WHERE id='group-a'");
+  await db.query("INSERT INTO groups(id,name,enabled) VALUES('GroupB','範例群組乙',true)");
+  await notice("group_received", "範例群組甲的收件通知");
+  await notice("group_answered", "範例群組乙的查詢結果", "GroupB");
+  const pushes = lineApi();
+  await flush();
+  expect(pushes.map((p) => p.to)).toEqual(["GroupB"]);
+  expect(pushes[0].messages[0].text).toBe("範例群組乙的查詢結果");
+  expect(await usage()).toEqual({ detail: "本月已用 163／上限 200 則" });
+});
+
 it("推播回應中斷後沿用同批重試鍵，新進度不會混進已收件批次", async () => {
   const keys: string[] = [];
   const pushes = lineApi(async (body, key) => {
