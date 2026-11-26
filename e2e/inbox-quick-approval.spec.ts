@@ -75,6 +75,10 @@ for (const [scenario, change] of Object.entries(changes)) {
     await row(page, current.title).getByRole("button", quickName).click();
     await expect(panel(page).getByRole("heading", { name: current.title })).toBeVisible();
     await expect(panel(page).getByRole("alert")).toContainText(/重新確認/);
+    if (scenario === "新增風險") {
+      await expect(row(page, current.title).getByText("有風險", { exact: true })).toBeVisible();
+      await expect(row(page, current.title).getByRole("button", { name: "查看", exact: true })).toBeVisible();
+    }
     expect(writes).toEqual([]);
   });
 }
