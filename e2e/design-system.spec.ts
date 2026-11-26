@@ -89,7 +89,7 @@ for (const width of [375, 1440]) {
       await page.keyboard.press("Escape");
       for (const [name, role] of [
         ["查看工單", "dialog"],
-        ["停止工單", "alertdialog"],
+        ["停止工單", "dialog"],
       ] as const) {
         const trigger = page.getByRole("button", { name });
         await trigger.press("Enter");

@@ -5,6 +5,10 @@
   @apply invisible fixed top-0 right-full w-diagram-measure;
 }
 
+.report-diagram {
+  width: var(--diagram-width);
+}
+
 .query-report {
   @apply text-sm leading-relaxed wrap-anywhere;
 }

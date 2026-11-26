@@ -3,6 +3,7 @@ on:
   pull_request:
     paths:
       - "src/**"
+      - "shared/**"
       - "e2e/design-*"
       - ".github/workflows/design-shots.yml"
 permissions:
@@ -31,13 +32,17 @@ jobs:
           npm ci --prefix proposed
           cd proposed
           npx playwright install --with-deps chromium --only-shell
-      - name: 使用同一組頁面驗收情境擷取兩版畫面
+      - name: 使用各版本的頁面驗收情境擷取畫面
         env:
           E2E_PORT: "5340"
         run: |
-          cp proposed/e2e/design-pages.spec.ts previous/e2e/design-pages.spec.ts
-          (cd previous && DESIGN_SHOTS_DIR="$RUNNER_TEMP/shots/改版前" npx playwright test e2e/design-pages.spec.ts --workers=1)
+          mkdir -p "$RUNNER_TEMP/shots/改版前" "$RUNNER_TEMP/shots/改版後"
+          if [ ! -f previous/e2e/design-pages.spec.ts ]; then
+            cp proposed/e2e/{design-pages.spec.ts,design-reference.ts} previous/e2e/
+          fi
+          (cd previous && DESIGN_REFERENCE=1 DESIGN_SHOTS_DIR="$RUNNER_TEMP/shots/改版前" npx playwright test e2e/design-pages.spec.ts --workers=1)
           (cd proposed && DESIGN_SHOTS_DIR="$RUNNER_TEMP/shots/改版後" npx playwright test e2e/design-pages.spec.ts e2e/design-system.spec.ts --workers=1)
+          (cd proposed && node --import tsx e2e/design-reference.ts "$RUNNER_TEMP/shots")
       - name: 保留畫面供審查
         if: always()
         uses: actions/upload-artifact@v4

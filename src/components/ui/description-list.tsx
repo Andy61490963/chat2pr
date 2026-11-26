@@ -27,11 +27,13 @@ function DescriptionItem({
   label,
   numeric = false,
   className,
+  valueClassName,
   children,
 }: {
   label: React.ReactNode;
   numeric?: boolean;
   className?: string;
+  valueClassName?: string;
   children: React.ReactNode;
 }) {
   return (
@@ -44,6 +46,7 @@ function DescriptionItem({
         className={cn(
           "min-w-0 text-foreground wrap-anywhere",
           numeric && "tabular-nums",
+          valueClassName,
         )}
       >
         {children}

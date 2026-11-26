@@ -1,15 +1,8 @@
-import { DataList, InlineNotice } from "@/components/ui/layout";
+import { DataList, InlineNotice, SectionHeader } from "@/components/ui/layout";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Trash2, UserPlus } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Dialog } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
@@ -216,82 +209,78 @@ export function MembersView({
     );
   return (
     <div className="flex flex-col gap-6">
-      <Card>
-        <CardHeader>
-          <CardTitle>加入成員</CardTitle>
-          <CardDescription>
+      <section aria-labelledby="member-form-title" className="space-y-4">
+        <header className="space-y-1">
+          <SectionHeader id="member-form-title">加入成員</SectionHeader>
+          <p className="text-sm text-muted-foreground">
             輸入同事的 GitHub 帳號。對方之後用 GitHub
             登入看板即可，不需要另外設定密碼。
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form
-            className="grid gap-2 sm:grid-cols-form-action"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void act(
-                () => request("/api/members", "POST", { login, role }),
-                `已加入 ${login}`,
-              ).then((ok) => {
-                // 加入失敗時保留帳號，改一個字就能再送。
-                if (ok) setLogin("");
-              });
-            }}
-          >
-            <Input
-              aria-label="GitHub 帳號"
-              placeholder="GitHub 帳號，例如 demo-xiaolin"
-              className="max-sm:min-h-11"
-              value={login}
-              onChange={(e) => setLogin(e.target.value.trim())}
-              required
-            />
-            <Select value={role} onValueChange={(v) => setRole(v as Role)}>
-              <SelectTrigger
-                className="w-full max-sm:min-h-11"
-                aria-label="角色"
-              >
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="member" className="max-sm:min-h-11">
-                  {memberRoleLabels.member}
-                </SelectItem>
-                <SelectItem value="admin" className="max-sm:min-h-11">
-                  {memberRoleLabels.admin}
-                </SelectItem>
-              </SelectContent>
-            </Select>
-            <Button className="max-sm:min-h-11" disabled={busy || !login}>
-              <UserPlus /> 加入
-            </Button>
-          </form>
-          <dl className="mt-4 grid gap-2 text-sm sm:grid-cols-2">
-            <div className="rounded-md border px-3 py-2.5">
-              <dt className="font-medium">{memberRoleLabels.member}</dt>
-              <dd className="text-muted-foreground">
-                查看收件匣、任務與聊天室，可以核准、結束任務、採用方案、修改這一題與重試任務。
-              </dd>
-            </div>
-            <div className="rounded-md border px-3 py-2.5">
-              <dt className="font-medium">{memberRoleLabels.admin}</dt>
-              <dd className="text-muted-foreground">
-                另外可以{memberRoleText.adminPermissions}。
-              </dd>
-            </div>
-          </dl>
-        </CardContent>
-      </Card>
-      <Card className="gap-0 py-0">
-        <CardHeader className="border-b py-4">
-          <CardTitle>成員名單</CardTitle>
-        </CardHeader>
+          </p>
+        </header>
+        <form
+          className="grid gap-2 sm:grid-cols-form-action"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void act(
+              () => request("/api/members", "POST", { login, role }),
+              `已加入 ${login}`,
+            ).then((ok) => {
+              // 加入失敗時保留帳號，改一個字就能再送。
+              if (ok) setLogin("");
+            });
+          }}
+        >
+          <Input
+            aria-label="GitHub 帳號"
+            placeholder="GitHub 帳號，例如 demo-xiaolin"
+            className="max-sm:min-h-11"
+            value={login}
+            onChange={(e) => setLogin(e.target.value.trim())}
+            required
+          />
+          <Select value={role} onValueChange={(v) => setRole(v as Role)}>
+            <SelectTrigger
+              className="w-full max-sm:min-h-11"
+              aria-label="角色"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="member" className="max-sm:min-h-11">
+                {memberRoleLabels.member}
+              </SelectItem>
+              <SelectItem value="admin" className="max-sm:min-h-11">
+                {memberRoleLabels.admin}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+          <Button className="max-sm:min-h-11" disabled={busy || !login}>
+            <UserPlus /> 加入
+          </Button>
+        </form>
+        <dl className="grid gap-3 border-t pt-3 text-sm sm:grid-cols-2">
+          <div>
+            <dt className="font-medium">{memberRoleLabels.member}</dt>
+            <dd className="text-muted-foreground">
+              查看收件匣、任務與聊天室，可以核准、結束任務、採用方案、修改這一題與重試任務。
+            </dd>
+          </div>
+          <div>
+            <dt className="font-medium">{memberRoleLabels.admin}</dt>
+            <dd className="text-muted-foreground">
+              另外可以{memberRoleText.adminPermissions}。
+            </dd>
+          </div>
+        </dl>
+      </section>
+      <section aria-labelledby="member-list-title" className="space-y-3 border-t pt-4">
+        <SectionHeader id="member-list-title">成員名單</SectionHeader>
         {error && (
           <InlineNotice as="p" tone="danger" className="m-4">
             {error}
           </InlineNotice>
         )}
-        <DataList>
+        <DataList className="border-y">
           {(members ?? []).map((m) => (
             <li key={m.github_id} className="flex items-center gap-3 px-5 py-3">
               <Initials name={m.login} className="size-8 text-xs" />
@@ -348,7 +337,7 @@ export function MembersView({
             </li>
           )}
         </DataList>
-      </Card>
+      </section>
     </div>
   );
 }

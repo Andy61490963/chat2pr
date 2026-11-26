@@ -1,5 +1,5 @@
 import { DataList, InlineNotice, Toolbar } from "@/components/ui/layout";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useMemo, useState } from "react";
 import { HardDrive, RefreshCw, Trash2 } from "lucide-react";
 import {
   diskRules,
@@ -304,14 +304,14 @@ export function DockerDiskCard({
                         <span className="h-1.5 overflow-hidden rounded-sm bg-muted">
                           <span
                             className={cn(
-                              "block h-full rounded-sm",
+                              "block h-full w-disk-used rounded-sm",
                               free * 100 < report.settings.pause_percent
                                 ? "bg-danger"
                                 : free * 100 < report.settings.warn_percent
                                   ? "bg-warn"
                                   : "bg-good",
                             )}
-                            style={{ width: `${(1 - free) * 100}%` }}
+                            style={{ "--disk-used-width": `${(1 - free) * 100}%` } as CSSProperties}
                           />
                         </span>
                       </li>

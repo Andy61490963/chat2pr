@@ -16,7 +16,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
+          cache: npm
+      - run: npm ci
       - name: 對照合併前版本的樣式基準
         env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-        run: node scripts/design-baseline.ts "$BASE_SHA"
+          BEFORE: ${{ github.event.before }}
+        run: node --import tsx scripts/check-design-baseline.ts "$GITHUB_EVENT_NAME" "$BEFORE"

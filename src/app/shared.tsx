@@ -53,8 +53,11 @@ import {
   taskGroups,
 } from "../../shared/types.js";
 import { Badge } from "@/components/ui/badge";
+import { SectionHeader } from "@/components/ui/layout";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+
+export { EmptyState as Empty } from "@/components/ui/layout";
 
 export type View =
   | "inbox"
@@ -353,55 +356,6 @@ export function StatusBadge({
   return <Badge variant={statusVariant[status]}>{label}</Badge>;
 }
 
-// 空狀態：圖示只是輔助（aria-hidden），標題說明現況，內文說明接下來會發生什麼。
-export function Empty({
-  icon,
-  title,
-  children,
-  compact,
-}: {
-  icon?: ReactNode;
-  title: string;
-  children?: ReactNode;
-  compact?: boolean;
-}) {
-  if (compact)
-    return (
-      <div className="flex gap-3 px-5 py-4 text-sm">
-        {icon && (
-          <span
-            aria-hidden
-            className="mt-0.5 shrink-0 text-muted-foreground [&_svg]:size-4"
-          >
-            {icon}
-          </span>
-        )}
-        <div className="min-w-0">
-          <p className="text-muted-foreground">{title}</p>
-          {children && (
-            <p className="mt-0.5 text-xs text-muted-foreground">{children}</p>
-          )}
-        </div>
-      </div>
-    );
-  return (
-    <div className="flex flex-col items-center gap-1 px-4 py-10 text-center">
-      {icon && (
-        <span
-          aria-hidden
-          className="mb-2 grid size-10 place-items-center rounded-full bg-muted text-muted-foreground [&_svg]:size-5"
-        >
-          {icon}
-        </span>
-      )}
-      <p className="font-medium">{title}</p>
-      {children && (
-        <p className="max-w-sm text-sm text-muted-foreground">{children}</p>
-      )}
-    </div>
-  );
-}
-
 const statusTone: Record<Task["status"], string> = {
   awaiting_approval: "text-warn",
   budget_wait: "text-warn",
@@ -669,11 +623,9 @@ export function SectionTitle({
   action?: ReactNode;
 }) {
   return (
-    <div className="mb-3 flex items-center gap-2">
-      <h2 className="text-lg font-semibold">{children}</h2>
-      {count !== undefined && <Badge variant="secondary">{count}</Badge>}
-      {action && <div className="ml-auto">{action}</div>}
-    </div>
+    <SectionHeader count={count} action={action} className="mb-3">
+      {children}
+    </SectionHeader>
   );
 }
 

@@ -1,102 +1,81 @@
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { pathToFileURL } from "node:url";
 
-export interface StyleEntry {
+interface BaselineEntry {
   file: string;
-  line: number;
-  column: number;
   reason: string;
   value: string;
   context: string;
 }
 
-const header = "檔案及原始行欄\t待遷移原因\t樣式\t來源識別";
-const baselinePath = "tests/design-tokens.baseline.tsv";
+export interface StyleEntry extends BaselineEntry {
+  line: number;
+  column: number;
+}
+
+const header = "檔案\t待遷移原因\t樣式\t來源識別";
+export const baselinePath = "tests/design-tokens.baseline.tsv";
 
 export const fingerprint = (line: string) =>
   createHash("sha256").update(line.trim()).digest("hex").slice(0, 16);
 
-function formatRow(e: StyleEntry) {
-  return [
-    e.file + ":" + e.line + ":" + e.column,
-    e.reason,
-    e.value,
-    e.context,
-  ].join("\t");
+function key({ file, reason, value, context }: BaselineEntry) {
+  return [file, reason, value, context].join("\t");
 }
 
-export function formatBaseline(entries: StyleEntry[]) {
-  return [header, ...entries.map(formatRow)].join("\n") + "\n";
+export function formatBaseline(entries: BaselineEntry[]) {
+  return [header, ...entries.map(key).sort()].join("\n") + "\n";
 }
 
-export function parseBaseline(text: string): StyleEntry[] {
+export function parseBaseline(text: string): BaselineEntry[] {
   const [title, ...lines] = text.trimEnd().split(/\r?\n/);
   if (title !== header) throw new Error("設計規範基準缺少欄名");
   return lines.map((row) => {
-    const [location, reason, value, context] = row.split("\t");
-    const match = /^(src\/.+):(\d+):(\d+)$/.exec(location);
-    if (!match || !reason || !value || !/^[\da-f]{16}$/.test(context)) {
+    const [file, reason, value, context, extra] = row.split("\t");
+    if (
+      !/^(src|shared)\//.test(file) ||
+      !reason ||
+      !value ||
+      !/^[\da-f]{16}$/.test(context) ||
+      extra !== undefined
+    )
       throw new Error("無法辨識基準列：" + row);
-    }
-    return {
-      file: match[1],
-      line: Number(match[2]),
-      column: Number(match[3]),
-      reason,
-      value,
-      context,
-    };
+    return { file, reason, value, context };
   });
+}
+
+export function baselineDifference<
+  T extends BaselineEntry,
+  U extends BaselineEntry,
+>(entries: T[], base: U[]) {
+  const remaining = new Map<string, U[]>();
+  for (const entry of base) {
+    const id = key(entry);
+    const group = remaining.get(id);
+    if (group) group.push(entry);
+    else remaining.set(id, [entry]);
+  }
+  const added = entries.filter((entry) => !remaining.get(key(entry))?.pop());
+  return { added, removed: [...remaining.values()].flat() };
 }
 
 export function checkBaseline(
   current: string,
   previous: string | null,
-  readSource?: (file: string) => string,
+  inherited: () => StyleEntry[] = () => [],
 ) {
-  const allowed = new Set(
-    previous === null ? [] : parseBaseline(previous).map(formatRow),
-  );
-  const seen = new Set<string>();
-  const sources = new Map<string, string[]>();
-  for (const entry of parseBaseline(current)) {
-    const row = formatRow(entry);
-    if (previous !== null) {
-      if (!allowed.delete(row)) throw new Error("基準只能刪除既有列：" + row);
-      continue;
-    }
-    // 首次導入時基底沒有基準檔，改用基底本來就有的來源行與欄位查核。
-    if (!sources.has(entry.file))
-      sources.set(entry.file, readSource?.(entry.file).split(/\r?\n/) ?? []);
-    const line = sources.get(entry.file)?.[entry.line - 1];
-    const location = [entry.file, entry.line, entry.column].join(":");
-    if (
-      !line ||
-      fingerprint(line) !== entry.context ||
-      !line.startsWith(entry.value, entry.column - 1) ||
-      seen.has(location)
-    ) {
-      throw new Error("基底版本沒有這筆樣式：" + row);
-    }
-    seen.add(location);
+  const allowed = previous === null ? inherited() : parseBaseline(previous);
+  const { added } = baselineDifference(parseBaseline(current), allowed);
+  if (added.length) {
+    const message =
+      previous === null ? "基底版本沒有這筆樣式" : "基準只能刪除既有列";
+    throw new Error(message + "：\n" + added.map(key).join("\n"));
   }
 }
 
-if (
-  process.argv[1] &&
-  pathToFileURL(process.argv[1]).href === import.meta.url
-) {
-  const base = process.argv[2];
-  if (!/^[\da-f]{40}$/.test(base)) throw new Error("缺少待比對的基底版本");
-  const git = (...args: string[]) =>
-    execFileSync("git", args, { encoding: "utf8" });
-  const exists = git("ls-tree", "--name-only", base, "--", baselinePath).trim();
-  const readBase = (file: string) => git("show", base + ":" + file);
-  checkBaseline(
-    readFileSync(baselinePath, "utf8"),
-    exists ? readBase(baselinePath) : null,
-    readBase,
-  );
+export function comparisonBase(event: string, before?: string) {
+  // PR 檢出的是 GitHub 的合併提交，第一個父版本就是此次測試使用的主線。
+  if (event === "pull_request") return "HEAD^1";
+  if (event !== "push" || !before || !/^[\da-f]{40}$/.test(before))
+    throw new Error("缺少待比對的推送前版本");
+  return /^0+$/.test(before) ? null : before;
 }

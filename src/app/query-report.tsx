@@ -1,6 +1,7 @@
 import { Toolbar } from "@/components/ui/layout";
 import {
   Children,
+  type CSSProperties,
   isValidElement,
   useEffect,
   useId,
@@ -120,8 +121,8 @@ function Diagram({ source }: { source: string }) {
       <img
         src={drawing.url}
         alt="簡易流程圖，說明請見下方文字"
-        className="mx-auto max-w-none"
-        style={{ width: drawing.width * zoom }}
+        className="report-diagram mx-auto max-w-none"
+        style={{ "--diagram-width": `${drawing.width * zoom}px` } as CSSProperties}
       />
     </div>
   );

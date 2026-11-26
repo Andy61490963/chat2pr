@@ -530,7 +530,7 @@ export function TasksView({
     ? {
         position: "popper" as const,
         className:
-          "max-w-(--radix-select-content-available-width) [&_[role=option]]:min-h-11 [&_[role=option]]:break-all",
+          "max-w-select-available [&_[role=option]]:min-h-11 [&_[role=option]]:break-all",
       }
     : {};
   const selectControls = (

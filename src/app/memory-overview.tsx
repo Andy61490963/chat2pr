@@ -2,13 +2,6 @@ import { DataList, ListRow, SectionHeader } from "@/components/ui/layout";
 import type { Memory } from "../../shared/types.js";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardHeader,
-  CardContent,
-  CardTitle,
-  CardDescription,
-} from "@/components/ui/card";
 import { type State, ago } from "./shared";
 const memorySource: Record<Memory["source"], string> = {
   ai: "AI 自動記住",
@@ -35,23 +28,23 @@ export function MemoryOverview({
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
     .slice(0, 8);
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>記憶總覽</CardTitle>
-        <CardDescription>
+    <section aria-labelledby="memory-overview-title" className="space-y-4 border-t pt-4">
+      <header className="space-y-1">
+        <SectionHeader id="memory-overview-title">記憶總覽</SectionHeader>
+        <p className="text-sm text-muted-foreground">
           群組記憶讓 AI 判斷要改哪個專案；專案記憶會以 PR 寫進該專案的
           AGENTS.md，Codex 每次開發都會遵守。
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-5">
-        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border bg-border sm:grid-cols-4">
+        </p>
+      </header>
+      <div className="flex flex-col gap-5">
+        <div className="grid grid-cols-2 gap-px border-y bg-border sm:grid-cols-4">
           {[
             ["群組記憶", state.memories.length],
             ["AI 自動記住", bySource("ai")],
             ["群組要求／管理者", bySource("chat") + bySource("admin")],
             ["專案記憶", state.knowledge.length],
           ].map(([label, value]) => (
-            <div key={label} className="flex flex-col gap-1 bg-card px-4 py-3">
+            <div key={label} className="flex flex-col gap-1 bg-background px-3 py-2">
               <span className="text-xs text-muted-foreground">{label}</span>
               <span className="text-xl font-semibold tabular-nums">
                 {value}
@@ -72,7 +65,7 @@ export function MemoryOverview({
             最近新增的群組記憶
           </SectionHeader>
           {recent.length ? (
-            <DataList variant="bordered">
+            <DataList className="border-y">
               {recent.map((m) => (
                 <ListRow key={m.id} className="flex flex-col gap-0.5">
                   <span className="text-sm wrap-anywhere">
@@ -121,7 +114,7 @@ export function MemoryOverview({
             專案記憶
           </SectionHeader>
           {state.knowledge.length ? (
-            <DataList variant="bordered">
+            <DataList className="border-y">
               {state.knowledge.map((k) => (
                 <ListRow
                   key={k.id}
@@ -149,7 +142,7 @@ export function MemoryOverview({
             <p className="text-sm text-muted-foreground">還沒有專案記憶。</p>
           )}
         </section>
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   );
 }

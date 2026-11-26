@@ -228,7 +228,7 @@ export function ListRow({
 
 const noticeColors = {
   good: "border-good/30 bg-good-soft text-good",
-  warn: "border-warn/30 bg-warn-soft text-warn",
+  warn: "border-warn/30 bg-warn-soft text-foreground",
   danger: "border-danger/30 bg-danger-soft text-danger",
   info: "border-border bg-info-soft text-info",
   muted: "border-border bg-muted text-muted-foreground",
@@ -237,16 +237,19 @@ const noticeColors = {
 export function InlineNotice({
   as: Element = "div",
   tone = "info",
+  variant = "panel",
   className,
   ...props
 }: HTMLAttributes<HTMLElement> & {
   as?: "div" | "p";
   tone?: keyof typeof noticeColors;
+  variant?: "panel" | "strip";
 }) {
   return (
     <Element
       className={cn(
-        "rounded-sm border px-3 py-2 text-sm",
+        "px-3 py-2 text-sm",
+        variant === "strip" ? "border-b" : "rounded-sm border",
         noticeColors[tone],
         className,
       )}

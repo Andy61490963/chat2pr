@@ -56,6 +56,12 @@ describe("看板的設計代幣", () => {
       "max-w-media-dialog",
     );
     expect(cn("w-media-dialog", "w-full")).toBe("w-full");
+    expect(cn("max-h-floating", "max-h-20")).toBe("max-h-20");
+    expect(cn("origin-floating", "origin-center")).toBe("origin-center");
+    expect(cn("h-select-trigger", "h-auto")).toBe("h-auto");
+    expect(cn("min-w-select-trigger", "min-w-0")).toBe("min-w-0");
+    expect(cn("max-w-select-available", "max-w-full")).toBe("max-w-full");
+    expect(cn("w-disk-used", "w-0")).toBe("w-0");
     expect(cn("md:grid-cols-project", "md:grid-cols-group")).toBe(
       "md:grid-cols-group",
     );
@@ -101,6 +107,6 @@ describe("看板的設計代幣", () => {
       expect(palette.get("--background")).not.toBe(palette.get("--popover"));
       expect(palette.get("--shadow-raised-value")).toBeTruthy();
     }
-    expect(theme.get("--shadow-card")).toBe("none");
+    expect(theme.has("--shadow-card")).toBe(false);
   });
 });

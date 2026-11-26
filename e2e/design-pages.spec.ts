@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test } from "@playwright/test";
+import { captureReferenceTarget } from "./design-reference";
 import {
   answeredDetail,
   blockedCheck,
@@ -62,9 +63,22 @@ for (const width of [375, 1440]) {
       for (const screen of screens) {
         await test.step(screen.name, async () => {
           await page.goto(screen.path);
+          await expect(page.getByRole("main")).toBeVisible();
           const content = page
             .getByText(screen.content, { exact: true })
             .first();
+          const reference = process.env.DESIGN_REFERENCE === "1";
+          if (
+            !(await captureReferenceTarget(reference, () =>
+              content.waitFor({ state: "attached", timeout: 5000 }),
+            ))
+          ) {
+            info.annotations.push({
+              type: "新增畫面",
+              description: screen.name,
+            });
+            return;
+          }
           await expect(content).toBeVisible();
           await page.evaluate(() => document.fonts.ready);
           if (screen.center) {

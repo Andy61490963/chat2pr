@@ -1,7 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { expect, it } from "vitest";
-import { parseBaseline } from "../scripts/design-baseline";
 
 function links(file: string) {
   const markdown = readFileSync(file, "utf8");
@@ -26,18 +25,37 @@ it("根目錄與專案慣例能連到前端規範，再走到元件展示與截�
   }
 });
 
-it("每個仍有例外的來源檔案都能在盤點表找到原始行號", () => {
+it("歷史盤點列出各檔案和總數，並連到可查詢現況的基準", () => {
   const guide = readFileSync("docs/design-system.md", "utf8");
   const rows = new Map(
     Array.from(
-      guide.matchAll(/^\| `(src\/[^|]+)` \| \d+ \| ([\d、]+) \| \d+ \|$/gm),
-      ([, file, lines]) => [file, new Set(lines.split("、").map(Number))],
+      guide.matchAll(/^\| `((?:src|shared)\/[^|]+)` \| \d+ \| (\d+) \|$/gm),
+      ([, file, count]) => [file, Number(count)],
     ),
   );
-  const baseline = parseBaseline(
-    readFileSync("tests/design-tokens.baseline.tsv", "utf8"),
+  expect(rows.size).toBeGreaterThan(0);
+  const total = [...rows.values()].reduce((sum, count) => sum + count, 0);
+  expect(guide).toContain(`本輪保留 ${total} 筆`);
+  expect(links("docs/design-system.md")).toContain(resolve("tests/design-tokens.baseline.tsv"));
+  expect(guide).not.toMatch(/\.tsx?:\d+|基底行號/);
+});
+
+it("前端規則明列手機可點擊尺寸、展示截圖位置與清單元件", () => {
+  const rules = readFileSync("src/AGENTS.md", "utf8");
+  expect(rules).toMatch(/375px[^。\n]*44\s*×\s*44px/);
+  expect(rules).toContain("設計系統前後截圖");
+  expect(rules).toContain("改版後");
+  expect(readFileSync("docs/conventions.md", "utf8")).toMatch(
+    /DataList.{0,20}ListRow/,
   );
-  for (const { file, line } of baseline) {
-    expect(rows.get(file)?.has(line), file + ":" + line).toBe(true);
+});
+
+it("遷移頁面的資料寬度經有名稱的變數傳遞，選單沿用可用寬度工具", () => {
+  for (const [path, token] of [
+    ["src/app/docker-disk.tsx", "--disk-used-width"],
+    ["src/app/query-report.tsx", "--diagram-width"],
+    ["src/app/tasks.tsx", "max-w-select-available"],
+  ]) {
+    expect(readFileSync(path, "utf8"), path).toContain(token);
   }
 });

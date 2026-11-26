@@ -1,147 +1,163 @@
-檔案及原始行欄	待遷移原因	樣式	來源識別
-src/App.tsx:939:33	大圓角須改用規範圓角	rounded-full	ec42ddd3cef62589
-src/App.tsx:949:34	任意工具值須改用具名 token	grid-cols-[15.5rem_minmax(0,1fr)]	f0104fff4f1aacff
-src/App.tsx:955:65	任意工具值須改用具名 token	pb-[env(safe-area-inset-bottom)]	93b7c968a822bd3a
-src/App.tsx:955:98	漸層或毛玻璃須改用單色表面	backdrop-blur	93b7c968a822bd3a
-src/App.tsx:971:39	任意工具值須改用具名 token	text-[11px]	d675777a1eda895c
-src/App.tsx:983:34	任意工具值須改用具名 token	min-h-[44px]	0efd96f3a8e1b567
-src/App.tsx:983:109	任意工具值須改用具名 token	text-[11px]	0efd96f3a8e1b567
-src/App.tsx:997:51	任意工具值須改用具名 token	right-[calc(50%-1.25rem)]	3f275175ca9f0966
-src/App.tsx:997:85	大圓角須改用規範圓角	rounded-full	3f275175ca9f0966
-src/App.tsx:997:117	任意工具值須改用具名 token	text-[10px]	3f275175ca9f0966
-src/App.tsx:1010:25	任意工具值須改用具名 token	min-h-[44px]	48f1eeb512d4c06b
-src/App.tsx:1010:100	任意工具值須改用具名 token	text-[11px]	48f1eeb512d4c06b
-src/App.tsx:1043:30	任意工具值須改用具名 token	min-h-[44px]	48c4191cffa00d3f
-src/App.tsx:1049:44	任意工具值須改用具名 token	min-h-[44px]	7c4fabfd30dcec6d
-src/App.tsx:1086:59	任意工具值須改用具名 token	pb-[calc(4.5rem+env(safe-area-inset-bottom))]	4e09f9b9be3f25a8
-src/App.tsx:1091:24	任意工具值須改用具名 token	grid-cols-[minmax(0,1fr)_auto]	38e4707e1b093d5d
-src/App.tsx:1250:47	任意工具值須改用具名 token	[overflow-wrap:anywhere]	221707b53dfa6844
-src/App.tsx:1277:35	任意工具值須改用具名 token	flex-[1_1_9rem]	66c7e69b8694e3bc
-src/App.tsx:1514:39	任意工具值須改用具名 token	z-[60]	6bc71c13425887dd
-src/App.tsx:1514:57	任意工具值須改用具名 token	max-w-[calc(100vw-2rem)]	6bc71c13425887dd
-src/App.tsx:1514:120	大圓角須改用規範圓角	rounded-lg	6bc71c13425887dd
-src/App.tsx:1523:36	任意工具值須改用具名 token	[overflow-wrap:anywhere]	ccb351a64074d398
-src/App.tsx:1624:42	任意工具值須改用具名 token	grid-cols-[1.1fr_1fr]	03a4230d1a85dd1a
-src/App.tsx:1663:28	大圓角須改用規範圓角	rounded-lg	1a12b941beab4e45
-src/App.tsx:1676:30	大圓角須改用規範圓角	rounded-lg	bbfdcbe4e6bca1ae
-src/App.tsx:1722:51	大圓角須改用規範圓角	rounded-lg	d00b74f43f85170b
-src/App.tsx:1790:55	大圓角須改用規範圓角	rounded-full	b1ac35f82d22d980
-src/App.tsx:1793:29	大圓角須改用規範圓角	rounded-full	6f1ec1c42a5a549c
-src/App.tsx:1813:43	大圓角須改用規範圓角	rounded-lg	371c86d8b19f6208
-src/App.tsx:1822:38	大圓角須改用規範圓角	rounded-lg	95d55a3d7a4f725d
-src/app/inbox.tsx:331:55	大圓角須改用規範圓角	rounded-lg	3356389de41783c1
-src/app/inbox.tsx:395:71	大圓角須改用規範圓角	rounded-full	77fa1d12aec6f024
-src/app/inbox.tsx:432:26	任意工具值須改用具名 token	max-h-[calc(100dvh-2rem)]	43c63d4fc233619c
-src/app/inbox.tsx:537:25	任意工具值須改用具名 token	grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]	5b4c953797678cf9
-src/app/inbox.tsx:745:49	任意工具值須改用具名 token	[overflow-wrap:anywhere]	82a5c755cb93ecfd
-src/app/inbox.tsx:949:38	任意工具值須改用具名 token	[overflow-wrap:anywhere]	55130ef66daaaf8a
-src/app/inbox.tsx:954:46	任意工具值須改用具名 token	[overflow-wrap:anywhere]	82023b447004e97a
-src/app/inbox.tsx:978:85	任意工具值須改用具名 token	[overflow-wrap:anywhere]	a585bdb360e4bbee
-src/app/inbox.tsx:1006:50	任意工具值須改用具名 token	[overflow-wrap:anywhere]	88e606f1b8dacf0f
-src/app/page-notices.tsx:45:28	任意工具值須改用具名 token	flex-[1_1_12rem]	500e7339156df3bc
-src/app/pick-list.tsx:57:30	任意工具值須改用具名 token	[overflow-wrap:anywhere]	939d1194527c927d
-src/app/review-workbench.tsx:127:57	任意工具值須改用具名 token	grid-cols-[minmax(0,1fr)_auto]	bf834de87a050cff
-src/app/review-workbench.tsx:127:121	任意工具值須改用具名 token	rounded-[inherit]	bf834de87a050cff
-src/app/review-workbench.tsx:127:319	任意工具值須改用具名 token	shadow-[inset_3px_0_var(--primary)]	bf834de87a050cff
-src/app/review-workbench.tsx:382:72	任意工具值須改用具名 token	[overflow-wrap:anywhere]	2f637c0f8f7a040e
-src/app/review-workbench.tsx:493:23	任意工具值須改用具名 token	grid-cols-[22.5rem_minmax(0,1fr)]	9d3d134881900eab
-src/app/review-workbench.tsx:493:84	任意工具值須改用具名 token	grid-cols-[27rem_minmax(0,1fr)]	9d3d134881900eab
-src/app/run-observer.tsx:71:32	任意工具值須改用具名 token	grid-cols-[5rem_minmax(0,1fr)]	93ae951b4f430f0b
-src/app/run-observer.tsx:173:26	大圓角須改用規範圓角	rounded-lg	f21a92a69e86b2d8
-src/app/run-observer.tsx:211:79	任意工具值須改用具名 token	[overflow-wrap:anywhere]	51ebb30c56442ca8
-src/app/run-observer.tsx:234:36	任意工具值須改用具名 token	grid-cols-[5rem_minmax(0,1fr)]	0b17f6e24bf612d7
-src/app/run-observer.tsx:339:34	任意工具值須改用具名 token	max-h-[32rem]	51b520337ae08b39
-src/app/run-observer.tsx:348:64	任意工具值須改用具名 token	[overflow-wrap:anywhere]	b7ca516ec0505dab
-src/app/settings.tsx:279:25	大圓角須改用規範圓角	rounded-lg	d3f3b7c743da34a3
-src/app/settings.tsx:285:29	大圓角須改用規範圓角	rounded-lg	d3f3b7c743da34a3
-src/app/settings.tsx:320:88	任意工具值須改用具名 token	[overflow-wrap:anywhere]	fdbb05dd73928699
-src/app/settings.tsx:594:66	大圓角須改用規範圓角	rounded-lg	3c2a5c9df6d86289
-src/app/settings.tsx:793:44	大圓角須改用規範圓角	rounded-lg	d995659fe51c31e7
-src/app/settings.tsx:860:99	任意工具值須改用具名 token	ring-[3px]	bff83b48d20df1c1
-src/app/settings.tsx:896:63	任意工具值須改用具名 token	grid-cols-[repeat(auto-fit,minmax(20rem,1fr))]	b20d78009dc1ff56
-src/app/settings.tsx:987:27	大圓角須改用規範圓角	rounded-lg	23089e6e91d760df
-src/app/settings.tsx:1090:34	大圓角須改用規範圓角	rounded-full	d95eec6ee997820e
-src/app/settings.tsx:1098:62	任意工具值須改用具名 token	[overflow-wrap:anywhere]	a01004f5716416a1
-src/app/settings.tsx:1242:28	大圓角須改用規範圓角	rounded-lg	bbfdcbe4e6bca1ae
-src/app/settings.tsx:1276:72	大圓角須改用規範圓角	rounded-lg	b04d7f4fd0e122c6
-src/app/shared.tsx:380:59	大圓角須改用規範圓角	rounded-full	ebf38bf8db806322
-src/app/shared.tsx:457:50	大圓角須改用規範圓角	rounded-full	b72ada0c4b1b0b93
-src/app/shared.tsx:457:72	任意工具值須改用具名 token	text-[11px]	b72ada0c4b1b0b93
-src/app/shared.tsx:588:66	任意工具值須改用具名 token	[overflow-wrap:anywhere]	7d96f4b0d023e2cb
-src/app/shared.tsx:704:32	任意工具值須改用具名 token	[overflow-wrap:anywhere]	e1fe000f04039f8f
-src/app/system.tsx:338:24	大圓角須改用規範圓角	rounded-lg	1a12b941beab4e45
-src/app/system.tsx:352:16	大圓角須改用規範圓角	rounded-lg	de06192da5f06382
-src/app/system.tsx:370:37	大圓角須改用規範圓角	rounded-lg	05847efe4c01a665
-src/app/system.tsx:413:41	大圓角須改用規範圓角	rounded-lg	05847efe4c01a665
-src/app/system.tsx:433:59	任意工具值須改用具名 token	grid-cols-[minmax(0,2fr)_minmax(0,1fr)]	f7f36411728a1d8b
-src/app/system.tsx:445:41	大圓角須改用規範圓角	rounded-lg	05847efe4c01a665
-src/app/system.tsx:451:53	任意工具值須改用具名 token	flex-[1_1_12rem]	00cfbcd8dc8579f8
-src/app/system.tsx:452:50	任意工具值須改用具名 token	[overflow-wrap:anywhere]	08e0c835813a593f
-src/app/system.tsx:456:74	任意工具值須改用具名 token	[overflow-wrap:anywhere]	a01004f5716416a1
-src/app/system.tsx:492:37	任意工具值須改用具名 token	grid-cols-[1fr_auto]	6f3386d80535fde2
-src/app/system.tsx:492:66	大圓角須改用規範圓角	rounded-lg	6f3386d80535fde2
-src/app/system.tsx:529:28	大圓角須改用規範圓角	rounded-full	f22ba69c0289daa4
-src/app/system.tsx:547:12	任意工具值須改用具名 token	max-w-[40%]	44e1c8d9d2a2afc1
-src/app/system.tsx:607:25	大圓角須改用規範圓角	rounded-lg	091cf232b043d545
-src/app/system.tsx:704:35	大圓角須改用規範圓角	rounded-lg	bc8772197082cc83
-src/app/system.tsx:708:37	任意工具值須改用具名 token	grid-cols-[auto_minmax(0,1fr)]	762c30fcc641ef20
-src/app/system.tsx:729:34	大圓角須改用規範圓角	rounded-lg	da19b9669cfacd25
-src/app/system.tsx:781:27	大圓角須改用規範圓角	rounded-lg	01df8961447e59c7
-src/app/task-actions.tsx:132:46	任意工具值須改用具名 token	[overflow-wrap:anywhere]	c09700e1a7fb6885
-src/app/task-actions.tsx:202:52	大圓角須改用規範圓角	rounded-lg	6e1c08c14a47368c
-src/app/task-actions.tsx:233:46	任意工具值須改用具名 token	[overflow-wrap:anywhere]	aabb8a5f9c0817b7
-src/app/task-actions.tsx:294:70	任意工具值須改用具名 token	[overflow-wrap:anywhere]	452f26e74af7ef0d
-src/app/task-actions.tsx:483:20	任意工具值須改用具名 token	max-h-[calc(100dvh-2rem)]	cb36b090a137a3ac
-src/app/task-review-panel.tsx:102:27	大圓角須改用規範圓角	rounded-lg	dd3933d4fbf15716
-src/app/task-review-panel.tsx:122:41	任意工具值須改用具名 token	[overflow-wrap:anywhere]	4dda69c2ef7e0414
-src/app/task-review-panel.tsx:126:39	任意工具值須改用具名 token	[overflow-wrap:anywhere]	5e39d97fbdedb58f
-src/app/task-review-panel.tsx:461:56	大圓角須改用規範圓角	rounded-2xl	438995807798798f
-src/app/task-review-panel.tsx:468:49	任意工具值須改用具名 token	[overflow-wrap:anywhere]	6c3ca6fd2332c0c7
-src/app/task-review-panel.tsx:481:38	大圓角須改用規範圓角	rounded-lg	9e33f11a61db92c4
-src/app/task-review-panel.tsx:488:43	任意工具值須改用具名 token	text-[11px]	29ed0fca11d40d22
-src/app/task-review-panel.tsx:503:28	大圓角須改用規範圓角	rounded-lg	8eaccb817580900d
-src/app/task-review-panel.tsx:576:63	任意工具值須改用具名 token	[overflow-wrap:anywhere]	0d9fde9cb2e624e2
-src/app/task-review-panel.tsx:685:46	任意工具值須改用具名 token	[overflow-wrap:anywhere]	05c7b99ff8d0f6a5
-src/app/task-review-panel.tsx:691:57	任意工具值須改用具名 token	[overflow-wrap:anywhere]	b591f2f6ec6aa53c
-src/app/task-review-panel.tsx:708:36	大圓角須改用規範圓角	rounded-lg	d54f791049f04c5c
-src/app/task-review-panel.tsx:711:59	任意工具值須改用具名 token	[overflow-wrap:anywhere]	19932dcb1cc03e9a
-src/app/task-review-panel.tsx:976:41	任意工具值須改用具名 token	[overflow-wrap:anywhere]	fa17290a60927115
-src/app/task-review-panel.tsx:1067:39	任意工具值須改用具名 token	[overflow-wrap:anywhere]	34ce2192f7b7b5cb
-src/app/task-review-panel.tsx:1075:32	大圓角須改用規範圓角	rounded-lg	07240d1611988459
-src/app/task-review-panel.tsx:1109:31	大圓角須改用規範圓角	rounded-lg	de64d5e1fb22c8ac
-src/app/task-review-panel.tsx:1151:35	大圓角須改用規範圓角	rounded-lg	ea312dad24ec0bd5
-src/app/task-review-panel.tsx:1155:29	任意工具值須改用具名 token	[overflow-wrap:anywhere]	4614830fbda38da0
-src/app/task-review-panel.tsx:1159:75	任意工具值須改用具名 token	[overflow-wrap:anywhere]	61d2e1e345a1faff
-src/app/task-review-panel.tsx:1184:27	大圓角須改用規範圓角	rounded-lg	dd3933d4fbf15716
-src/app/task-review-panel.tsx:1200:52	任意工具值須改用具名 token	[overflow-wrap:anywhere]	2936249055efc2bb
-src/app/task-review-panel.tsx:1251:36	任意工具值須改用具名 token	flex-[1_1_12rem]	93853e3c717d6ed5
-src/app/task-review-panel.tsx:1267:61	大圓角須改用規範圓角	rounded-lg	9d0d1523125e88af
-src/app/task-review-panel.tsx:1292:69	任意工具值須改用具名 token	[overflow-wrap:anywhere]	7a1612cc607de9a5
-src/app/task-review-panel.tsx:1315:42	大圓角須改用規範圓角	rounded-lg	07dd65715c65d35b
-src/app/task-review-panel.tsx:1331:71	大圓角須改用規範圓角	rounded-full	bfbb026d48bd3962
-src/app/task-review-panel.tsx:1384:24	大圓角須改用規範圓角	rounded-lg	8e92f277924dfd13
-src/app/task-review-panel.tsx:1410:74	大圓角須改用規範圓角	rounded-lg	516e18c3fac7e89e
-src/flow/architecture-flow.js:82:121	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	12px	b5d3a5d581e5923c
-src/flow/architecture-flow.js:118:82	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	16.5px	3f6590d486e7401d
-src/flow/architecture-flow.js:119:80	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	12.5px	477edba827682a95
-src/flow/architecture-flow.js:126:101	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	px	2b977d8013bb8570
-src/flow/architecture-flow.js:132:82	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	11.5px	afb6de7e93f25d3e
-src/flow/architecture-flow.js:142:86	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	14px	baeff871d5b74447
-src/flow/architecture-flow.js:146:106	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	12px	ea9658df7fdde3be
-src/flow/architecture-flow.js:187:89	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	12.5px	8ffa779560fc56b6
-src/flow/architecture-flow.js:199:124	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	12.5px	9e7bd4ab631a3efb
-src/flow/architecture-flow.js:200:112	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	9.5px	6dcd51d902783218
-src/flow/architecture-flow.js:204:83	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	10.5px	e80921f900908602
-src/flow/architecture-flow.js:207:113	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	12.5px	a9f542cb4201b4ad
-src/flow/architecture-flow.js:236:78	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	14px	ce7d53e3847783ed
-src/flow/architecture-flow.js:237:83	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	11.5px	5424adf56879905d
-src/flow/architecture-flow.js:240:95	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	13px	d1745cad1b9879d9
-src/flow/architecture-flow.js:254:69	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	12px	48002cd48f749f85
-src/flow/architecture-flow.js:258:67	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	12px	9ea4d0ee6f64de0f
-src/flow/architecture-flow.js:259:70	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	12px	2857f9f69f370995
-src/flow/architecture-flow.js:266:75	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	11.5px	47ba1e250f34bc28
-src/flow/architecture-flow.js:268:70	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	14px	16fd862de7ec5dff
-src/flow/architecture-flow.js:282:89	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	12.5px	2bc698a4de10ab3e
-src/flow/architecture-flow.js:283:84	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	13.5px	0c0541fe3b2ccb36
-src/flow/architecture-flow.js:295:80	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	13px	798ab7e40b822b31
-src/flow/architecture-flow.js:299:69	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	12px	233eab46841839fd
+檔案	待遷移原因	樣式	來源識別
+src/App.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	221707b53dfa6844
+src/App.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	ccb351a64074d398
+src/App.tsx	任意工具值須改用具名 token	flex-[1_1_9rem]	66c7e69b8694e3bc
+src/App.tsx	任意工具值須改用具名 token	grid-cols-[1.1fr_1fr]	03a4230d1a85dd1a
+src/App.tsx	任意工具值須改用具名 token	grid-cols-[15.5rem_minmax(0,1fr)]	f0104fff4f1aacff
+src/App.tsx	任意工具值須改用具名 token	grid-cols-[minmax(0,1fr)_auto]	38e4707e1b093d5d
+src/App.tsx	任意工具值須改用具名 token	max-w-[calc(100vw-2rem)]	6bc71c13425887dd
+src/App.tsx	任意工具值須改用具名 token	min-h-[44px]	0efd96f3a8e1b567
+src/App.tsx	任意工具值須改用具名 token	min-h-[44px]	48c4191cffa00d3f
+src/App.tsx	任意工具值須改用具名 token	min-h-[44px]	48f1eeb512d4c06b
+src/App.tsx	任意工具值須改用具名 token	min-h-[44px]	7c4fabfd30dcec6d
+src/App.tsx	任意工具值須改用具名 token	pb-[calc(4.5rem+env(safe-area-inset-bottom))]	4e09f9b9be3f25a8
+src/App.tsx	任意工具值須改用具名 token	pb-[env(safe-area-inset-bottom)]	93b7c968a822bd3a
+src/App.tsx	任意工具值須改用具名 token	right-[calc(50%-1.25rem)]	3f275175ca9f0966
+src/App.tsx	任意工具值須改用具名 token	text-[10px]	3f275175ca9f0966
+src/App.tsx	任意工具值須改用具名 token	text-[11px]	0efd96f3a8e1b567
+src/App.tsx	任意工具值須改用具名 token	text-[11px]	48f1eeb512d4c06b
+src/App.tsx	任意工具值須改用具名 token	text-[11px]	d675777a1eda895c
+src/App.tsx	任意工具值須改用具名 token	z-[60]	6bc71c13425887dd
+src/App.tsx	動態樣式須使用已登記的 CSS 變數	width	8932a00be3db4d97
+src/App.tsx	大圓角須改用規範圓角	rounded-full	3f275175ca9f0966
+src/App.tsx	大圓角須改用規範圓角	rounded-full	6f1ec1c42a5a549c
+src/App.tsx	大圓角須改用規範圓角	rounded-full	b1ac35f82d22d980
+src/App.tsx	大圓角須改用規範圓角	rounded-full	ec42ddd3cef62589
+src/App.tsx	大圓角須改用規範圓角	rounded-lg	1a12b941beab4e45
+src/App.tsx	大圓角須改用規範圓角	rounded-lg	371c86d8b19f6208
+src/App.tsx	大圓角須改用規範圓角	rounded-lg	6bc71c13425887dd
+src/App.tsx	大圓角須改用規範圓角	rounded-lg	95d55a3d7a4f725d
+src/App.tsx	大圓角須改用規範圓角	rounded-lg	bbfdcbe4e6bca1ae
+src/App.tsx	大圓角須改用規範圓角	rounded-lg	d00b74f43f85170b
+src/App.tsx	漸層或毛玻璃須改用單色表面	backdrop-blur	93b7c968a822bd3a
+src/app/inbox.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	55130ef66daaaf8a
+src/app/inbox.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	82023b447004e97a
+src/app/inbox.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	82a5c755cb93ecfd
+src/app/inbox.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	88e606f1b8dacf0f
+src/app/inbox.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	a585bdb360e4bbee
+src/app/inbox.tsx	任意工具值須改用具名 token	grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]	5b4c953797678cf9
+src/app/inbox.tsx	任意工具值須改用具名 token	max-h-[calc(100dvh-2rem)]	43c63d4fc233619c
+src/app/inbox.tsx	大圓角須改用規範圓角	rounded-full	77fa1d12aec6f024
+src/app/inbox.tsx	大圓角須改用規範圓角	rounded-lg	3356389de41783c1
+src/app/page-notices.tsx	任意工具值須改用具名 token	flex-[1_1_12rem]	500e7339156df3bc
+src/app/pick-list.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	939d1194527c927d
+src/app/review-workbench.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	2f637c0f8f7a040e
+src/app/review-workbench.tsx	任意工具值須改用具名 token	grid-cols-[22.5rem_minmax(0,1fr)]	9d3d134881900eab
+src/app/review-workbench.tsx	任意工具值須改用具名 token	grid-cols-[27rem_minmax(0,1fr)]	9d3d134881900eab
+src/app/review-workbench.tsx	任意工具值須改用具名 token	grid-cols-[minmax(0,1fr)_auto]	bf834de87a050cff
+src/app/review-workbench.tsx	任意工具值須改用具名 token	rounded-[inherit]	bf834de87a050cff
+src/app/review-workbench.tsx	任意工具值須改用具名 token	shadow-[inset_3px_0_var(--primary)]	bf834de87a050cff
+src/app/run-observer.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	51ebb30c56442ca8
+src/app/run-observer.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	81f02e2daba16d7a
+src/app/run-observer.tsx	任意工具值須改用具名 token	grid-cols-[5rem_minmax(0,1fr)]	0b17f6e24bf612d7
+src/app/run-observer.tsx	任意工具值須改用具名 token	grid-cols-[5rem_minmax(0,1fr)]	93ae951b4f430f0b
+src/app/run-observer.tsx	任意工具值須改用具名 token	max-h-[32rem]	51b520337ae08b39
+src/app/run-observer.tsx	大圓角須改用規範圓角	rounded-lg	f21a92a69e86b2d8
+src/app/settings.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	a01004f5716416a1
+src/app/settings.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	fdbb05dd73928699
+src/app/settings.tsx	任意工具值須改用具名 token	grid-cols-[repeat(auto-fit,minmax(20rem,1fr))]	b20d78009dc1ff56
+src/app/settings.tsx	任意工具值須改用具名 token	ring-[3px]	bff83b48d20df1c1
+src/app/settings.tsx	大圓角須改用規範圓角	rounded-full	d95eec6ee997820e
+src/app/settings.tsx	大圓角須改用規範圓角	rounded-lg	23089e6e91d760df
+src/app/settings.tsx	大圓角須改用規範圓角	rounded-lg	3c2a5c9df6d86289
+src/app/settings.tsx	大圓角須改用規範圓角	rounded-lg	b04d7f4fd0e122c6
+src/app/settings.tsx	大圓角須改用規範圓角	rounded-lg	bbfdcbe4e6bca1ae
+src/app/settings.tsx	大圓角須改用規範圓角	rounded-lg	d3f3b7c743da34a3
+src/app/settings.tsx	大圓角須改用規範圓角	rounded-lg	d3f3b7c743da34a3
+src/app/settings.tsx	大圓角須改用規範圓角	rounded-lg	d995659fe51c31e7
+src/app/shared.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	7d96f4b0d023e2cb
+src/app/shared.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	e1fe000f04039f8f
+src/app/shared.tsx	任意工具值須改用具名 token	text-[11px]	b72ada0c4b1b0b93
+src/app/shared.tsx	大圓角須改用規範圓角	rounded-full	b72ada0c4b1b0b93
+src/app/system.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	08e0c835813a593f
+src/app/system.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	a01004f5716416a1
+src/app/system.tsx	任意工具值須改用具名 token	flex-[1_1_12rem]	00cfbcd8dc8579f8
+src/app/system.tsx	任意工具值須改用具名 token	grid-cols-[1fr_auto]	6f3386d80535fde2
+src/app/system.tsx	任意工具值須改用具名 token	grid-cols-[auto_minmax(0,1fr)]	762c30fcc641ef20
+src/app/system.tsx	任意工具值須改用具名 token	grid-cols-[minmax(0,2fr)_minmax(0,1fr)]	f7f36411728a1d8b
+src/app/system.tsx	任意工具值須改用具名 token	max-w-[40%]	44e1c8d9d2a2afc1
+src/app/system.tsx	動態樣式須使用已登記的 CSS 變數	height	d196116ff7362e25
+src/app/system.tsx	大圓角須改用規範圓角	rounded-full	f22ba69c0289daa4
+src/app/system.tsx	大圓角須改用規範圓角	rounded-lg	01df8961447e59c7
+src/app/system.tsx	大圓角須改用規範圓角	rounded-lg	05847efe4c01a665
+src/app/system.tsx	大圓角須改用規範圓角	rounded-lg	05847efe4c01a665
+src/app/system.tsx	大圓角須改用規範圓角	rounded-lg	05847efe4c01a665
+src/app/system.tsx	大圓角須改用規範圓角	rounded-lg	091cf232b043d545
+src/app/system.tsx	大圓角須改用規範圓角	rounded-lg	1a12b941beab4e45
+src/app/system.tsx	大圓角須改用規範圓角	rounded-lg	6f3386d80535fde2
+src/app/system.tsx	大圓角須改用規範圓角	rounded-lg	bc8772197082cc83
+src/app/system.tsx	大圓角須改用規範圓角	rounded-lg	da19b9669cfacd25
+src/app/system.tsx	大圓角須改用規範圓角	rounded-lg	de06192da5f06382
+src/app/task-actions.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	452f26e74af7ef0d
+src/app/task-actions.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	aabb8a5f9c0817b7
+src/app/task-actions.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	c09700e1a7fb6885
+src/app/task-actions.tsx	任意工具值須改用具名 token	max-h-[calc(100dvh-2rem)]	cb36b090a137a3ac
+src/app/task-actions.tsx	大圓角須改用規範圓角	rounded-lg	6e1c08c14a47368c
+src/app/task-review-panel.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	05c7b99ff8d0f6a5
+src/app/task-review-panel.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	0d9fde9cb2e624e2
+src/app/task-review-panel.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	19932dcb1cc03e9a
+src/app/task-review-panel.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	2936249055efc2bb
+src/app/task-review-panel.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	34ce2192f7b7b5cb
+src/app/task-review-panel.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	4614830fbda38da0
+src/app/task-review-panel.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	4dda69c2ef7e0414
+src/app/task-review-panel.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	5e39d97fbdedb58f
+src/app/task-review-panel.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	61d2e1e345a1faff
+src/app/task-review-panel.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	6c3ca6fd2332c0c7
+src/app/task-review-panel.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	7a1612cc607de9a5
+src/app/task-review-panel.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	b591f2f6ec6aa53c
+src/app/task-review-panel.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	fa17290a60927115
+src/app/task-review-panel.tsx	任意工具值須改用具名 token	flex-[1_1_12rem]	93853e3c717d6ed5
+src/app/task-review-panel.tsx	任意工具值須改用具名 token	text-[11px]	29ed0fca11d40d22
+src/app/task-review-panel.tsx	大圓角須改用規範圓角	rounded-2xl	438995807798798f
+src/app/task-review-panel.tsx	大圓角須改用規範圓角	rounded-full	bfbb026d48bd3962
+src/app/task-review-panel.tsx	大圓角須改用規範圓角	rounded-lg	07240d1611988459
+src/app/task-review-panel.tsx	大圓角須改用規範圓角	rounded-lg	07dd65715c65d35b
+src/app/task-review-panel.tsx	大圓角須改用規範圓角	rounded-lg	516e18c3fac7e89e
+src/app/task-review-panel.tsx	大圓角須改用規範圓角	rounded-lg	8e92f277924dfd13
+src/app/task-review-panel.tsx	大圓角須改用規範圓角	rounded-lg	8eaccb817580900d
+src/app/task-review-panel.tsx	大圓角須改用規範圓角	rounded-lg	9d0d1523125e88af
+src/app/task-review-panel.tsx	大圓角須改用規範圓角	rounded-lg	9e33f11a61db92c4
+src/app/task-review-panel.tsx	大圓角須改用規範圓角	rounded-lg	d54f791049f04c5c
+src/app/task-review-panel.tsx	大圓角須改用規範圓角	rounded-lg	dd3933d4fbf15716
+src/app/task-review-panel.tsx	大圓角須改用規範圓角	rounded-lg	dd3933d4fbf15716
+src/app/task-review-panel.tsx	大圓角須改用規範圓角	rounded-lg	de64d5e1fb22c8ac
+src/app/task-review-panel.tsx	大圓角須改用規範圓角	rounded-lg	ea312dad24ec0bd5
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：動態樣式須使用已登記的 CSS 變數	fill	1e4ad036c47d0e7e
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：動態樣式須使用已登記的 CSS 變數	fill	2e55e22ff71595b3
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：動態樣式須使用已登記的 CSS 變數	fill	2e55e22ff71595b3
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：動態樣式須使用已登記的 CSS 變數	fill	e2ff15127af6ad66
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：動態樣式須使用已登記的 CSS 變數	fill	e2ff15127af6ad66
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：動態樣式須使用已登記的 CSS 變數	opacity	59e28fbc6f06a959
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：動態樣式須使用已登記的 CSS 變數	opacity	abd56ac108e07bc2
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：動態樣式須使用已登記的 CSS 變數	stroke	7c89525281df0223
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：動態樣式須使用已登記的 CSS 變數	stroke	c7cc8c4be88fee03
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：動態樣式須使用已登記的 CSS 變數	stroke	d1199c06c92d6d40
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：動態樣式須使用已登記的 CSS 變數	strokeDasharray	7c89525281df0223
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：動態樣式須使用已登記的 CSS 變數	strokeDashoffset	57ba9f727934d43d
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：動態樣式須使用已登記的 CSS 變數	strokeDashoffset	7c89525281df0223
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：動態樣式須使用已登記的 CSS 變數	width	5ce24ec4f3f196e2
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：動態樣式須使用已登記的 CSS 變數	width	8867c1a0349fa776
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：固定字級、間距或圓角須改用 token	font	0c0541fe3b2ccb36
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：固定字級、間距或圓角須改用 token	font	16fd862de7ec5dff
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：固定字級、間距或圓角須改用 token	font	233eab46841839fd
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：固定字級、間距或圓角須改用 token	font	2857f9f69f370995
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：固定字級、間距或圓角須改用 token	font	2bc698a4de10ab3e
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：固定字級、間距或圓角須改用 token	font	47ba1e250f34bc28
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：固定字級、間距或圓角須改用 token	font	48002cd48f749f85
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：固定字級、間距或圓角須改用 token	font	5424adf56879905d
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：固定字級、間距或圓角須改用 token	font	6dcd51d902783218
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：固定字級、間距或圓角須改用 token	font	798ab7e40b822b31
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：固定字級、間距或圓角須改用 token	font	8ffa779560fc56b6
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：固定字級、間距或圓角須改用 token	font	9e7bd4ab631a3efb
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：固定字級、間距或圓角須改用 token	font	9ea4d0ee6f64de0f
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：固定字級、間距或圓角須改用 token	font	a9f542cb4201b4ad
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：固定字級、間距或圓角須改用 token	font	afb6de7e93f25d3e
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：固定字級、間距或圓角須改用 token	font	b5d3a5d581e5923c
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：固定字級、間距或圓角須改用 token	font	baeff871d5b74447
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：固定字級、間距或圓角須改用 token	font	ce7d53e3847783ed
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：固定字級、間距或圓角須改用 token	font	d1745cad1b9879d9
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：固定字級、間距或圓角須改用 token	font	e80921f900908602
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：固定字級、間距或圓角須改用 token	font	ea9658df7fdde3be
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	12.5px	477edba827682a95
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	16.5px	3f6590d486e7401d
+src/flow/architecture-flow.js	系統架構圖為獨立文件，須連同圖表主題遷移：行內像素須改用尺寸 token	px	2b977d8013bb8570

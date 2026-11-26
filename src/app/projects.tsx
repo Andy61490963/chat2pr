@@ -435,7 +435,7 @@ export function ProjectsView({
                       {open.setup_mode === "auto" ? "AI 自動設定" : "手動指定"}
                     </DescriptionItem>
                     <DescriptionItem label="分支">{open.base_branch}</DescriptionItem>
-                    <DescriptionItem label="安裝命令" className="break-all">
+                    <DescriptionItem label="安裝命令" valueClassName="break-all">
                       {(
                         open.setup_mode === "auto"
                           ? open.setup_plan?.install
@@ -456,7 +456,7 @@ export function ProjectsView({
                         "未設定"
                       )}
                     </DescriptionItem>
-                    <DescriptionItem label="測試命令" className="break-all">
+                    <DescriptionItem label="測試命令" valueClassName="break-all">
                       {(
                         open.setup_mode === "auto"
                           ? open.setup_plan?.test
@@ -478,7 +478,7 @@ export function ProjectsView({
                     <DescriptionItem label="索引">
                       {indexStatus(open, state.settings.rag_enabled)}
                     </DescriptionItem>
-                    <DescriptionItem label="範圍" className="whitespace-pre-wrap break-all text-xs">
+                    <DescriptionItem label="範圍" valueClassName="whitespace-pre-wrap break-all text-xs">
                       {open.index_paths?.length
                         ? open.index_paths.join("\n")
                         : "全儲存庫可索引文字"}

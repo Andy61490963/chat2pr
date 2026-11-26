@@ -95,7 +95,7 @@ export function ProjectContextEditor({
       </div>
       {pending && (
         <InlineNotice tone="warn" className="space-y-3 p-3" role="status">
-          <h4 className="font-medium">還需要你提供一點資訊</h4>
+          <h4 className="font-medium text-warn">還需要你提供一點資訊</h4>
           <p className="text-sm whitespace-pre-wrap">
             {pending.reason.length > 240
               ? "測試環境還缺少必要資訊，補充後 AI 會繼續準備。"

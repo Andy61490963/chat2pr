@@ -380,8 +380,8 @@ export function AlertBell({
           )}
         </div>
         {quota && (
-          <InlineNotice as="p" tone="warn" role="status" className="flex gap-2 border-b text-xs">
-            <Unplug className="mt-0.5 size-4 shrink-0" />
+          <InlineNotice as="p" tone="warn" variant="strip" role="status" className="flex gap-2 text-xs">
+            <Unplug className="mt-0.5 size-4 shrink-0 text-warn" />
             <span className="min-w-0 flex-1 wrap-anywhere">
               {quota.text}
             </span>
