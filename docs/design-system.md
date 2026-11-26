@@ -127,4 +127,4 @@
 
 `node --import tsx scripts/design-tokens.ts` 可重新列出全站違規的檔案、行、欄、原因與樣式，附加 Git revision 可重現歷史盤點。清除違規後從 [基準](../tests/design-tokens.baseline.tsv) 刪除對應列，用 `npx vitest run tests/design-tokens.test.ts` 核對。CI 也會以目標版本檢查每一筆豁免是否原已存在。
 
-展示入口為驗收伺服器的 `/e2e/design-system.html`。執行 `e2e/design-system.spec.ts` 與 `e2e/design-pages.spec.ts` 會產生 375px、1440px 深淺色的元件與頁面截圖。設定 `DESIGN_SHOTS_DIR` 可將 PNG 直接存到比較目錄。
+展示入口為驗收伺服器的 `/e2e/design-system.html`。更新[展示元件](../e2e/design-system-gallery.tsx)後，執行[元件操作與截圖測試](../e2e/design-system.spec.ts)及[頁面對照測試](../e2e/design-pages.spec.ts)，取得 375px、1440px 的深淺色畫面。設定 `DESIGN_SHOTS_DIR` 可指定 PNG 目錄。審查者可在 PR 的「設計系統前後截圖」工作下載兩版畫面，保留 14 天。
