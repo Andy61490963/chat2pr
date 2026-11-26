@@ -5,11 +5,22 @@ import { PassThrough, type Duplex } from "node:stream";
 import { request, type ClientRequest } from "node:http";
 import { buffer } from "node:stream/consumers";
 import { pack } from "tar-stream";
+import { z } from "zod";
 import { AppError } from "./policy.js";
 import { instanceName } from "./config.js";
 const cleanupDelay = () => new Promise((resolve) => setTimeout(resolve, 100));
 export const COLLECT_OUTPUT_BYTES = 16 * 1024 * 1024;
 const nugetFeedPath = "/opt/agentflow/nuget-feed";
+// 只接受 worker/observe.mjs 回報的欄位。階段結束與容器識別碼由執行器記錄。
+const WorkerEvent = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("thread"), threadId: z.string().uuid() }),
+  z.object({ kind: z.enum(["usage", "error", "message", "files"]), detail: z.string() }),
+  z.object({
+    kind: z.enum(["command_start", "command_end"]),
+    detail: z.string(),
+    exitCode: z.number().int().optional(),
+  }),
+]);
 /** 擁有者提供的環境資料（例如資料庫結構快照）；所有階段唯讀掛載。 */
 export const environmentPath = "/agentflow/env";
 /** 候選檔案只能是工作副本內的相對路徑，不能碰 git 紀錄、跳出目錄或夾帶換行。 */
@@ -606,7 +617,8 @@ export class Containers {
           pending = pending.slice(newline + 1);
           if (line.startsWith("AGENTFLOW_EVENT ")) {
             try {
-              observe(JSON.parse(line.slice(16)));
+              const event = WorkerEvent.safeParse(JSON.parse(line.slice(16)));
+              if (event.success) observe(event.data);
             } catch {
               /* 不可信輸出不能影響執行 */
             }

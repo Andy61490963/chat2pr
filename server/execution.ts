@@ -1450,8 +1450,14 @@ export class Execution {
             : "SQL Server 審查複驗未通過";
           throw new AppError(422, `${reason}（退出碼 ${r.exitCode}）\n${redact(r.stderr).slice(-4000)}`);
         }
-        if (subscription && (name === "code" || name === "review") && r.exitCode !== 0)
+        if (subscription && (name === "code" || name === "review") && r.exitCode !== 0) {
           upstreamFailure = parseUpstreamFailure(r.upstreamFailure);
+          if (upstreamFailure)
+            await this.db.query(
+              "UPDATE runs SET upstream_failure=$2 WHERE id=$1 AND run_content_visible(id)",
+              [runId, upstreamFailure],
+            );
+        }
         return r;
       };
       let setup: { plan: SetupPlan; cached: boolean } | undefined;

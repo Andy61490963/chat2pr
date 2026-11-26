@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { RunEvent, RunView } from "../../shared/observation.js";
-import { parseUpstreamFailureDetail, upstreamFailureText } from "../../shared/upstream-failure.js";
+import { upstreamFailureText } from "../../shared/upstream-failure.js";
 import { heartbeatStale } from "../../shared/run-progress.js";
 import { InstallReportView } from "./egress";
 import {
@@ -36,14 +36,12 @@ function EventHeading({ event }: { event: RunEvent }) {
   const { phase, kind, detail, exitCode } = event;
   let label = eventLabels[kind] ?? kind;
   let failed = kind === "error" || (exitCode != null && exitCode !== 0);
-  if (detail && (phase === "code" || phase === "review")) {
-    if (kind === "phase_end" && exitCode != null && exitCode !== 0) {
-      const cause = parseUpstreamFailureDetail(detail);
-      if (cause) label = `階段失敗原因：${upstreamFailureText(cause)}`;
-    } else if (kind === "error" && /^Reconnecting\.\.\. \d+\/\d+ \(unexpected status 403\b/i.test(detail)) {
-      label = "重連被拒（HTTP 403）";
-      failed = false;
-    }
+  if (
+    (phase === "code" || phase === "review") && kind === "error" &&
+    detail && /^Reconnecting\.\.\. \d+\/\d+ \(unexpected status 403\b/i.test(detail)
+  ) {
+    label = "重連被拒（HTTP 403）";
+    failed = false;
   }
   return (
     <p className={`flex flex-wrap gap-x-3 gap-y-1 [overflow-wrap:anywhere] ${failed ? "text-danger" : "font-medium"}`}>
@@ -263,6 +261,12 @@ export function RunObserver({
             <dd>{phaseLabels[run.status] ?? run.status}</dd>
             <dt>執行結果</dt>
             <dd>{outcomeText(run)}</dd>
+            {run.upstream_failure && (
+              <>
+                <dt>訂閱失敗原因</dt>
+                <dd className="text-danger">{upstreamFailureText(run.upstream_failure)}</dd>
+              </>
+            )}
             <dt>開始時間</dt>
             <dd>{time(run.started_at)}</dd>
             <dt>{run.completed_at ? "結束時間" : "執行期限"}</dt>

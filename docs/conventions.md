@@ -42,7 +42,9 @@
 
 訂閱轉送層的 502 只代表轉送失敗；請看該階段執行事件裡訂閱代理記錄的固定類別與上游 HTTP 狀態碼（若有），不要從轉送層的 502 推測上游也回了 502。
 
-看板從修改或審查的失敗 `phase_end` 事件讀取代理原因。調整 `shared/upstream-failure.ts` 的事件明細格式時，讀取端也要能辨識舊格式，讓過去的紀錄仍顯示當時的原因。Codex 重連收到的 403 只說明這次重連遭拒。
+工作容器寫到 stderr 的 `AGENTFLOW_EVENT` 是不可信輸入。`server/containers.ts` 只接受 `worker/observe.mjs` 使用的七種事件及各自的欄位：`thread`、`usage`、`error`、`command_start`、`command_end`、`message`、`files`。新增工作端事件時要一起更新白名單與容器測試。`phase_end` 由執行器或伺服器記錄，明細仍可能是容器的 stderr。
+
+看板的「訂閱失敗原因」只讀該次執行的 `runs.upstream_failure`。伺服器在訂閱修改或審查失敗時，從執行器回傳的 `r.upstreamFailure` 保存固定類別與有效 HTTP 狀態碼；來源是代理的階段授權。舊紀錄的明細保留供展開，不據以回填原因。Codex 重連收到的 403 只說明這次重連遭拒。
 
 調整訂閱重試時，一起核對 `shared/upstream-failure.ts` 的可重試類別、訂閱代理的階段連敗上限與 `worker/provider.mjs` 的 CLI 重試設定。代理保留授權且 CLI 願意重送，工作才有機會恢復。只有下一次請求實際送往上游時才記重試事件，避免把最後一次失敗也算成重試。
 

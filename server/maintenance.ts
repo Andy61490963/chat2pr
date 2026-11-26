@@ -41,6 +41,9 @@ export async function cleanup(db: Database) {
     "UPDATE run_events SET detail=NULL WHERE detail IS NOT NULL AND NOT run_content_visible(run_id)",
   );
   await db.query(
+    "UPDATE runs SET upstream_failure=NULL WHERE upstream_failure IS NOT NULL AND NOT run_content_visible(id)",
+  );
+  await db.query(
     "UPDATE runs SET result=erase_candidate_quotes(result) WHERE result->'candidate' ?| ARRAY['codexSummary','feedback'] AND NOT run_content_visible(id)",
   );
   await db.query(

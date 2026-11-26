@@ -100,7 +100,7 @@ export function upstreamFailureDetail(failure: UpstreamFailure): string {
   return safe.status === undefined ? safe.kind : `${safe.kind}（HTTP ${safe.status}）`;
 }
 
-/** 從階段結束事件讀回代理寫入的固定類別與狀態碼。 */
+/** 解析診斷明細的文字格式；事件來源須另行確認。 */
 export function parseUpstreamFailureDetail(detail: string): UpstreamFailure | undefined {
   const match = /^([a-z_]+)(?:（HTTP ([1-5]\d\d)）)?$/.exec(detail);
   if (!match || !isKind(match[1])) return undefined;

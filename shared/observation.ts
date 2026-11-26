@@ -1,4 +1,5 @@
 import type { InstallReport } from "./install-plan.js";
+import type { UpstreamFailure } from "./upstream-failure.js";
 export type RunVerificationScope = {
   kind: "build" | "partial";
   limitations?: string;
@@ -15,6 +16,8 @@ export interface RunEvent {
   exitCode?: number;
 }
 export interface RunView {
+  /** 這次執行的訂閱代理診斷；舊紀錄可能沒有這個欄位。 */
+  upstream_failure?: UpstreamFailure | null;
   pr_summary?: string | null;
   /** 本次執行實際使用的有限驗證範圍。 */
   verification_scope?: RunVerificationScope | null;

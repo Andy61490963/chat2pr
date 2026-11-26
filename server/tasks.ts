@@ -699,6 +699,7 @@ export class Tasks {
              WHEN result->>'prUrl'=$2 AND version=$3 AND starts_with(result->>'report','只執行了部分測試。未涵蓋：')
                THEN '{"kind":"partial"}'::jsonb
            END AS verification_scope,
+           CASE WHEN r.upstream_failure IS NOT NULL AND run_content_visible(r.id) THEN r.upstream_failure END AS upstream_failure,
            version,status,outcome,observed,model,started_at,completed_at,heartbeat_at,deadline,install_report,
            COALESCE((SELECT jsonb_agg(jsonb_build_object('phase',e.phase,'threadId',e.thread_id) ORDER BY e.id)
              FROM run_events e WHERE e.run_id=r.id AND e.kind='thread'),'[]') AS threads,
