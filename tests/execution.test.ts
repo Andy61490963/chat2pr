@@ -515,6 +515,8 @@ it("訂閱修改失敗後，執行紀錄、看板與群組保留代理原因", a
   expect(await db.one("SELECT status FROM tasks WHERE id=$1", [sample.task.id])).toEqual({ status: "queued" });
   const event = await db.one<{ detail: string }>("SELECT detail FROM run_events WHERE source='runner' AND phase='code' AND kind='phase_end'");
   expect(event.detail).toMatch(/upstream_http.*500/);
+  const detail = await new Tasks(db).detail(sample.task.id);
+  expect(detail.runs[0]).toMatchObject({ upstream_failure: { kind: "upstream_http", status: 500 } });
   await db.query("UPDATE tasks SET retry_at=now()-interval '1 second' WHERE id=$1", [sample.task.id]);
   await execution.execute(sample.task.id);
   const task = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [sample.task.id]);

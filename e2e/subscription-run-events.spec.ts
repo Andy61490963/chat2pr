@@ -5,7 +5,10 @@ test("執行紀錄直接顯示代理失敗原因，四次重連被拒和其他�
   page,
 }) => {
   await page.setViewportSize({ width: 375, height: 812 });
-  const run = { ...completedRun, observed: true, outcome: "failed" };
+  const run = {
+    ...completedRun, observed: true, outcome: "failed",
+    upstream_failure: { kind: "upstream_http", status: 400 },
+  };
   const reconnects = Array.from(
     { length: 4 },
     (_, i) =>
@@ -29,7 +32,7 @@ test("執行紀錄直接顯示代理失敗原因，四次重連被拒和其他�
             seq: 6,
             kind: "phase_end",
             exitCode: 1,
-            detail: "upstream_http（HTTP 400）",
+            detail: "auth（HTTP 401）",
           },
         ],
         hasOlder: false,
@@ -41,9 +44,12 @@ test("執行紀錄直接顯示代理失敗原因，四次重連被拒和其他�
   const drawer = page.getByRole("dialog", { name: task.title });
   await drawer.getByRole("tab", { name: /^執行紀錄/ }).click();
   const events = drawer.getByRole("list", { name: "執行事件" });
-  await expect(
-    events.getByText(/訂閱上游回應失敗（上游 HTTP 400）/),
-  ).toBeVisible();
+  const observer = drawer.getByRole("region", { name: "Codex 執行紀錄" });
+  await expect(observer.getByText(/訂閱上游回應失敗（上游 HTTP 400）/)).toBeVisible();
+  await expect(observer.getByText(/訂閱登入已失效或無法刷新/)).toHaveCount(0);
+  const end = events.getByRole("listitem").filter({ has: page.getByText("階段結束", { exact: true }) });
+  await end.getByText("檢視內容", { exact: true }).click();
+  await expect(end.getByText("auth（HTTP 401）", { exact: true })).toBeVisible();
 
   const retries = events.getByRole("listitem").filter({
     has: page.getByText("重連被拒（HTTP 403）", { exact: true }),

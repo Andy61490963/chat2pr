@@ -142,21 +142,38 @@ it.each([
     await app.close();
   }
 });
+it("只有一般階段輸出時，管理 API 保留明細且不回報代理失敗", async () => {
+  const { taskId, runId } = await fixtureRun();
+  const stderr = "auth（HTTP 401）";
+  const [end] = phaseEndEvents("code", { exitCode: 1, stdout: "", stderr });
+  await saveEvents(db, runId, "runner", [{ ...end, phase: "code", seq: 1, at: new Date().toISOString() }]);
+  const tasks = new Tasks(db);
+  expect((await tasks.runEvents(taskId, runId)).events).toMatchObject([{ kind: "phase_end", detail: stderr }]);
+  expect((await tasks.detail(taskId)).runs[0]).toMatchObject({ upstream_failure: null });
+});
+
 it("到期立即不可讀，撤回清除內容且延遲事件不能寫回；備份排除執行輸出", async () => {
   const { taskId, runId } = await fixtureRun(),
     tasks = new Tasks(db);
+  const reason = { kind: "connection" };
+  const saveReason = () => db.query("UPDATE runs SET upstream_failure=$2 WHERE id=$1", [runId, reason]);
   await saveEvents(db, runId, "runner", [event()]);
+  await saveReason();
   await db.query("UPDATE runs SET started_at=now()-interval '31 days'");
+  expect((await tasks.detail(taskId)).runs[0]).toMatchObject({ upstream_failure: null });
   expect((await tasks.runEvents(taskId, runId)).events[0]).toMatchObject({
     detail: null,
   });
   await cleanup(db);
+  expect(await db.one("SELECT upstream_failure FROM runs WHERE id=$1", [runId])).toEqual({ upstream_failure: null });
   expect((await db.one("SELECT detail FROM run_events")).detail).toBeNull();
   await db.query("UPDATE runs SET started_at=now()");
+  await saveReason();
   await saveEvents(db, runId, "runner", [event(2)]);
   await db.query(
     "UPDATE messages SET revoked=true,text=NULL WHERE id='source'",
   );
+  expect(await db.one("SELECT upstream_failure FROM runs WHERE id=$1", [runId])).toEqual({ upstream_failure: null });
   await saveEvents(db, runId, "runner", [event(3)]);
   expect(
     (await db.query("SELECT detail FROM run_events")).every(

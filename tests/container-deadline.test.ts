@@ -126,6 +126,46 @@ function fakeRequest(immediate: boolean) {
   return { req, stream, upgrade };
 }
 
+it("容器只回報工作端的七種事件，階段結束與其他執行器事件一律略過", async () => {
+  const { c, runId, container } = fixture();
+  const { stream } = fakeRequest(true);
+  vi.spyOn(c, "finishContainer").mockResolvedValue();
+  const observed = vi.fn();
+  const workerEvents = [
+    { kind: "thread", threadId: randomUUID() },
+    { kind: "usage", detail: '{"input_tokens":2,"output_tokens":1}' },
+    { kind: "error", detail: "範例錯誤" },
+    { kind: "command_start", detail: "範例命令" },
+    { kind: "command_end", detail: "範例命令完成", exitCode: 0 },
+    { kind: "message", detail: "範例回覆" },
+    { kind: "files", detail: "[]" },
+  ];
+  const otherKinds = [
+    "phase", "phase_end", "container", "observer_error", "observer_restored",
+    "truncated", "upstream_retry", "unknown",
+  ];
+  vi.mocked(c.docker.modem.demuxStream).mockImplementation((_stream, _stdout, stderr) => {
+    for (const event of [...otherKinds.map((kind) => ({ kind })), ...workerEvents]) {
+      const input = event.kind === "message" ? { ...event, containerId: container.id, exitCode: 1 } : event;
+      stderr.write(`AGENTFLOW_EVENT ${JSON.stringify(input)}\n`);
+    }
+  });
+  Object.assign(container, {
+    wait: async () => {
+      stream.end();
+      stream.resume();
+      return { StatusCode: 0 };
+    },
+  });
+
+  const result = await c.phase(runId, "fake", ["node"], "none", "{}", 1000, false, false, observed);
+  expect(result.exitCode).toBe(0);
+  expect(observed.mock.calls.map(([event]) => event)).toEqual([
+    { kind: "container", containerId: container.id },
+    ...workerEvents,
+  ]);
+});
+
 it("連線整理的容器停用日誌驅動程式並保留即時附接輸出", async () => {
   const { c, runId, create } = fixture();
   create.mockRejectedValueOnce(new Error("虛構容器未建立"));

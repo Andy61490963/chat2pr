@@ -11,6 +11,7 @@ import { AppError } from "../server/policy.js";
 import { phaseEndEvents } from "../server/test-failures.js";
 import {
   parseUpstreamFailure,
+  parseUpstreamFailureDetail,
   upstreamFailureDetail,
   upstreamFailureText,
 } from "../shared/upstream-failure.js";
@@ -93,6 +94,25 @@ async function fixture(
   return { app, broker, runId, lease, send, calls: () => calls };
 }
 describe("訂閱上游診斷的白名單", () => {
+  it("代理明細有無上游 HTTP 狀態碼都能還原原本的診斷", () => {
+    for (const failure of [
+      { kind: "connection" },
+      { kind: "upstream_http", status: 503 },
+    ] as const) {
+      expect(parseUpstreamFailureDetail(upstreamFailureDetail(failure))).toStrictEqual(failure);
+    }
+  });
+
+  it("代理明細含未知類別、無效狀態碼或額外文字時不予解析", () => {
+    for (const detail of [
+      "", "unknown_kind", "__proto__",
+      "upstream_http（HTTP 099）", "upstream_http（HTTP 600）", "upstream_http（HTTP 50）",
+      "auth (HTTP 401)", "範例文字 auth（HTTP 401）", "auth（HTTP 401）\n範例文字",
+    ]) {
+      expect(parseUpstreamFailureDetail(detail)).toBeUndefined();
+    }
+  });
+
   it("只採用固定類別和有效數字，不把附加資料帶到文字或事件", () => {
     const input = { kind: "invalid_usage", status: 200, message: identity.accessToken } as const;
     expect(parseUpstreamFailure(input)).toStrictEqual({ kind: "invalid_usage", status: 200 });
