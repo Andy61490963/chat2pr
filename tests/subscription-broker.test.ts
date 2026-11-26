@@ -169,6 +169,20 @@ describe("訂閱主憑證隔離與有限階段能力", () => {
     expect(f.lease.failure()).toStrictEqual({ kind: "upstream_http", status: 400 });
   });
 
+  it.each(["max_output_tokens", "content_filter"])("上游明確結束未完成的回應（%s）時，計入用量並停止重試", async (reason) => {
+    const f = await fixture({
+      credentials: async () => identity,
+      upstreamFetch: async () => sse([{
+        type: "response.incomplete",
+        response: { status: "incomplete", incomplete_details: { reason }, usage: { input_tokens: 5, output_tokens: 3 } },
+      }]),
+    });
+    expect((await f.send()).statusCode).toBe(502);
+    expect(f.lease.failure()).toStrictEqual({ kind: "stream_error", status: 200 });
+    expect((await f.send()).statusCode).toBe(403);
+    expect(f.broker.usage(f.runId)).toMatchObject({ requests: 1, outputTokens: 3, revoked: true });
+  });
+
   it("串流尾端中斷仍保留已回報的輸出用量，下一次推論超額會撤銷", async () => {
     let calls = 0;
     const f = await fixture({
