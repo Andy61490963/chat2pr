@@ -101,7 +101,7 @@ export class ContainerDeadline {
   }
 }
 /** 執行器接受的最低工作映像版本；與 worker/Dockerfile 的 io.agentflow.worker-rev 同步。 */
-export const WORKER_REV = "2026-11-26.1";
+export const WORKER_REV = "2026-11-26.2";
 /** 完全存取時唯一允許傳進工作容器的環境變數：專案登記的資料庫連線與 SSH 主機。 */
 export const FULL_ACCESS_ENV = /^AGENTFLOW_(DB_[A-Z]+|SSH_HOSTS)=/;
 export const containerPolicy = (
