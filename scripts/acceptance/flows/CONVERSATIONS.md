@@ -37,4 +37,4 @@ async function run(number: ConversationNumber, ctx: BasicFlowContext) {
 
 輕量檢查可執行 `npx vitest run tests/acceptance-conversations.test.ts --maxWorkers=1`。它驗證七案的簽章輸入與入口拒收、拒絕原因有無傳入模型，以及各案關鍵證據的正反例。
 
-主控接線後，F03、F04、F05、F06、F07、F09 均使用既有隔離 app、PostgreSQL、jobs、訂閱 broker／relay、工作容器與聊天、GitHub 替身。F08 另外依賴模型本文解析。完整實跑要有重型工作排隊時段，並設定本輪專用的 `ACCEPTANCE_OUTPUT_ROOT`。單案指令為 `npm run acceptance:flows -- 9`，將數字替換為欲驗收的案例。本次開發只執行輕量檢查；七案的實跑狀態以各自隔離驗收帳本為準。
+F03 至 F09 均經隔離 app、PostgreSQL、背景工作、訂閱代理及轉送、工作容器與平台替身。F08 的模型上游還會依實際收到的拒絕紀錄決定是否略過新訊息。設定本輪專用的 `ACCEPTANCE_OUTPUT_ROOT`，再經重型工作排隊腳本執行 `npm run acceptance:flows -- 9`；將數字替換為欲驗收的情境。帳本分別保存單案結果；單元測試通過不等於流程通過。
