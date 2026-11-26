@@ -15,11 +15,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium --only-shell
-      - name: 收件匣改版前截圖與行為驗證
+      - name: 收件匣改版後截圖與行為驗證
         run: |
           mkdir -p "$RUNNER_TEMP/inbox-shots"
           INBOX_SHOT_DIR="$RUNNER_TEMP/inbox-shots" npx playwright test e2e/inbox-review-states.spec.ts -g '六種狀態截圖' --workers=2
-          npx playwright test e2e/inbox-review-flow.spec.ts --workers=2
+          npx playwright test 'inbox-|review-workbench|pick-lists|activity-feed|empty-views|stuck-tasks|surfaces' --workers=2
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -61,7 +61,7 @@ import {
 import { cn } from "@/lib/utils";
 import { GroupsView } from "./app/groups";
 import { ChatView } from "./app/chat";
-import { InboxView } from "./app/inbox";
+import { InboxReadState, InboxView } from "./app/inbox";
 import { pickListReviewId } from "../shared/review-queue.js";
 import { ProjectForm, ProjectsView } from "./app/projects";
 import { saveProject } from "./app/project-form";
@@ -120,7 +120,6 @@ const views = [
     label: "收件匣",
     icon: Inbox,
     section: "工作區",
-    hint: "需要你決定的事、進行中的工作與最新動態",
   },
   {
     id: "tasks",
@@ -845,6 +844,8 @@ export function App() {
   );
   const visible = views.filter((v) => admin || v.section === "工作區");
   const current = visible.find((v) => v.id === view) ?? visible[0];
+  const inbox = current.id === "inbox";
+  const noticeError = inbox && !state ? "" : error;
   const morePages = visible.filter((v) => v.section === "管理");
   const moreIsCurrent = current.section === "管理";
   const hostHold = state?.diskDispatchPaused
@@ -916,7 +917,7 @@ export function App() {
       visible: true,
     },
     offline && { key: "offline", visible: true },
-    error && { key: "error", visible: true },
+    noticeError && { key: "error", visible: true },
   ].filter((notice) => typeof notice === "object" && notice !== null);
   const noticeCount = notices.filter((notice) => notice.visible).length;
   const noticeIncident = notices.length
@@ -1083,6 +1084,9 @@ export function App() {
       <main
         className={cn(
           "mx-auto w-full max-w-6xl px-4 pt-5 pb-28 md:px-8 md:pt-7 md:pb-12",
+          inbox && "pt-3 md:pt-4",
+          inbox && lineQuota && noticeCount === 1 &&
+            "[&>:has(#line-quota-help)]:mb-2 [&>:has(#line-quota-help)]:border-border [&>:has(#line-quota-help)]:bg-transparent [&>:has(#line-quota-help)]:text-foreground",
           current.id === "chat" &&
             "flex h-full min-h-0 flex-col overflow-hidden pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:pb-6",
         )}
@@ -1090,6 +1094,7 @@ export function App() {
         <header
           className={cn(
             "mb-7 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3",
+            inbox && "mb-3 items-center md:mb-4",
             current.id === "chat" && "mb-4 shrink-0",
           )}
         >
@@ -1271,15 +1276,15 @@ export function App() {
             </p>
           )}
           {lineQuota && (
-            <div className="px-2 text-sm">
+            <div className={cn("px-2 text-sm", inbox && "px-0")}>
               <div className="flex flex-wrap items-center gap-x-2">
                 <p
                   role="status"
-                  className="flex flex-[1_1_9rem] items-start gap-2 py-2"
+                  className={cn("flex flex-[1_1_9rem] items-start gap-2 py-2", inbox && "py-1")}
                 >
                   <BellOff
                     aria-hidden="true"
-                    className="mt-0.5 size-4 shrink-0"
+                    className={cn("mt-0.5 size-4 shrink-0", inbox && "text-warn")}
                   />
                   <span>LINE 本月推播額度已用完，你仍可在看板查看通知。</span>
                 </p>
@@ -1315,7 +1320,9 @@ export function App() {
             >
               <WifiOff className="size-4 shrink-0" />
               <span className="min-w-0 flex-1">
-                即時更新中斷了，正在重新連線；畫面可能不是最新狀態。
+                {inbox && state
+                  ? "即時更新中斷，正在重新連線。收件匣仍顯示上次讀取的內容。"
+                  : "即時更新中斷了，正在重新連線；畫面可能不是最新狀態。"}
               </span>
               <Button
                 variant="outline"
@@ -1326,13 +1333,13 @@ export function App() {
               </Button>
             </p>
           )}
-          {error && (
+          {noticeError && (
             <p
               role="alert"
               className="flex flex-wrap items-center gap-2 px-2 py-2 text-sm text-danger"
             >
               <AlertCircle className="size-4 shrink-0" />
-              <span className="min-w-0 flex-1">{error}</span>
+              <span className="min-w-0 flex-1">{noticeError}</span>
               <Button
                 variant="outline"
                 size="xs"
@@ -1344,9 +1351,13 @@ export function App() {
           )}
         </PageNotices>
         {!state ? (
-          <div className="flex min-h-60 items-center justify-center gap-2 text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" /> 載入中…
-          </div>
+          inbox ? (
+            <InboxReadState error={error} retry={refresh} />
+          ) : (
+            <div className="flex min-h-60 items-center justify-center gap-2 text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" /> 載入中…
+            </div>
+          )
         ) : (
           <>
             {current.id === "inbox" && (

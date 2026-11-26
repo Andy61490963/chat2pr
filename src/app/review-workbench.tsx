@@ -107,6 +107,9 @@ export function ReviewQueue({
         </TabsTrigger>
       </TabsList>
       {batchControls}
+      <p className="hidden text-xs leading-5 text-muted-foreground lg:block">
+        J / K 切換案件，Enter 開啟，Alt + Enter 執行主要決定
+      </p>
       <TabsContent id={queueId} value={sort} tabIndex={-1} className="min-w-0">
         <ul
           role="list"
@@ -124,28 +127,30 @@ export function ReviewQueue({
                 data-review-row={item.id}
                 aria-current={selected === item.id ? "true" : undefined}
                 tabIndex={tabbable === item.id ? 0 : -1}
-                className="grid min-h-11 min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-3 gap-y-0.5 rounded-[inherit] px-3.5 py-2.5 text-left hover:bg-muted/60 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-foreground aria-[current=true]:bg-muted aria-[current=true]:shadow-[inset_3px_0_var(--primary)]"
+                className="grid min-h-11 min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1.5 rounded-[inherit] px-3 py-3 text-left hover:bg-muted/60 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-foreground aria-[current=true]:bg-primary-soft aria-[current=true]:shadow-[inset_3px_0_var(--primary)] lg:px-4"
                 onClick={() => choose(item.id, "click")}
                 onKeyDown={(event) => {
+                  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey ||
+                      event.nativeEvent.isComposing) return;
                   if (event.key === "Enter") {
                     event.preventDefault();
                     if (!event.repeat)
                       setTimeout(() => choose(item.id, "enter"), 0);
                     return;
                   }
-                  if (
-                    !desktop ||
-                    (event.key !== "ArrowDown" && event.key !== "ArrowUp")
-                  )
-                    return;
+                  const forward = event.key === "ArrowDown" || event.key === "j";
+                  if (!forward && event.key !== "ArrowUp" && event.key !== "k") return;
                   event.preventDefault();
-                  const next =
-                    items[index + (event.key === "ArrowDown" ? 1 : -1)];
-                  if (next) setTimeout(() => choose(next.id, "move"), 0);
+                  const next = items[index + (forward ? 1 : -1)];
+                  if (!next) return;
+                  if (desktop) setTimeout(() => choose(next.id, "move"), 0);
+                  else event.currentTarget.closest("ul")
+                    ?.querySelector<HTMLButtonElement>(`[data-review-row="${CSS.escape(next.id)}"]`)
+                    ?.focus();
                 }}
               >
                 {/* 固定欄位：左欄標題與來源，右欄等待時間與狀態；讀屏順序維持標題、來源、狀態、等待時間。 */}
-                <span className="col-start-1 row-start-1 truncate text-sm font-semibold">
+                <span className="col-start-1 row-start-1 line-clamp-2 text-base leading-snug font-semibold [overflow-wrap:anywhere]">
                   {item.title}
                 </span>
                 <span className="col-start-1 row-start-2 flex min-w-0 gap-x-2 text-xs text-muted-foreground">
@@ -158,7 +163,7 @@ export function ReviewQueue({
                 </span>
                 <span
                   data-review-status
-                  className="col-start-2 row-start-2 justify-self-end text-xs font-medium whitespace-nowrap"
+                  className="col-start-2 row-start-2 justify-self-end rounded-md border bg-card px-1.5 py-0.5 text-xs font-medium whitespace-nowrap"
                 >
                   {item.status}
                 </span>
@@ -222,6 +227,7 @@ export function ReviewWorkbench({
   const [sort, setSort] = useState<ReviewSort>("oldest");
   const [result, setResult] = useState<DetailResult | null>(null);
   const [reload, reloadDetail] = useState(0);
+  const [actionDock, setActionDock] = useState<HTMLDivElement | null>(null);
   const sorted = sortReviewItems(items, sort);
   const item = items.find(({ id }) => id === reviewId);
   const taskId = item?.kind === "task" && !suspended ? item.id : null;
@@ -237,6 +243,7 @@ export function ReviewWorkbench({
   const panel = useRef<HTMLDivElement>(null);
   const primary = useRef<HTMLButtonElement | null>(null);
   const focusId = useRef<string | null>(null);
+  const keepScroll = useRef(false);
   const focusAfterRemoval = useRef<string | null>(null);
   const completing = useRef(false);
   const attachPrimary = useCallback((button: HTMLButtonElement | null) => {
@@ -252,7 +259,7 @@ export function ReviewWorkbench({
     ) {
       focusId.current = first?.id ?? null;
       focusAfterRemoval.current = null;
-      if (!first) requestAnimationFrame(() => workbench.current?.focus());
+      if (!first) requestAnimationFrame(() => workbench.current?.focus({ preventScroll: true }));
     }
     setReview(first?.id ?? null, false);
   }, [reviewId, item, busy, items, sort, setReview]);
@@ -300,7 +307,8 @@ export function ReviewWorkbench({
             "[data-task-title], [data-review-error]",
           ));
     if (!target) return;
-    target.focus();
+    target.focus({ preventScroll: keepScroll.current });
+    keepScroll.current = false;
     focusId.current = null;
   }, []);
   useEffect(() => {
@@ -314,11 +322,12 @@ export function ReviewWorkbench({
         `[data-review-row="${CSS.escape(id)}"]`,
       );
     if (row) row.focus();
-    else workbench.current?.focus();
+    else workbench.current?.focus({ preventScroll: true });
   }
 
   function choose(id: string, mode: SelectionMode) {
     const select = () => {
+      keepScroll.current = false;
       focusAfterRemoval.current = null;
       if (mode === "enter" || (!desktop && mode === "click"))
         focusId.current = id;
@@ -352,6 +361,7 @@ export function ReviewWorkbench({
       const succeeded = await action();
       if (!succeeded || latestId.current !== id) return succeeded;
       if (after !== "stay") {
+        keepScroll.current = true;
         const next = nextReviewItem(sorted, id)?.id ?? null;
         if (next) {
           focusId.current = next;
@@ -403,6 +413,7 @@ export function ReviewWorkbench({
             finish(item.id, () => resolvePickList(list, ids), "advance")
           }
           onPrimaryMount={attachPrimary}
+          actionDock={desktop ? null : actionDock}
         />
       ) : (
         <>
@@ -432,6 +443,7 @@ export function ReviewWorkbench({
               admin={admin}
               reviewStatus={item.status}
               actionNotice={desktop ? actionNotice : undefined}
+              actionDock={desktop ? null : actionDock}
               onPrimaryMount={attachPrimary}
               act={(task, action, body, done) =>
                 finish(
@@ -486,6 +498,18 @@ export function ReviewWorkbench({
     <div
       ref={workbench}
       tabIndex={-1}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" || !event.altKey || event.ctrlKey || event.metaKey ||
+            event.shiftKey || event.nativeEvent.isComposing || busy || suspended) return;
+        const target = event.target;
+        const button = primary.current;
+        if (!(target instanceof HTMLElement) || !event.currentTarget.contains(target) ||
+            !button?.isConnected || button.disabled || button.getAttribute("aria-disabled") === "true") return;
+        if (!item || panel.current?.dataset.reviewId !== item.id) return;
+        if (target !== button && target.closest<HTMLElement>("[data-review-row]")?.dataset.reviewRow !== item.id) return;
+        event.preventDefault();
+        if (!event.repeat) button.click();
+      }}
       className={cn(
         "min-w-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground",
         items.length > 0 &&
@@ -515,7 +539,6 @@ export function ReviewWorkbench({
         <section
           aria-label="審核面板"
           className="work-ledger min-w-0"
-          key={item?.id}
         >
           {item && !suspended ? (
             content
@@ -563,6 +586,7 @@ export function ReviewWorkbench({
             <div key={item.id} className="min-h-0 flex-1 overflow-y-auto">
               {content}
             </div>
+            <div ref={setActionDock} className="shrink-0 bg-card" />
           </SheetContent>
         </Sheet>
       )}

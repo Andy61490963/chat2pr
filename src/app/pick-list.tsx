@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { createPortal } from "react-dom";
 import { Button } from "@/components/ui/button";
 import type { PickList } from "../../shared/pick-list.js";
 import { pickListLabels } from "../../shared/status-glossary.js";
@@ -14,18 +15,20 @@ export function PickListForm({
   busy,
   resolve,
   onPrimaryMount,
+  actionDock,
 }: {
   list: PickList;
   group: string;
   busy: boolean;
   resolve: (ids: string[]) => unknown;
   onPrimaryMount: (button: HTMLButtonElement | null) => void;
+  actionDock: HTMLElement | null;
 }) {
   const [selected, setSelected] = useState<string[]>([]);
   useUnsaved("task-pick-list", selected.length > 0);
   const canCreate = !busy && selected.length > 0;
   const actions = (
-    <div className="mt-4 flex flex-wrap gap-2">
+    <div className="flex flex-wrap gap-2 max-lg:border-t max-lg:px-4 max-lg:py-3 lg:mt-4">
       <Button
         ref={onPrimaryMount}
         type="button"
@@ -61,7 +64,7 @@ export function PickListForm({
         {pickListLabels.pending}
       </h3>
       <p className="mt-1 text-sm text-muted-foreground">{group}</p>
-      {actions}
+      {actionDock ? createPortal(actions, actionDock) : actions}
       <fieldset className="mt-4 min-w-0" disabled={busy}>
         <legend className="text-sm">
           勾選你要建立的任務，送出後這張清單就會結束。

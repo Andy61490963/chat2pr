@@ -149,6 +149,50 @@ function setupSteps(state: State) {
 
 type OpenTask = (id: string) => unknown;
 
+export function InboxReadState({ error, retry }: { error: string; retry: () => Promise<boolean> }) {
+  const [retrying, setRetrying] = useState(false);
+  const networkError = /^TypeError: (Failed to fetch|Load failed|NetworkError when attempting to fetch resource\.?)$/.test(error);
+  return (
+    <Card>
+      <CardContent className="flex items-start gap-3">
+        <span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted">
+          {error
+            ? <CircleAlert className="size-5 text-danger" />
+            : <Loader2 className="size-5 motion-safe:animate-spin" />}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div role={error ? "alert" : "status"}>
+            <h2 className="font-semibold">{error ? "收件匣未能載入" : "正在讀取收件匣"}</h2>
+            <p className="mt-1 text-sm text-muted-foreground [overflow-wrap:anywhere]">
+              {networkError ? "連不上服務，請確認網路連線後重試。" : error || "正在取得待決策的任務與最近動態。"}
+            </p>
+          </div>
+          {error && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-3"
+              aria-disabled={retrying}
+              onClick={async () => {
+                if (retrying) return;
+                setRetrying(true);
+                try {
+                  await retry();
+                } finally {
+                  setRetrying(false);
+                }
+              }}
+            >
+              {retrying ? "正在重試" : "重試"}
+            </Button>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function InboxView({
   state,
   needs,
@@ -198,6 +242,7 @@ export function InboxView({
   const [reason, setReason] = useState("");
   const [notify, setNotify] = useState(true);
   const decisionSection = useRef<HTMLElement>(null);
+  const stuckHeading = useRef<HTMLHeadingElement>(null);
   const endButton = useRef<HTMLButtonElement>(null);
   const eligible = new Map<string, EndTaskSelection>();
   for (const { id, status, version } of needs) {
@@ -353,46 +398,8 @@ export function InboxView({
     </Card>
   );
   return (
-    <div
-      className={cn(
-        "work-surface flex min-w-0 flex-col",
-        clear ? "gap-4" : "gap-7",
-      )}
-    >
-      {stuckTasks.length > 0 && (
-        <section aria-labelledby="inbox-stuck">
-          <SectionTitle count={stuckTasks.length}>
-            <span id="inbox-stuck">卡住的任務</span>
-          </SectionTitle>
-          <ul className="work-ledger">
-            {stuckTasks.map(({ taskId, title, reason, actionLabel, target }) => {
-              const needsAdmin = target === "system" && !admin;
-              return (
-                <li key={taskId} className="work-row">
-                  <div className="grid min-w-0 gap-1 [overflow-wrap:anywhere] md:grid-cols-2 md:gap-4">
-                    <span className="font-semibold">{title}</span>
-                    <div className="text-sm">
-                      <p>{reason}</p>
-                      {needsAdmin && <p>請管理者查看系統。</p>}
-                    </div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className={cn(batchControl, "justify-self-start md:justify-self-end")}
-                    onClick={() => target === "system" && admin ? go("system") : open(taskId)}
-                  >
-                    {needsAdmin ? "查看任務" : actionLabel}
-                    <span className="sr-only">：{title}</span>
-                  </Button>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      )}
-      {!items.length && onboarding}
+    <div className="work-surface flex min-w-0 flex-col gap-4 md:gap-5">
+      {!items.length && !stuckTasks.length && onboarding}
       <section
         hidden={stuckTasks.length > 0 && items.length === 0 && !confirmEnd}
         ref={decisionSection}
@@ -401,13 +408,25 @@ export function InboxView({
         className={batchFocus}
       >
         {!clear && (
-          <TaskSectionTitle
-            id="inbox-todo"
-            count={items.length}
-            open={() => showTasks("todo")}
-          >
-            {notificationLabels.action}
-          </TaskSectionTitle>
+          <div className="mb-2 flex flex-wrap items-center justify-between gap-x-3">
+            <TaskSectionTitle
+              id="inbox-todo"
+              count={items.length}
+              open={() => showTasks("todo")}
+            >
+              {notificationLabels.action}
+            </TaskSectionTitle>
+            {stuckTasks.length > 0 && (
+              <button
+                type="button"
+                className={cn("work-touch inline-flex items-center gap-2 text-sm underline underline-offset-4", batchFocus)}
+                onClick={() => stuckHeading.current?.focus()}
+              >
+                <CircleAlert aria-hidden="true" className="size-4 text-warn" />
+                卡住的任務 <span className="tabular-nums">{stuckTasks.length}</span>
+              </button>
+            )}
+          </div>
         )}
         <ReviewWorkbench
           items={items}
@@ -526,7 +545,42 @@ export function InboxView({
           </Dialog>
         )}
       </section>
-      {items.length > 0 && onboarding}
+      {stuckTasks.length > 0 && (
+        <section aria-labelledby="inbox-stuck" className="min-w-0">
+          <div className="mb-2 flex items-center gap-2">
+            <CircleAlert aria-hidden="true" className="size-4 text-warn" />
+            <h2 ref={stuckHeading} id="inbox-stuck" tabIndex={-1} className={cn("scroll-mt-4 font-semibold", batchFocus)}>
+              卡住的任務
+            </h2>
+            <Badge variant="secondary" className="tabular-nums">{stuckTasks.length}</Badge>
+          </div>
+          <ul className="work-ledger divide-y">
+            {stuckTasks.map(({ taskId, title, reason, actionLabel, target }) => {
+              const needsAdmin = target === "system" && !admin;
+              return (
+                <li key={taskId} className="grid gap-2 px-4 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+                  <div className="grid min-w-0 gap-1 [overflow-wrap:anywhere]">
+                    <span className="font-semibold">{title}</span>
+                    <p className="text-sm text-muted-foreground">{reason}</p>
+                    {needsAdmin && <p className="text-sm">請管理者查看系統。</p>}
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className={cn(batchControl, "justify-self-start md:min-h-8")}
+                    onClick={() => target === "system" && admin ? go("system") : open(taskId)}
+                  >
+                    {needsAdmin ? "查看任務" : actionLabel}
+                    <span className="sr-only">：{title}</span>
+                  </Button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
+      {(items.length > 0 || stuckTasks.length > 0) && onboarding}
       {/* 等待額度的工作會自動繼續，不需要決定；放在較低調的段落，只說明什麼時候恢復。 */}
       {held.length > 0 && (
         <section aria-labelledby="waiting-title">
@@ -564,86 +618,20 @@ export function InboxView({
           </div>
         </section>
       )}
-      <div
-        className={cn(
-          "grid grid-cols-1",
-          clear
-            ? "gap-4"
-            : "gap-8 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]",
-        )}
-      >
-        <div className="flex flex-col gap-8">
+      <div className="grid min-w-0 gap-3">
+        <div className="flex flex-wrap items-baseline gap-x-6 gap-y-2 border-y py-1">
           {!clear && (
-            <>
-              <section aria-labelledby="inbox-moving">
-                <TaskSectionTitle
-                  id="inbox-moving"
-                  count={movingCount}
-                  open={() => showTasks("moving")}
-                >
-                  {taskStatusFilterLabels.moving}
-                </TaskSectionTitle>
-                <div className="work-ledger">
-                  {working.length ? (
-                    working.map((t) => (
-                      <TaskRow key={t.id} task={t} state={state} open={open} />
-                    ))
-                  ) : (
-                    <Empty
-                      compact
-                      icon={<Loader2 />}
-                      title="目前沒有執行中的工作"
-                    >
-                      你核准需求後，就能在這裡追蹤進度。
-                    </Empty>
-                  )}
-                </div>
-              </section>
-              <section aria-labelledby="inbox-ready">
-                <TaskSectionTitle
-                  id="inbox-ready"
-                  count={readyCount}
-                  open={() => showTasks("ready")}
-                >
-                  {statusLabels.ready}
-                </TaskSectionTitle>
-                <div className="work-ledger">
-                  {ready.length ? (
-                    ready.map((t) => (
-                      <TaskRow
-                        key={t.id}
-                        task={t}
-                        state={state}
-                        open={open}
-                        trailing={
-                          t.pr_url && (
-                            <Button variant="outline" size="sm" asChild>
-                              <a
-                                href={t.pr_url}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                PR #{t.pr_number} <ArrowUpRight />
-                              </a>
-                            </Button>
-                          )
-                        }
-                      />
-                    ))
-                  ) : (
-                    <Empty
-                      compact
-                      icon={<GitPullRequest />}
-                      title="沒有等待合併的 PR"
-                    >
-                      修改通過驗證並建立 PR 後，你就能在這裡開啟 PR。
-                    </Empty>
-                  )}
-                </div>
-              </section>
-            </>
+            <div className={cn(
+              "min-w-0",
+              working.length || ready.length
+                ? "grid w-full gap-3 py-2 lg:grid-cols-2"
+                : "flex flex-wrap gap-x-6",
+            )}>
+              <TaskSummary kind="moving" tasks={working} count={movingCount} state={state} open={open} showTasks={showTasks} />
+              <TaskSummary kind="ready" tasks={ready} count={readyCount} state={state} open={open} showTasks={showTasks} />
+            </div>
           )}
-          <div className="flex flex-wrap items-center gap-x-4 border-t pt-2 text-sm text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-x-4 text-sm text-muted-foreground">
             <button
               type="button"
               className="work-touch font-medium hover:underline"
@@ -671,6 +659,59 @@ const batchControl = cn(
 );
 const batchCheckbox = cn(batchFocus, "size-5 shrink-0 accent-primary");
 
+function TaskSummary({
+  kind, tasks, count, state, open, showTasks,
+}: {
+  kind: "moving" | "ready";
+  tasks: Task[];
+  count: number;
+  state: State;
+  open: OpenTask;
+  showTasks: (destination: TaskListDestination) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const title = kind === "moving" ? taskStatusFilterLabels.moving : statusLabels.ready;
+  const id = `inbox-${kind}`;
+  return (
+    <section aria-labelledby={id} className="min-w-0">
+      <TaskSectionTitle id={id} count={count} open={() => showTasks(kind)} subdued>
+        {title}
+      </TaskSectionTitle>
+      {tasks.length > 0 && (
+        <div className="work-ledger mt-1" id={`${id}-list`}>
+          {(expanded ? tasks : tasks.slice(0, 2)).map((task) => (
+            <TaskRow
+              key={task.id}
+              task={task}
+              state={state}
+              open={open}
+              trailing={kind === "ready" && task.pr_url && (
+                <Button variant="outline" size="sm" asChild>
+                  <a href={task.pr_url} target="_blank" rel="noreferrer">
+                    PR #{task.pr_number} <ArrowUpRight />
+                  </a>
+                </Button>
+              )}
+            />
+          ))}
+        </div>
+      )}
+      {tasks.length > 2 && (
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          aria-controls={`${id}-list`}
+          aria-expanded={expanded}
+          onClick={() => setExpanded(!expanded)}
+        >
+          {expanded ? `收合${title}清單` : `顯示其餘 ${tasks.length - 2} 筆${title}工作`}
+        </Button>
+      )}
+    </section>
+  );
+}
+
 function TaskSectionTitle({
   id,
   count,
@@ -697,14 +738,15 @@ function TaskSectionTitle({
         type="button"
         onClick={open}
         className={cn(
-          "work-touch inline-flex items-center gap-2 text-left hover:underline",
-          !subdued && "pb-2",
+          "work-touch inline-flex items-center gap-2 rounded-sm text-left hover:underline",
+          batchFocus,
         )}
       >
         {children}{" "}
         <Badge variant="secondary" className="tabular-nums">
           {count}
         </Badge>
+        <ChevronRight aria-hidden="true" className="size-3.5 text-muted-foreground" />
       </button>
     </h2>
   );
@@ -777,7 +819,7 @@ function ActivityRow({
   const canExpand = !!taskId && (steps.length > 1 || status !== detail);
   const times = steps.find(({ event }) => event === latest)?.times ?? 1;
   return (
-    <div className="min-w-0 flex-1 pb-3 text-sm [overflow-wrap:anywhere]">
+    <div className="min-w-0 flex-1 pb-2 text-sm [overflow-wrap:anywhere]">
       {taskId && (
         <button
           type="button"
@@ -855,7 +897,8 @@ function ActivityFeed({
   more: () => unknown;
 }) {
   const [all, setAll] = useState(false);
-  const [limit, setLimit] = useState(10);
+  const [extra, setExtra] = useState(0);
+  const limit = (all ? 10 : 3) + extra;
   const rows = groupActivity(state.activity, all);
   const items = rows.slice(0, limit);
   return (
@@ -876,7 +919,7 @@ function ActivityFeed({
       >
         最近動態
       </SectionTitle>
-      <Card className="py-4">
+      <Card className="py-3">
         <CardContent id="inbox-activity">
           {items.length ? (
             <ol className="flex flex-col">
@@ -926,7 +969,7 @@ function ActivityFeed({
                     variant="ghost"
                     size="sm"
                     className="w-full text-muted-foreground"
-                    onClick={() => setLimit(limit + 20)}
+                    onClick={() => setExtra((previous) => previous + 20)}
                   >
                     看更多
                   </Button>
@@ -949,7 +992,7 @@ function ActivityFeed({
               unit="筆紀錄"
               more={async () => {
                 await more();
-                setLimit((n) => n + 20);
+                setExtra((previous) => previous + 20);
               }}
             />
           )}
