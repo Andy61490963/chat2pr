@@ -1,7 +1,9 @@
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { dashboardAlerts } from "../server/dashboard-alerts.js";
 import { db, reset, session } from "./helpers.js";
 import { buildApp } from "../server/app.js";
-import { probeInference } from "../server/inference-health.js";
+import { probeInference, recordWorkInference, systemHealth } from "../server/inference-health.js";
 import { HttpRunner } from "../server/execution.js";
 import { recordWorkInferenceFailure } from '../server/inference-health.js';
 
@@ -26,6 +28,51 @@ afterEach(async () => {
   );
 });
 afterAll(() => db.close());
+
+const deferral = () => db.one("SELECT detail FROM service_health WHERE name='codex_probe_deferred'");
+
+it.each(["成功", "失敗", "工作成功", "工作失敗"])("延後之後取得%s讀數，清除延後列且不產生獨立異常", async source => {
+  const runner = new HttpRunner();
+  const ok = source.endsWith("成功");
+  const failure = { kind: "upstream_http", status: 502 } as const;
+  vi.spyOn(runner, "call").mockResolvedValue(ok ? { ok } : { ok, failure });
+  const revision = (await db.settingsSnapshot()).revision;
+  const probe = (known: boolean) => probeInference(db, runner, revision, async () => ({ known, hold: null }));
+  await probe(false);
+  const pending = await deferral();
+  expect(pending).toMatchObject({ detail: expect.stringContaining("讀不到主機資源") });
+  const health = await systemHealth(db);
+  expect(health.some(row => row.name === "codex_probe_deferred")).toBe(false);
+  expect(health.find(row => row.name === "codex")).toMatchObject({ inferenceStatus: "unknown", detail: pending.detail });
+  if (source === "工作成功") await recordWorkInference(db, null, new Date());
+  else if (source === "工作失敗") await recordWorkInferenceFailure(db, null, new Date(), failure);
+  else await probe(true);
+  expect(await deferral()).toBeUndefined();
+  expect((await systemHealth(db)).find(row => row.name === "codex")).toMatchObject({ ok, inferenceStatus: ok ? "healthy" : "failed" });
+  expect((await dashboardAlerts(db, true)).filter(row => row.kind === "service_down" || row.kind === "service_up")).toEqual([]);
+});
+
+it("部署冒煙不列出延後說明，但仍列出真實推論失敗", async () => {
+  const sql = readFileSync(new URL("../scripts/lib/smoke-health.sql", import.meta.url), "utf8");
+  await db.query("INSERT INTO service_health(name,ok,detail) VALUES ('codex_probe_deferred',false,'稍後檢查'),('codex_inference',false,'上游回應失敗')");
+  const failures = (await db.query(sql)).map(row => row.name);
+  expect(failures).toContain("codex_inference");
+  expect(failures).not.toContain("codex_probe_deferred");
+});
+
+it("升級時只清除同模型已被真實讀數取代的舊延後說明", async () => {
+  await db.query(`INSERT INTO service_health(name,ok,detail,reading_ok,checked_at,probe_info) VALUES
+    ('codex_inference',true,'成功',true,now()-interval '1 minute','{"model":"modelA"}'),
+    ('codex_probe_deferred',false,'稍後檢查',null,now(), '{"model":"modelA"}')`);
+  await db.migrate();
+  expect(await deferral()).toBeDefined();
+  await db.query(`UPDATE service_health SET checked_at=now()-interval '2 minutes',probe_info='{"model":"modelB"}' WHERE name='codex_probe_deferred'`);
+  await db.migrate();
+  expect(await deferral()).toBeDefined();
+  await db.query(`UPDATE service_health SET probe_info='{"model":"modelA"}' WHERE name='codex_probe_deferred'`);
+  await db.migrate();
+  expect(await deferral()).toBeUndefined();
+});
 
 it.each(['quota', 'quota_unavailable', 'concurrent_request', 'runner'])('代理略過或未取得結果（%s）不耗一般及提早補測名額，仍保留冷卻', async reason => {
   const runner = new HttpRunner();

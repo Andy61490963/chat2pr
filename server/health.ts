@@ -170,15 +170,20 @@ export async function recordHealth(
        ON CONFLICT(name) DO NOTHING RETURNING name`,
       [name, ok, detail, Object.hasOwn(noticeDelay, name) || ok, probe],
     );
-    if (inserted.rowCount) return;
-    const {
-      rows: [before],
-    } = await c.query<HealthReading>(
+    const before = inserted.rowCount ? undefined : (await c.query<HealthReading>(
       "SELECT * FROM service_health WHERE name=$1 FOR UPDATE",
       [name],
-    );
-    if (observation && before.probe_info?.started &&
+    )).rows[0];
+    if (observation && before?.probe_info?.started &&
         Date.parse(before.probe_info.started) >= observation.started.getTime()) return;
+    if (observation) {
+      await c.query(
+        `DELETE FROM service_health WHERE name='codex_probe_deferred'
+         AND (probe_info->>'model') IS NOT DISTINCT FROM $1::text AND checked_at<=now()`,
+        [observation.model],
+      );
+    }
+    if (!before) return;
     if (options.firstWorkFailure && before.reading_ok === false && before.probe_info?.model === observation?.model) return;
     const {
       rows: [{ observed_at: observedAt }],

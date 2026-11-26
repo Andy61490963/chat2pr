@@ -247,7 +247,7 @@ async function smoke() {
   } else add("對外入口 /health", false, "尚未設定固定公開網址", true);
 
   const failing = sql(
-    "SELECT name FROM service_health WHERE NOT ok ORDER BY 1",
+    readFileSync(new URL("./lib/smoke-health.sql", import.meta.url), "utf8"),
   );
   add(
     "看板「系統」頁的檢查項目",
