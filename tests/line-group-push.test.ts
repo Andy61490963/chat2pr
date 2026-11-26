@@ -129,3 +129,70 @@ it("帶常見答案的補問放在批次末尾，下一題仍有自己的按鈕"
   await flush();
   expect(pushes[1].messages).toEqual([expect.objectContaining({ text: "請選擇日期", quickReply: expect.anything() })]);
 });
+
+it("群組關閉回覆或離開後才輪到的待送通知不推播", async () => {
+  const pushes = lineApi();
+  await db.query("INSERT INTO groups(id,name,enabled) VALUES('GroupB','範例群組乙',true)");
+  await notice("group_ready", "原定通知甲");
+  await notice("group_answered", "原定通知乙", "GroupB");
+  await db.query("UPDATE groups SET reply_mode='off' WHERE id='group-a'");
+  await db.query("UPDATE groups SET left_at=now() WHERE id='GroupB'");
+  await flush();
+  expect(pushes).toHaveLength(0);
+  await db.query("UPDATE groups SET reply_mode='results',left_at=NULL");
+  await flush();
+  expect(pushes).toHaveLength(0);
+});
+
+it("未確認收件的舊批次跨日後略過過期通知，保留仍有效的結果", async () => {
+  const uncertain = lineApi(async () => { throw new Error("模擬網路中斷"); });
+  await notice("group_answered", "過期的查詢答案");
+  await notice("group_ready", "仍有效的修改結果");
+  await flush();
+  expect(uncertain).toHaveLength(1);
+  await db.query("UPDATE notifications SET created_at=now()-interval '2 days' WHERE text='過期的查詢答案'");
+  const pushes = lineApi();
+  await flush();
+  expect(pushes.flatMap((p) => p.messages.map((m) => m.text))).toEqual(["仍有效的修改結果"]);
+  expect(await db.one("SELECT last_error FROM notifications WHERE text='過期的查詢答案'")).toEqual({ last_error: "已過期，未補送" });
+});
+
+it("已有重試批次時降至兩成，只以新鍵推仍需送達的重要通知", async () => {
+  const keys: string[] = [];
+  const pushes = lineApi(async (body, key) => {
+    keys.push(key);
+    if (keys.length === 1) throw new Error("模擬回應中斷");
+    return Response.json({ sentMessages: body.messages.map((_, i) => ({ id: `Retry${i}` })) });
+  });
+  await notice("group_received", "這項已收到");
+  await notice("group_answered", "查詢的答覆");
+  await flush();
+  await setUsage(160);
+  await flush();
+  expect(pushes.map((p) => p.messages.map((m) => m.text))).toEqual([["這項已收到", "查詢的答覆"], ["查詢的答覆"]]);
+  expect(keys[0]).not.toBe(keys[1]);
+});
+
+it("每輪最多查五十個群組的人數，下一輪會輪到額度夠用的小群組", async () => {
+  await setUsage(197);
+  const checked: string[] = [];
+  const recipients: string[] = [];
+  vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+    if (url.endsWith("/members/count")) {
+      checked.push(url);
+      return Response.json({ count: url.includes("/Group51/") ? 2 : 4 });
+    }
+    recipients.push(JSON.parse(String(init.body)).to);
+    return Response.json({ sentMessages: [{ id: "Delivered" }] });
+  });
+  await db.query(`INSERT INTO groups(id,name,enabled)
+     SELECT 'Group'||i,'範例群組'||i,true FROM generate_series(1,51) i`);
+  await db.query(`INSERT INTO notifications(kind,dedupe_key,text,group_id,created_at)
+     SELECT 'group_answered','answer'||i,'範例回答','Group'||i,now()-interval '1 minute'+i*interval '1 second'
+     FROM generate_series(1,51) i`);
+  await flush();
+  expect(checked).toHaveLength(50);
+  await flush();
+  expect(checked).toHaveLength(51);
+  expect(recipients).toEqual(["Group51"]);
+});
