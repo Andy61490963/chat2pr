@@ -566,6 +566,13 @@ export async function mockDashboardSeparators(page: Page) {
   };
   const runEvents: RunEvent[] = [
     {
+      seq: 2,
+      at: dashboardSeparatorsTime,
+      phase: "code",
+      kind: "upstream_retry",
+      detail: "上游暫時失敗，已讓 Codex 重試（第 1 次）：upstream_http（HTTP 503）",
+    },
+    {
       seq: 1,
       at: timestamp,
       phase: "test",

@@ -65,6 +65,7 @@ export const eventLabels: Record<string, string> = {
   truncated: "部分紀錄已截斷",
   observer_error: "進度連線中斷",
   observer_restored: "進度連線恢復",
+  upstream_retry: "訂閱上游重試",
 };
 
 /** 自動修復那次「Codex 修改程式」的階段說明；舊紀錄沒有時，以之前出現過「評估驗證結果」判斷。 */
