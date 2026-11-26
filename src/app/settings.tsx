@@ -1053,6 +1053,12 @@ export function SettingsView({
     g.platform === "line" && !g.left_at && g.reply_mode !== "off" &&
     (g.member_count == null || (g.member_count_estimate ?? 0) > g.member_count)
   );
+  const idleEstimates = estimatedGroups.filter((g) => !g.has_pending_line_push);
+  const estimateRow = (g: (typeof estimatedGroups)[number]) => (
+    <p key={g.id} className="break-words text-sm text-muted-foreground">
+      {g.name}：{g.member_count == null ? "目前人數未知" : `上次查得 ${g.member_count} 人`}，以 {pushCost(g.member_count ?? null, g.member_count_estimate)} 人估算每次推播用量。
+    </p>
+  );
   const [allServicesOpen, setAllServicesOpen] = useState(false);
   const serviceRows = services
     .filter((i) => !i.mode || i.mode === s.ai_mode)
@@ -1243,11 +1249,15 @@ export function SettingsView({
             {push.forecast && (
               <p className="text-sm text-muted-foreground">{push.forecast}</p>
             )}
-            {estimatedGroups.map((g) => (
-              <p key={g.id} className="break-words text-sm text-muted-foreground">
-                {g.name}目前人數未知，以 {pushCost(g.member_count ?? null, g.member_count_estimate)} 人估算每次推播用量。
-              </p>
-            ))}
+            {estimatedGroups.filter((g) => g.has_pending_line_push).map(estimateRow)}
+            {idleEstimates.length > 0 && (
+              <details className="text-sm">
+                <summary className="min-h-11 cursor-pointer py-3">
+                  其他群組的推播估值（{idleEstimates.length}）
+                </summary>
+                {idleEstimates.map(estimateRow)}
+              </details>
+            )}
             {push.notice && (s.admin_line_id || push.blocked) && (
               <p
                 role="status"

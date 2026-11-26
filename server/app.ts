@@ -566,6 +566,8 @@ export async function buildApp(
       ),
       db.query<DashboardGroup>(
         `SELECT g.*,
+           (g.platform='line' AND g.id IN (SELECT n.group_id FROM notifications n
+             WHERE n.group_id IS NOT NULL AND n.sent_at IS NULL AND n.attempts<3 AND n.line_reply_policy IS NULL)) AS has_pending_line_push,
            COALESCE((SELECT array_agg(gp.project_id ORDER BY gp.created_at) FROM group_projects gp WHERE gp.group_id=g.id),'{}') AS project_ids,
            (SELECT count(*)::int FROM tasks t WHERE t.group_id=g.id AND t.status IN ('queued','budget_wait','failed','running','reviewing')) AS affected_tasks,
            -- 修改任務一律人工核准，有核准者的需求版本就代表管理者核准過。

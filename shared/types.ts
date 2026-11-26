@@ -157,6 +157,8 @@ export interface DashboardGroup extends Group {
   member_count?: number | null;
   /** LINE 拒絕推播後依剩餘額度估計的成本，下次實測成功即清除。 */
   member_count_estimate?: number | null;
+  /** 是否有尚待付費推播的 LINE 群組通知。 */
+  has_pending_line_push?: boolean;
   /** 近 30 天建立的修改需求與其中核准、拒絕的數量；舊伺服器沒有這個欄位。 */
   change_stats?: GroupChangeStats;
   /** 最近一則仍保留且未撤回的群組訊息收取時間。 */
