@@ -217,6 +217,43 @@ describe("訂閱主憑證隔離與有限階段能力", () => {
     expect((await f.send()).statusCode).toBe(403);
   });
 
+  it.each(["字串未結束", "物件未結束", "含跳脫字元"])("主憑證跨越完整事件與未收完的文字欄位（%s）時，記為受保護資料並撤銷授權", async (ending) => {
+    const first = identity.accessToken.slice(0, 12);
+    const second = identity.accessToken.slice(12);
+    const frame = JSON.stringify({ type: "response.output_text.delta", delta: first });
+    const partial = ending === "含跳脫字元"
+      ? `\\u${second.charCodeAt(0).toString(16).padStart(4, "0")}${second.slice(1)}`
+      : second;
+    const tail = `data: {"type":"response.output_text.delta","delta":"${partial}${ending === "物件未結束" ? '"' : ""}`;
+    const f = await fixture({
+      credentials: async () => identity,
+      upstreamFetch: async () => new Response(`data: ${frame}\n\n${tail}`, {
+        headers: { "content-type": "text/event-stream" },
+      }),
+    });
+    const response = await f.send();
+    expect(response.statusCode).toBe(502);
+    expect(response.body).not.toContain(first);
+    expect(response.body).not.toContain(second);
+    expect(f.lease.failure()).toStrictEqual({ kind: "protected_data", status: 200 });
+    expect((await f.send()).statusCode).toBe(403);
+    expect(f.broker.usage(f.runId)).toMatchObject({ requests: 1, revoked: true });
+  });
+
+  it("未收完的另一個欄位恰好含有憑證後半段時，仍可重試", async () => {
+    const frame = JSON.stringify({ type: "response.output_text.delta", delta: identity.accessToken.slice(0, 12) });
+    const tail = `data: {"type":"response.output_text.delta","other":"${identity.accessToken.slice(12)}`;
+    const f = await fixture({
+      credentials: async () => identity,
+      upstreamFetch: async () => new Response(`data: ${frame}\n\n${tail}`, {
+        headers: { "content-type": "text/event-stream" },
+      }),
+    });
+    expect((await f.send()).statusCode).toBe(502);
+    expect(f.lease.failure()).toStrictEqual({ kind: "stream_interrupted", status: 200 });
+    expect(f.broker.usage(f.runId)?.revoked).toBe(false);
+  });
+
   it("刷新時查不到額度仍拒絕新推論，並記下最後的上游狀態", async () => {
     const sample = await fixture({
       credentials: async (refresh) => {
