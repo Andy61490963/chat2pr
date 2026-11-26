@@ -73,6 +73,7 @@ const Event = z
     type: z.string(),
     replyToken: z.string().max(200).optional(),
     timestamp: z.number().optional(),
+    deliveryContext: z.object({ isRedelivery: z.boolean() }).optional(),
     source: z
       .object({
         type: z.string(),
@@ -108,7 +109,8 @@ export const LinePayload = z.object({ events: z.array(Event).max(100) });
 interface Ack {
   token: string;
   messages: ChatReplyMessage[];
-  recent?: { group: string; expiresAt: number };
+  expiresAt: number;
+  group?: string;
   /** 第一則是進度摘要，其後每則訊息依序對應 claim.ids。 */
   claim?: GroupReplyClaim;
 }
@@ -197,6 +199,12 @@ export class Line {
         ).rows[0];
         // 其他平台的群組留給各自的收訊入口，也不會領取 LINE 的 /進度 補送。
         if (!settings) return;
+        // 一分鐘從收到 webhook 起算；重送還受原事件發生後二十分鐘的期限限制。
+        const expiresAt = e.deliveryContext?.isRedelivery
+          ? Math.min(receivedAt + 60_000, (e.timestamp ?? 0) + 20 * 60_000)
+          : receivedAt + 60_000;
+        const replyOn = !!e.replyToken && expiresAt > Date.now() &&
+          settings.reply_mode !== "off" && settings.replies;
         // 群組成員點了補問的常見答案按鈕：比照用「回覆」作答，只在任務仍在等這一版回答時收下。
         // 重複點擊由上方 events 去重與版本比對擋下（作答後版本 +1，舊按鈕不再符合）。
         if (e.type === "postback") {
@@ -207,8 +215,6 @@ export class Line {
             !answerPostback.test(data)
           )
             return;
-          const replyOn =
-            !!e.replyToken && settings.reply_mode !== "off" && settings.replies;
           const t = await answerByPostback(
             this.db,
             c,
@@ -219,6 +225,7 @@ export class Line {
           if (replyOn)
             acks.push({
               token: e.replyToken!,
+              expiresAt,
               messages: [
                 !t
                   ? staleAnswerAck
@@ -238,16 +245,13 @@ export class Line {
           return;
         }
         if (e.type === "message" && e.message) {
-          const replyOn =
-            !!e.replyToken && settings.reply_mode !== "off" && settings.replies;
           const queueReply = (messages: ChatReplyMessage[] = []) => {
             if (!replyOn || !e.replyToken) return;
-            const expiresAt = Math.min(e.timestamp ?? receivedAt, receivedAt) + 60_000;
-            if (expiresAt <= Date.now()) return;
             acks.push({
               token: e.replyToken,
+              expiresAt,
               messages,
-              recent: settings.enabled && !settings.left_at ? { group, expiresAt } : undefined,
+              group: settings.enabled && !settings.left_at ? group : undefined,
             });
           };
           // 「/進度」：用不耗推播額度的 reply token 回本群組的需求狀態與先前沒送到的回覆。
@@ -265,7 +269,7 @@ export class Line {
             );
             if (!saved.rowCount || !replyOn) return;
             if (!settings.enabled) {
-              acks.push({ token: e.replyToken!, messages: [disabledAck] });
+              acks.push({ token: e.replyToken!, expiresAt, messages: [disabledAck] });
               return;
             }
             const { tasks, total } = await progressTasks(c, group);
@@ -280,6 +284,7 @@ export class Line {
             }));
             acks.push({
               token: e.replyToken!,
+              expiresAt,
               messages: [
                 progressSummary(tasks, total, replies.length),
                 ...notes,
@@ -429,7 +434,7 @@ export class Line {
         }
       });
     for (const a of acks) {
-      if (a.recent) await this.replyWithPending(a.recent.group, a.token, a.recent.expiresAt, a.messages);
+      if (a.group) await this.replyWithPending(a.group, a.token, a.expiresAt, a.messages);
       else await this.sendAck(a);
     }
     for (const a of adoptions) {
@@ -543,7 +548,7 @@ export class Line {
     }
     const unlisted = pending.remaining - pending.summaries.length;
     const more = pending.remaining
-      ? `\n\n其餘待送通知：\n${pending.summaries.join("\n")}${unlisted ? `\n另有 ${unlisted} 則未列出。` : ""}\n${progressMoreNote(pending.remaining)}`
+      ? `\n\n其餘待送通知：\n${pending.summaries.join("\n")}${unlisted ? `\n另有 ${unlisted} 則未列出。` : ""}\n下次群組發言時會繼續補送，也可以輸入 /進度 取回待送的任務結果。`
       : "";
     const notices = pending.replies.map((notice, i) => {
       const suffix = i === pending.replies.length - 1 ? more : "";
@@ -554,6 +559,12 @@ export class Line {
       : { ids: null, status: null };
     const claim = pending.claim;
     await this.db.transaction((c) => this.settleClaimed(c, claim, result, messages.length));
+    // LINE 明確拒收內容時，原指令回覆仍可單獨嘗試。連線中斷或權杖失效時不能重送。
+    if (messages.length && expiresAt > Date.now() && result.status === 400 &&
+        typeof result.message === "string" && /request body|invalid message|messages?\[\d+\]/i.test(result.message) &&
+        replyRejected(result.status, result.message)) {
+      await this.reply(token, messages);
+    }
   }
   private async flushRecentReplies() {
     for (const [group, reply] of [...this.unusedReplies]) {
@@ -562,9 +573,9 @@ export class Line {
       await this.replyWithPending(group, reply.token, reply.expiresAt, []);
     }
   }
-  private async sendAck({ token, messages, claim }: Ack) {
+  private async sendAck({ token, expiresAt, messages, claim }: Ack) {
     if (!claim) {
-      await this.reply(token, messages);
+      if (expiresAt > Date.now()) await this.reply(token, messages);
       return;
     }
     const renewed = await this.db.transaction(async (c) => {
@@ -586,12 +597,12 @@ export class Line {
       return { ids: claim.ids, claimedAt: stamp.claimed_at };
     });
     if (!renewed) {
-      await this.reply(token, [
+      if (expiresAt > Date.now()) await this.reply(token, [
         "這批群組回覆已更新，請再輸入 /進度 查看最新進度。",
       ]);
       return;
     }
-    const result = await this.reply(token, messages);
+    const result = expiresAt > Date.now() ? await this.reply(token, messages) : { ids: null, status: null };
     await this.db.transaction((c) => this.settleClaimed(c, renewed, result, 1));
   }
   /**

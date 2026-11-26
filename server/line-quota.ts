@@ -36,7 +36,11 @@ export class LineQuotaExhausted extends Error {
 export const importantLineGroupNotice = `(n.kind IN ('group_question','group_ready','group_merged','group_answered','group_failed','group_no_changes')
   OR (n.kind='group_check' AND n.text LIKE '⚠️ %'))`;
 
-export class LinePushRejected extends Error {}
+export class LinePushRejected extends Error {
+  constructor(readonly status: number) {
+    super(status === 429 ? "LINE 推播太頻繁，稍後會再送（429）" : `LINE 通知失敗（${status}）`);
+  }
+}
 
 // 測試私訊、通知排程與額度同步共用同一把鎖，避免同時計入同一份剩餘額度。
 export const linePushLockId = 73467;
@@ -85,12 +89,8 @@ export async function pushLineMessage(
   } | null;
   if (isMonthlyLimit(response.status, body?.message))
     throw new LineQuotaExhausted();
-  const Failure = response.status >= 400 && response.status < 500 ? LinePushRejected : Error;
-  throw new Failure(
-    response.status === 429
-      ? "LINE 推播太頻繁，稍後會再送（429）"
-      : `LINE 通知失敗（${response.status}）`,
-  );
+  if (response.status >= 400 && response.status < 500) throw new LinePushRejected(response.status);
+  throw new Error(`LINE 通知失敗（${response.status}）`);
 }
 
 export function recordLinePush(db: Database, error?: string) {

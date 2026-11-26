@@ -38,6 +38,7 @@ type Notice = {
 };
 
 const pending = "n.sent_at IS NULL AND n.attempts<3";
+const rejectedContent = String(new LinePushRejected(400));
 
 /** 在送出前提交名單與重試鍵。程序重開時先取回原批次，避免已收件的重試鍵被拿去送不同內容。 */
 async function claimBatch(db: Database, group: string, importantOnly: boolean) {
@@ -59,7 +60,7 @@ async function claimBatch(db: Database, group: string, importantOnly: boolean) {
     );
     const { rows } = await c.query<Notice>(
       `WITH anchor AS (
-         SELECT n.line_digest_id,n.attempts FROM notifications n JOIN groups g ON g.id=n.group_id
+         SELECT n.id,n.line_digest_id,n.attempts,n.last_error FROM notifications n JOIN groups g ON g.id=n.group_id
          WHERE n.group_id=$1 AND ${pending} AND g.enabled AND g.left_at IS NULL AND g.reply_mode<>'off'
            AND COALESCE((SELECT (value->>'group_replies')::boolean FROM settings WHERE id=1),true)
            AND (n.line_digest_id IS NOT NULL OR NOT $2 OR ${importantLineGroupNotice})
@@ -67,9 +68,10 @@ async function claimBatch(db: Database, group: string, importantOnly: boolean) {
        )
        SELECT n.id,n.kind,n.text,n.quick_replies,n.line_digest_id FROM notifications n CROSS JOIN anchor a
        WHERE n.group_id=$1 AND ${pending} AND n.attempts=a.attempts AND n.line_digest_id IS NOT DISTINCT FROM a.line_digest_id
+         AND (n.id=a.id OR (n.last_error IS DISTINCT FROM $4 AND a.last_error IS DISTINCT FROM $4))
          AND (n.line_digest_id IS NOT NULL OR NOT $2 OR ${importantLineGroupNotice})
        ORDER BY n.created_at,n.id LIMIT $3 FOR UPDATE OF n SKIP LOCKED`,
-      [group, importantOnly, lineReplyLimit],
+      [group, importantOnly, lineReplyLimit, rejectedContent],
     );
     if (!rows.length) return;
     // LINE 只顯示最後一則的快速回覆按鈕。把下一題留到下一批，兩題都能在自己的訊息下作答。
@@ -179,11 +181,13 @@ export async function flushLineGroups(db: Database, access: string) {
         break;
       }
       const detail = redact(String(error));
+      // 整批被拒收時還不知道哪一則有問題，下一輪逐則送，只有單獨被拒收才算該通知失敗。
+      const isolate = error instanceof LinePushRejected && error.status === 400 && batch.ids.length > 1;
       await db.query(
-        `UPDATE notifications SET attempts=attempts+1,last_error=$2,
-           line_digest_id=CASE WHEN $3 OR attempts+1>=3 THEN NULL ELSE line_digest_id END
+        `UPDATE notifications SET attempts=attempts+$4::int,last_error=$2,
+           line_digest_id=CASE WHEN $3 OR attempts+$4::int>=3 THEN NULL ELSE line_digest_id END
          WHERE id=ANY($1::uuid[])`,
-        [batch.ids, detail, error instanceof LinePushRejected],
+        [batch.ids, detail, error instanceof LinePushRejected, isolate ? 0 : 1],
       );
       await recordLinePush(db, detail);
     }
