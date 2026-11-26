@@ -179,6 +179,7 @@ test("手機看板只在系統紀錄顯示入口短暫中斷，鈴鐺顯示完�
     },
   });
   await page.goto("/");
+  await page.getByRole("tab", { name: /^動態/ }).click();
   const history = page.locator("#inbox-activity");
   const toggle = page.getByRole("button", { name: "顯示系統紀錄" });
   await expect(toggle).toBeVisible();
@@ -246,7 +247,7 @@ for (const width of [1280, 375]) {
     const bell = page.getByRole("button", { name: /^通知(?:，|$)/ });
     await expect(bell).toHaveAccessibleName("通知，2 則未讀");
     await expect(
-      page.getByRole("button", { name: /^需要你處理 1/ }),
+      page.getByRole("tab", { name: /^決定\s*1$/ }),
     ).toBeVisible();
     await bell.click();
     const menu = page.getByRole("menu");
@@ -275,7 +276,7 @@ for (const width of [1280, 375]) {
     await expect(bell).toBeFocused();
     await expect(bell).toHaveAccessibleName("通知，1 則未讀");
     await expect(
-      page.getByRole("button", { name: /^需要你處理 1/ }),
+      page.getByRole("tab", { name: /^決定\s*1$/ }),
     ).toBeVisible();
 
     completed = true;

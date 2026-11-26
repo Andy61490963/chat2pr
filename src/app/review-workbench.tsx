@@ -1,7 +1,6 @@
 import {
   useCallback,
   useEffect,
-  useId,
   useRef,
   useState,
   useSyncExternalStore,
@@ -9,12 +8,6 @@ import {
 } from "react";
 import { CircleCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/form-controls";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -26,12 +19,12 @@ import {
   type ReviewItem,
   type ReviewSort,
 } from "../../shared/review-queue.js";
-import {
-  groupPlatformLabels,
-  inboxStatusLabels,
-} from "../../shared/status-glossary.js";
+import { inboxStatusLabels } from "../../shared/status-glossary.js";
 import { PickListForm } from "./pick-list";
-import { ago, Empty, message, type Detail, type State } from "./shared";
+import {
+  matchesApproval, quickApproval, ReviewQueue, type QuickApproval, type SelectionMode,
+} from "./review-queue-list";
+import { Empty, message, type Detail, type State } from "./shared";
 import {
   TaskReviewPanel,
   type TaskReviewPanelProps,
@@ -46,146 +39,27 @@ function subscribeToReviewLayout(onChange: () => void) {
   return () => query.removeEventListener("change", onChange);
 }
 
-function waitingLabel(since: string | null) {
-  if (!since) return "等待時間未提供";
-  const days = Math.floor((Date.now() - Date.parse(since)) / 86_400_000);
-  if (days >= 1) return `等了 ${days} 天`;
-  const relative = ago(since);
-  return relative === "剛剛"
-    ? "剛開始等待"
-    : `等了 ${relative.replace(/前$/, "")}`;
-}
-
-type SelectionMode = "move" | "enter" | "click";
-
-export function ReviewQueue({
-  items,
-  selected,
-  sort,
-  setSort,
-  desktop,
-  choose,
-  batchControls,
-  checkbox,
-}: {
-  items: readonly ReviewItem[];
-  selected: string | null;
-  sort: ReviewSort;
-  setSort: (sort: ReviewSort) => void;
-  desktop: boolean;
-  choose: (id: string, mode: SelectionMode) => void;
-  batchControls?: ReactNode;
-  checkbox: (item: ReviewItem) => ReactNode;
-}) {
-  const queueId = useId();
-  const tabbable = selected ?? items[0]?.id;
-  return (
-    <Tabs
-      value={sort}
-      onValueChange={(value) =>
-        setSort(value === "newest" ? "newest" : "oldest")
-      }
-      className="min-w-0"
-    >
-      <TabsList
-        aria-label="待決策排序"
-        className="h-auto max-w-full shrink-0 overflow-x-auto"
-      >
-        <TabsTrigger
-          value="oldest"
-          aria-controls={queueId}
-          className="min-h-11 flex-none lg:min-h-8"
-        >
-          等最久
-        </TabsTrigger>
-        <TabsTrigger
-          value="newest"
-          aria-controls={queueId}
-          className="min-h-11 flex-none lg:min-h-8"
-        >
-          最新
-        </TabsTrigger>
-      </TabsList>
-      {batchControls}
-      <TabsContent id={queueId} value={sort} tabIndex={-1} className="min-w-0">
-        <ul
-          role="list"
-          aria-label="待決策佇列"
-          className="work-ledger divide-y"
-        >
-          {items.map((item, index) => (
-            <li
-              key={item.id}
-              className="flex min-w-0 items-stretch"
-            >
-              {checkbox(item)}
-              <button
-                type="button"
-                data-review-row={item.id}
-                aria-current={selected === item.id ? "true" : undefined}
-                tabIndex={tabbable === item.id ? 0 : -1}
-                className="grid min-h-11 min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-3 gap-y-0.5 rounded-[inherit] px-3.5 py-2.5 text-left hover:bg-muted/60 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-foreground aria-[current=true]:bg-muted aria-[current=true]:shadow-[inset_3px_0_var(--primary)]"
-                onClick={() => choose(item.id, "click")}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    if (!event.repeat)
-                      setTimeout(() => choose(item.id, "enter"), 0);
-                    return;
-                  }
-                  if (
-                    !desktop ||
-                    (event.key !== "ArrowDown" && event.key !== "ArrowUp")
-                  )
-                    return;
-                  event.preventDefault();
-                  const next =
-                    items[index + (event.key === "ArrowDown" ? 1 : -1)];
-                  if (next) setTimeout(() => choose(next.id, "move"), 0);
-                }}
-              >
-                {/* 固定欄位：左欄標題與來源，右欄等待時間與狀態；讀屏順序維持標題、來源、狀態、等待時間。 */}
-                <span className="col-start-1 row-start-1 truncate text-sm font-semibold">
-                  {item.title}
-                </span>
-                <span className="col-start-1 row-start-2 flex min-w-0 gap-x-2 text-xs text-muted-foreground">
-                  <span className="truncate">{item.group}</span>
-                  <span className="shrink-0">
-                    {item.platform
-                      ? groupPlatformLabels[item.platform]
-                      : "平台未記錄"}
-                  </span>
-                </span>
-                <span
-                  data-review-status
-                  className="col-start-2 row-start-2 justify-self-end text-xs font-medium whitespace-nowrap"
-                >
-                  {item.status}
-                </span>
-                <span
-                  data-review-waiting
-                  className="col-start-2 row-start-1 justify-self-end text-xs whitespace-nowrap text-muted-foreground tabular-nums"
-                >
-                  {waitingLabel(item.waitingSince)}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      </TabsContent>
-    </Tabs>
-  );
-}
 
 export type ReviewActions = Pick<
   TaskReviewPanelProps,
   "act" | "answer" | "followup" | "go" | "open" | "relink" | "repairBaseline"
->;
+> & {
+  verifyQuickActor: () => Promise<boolean>;
+  approveFromQueue: (task: Detail["task"], body: QuickApproval["body"], onError: (text: string, updated?: Detail["task"]) => void) => Promise<boolean>;
+};
 
 type DetailResult = { id: string; detail?: Detail; error?: string };
+type RowError = { text: string } & (Pick<Detail["task"], "version" | "updated_at"> | { awaitingUpdateFrom: State["tasks"] });
+
+function readError(cause: unknown) {
+  if (cause instanceof TypeError && /^(Failed to fetch|Load failed|NetworkError when attempting to fetch resource\.?)$/i.test(cause.message))
+    return navigator.onLine ? "未收到服務回應，請確認連線後再試。" : "裝置目前離線，請恢復網路連線後再試。";
+  return message(cause);
+}
 
 export function ReviewWorkbench({
   items,
+  sort,
   lists,
   reviewId,
   setReview,
@@ -202,6 +76,7 @@ export function ReviewWorkbench({
   empty,
 }: {
   items: readonly ReviewItem[];
+  sort: ReviewSort;
   lists: readonly PickList[];
   reviewId: string | null;
   setReview: (id: string | null, push?: boolean) => void;
@@ -219,9 +94,27 @@ export function ReviewWorkbench({
 }) {
   const desktop = useSyncExternalStore(subscribeToReviewLayout, isDesktopWidth);
   const guard = useGuard();
-  const [sort, setSort] = useState<ReviewSort>("oldest");
+  const [checking, setChecking] = useState(false);
+  const [rowErrors, setRowErrors] = useState<Record<string, RowError>>({});
+  let reconciled = rowErrors;
+  for (const [id, failed] of Object.entries(rowErrors)) {
+    const task = state.tasks.find((task) => task.id === id);
+    if (!task || !items.some((item) => item.kind === "task" && item.id === id) ||
+        ("version" in failed && (task.version !== failed.version || task.updated_at !== failed.updated_at))) {
+      if (reconciled === rowErrors) reconciled = { ...rowErrors };
+      delete reconciled[id];
+    } else if ("awaitingUpdateFrom" in failed && failed.awaitingUpdateFrom !== state.tasks) {
+      if (reconciled === rowErrors) reconciled = { ...rowErrors };
+      reconciled[id] = { text: failed.text, version: task.version, updated_at: task.updated_at };
+    }
+  }
+  if (reconciled !== rowErrors) setRowErrors(reconciled);
+  const [queueCursor, setQueueCursor] = useState<string | null>(null);
+  const [actorChanged, setActorChanged] = useState(false);
+  const [quickNotice, setQuickNotice] = useState<{ id: string; text: string } | null>(null);
   const [result, setResult] = useState<DetailResult | null>(null);
   const [reload, reloadDetail] = useState(0);
+  const [actionDock, setActionDock] = useState<HTMLDivElement | null>(null);
   const sorted = sortReviewItems(items, sort);
   const item = items.find(({ id }) => id === reviewId);
   const taskId = item?.kind === "task" && !suspended ? item.id : null;
@@ -232,11 +125,16 @@ export function ReviewWorkbench({
   const detail = result?.id === taskId ? result.detail : undefined;
   const error = result?.id === taskId ? result.error : undefined;
   const latestId = useRef(reviewId);
+  const sheetTitle = useRef<HTMLHeadingElement>(null);
   latestId.current = reviewId;
+  const latest = useRef({ state, admin, busy, suspended, loadTaskDetail });
+  latest.current = { state, admin, busy, suspended, loadTaskDetail };
+  const activeCheck = useRef<symbol | null>(null);
   const workbench = useRef<HTMLDivElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const primary = useRef<HTMLButtonElement | null>(null);
   const focusId = useRef<string | null>(null);
+  const keepScroll = useRef(false);
   const focusAfterRemoval = useRef<string | null>(null);
   const completing = useRef(false);
   const attachPrimary = useCallback((button: HTMLButtonElement | null) => {
@@ -252,7 +150,7 @@ export function ReviewWorkbench({
     ) {
       focusId.current = first?.id ?? null;
       focusAfterRemoval.current = null;
-      if (!first) requestAnimationFrame(() => workbench.current?.focus());
+      if (!first) requestAnimationFrame(() => workbench.current?.focus({ preventScroll: true }));
     }
     setReview(first?.id ?? null, false);
   }, [reviewId, item, busy, items, sort, setReview]);
@@ -279,7 +177,7 @@ export function ReviewWorkbench({
           setResult((current) => ({
             id: taskId,
             detail: current?.id === taskId ? current.detail : undefined,
-            error: message(e),
+            error: readError(e),
           }));
       },
     );
@@ -300,7 +198,8 @@ export function ReviewWorkbench({
             "[data-task-title], [data-review-error]",
           ));
     if (!target) return;
-    target.focus();
+    target.focus({ preventScroll: keepScroll.current });
+    keepScroll.current = false;
     focusId.current = null;
   }, []);
   useEffect(() => {
@@ -314,12 +213,14 @@ export function ReviewWorkbench({
         `[data-review-row="${CSS.escape(id)}"]`,
       );
     if (row) row.focus();
-    else workbench.current?.focus();
+    else workbench.current?.focus({ preventScroll: true });
   }
 
   function choose(id: string, mode: SelectionMode) {
     const select = () => {
+      keepScroll.current = false;
       focusAfterRemoval.current = null;
+      if (id !== reviewId) setQuickNotice(null);
       if (mode === "enter" || (!desktop && mode === "click"))
         focusId.current = id;
       else focusId.current = null;
@@ -345,15 +246,20 @@ export function ReviewWorkbench({
     id: string,
     action: () => Promise<boolean>,
     after: "advance" | "advance-or-stay" | "stay",
+    initialSelection: string | null = id,
   ) {
     if (completing.current) return false;
     completing.current = true;
     try {
       const succeeded = await action();
-      if (!succeeded || latestId.current !== id) return succeeded;
+      if (!succeeded || !workbench.current || latestId.current !== initialSelection) return succeeded;
       if (after !== "stay") {
+        keepScroll.current = true;
         const next = nextReviewItem(sorted, id)?.id ?? null;
-        if (next) {
+        if (!desktop && initialSelection === null) {
+          setQueueCursor(next);
+          requestAnimationFrame(() => focusQueue(next));
+        } else if (next) {
           focusId.current = next;
           setReview(next);
         } else if (after === "advance-or-stay") {
@@ -373,22 +279,80 @@ export function ReviewWorkbench({
     }
   }
 
+  function cancelQuickCheck() {
+    if (!activeCheck.current) return;
+    activeCheck.current = null;
+    setChecking(false);
+  }
+
+  async function verifyAndApprove(expected: QuickApproval) {
+    const id = expected.task.id;
+    const initialSelection = reviewId;
+    if (!workbench.current || latestId.current !== initialSelection || activeCheck.current ||
+        completing.current || latest.current.busy || latest.current.suspended) return;
+    const token = Symbol();
+    activeCheck.current = token;
+    setChecking(true);
+    setQuickNotice(null);
+    const stillHere = () => activeCheck.current === token && !!workbench.current &&
+      !workbench.current.closest('[role="tabpanel"][data-state="inactive"]') &&
+      latestId.current === initialSelection && !latest.current.busy && !latest.current.suspended;
+    const reviewInstead = (text: string, detail?: Detail) => {
+      setQuickNotice({ id, text });
+      if (detail) setResult({ id, detail });
+      if (id !== latestId.current) setReview(id);
+    };
+    try {
+      const fresh = await loadTaskDetail(id);
+      if (!stillHere()) return;
+      const sameActor = await actions.verifyQuickActor();
+      if (!stillHere()) return;
+      if (!latest.current.admin || !sameActor || loadTaskDetail !== latest.current.loadTaskDetail) {
+        setActorChanged(true);
+        reviewInstead("登入身分已變更，尚未核准。請重新確認目前的身分與案件。", fresh);
+        return;
+      }
+      const snapshot = latest.current.state;
+      const current = quickApproval(snapshot.tasks.find((task) => task.id === id), snapshot, latest.current.admin);
+      if (!current || !matchesApproval(current, fresh) || !matchesApproval(expected, fresh)) {
+        reviewInstead("案件與清單不同，尚未核准。請重新確認目前的需求、專案與分支。", fresh);
+        return;
+      }
+      await finish(id, () => actions.approveFromQueue(fresh.task, expected.body, (text, updated) => {
+        const error: RowError = updated
+          ? { text, version: updated.version, updated_at: updated.updated_at }
+          : { text, awaitingUpdateFrom: latest.current.state.tasks };
+        setRowErrors((errors) => ({ ...errors, [id]: error }));
+      }), "advance", initialSelection);
+    } catch (cause) {
+      if (stillHere()) reviewInstead(`無法重新確認案件，尚未核准。${readError(cause)} 請重新載入後再試。`);
+    } finally {
+      if (activeCheck.current === token && workbench.current) cancelQuickCheck();
+    }
+  }
+
+  function startApproval(approval: QuickApproval) {
+    guard(() => void verifyAndApprove(approval), { prefixes: ["task"] });
+  }
+
   const index = sorted.findIndex(({ id }) => id === item?.id);
   const previous = sorted[index - 1];
   const next = sorted[index + 1];
-  const actionNotice = actionError && (
+  const noticeText = actionError ?? (quickNotice?.id === item?.id ? quickNotice?.text : undefined);
+  const actionNotice = noticeText && (
     <div
       role="alert"
       className="border-b bg-danger-soft px-4 py-3 text-sm text-danger [overflow-wrap:anywhere]"
     >
-      {actionError}
+      {noticeText}
     </div>
   );
   const content = item && (
     <div
       ref={panel}
       data-review-id={item.id}
-      className="min-w-0 [&_a[data-slot=button]]:max-lg:min-h-11 [&_button]:max-w-full [&_button]:whitespace-normal [&_button]:max-lg:min-h-11 [&_select]:max-lg:min-h-11 [&_summary]:max-lg:min-h-11"
+      data-review-version={detail?.task.version ?? list?.version}
+      className={cn("min-w-0 [&_a[data-slot=button]]:max-lg:min-h-11 [&_button]:max-w-full [&_button]:whitespace-normal [&_button]:max-lg:min-h-11 [&_select]:max-lg:min-h-11 [&_summary]:max-lg:min-h-11", list && "max-lg:flex max-lg:h-full max-lg:flex-col")}
     >
       {(!desktop || !detail) && actionNotice && (
         <div className="sticky top-0 z-10">{actionNotice}</div>
@@ -403,6 +367,7 @@ export function ReviewWorkbench({
             finish(item.id, () => resolvePickList(list, ids), "advance")
           }
           onPrimaryMount={attachPrimary}
+          mobile={!desktop}
         />
       ) : (
         <>
@@ -432,6 +397,7 @@ export function ReviewWorkbench({
               admin={admin}
               reviewStatus={item.status}
               actionNotice={desktop ? actionNotice : undefined}
+              actionDock={desktop ? null : actionDock}
               onPrimaryMount={attachPrimary}
               act={(task, action, body, done) =>
                 finish(
@@ -486,6 +452,39 @@ export function ReviewWorkbench({
     <div
       ref={workbench}
       tabIndex={-1}
+      onClickCapture={cancelQuickCheck}
+      onInputCapture={cancelQuickCheck}
+      onKeyDownCapture={(event) => {
+        cancelQuickCheck();
+        if (event.ctrlKey || event.metaKey || event.shiftKey || event.nativeEvent.isComposing) return;
+        const target = event.target;
+        const button = primary.current;
+        if (!event.altKey && target === button && (event.key === "j" || event.key === "k")) {
+          event.preventDefault();
+          const neighbor = event.key === "j" ? next : previous;
+          if (neighbor && !busy && !suspended && !event.repeat) choose(neighbor.id, "enter");
+          return;
+        }
+        if (event.key !== "Enter" || !event.altKey) return;
+        event.preventDefault();
+        if (busy || suspended || event.repeat || !(target instanceof HTMLElement)) return;
+        if (!item || panel.current?.dataset.reviewId !== item.id) return;
+        if (target !== button) {
+          if (!event.currentTarget.contains(target) || target.closest<HTMLElement>("[data-review-row]")?.dataset.reviewRow !== item.id) return;
+          const approval = quickApproval(state.tasks.find((task) => task.id === item.id), state, admin && !actorChanged);
+          if (!rowErrors[item.id] && approval && detail && matchesApproval(approval, detail)) startApproval(approval);
+          else choose(item.id, "enter");
+          return;
+        }
+        if (!button || button.disabled || button.getAttribute("aria-disabled") === "true") return;
+        const version = panel.current.dataset.reviewVersion;
+        const activate = () => {
+          if (button === primary.current && button.isConnected && latestId.current === item.id &&
+              panel.current?.dataset.reviewVersion === version && !button.disabled && button.getAttribute("aria-disabled") !== "true") button.click();
+        };
+        if (item.kind === "task") guard(activate, { prefixes: ["task"] });
+        else activate();
+      }}
       className={cn(
         "min-w-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground",
         items.length > 0 &&
@@ -496,9 +495,14 @@ export function ReviewWorkbench({
       {items.length ? (
         <ReviewQueue
           items={sorted}
-          selected={item?.id ?? null}
-          sort={sort}
-          setSort={setSort}
+          selected={item?.id ?? (!desktop && sorted.some(({ id }) => id === queueCursor) ? queueCursor : null)}
+          busy={busy || suspended}
+          checking={checking}
+          state={state}
+          admin={admin && !actorChanged}
+          detail={detail}
+          decide={startApproval}
+          rowErrors={rowErrors}
           desktop={desktop}
           choose={choose}
           batchControls={batchControls}
@@ -515,7 +519,6 @@ export function ReviewWorkbench({
         <section
           aria-label="審核面板"
           className="work-ledger min-w-0"
-          key={item?.id}
         >
           {item && !suspended ? (
             content
@@ -530,12 +533,16 @@ export function ReviewWorkbench({
             aria-describedby={undefined}
             className="w-full max-w-none overflow-hidden sm:max-w-none"
             showCloseButton={false}
+            onOpenAutoFocus={(event) => {
+              event.preventDefault();
+              sheetTitle.current?.focus({ preventScroll: true });
+            }}
             onCloseAutoFocus={(event) => {
               event.preventDefault();
               if (document.activeElement === document.body) focusQueue(item.id);
             }}
           >
-            <SheetTitle className="sr-only">{item.title}</SheetTitle>
+            <SheetTitle ref={sheetTitle} tabIndex={-1} className="sr-only focus:outline-none!">{item.title}</SheetTitle>
             <nav
               aria-label="案件導覽"
               className="flex shrink-0 flex-wrap gap-1 border-b px-2 py-1"
@@ -562,6 +569,13 @@ export function ReviewWorkbench({
             </nav>
             <div key={item.id} className="min-h-0 flex-1 overflow-y-auto">
               {content}
+            </div>
+            <div ref={setActionDock} className="shrink-0 bg-card">
+              {!list && !detail && !error && keepScroll.current && (
+                <p role="status" className="grid min-h-28 place-items-center border-t p-4 text-sm text-muted-foreground">
+                  正在讀取下一筆
+                </p>
+              )}
             </div>
           </SheetContent>
         </Sheet>

@@ -1,7 +1,6 @@
 import {
   groupPlatformLabels,
   inboxStatusLabels,
-  notificationLabels,
   taskListLabels,
   taskStatusFilterLabels,
   type EndReason,
@@ -14,7 +13,7 @@ import {
 } from "../../shared/task-list.js";
 import { taskListTitle } from "../../shared/task-title.js";
 import { firstSetupStatus } from "../../shared/first-setup.js";
-import { reviewItems } from "../../shared/review-queue.js";
+import { reviewItems, type ReviewSort } from "../../shared/review-queue.js";
 import {
   activityDay,
   activityDetail,
@@ -22,10 +21,12 @@ import {
   groupActivity,
   type ActivityGroup,
 } from "../../shared/activity-groups.js";
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { PickList } from "../../shared/pick-list.js";
 import { ReviewWorkbench, type ReviewActions } from "./review-workbench";
+import { ReviewKeyboardHint } from "./review-queue-list";
 import { BudgetRetry, EndReasonFields } from "./task-actions";
+import { useGuard } from "./unsaved";
 import {
   Activity,
   Archive,
@@ -57,6 +58,12 @@ import { failureBrief, waitHint } from "../../shared/failure-text.js";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/form-controls";
 import {
   Dialog,
   DialogClose,
@@ -149,6 +156,50 @@ function setupSteps(state: State) {
 
 type OpenTask = (id: string) => unknown;
 
+export function InboxReadState({ error, retry }: { error: string; retry: () => Promise<boolean> }) {
+  const [retrying, setRetrying] = useState(false);
+  const networkError = /^TypeError: (Failed to fetch|Load failed|NetworkError when attempting to fetch resource\.?)$/.test(error);
+  return (
+    <Card>
+      <CardContent className="flex items-start gap-3">
+        <span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted">
+          {error
+            ? <CircleAlert className="size-5 text-danger" />
+            : <Loader2 className="size-5 motion-safe:animate-spin" />}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div role={error ? "alert" : "status"}>
+            <h2 className="font-semibold">{error ? "收件匣未能載入" : "正在讀取收件匣"}</h2>
+            <p className="mt-1 text-sm text-muted-foreground [overflow-wrap:anywhere]">
+              {networkError ? "連不上服務，請確認網路連線後重試。" : error || "正在取得待決策的任務與最近動態。"}
+            </p>
+          </div>
+          {error && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-3"
+              aria-disabled={retrying}
+              onClick={async () => {
+                if (retrying) return;
+                setRetrying(true);
+                try {
+                  await retry();
+                } finally {
+                  setRetrying(false);
+                }
+              }}
+            >
+              {retrying ? "正在重試" : "重試"}
+            </Button>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function InboxView({
   state,
   needs,
@@ -190,6 +241,10 @@ export function InboxView({
   loadTaskDetail: (id: string) => Promise<Detail>;
   more: () => unknown;
 }) {
+  const [tab, setTab] = useState("decisions");
+  const [sort, setSort] = useState<ReviewSort>("oldest");
+  const activeTab = reviewId ? "decisions" : tab;
+  const guard = useGuard();
   const [selected, setSelected] = useState(new Map<string, EndTaskSelection>());
   const [confirmEnd, setConfirmEnd] = useState(false);
   const [endReason, setEndReason] = useState<EndReason | null>(null);
@@ -198,6 +253,22 @@ export function InboxView({
   const [reason, setReason] = useState("");
   const [notify, setNotify] = useState(true);
   const decisionSection = useRef<HTMLElement>(null);
+  const stuckHeading = useRef<HTMLHeadingElement>(null);
+  const categoryList = useRef<HTMLDivElement>(null);
+  const [moreCategories, setMoreCategories] = useState(false);
+  useEffect(() => {
+    const list = categoryList.current;
+    if (!list) return;
+    const measure = () => setMoreCategories(list.scrollWidth - list.clientWidth - list.scrollLeft > 1);
+    const resize = new ResizeObserver(measure);
+    resize.observe(list);
+    for (const tab of list.children) resize.observe(tab);
+    list.addEventListener("scroll", measure, { passive: true });
+    return () => {
+      resize.disconnect();
+      list.removeEventListener("scroll", measure);
+    };
+  }, []);
   const endButton = useRef<HTMLButtonElement>(null);
   const eligible = new Map<string, EndTaskSelection>();
   for (const { id, status, version } of needs) {
@@ -273,9 +344,15 @@ export function InboxView({
   const mergedWeek =
     state.totals?.mergedWeek ??
     state.tasks.filter((t) => isMergedInWeek(t, week)).length;
-  const batchControls = canBatch &&
-    (eligible.size > 0 || selected.size > 0) && (
-      <div className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
+  const categories = [
+    { value: "decisions", label: "決定", count: items.length },
+    { value: "moving", label: taskStatusFilterLabels.moving, count: movingCount },
+    { value: "ready", label: statusLabels.ready, count: readyCount },
+    { value: "activity", label: "動態", count: state.totals?.activity ?? state.activity.length },
+  ];
+  const batchControls =
+    canBatch && selected.size > 0 && (
+      <div role="group" aria-label="批次操作" className="mb-2 flex flex-wrap items-center gap-x-2 gap-y-1">
         <Button
           type="button"
           variant="ghost"
@@ -291,26 +368,28 @@ export function InboxView({
           type="button"
           variant="ghost"
           className={batchControl}
-          aria-disabled={busy || selected.size === 0}
+          aria-disabled={busy}
           onClick={() => {
-            if (!busy && selected.size) setSelected(new Map());
+            if (busy) return;
+            setSelected(new Map());
+            decisionSection.current
+              ?.querySelector<HTMLInputElement>('input[type="checkbox"]')
+              ?.focus({ preventScroll: true });
           }}
         >
           清除選取
         </Button>
-        {selected.size > 0 && (
-          <Button
-            ref={endButton}
-            type="button"
-            className={batchControl}
-            aria-disabled={busy}
-            onClick={() => {
-              if (!busy) setConfirmEnd(true);
-            }}
-          >
-            結束選取的 {selected.size} 張任務
-          </Button>
-        )}
+        <Button
+          ref={endButton}
+          type="button"
+          className={batchControl}
+          aria-disabled={busy}
+          onClick={() => {
+            if (!busy) setConfirmEnd(true);
+          }}
+        >
+          結束選取的 {selected.size} 張任務
+        </Button>
       </div>
     );
   const onboarding = left.length > 0 && (
@@ -354,67 +433,69 @@ export function InboxView({
     </Card>
   );
   return (
-    <div
-      className={cn(
-        "work-surface flex min-w-0 flex-col",
-        clear ? "gap-4" : "gap-7",
-      )}
+    <Tabs
+      value={activeTab}
+      activationMode="manual"
+      onValueChange={(next) => {
+        setTimeout(() => guard(() => {
+          setTab(next);
+          if (reviewId && next !== "decisions") setReview(null);
+        }, { prefixes: ["task"] }), 0);
+      }}
+      className="work-surface min-w-0 gap-3 md:gap-4"
     >
-      {stuckTasks.length > 0 && (
-        <section aria-labelledby="inbox-stuck">
-          <SectionTitle count={stuckTasksTotal}>
-            <span id="inbox-stuck">卡住的任務</span>
-          </SectionTitle>
-          {stuckTasksTotal > stuckTasks.length && (
-            <p className="text-sm text-muted-foreground">依卡住時間先後，顯示前 {stuckTasks.length} 筆。</p>
-          )}
-          <ul className="work-ledger">
-            {stuckTasks.map(({ taskId, title, reason, actionLabel, target }) => {
-              const needsAdmin = target === "system" && !admin;
-              return (
-                <li key={taskId} className="work-row">
-                  <div className="grid min-w-0 gap-1 [overflow-wrap:anywhere] md:grid-cols-2 md:gap-4">
-                    <span className="font-semibold">{title}</span>
-                    <div className="text-sm">
-                      <p>{reason}</p>
-                      {needsAdmin && <p>請管理者查看系統。</p>}
-                    </div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className={cn(batchControl, "justify-self-start md:justify-self-end")}
-                    onClick={() => target === "system" && admin ? go("system") : open(taskId)}
-                  >
-                    {needsAdmin ? "查看任務" : actionLabel}
-                    <span className="sr-only">：{title}</span>
-                  </Button>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      )}
-      {!items.length && onboarding}
+      <div className="flex min-w-0 flex-col border-b sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-3">
+        <TabsList ref={categoryList} aria-label="收件匣分類" className={cn("h-auto max-w-full flex-none justify-start gap-2 overflow-x-auto rounded-none bg-transparent p-0 sm:gap-0", moreCategories && "max-sm:[mask-image:linear-gradient(to_right,black_calc(100%-12px),transparent)]")}>
+          {categories.map(({ value, label, count }) => (
+            <TabsTrigger
+              key={value}
+              value={value}
+              className="min-h-11 min-w-11 flex-none gap-1.5 rounded-none border-0 border-b-2 border-transparent px-1.5 text-xs data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none sm:px-3 sm:text-sm dark:data-[state=active]:border-primary"
+            >
+              {label}{" "}<span className="rounded text-xs tabular-nums sm:bg-muted sm:px-1">{count}</span>
+            </TabsTrigger>
+          ))}
+        </TabsList>
+        {activeTab === "decisions" && (items.length > 0 || stuckTasks.length > 0) && (
+          <div className="flex max-w-full items-center justify-between gap-x-2 sm:ml-auto sm:flex-wrap sm:justify-end sm:gap-x-3">
+            {items.length > 0 && <ReviewKeyboardHint />}
+            {stuckTasks.length > 0 && (
+              <button
+                type="button"
+                title={`卡住的任務 ${stuckTasksTotal}`}
+                className={cn("inline-flex min-h-11 min-w-11 items-center justify-center gap-1 whitespace-nowrap rounded-sm text-xs font-medium hover:underline", batchFocus)}
+                onClick={() => stuckHeading.current?.focus()}
+              >
+                <CircleAlert aria-hidden="true" className="hidden size-3.5 text-warn sm:block" />
+                <span>卡住的任務</span>{" "}
+                <span className="tabular-nums">{stuckTasksTotal}</span>
+              </button>
+            )}
+            {items.length > 0 && (
+              <select
+                aria-label="待決策排序"
+                className={cn("ml-auto min-h-11 min-w-11 rounded-md border border-input bg-background px-1.5 text-xs text-foreground sm:ml-0 lg:pointer-fine:min-h-8 [@media(any-pointer:coarse)]:min-h-11!", batchFocus)}
+                value={sort}
+                onChange={(event) => setSort(event.target.value === "newest" ? "newest" : "oldest")}
+              >
+                <option value="oldest">等最久</option>
+                <option value="newest">最新</option>
+              </select>
+            )}
+          </div>
+        )}
+      </div>
+      {!items.length && !stuckTasks.length && onboarding}
+      <TabsContent value="decisions" className="grid min-w-0 gap-3 md:gap-4">
       <section
-        hidden={stuckTasks.length > 0 && items.length === 0 && !confirmEnd}
         ref={decisionSection}
         tabIndex={-1}
-        aria-labelledby="inbox-todo"
+        aria-label="待決策佇列"
         className={batchFocus}
       >
-        {!clear && (
-          <TaskSectionTitle
-            id="inbox-todo"
-            count={items.length}
-            open={() => showTasks("todo")}
-          >
-            {notificationLabels.action}
-          </TaskSectionTitle>
-        )}
-        <ReviewWorkbench
+        {activeTab === "decisions" && (!stuckTasks.length || items.length > 0 || confirmEnd) && <ReviewWorkbench
           items={items}
+          sort={sort}
           lists={lists}
           reviewId={reviewId}
           setReview={setReview}
@@ -427,7 +508,7 @@ export function InboxView({
           actions={reviewActions}
           resolvePickList={resolvePickList}
           empty={
-            clear ? (
+            !items.length ? (
               <Card className="flex-row items-center gap-4 px-5 py-5">
                 <span
                   aria-hidden
@@ -436,11 +517,11 @@ export function InboxView({
                   <CircleCheck className="size-5" />
                 </span>
                 <div className="min-w-0">
-                  <h2 id="inbox-todo" className="font-semibold">
+                  <h2 className="font-semibold">
                     {inboxStatusLabels.clear}
                   </h2>
                   <p className="text-sm text-muted-foreground">
-                    {inboxStatusLabels.clearDescription}
+                    {clear ? inboxStatusLabels.clearDescription : "其餘工作可到進行中或待合併查看。"}
                   </p>
                 </div>
               </Card>
@@ -463,7 +544,7 @@ export function InboxView({
               </label>
             ) : undefined
           }
-        />
+        />}
         {!clear && admin && (
           <Dialog open={confirmEnd} onOpenChange={setConfirmEnd}>
             <DialogContent
@@ -530,7 +611,47 @@ export function InboxView({
           </Dialog>
         )}
       </section>
-      {items.length > 0 && onboarding}
+      {stuckTasks.length > 0 && (
+        <section aria-labelledby="inbox-stuck" className="min-w-0">
+          <div className="mb-2 flex items-center gap-2">
+            <CircleAlert aria-hidden="true" className="size-4 text-warn" />
+            <h2 ref={stuckHeading} id="inbox-stuck" tabIndex={-1} className={cn("scroll-mt-4 font-semibold", batchFocus)}>
+              卡住的任務
+            </h2>
+            <Badge variant="secondary" className="tabular-nums">{stuckTasksTotal}</Badge>
+          </div>
+          {stuckTasksTotal > stuckTasks.length && (
+            <p className="text-sm text-muted-foreground">依卡住時間先後，顯示前 {stuckTasks.length} 筆。</p>
+          )}
+          <ul className="work-ledger divide-y">
+            {stuckTasks.map(({ taskId, title, reason, actionLabel, target }) => {
+              const needsAdmin = target === "system" && !admin;
+              return (
+                <li key={taskId} className="grid gap-2 px-4 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+                  <div className="grid min-w-0 gap-1 [overflow-wrap:anywhere]">
+                    <span className="font-semibold">{title}</span>
+                    <p className="text-sm text-muted-foreground">{reason}</p>
+                    {needsAdmin && <p className="text-sm">請管理者查看系統。</p>}
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className={cn(batchControl, "justify-self-start md:min-h-8")}
+                    onClick={() => target === "system" && admin ? go("system") : open(taskId)}
+                  >
+                    {needsAdmin ? "查看任務" : actionLabel}
+                    <span className="sr-only">：{title}</span>
+                  </Button>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
+      <Button variant="link" className="justify-self-start" onClick={() => showTasks("todo")}>
+        查看需要你處理的任務
+      </Button>
       {/* 等待額度的工作會自動繼續，不需要決定；放在較低調的段落，只說明什麼時候恢復。 */}
       {held.length > 0 && (
         <section aria-labelledby="waiting-title">
@@ -568,102 +689,61 @@ export function InboxView({
           </div>
         </section>
       )}
-      <div
-        className={cn(
-          "grid grid-cols-1",
-          clear
-            ? "gap-4"
-            : "gap-8 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]",
-        )}
-      >
-        <div className="flex flex-col gap-8">
-          {!clear && (
-            <>
-              <section aria-labelledby="inbox-moving">
-                <TaskSectionTitle
-                  id="inbox-moving"
-                  count={movingCount}
-                  open={() => showTasks("moving")}
-                >
-                  {taskStatusFilterLabels.moving}
-                </TaskSectionTitle>
-                <div className="work-ledger">
-                  {working.length ? (
-                    working.map((t) => (
-                      <TaskRow key={t.id} task={t} state={state} open={open} />
-                    ))
-                  ) : (
-                    <Empty
-                      compact
-                      icon={<Loader2 />}
-                      title="目前沒有執行中的工作"
-                    >
-                      你核准需求後，就能在這裡追蹤進度。
-                    </Empty>
-                  )}
-                </div>
-              </section>
-              <section aria-labelledby="inbox-ready">
-                <TaskSectionTitle
-                  id="inbox-ready"
-                  count={readyCount}
-                  open={() => showTasks("ready")}
-                >
-                  {statusLabels.ready}
-                </TaskSectionTitle>
-                <div className="work-ledger">
-                  {ready.length ? (
-                    ready.map((t) => (
-                      <TaskRow
-                        key={t.id}
-                        task={t}
-                        state={state}
-                        open={open}
-                        trailing={
-                          t.pr_url && (
-                            <Button variant="outline" size="sm" asChild>
-                              <a
-                                href={t.pr_url}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                PR #{t.pr_number} <ArrowUpRight />
-                              </a>
-                            </Button>
-                          )
-                        }
-                      />
-                    ))
-                  ) : (
-                    <Empty
-                      compact
-                      icon={<GitPullRequest />}
-                      title="沒有等待合併的 PR"
-                    >
-                      修改通過驗證並建立 PR 後，你就能在這裡開啟 PR。
-                    </Empty>
-                  )}
-                </div>
-              </section>
-            </>
+      </TabsContent>
+      <TabsContent value="moving">
+        <TaskSectionTitle id="inbox-moving" open={() => showTasks("moving")}>{taskStatusFilterLabels.moving}</TaskSectionTitle>
+        <div className="work-ledger mt-1">
+          {working.length ? working.map((entry) => (
+            <TaskRow key={entry.id} task={entry} state={state} open={open} />
+          )) : (
+            <Empty compact icon={<Loader2 />} title="目前沒有執行中的工作">
+              你核准需求後，就能在這裡追蹤進度。
+            </Empty>
           )}
-          <div className="flex flex-wrap items-center gap-x-4 border-t pt-2 text-sm text-muted-foreground">
-            <button
-              type="button"
-              className="work-touch font-medium hover:underline"
-              onClick={() => showTasks({ mergedWeek: weekDay })}
-            >
-              {taskListLabels.mergedWeek}{" "}
-              <span className="tabular-nums">{mergedWeek}</span>
-            </button>
-            <span className="tabular-nums">
-              累計 {state.totals?.tasks ?? state.tasks.length} 個需求
-            </span>
-          </div>
         </div>
+      </TabsContent>
+      <TabsContent value="ready">
+        <TaskSectionTitle id="inbox-ready" open={() => showTasks("ready")}>{statusLabels.ready}</TaskSectionTitle>
+        <div className="work-ledger mt-1">
+          {ready.length ? ready.map((entry) => (
+            <TaskRow
+              key={entry.id}
+              task={entry}
+              state={state}
+              open={open}
+              trailing={entry.pr_url && (
+                <Button variant="outline" size="sm" asChild>
+                  <a href={entry.pr_url} target="_blank" rel="noreferrer">
+                    PR #{entry.pr_number} <ArrowUpRight />
+                  </a>
+                </Button>
+              )}
+            />
+          )) : (
+            <Empty compact icon={<GitPullRequest />} title="沒有等待合併的 PR">
+              修改通過驗證並建立 PR 後，你就能在這裡開啟 PR。
+            </Empty>
+          )}
+        </div>
+      </TabsContent>
+      <TabsContent value="activity">
         <ActivityFeed state={state} open={open} more={more} />
+      </TabsContent>
+      {(items.length > 0 || stuckTasks.length > 0) && onboarding}
+      <div className="flex flex-wrap items-center gap-x-4 border-t pt-1 text-sm text-muted-foreground">
+        <button
+          type="button"
+          className="work-touch font-medium hover:underline"
+          onClick={() => showTasks({ mergedWeek: weekDay })}
+        >
+          {taskListLabels.mergedWeek}{" "}
+          <span className="tabular-nums">{mergedWeek}</span>
+        </button>
+        <span className="tabular-nums">
+          累計 {state.totals?.tasks ?? state.tasks.length} 個需求
+        </span>
       </div>
-    </div>
+    </Tabs>
   );
 }
 
@@ -683,7 +763,7 @@ function TaskSectionTitle({
   children,
 }: {
   id: string;
-  count: number;
+  count?: number;
   open: () => void;
   subdued?: boolean;
   children: string;
@@ -701,14 +781,15 @@ function TaskSectionTitle({
         type="button"
         onClick={open}
         className={cn(
-          "work-touch inline-flex items-center gap-2 text-left hover:underline",
-          !subdued && "pb-2",
+          "work-touch inline-flex items-center gap-2 rounded-sm text-left hover:underline",
+          batchFocus,
         )}
       >
         {children}{" "}
-        <Badge variant="secondary" className="tabular-nums">
+        {count !== undefined && <Badge variant="secondary" className="tabular-nums">
           {count}
-        </Badge>
+        </Badge>}
+        <ChevronRight aria-hidden="true" className="size-3.5 text-muted-foreground" />
       </button>
     </h2>
   );
@@ -781,7 +862,7 @@ function ActivityRow({
   const canExpand = !!taskId && (steps.length > 1 || status !== detail);
   const times = steps.find(({ event }) => event === latest)?.times ?? 1;
   return (
-    <div className="min-w-0 flex-1 pb-3 text-sm [overflow-wrap:anywhere]">
+    <div className="min-w-0 flex-1 pb-2 text-sm [overflow-wrap:anywhere]">
       {taskId && (
         <button
           type="button"
@@ -859,7 +940,8 @@ function ActivityFeed({
   more: () => unknown;
 }) {
   const [all, setAll] = useState(false);
-  const [limit, setLimit] = useState(10);
+  const [extra, setExtra] = useState(0);
+  const limit = 10 + extra;
   const rows = groupActivity(state.activity, all);
   const items = rows.slice(0, limit);
   return (
@@ -880,7 +962,7 @@ function ActivityFeed({
       >
         最近動態
       </SectionTitle>
-      <Card className="py-4">
+      <Card className="py-3">
         <CardContent id="inbox-activity">
           {items.length ? (
             <ol className="flex flex-col">
@@ -930,7 +1012,7 @@ function ActivityFeed({
                     variant="ghost"
                     size="sm"
                     className="w-full text-muted-foreground"
-                    onClick={() => setLimit(limit + 20)}
+                    onClick={() => setExtra((previous) => previous + 20)}
                   >
                     看更多
                   </Button>
@@ -953,7 +1035,7 @@ function ActivityFeed({
               unit="筆紀錄"
               more={async () => {
                 await more();
-                setLimit((n) => n + 20);
+                setExtra((previous) => previous + 20);
               }}
             />
           )}

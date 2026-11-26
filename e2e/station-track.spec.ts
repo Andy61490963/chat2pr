@@ -76,33 +76,31 @@ for (const colorScheme of ["light", "dark"] as const) {
         });
       };
 
-      await expect(
-        page.getByRole("heading", { name: "需要你處理 3", exact: true }),
-      ).toBeVisible();
+      const decision = page.getByRole("tab", { name: /^決定\s*3$/ });
+      await expect(decision).toBeVisible();
       expect(await withinViewport()).toBe(true);
-      for (const name of [
-        "需要你處理 3",
-        "進行中 1",
-        "待合併 1",
-        "近 7 天已合併 0",
-      ]) {
-        await expect(
-          page.getByRole("button", { name, exact: true }),
-        ).toHaveCount(1);
-        await expect(page.getByText(name, { exact: true })).toHaveCount(1);
-      }
-      for (const name of ["需要你處理 3", "進行中 1", "待合併 1"]) {
-        const section = page.getByRole("region", { name, exact: true });
-        const heading = section.getByRole("heading", { name, exact: true });
-        const ledger = name.startsWith("需要你處理")
+      await expect(page.getByRole("button", { name: "近 7 天已合併 0", exact: true })).toHaveCount(1);
+      for (const [label, count] of [["決定", 3], ["進行中", 1], ["待合併", 1]] as const) {
+        const name = new RegExp(`^${label}\\s*${count}$`);
+        const tab = page.getByRole("tab", { name });
+        await tab.click();
+        const section = page.getByRole("tabpanel", { name });
+        if (label === "決定") {
+          await expect(section.getByRole("heading", { name: "需要你處理" })).toHaveCount(0);
+        } else {
+          const heading = section.getByRole("heading", { name: label, exact: true });
+          await expect(heading.getByRole("button", { name: label, exact: true })).toHaveCount(1);
+          await expect(heading).toHaveCSS("border-bottom-width", "0px");
+        }
+        const ledger = label === "決定"
           ? section.getByRole("list", { name: "待決策佇列" })
-          : section.locator(":scope > .work-ledger");
+          : section.locator(".work-ledger");
         const firstRow = ledger.locator(":scope > :first-child");
         await expect(firstRow).toBeVisible();
-        await expect(heading).toHaveCSS("border-bottom-width", "0px");
         await expect(ledger).toHaveCSS("border-top-width", "1px");
         await expect(firstRow).toHaveCSS("border-top-width", "0px");
       }
+      await decision.click();
       await capture("收件匣");
       await page.getByRole("list", { name: "待決策佇列" })
         .getByRole("button", { name: new RegExp(task.title) }).click();

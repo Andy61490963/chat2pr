@@ -279,6 +279,7 @@ for (const theme of ["light", "dark"] as const) {
           await expect(page).toHaveTitle("chat2pr｜群組需求到 PR");
         }
         if (screen.path === "/" && !screen.signedOut) {
+          await page.getByRole("tab", { name: /^動態/ }).click();
           const reason = page.getByText(skipped.detail, { exact: true });
           await expect(reason).toHaveCount(0);
           await page.getByRole("button", { name: "顯示系統紀錄" }).click();
