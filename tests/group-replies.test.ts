@@ -779,15 +779,16 @@ describe("LINE 每月推播額度用完", () => {
     );
     expect(second.attempts).toBe(0);
     expect(second.sent_at).toBeNull();
-    // 記下這個群組至少要 4 則，24 小時內不再對它撞 429。
-    expect(
-      await db.one("SELECT member_count FROM groups WHERE id='group-a'"),
-    ).toEqual({ member_count: 4 });
+    // 剩 3 則並不能推得有 4 人；人數仍未知，維持保守估值。
+    const state = await app.inject({ url: "/api/state", headers });
+    expect(state.json().groups.find((g: { id: string }) => g.id === "group-a")).toMatchObject({
+      member_count: null, member_count_estimate: 8,
+    });
     await line.flushNotifications();
     // 私訊與群組分開送，誰先送出不固定；只核對兩邊各送一次。
     expect([...calls.pushes].sort()).toEqual(["fictional-admin", "group-a"]);
     expect((await rows())[1].last_error).toBe(
-      "推播額度剩 2 則，不足這個群組 4 人，額度恢復後再送",
+      "推播額度剩 2 則，不足這個群組的人數，額度恢復後再送",
     );
 
     // 額度 API 顯示剩 0 則：整個封鎖，說明保留用量，私訊也不再送。
@@ -808,6 +809,30 @@ describe("LINE 每月推播額度用完", () => {
     });
     expect((await directRow("direct:2"))?.sent_at).toBeNull();
     expect((await rows()).map((r) => r.attempts)).toEqual([0, 0]);
+  });
+
+  it.each([
+    { scenario: "尚未能重新查得人數", members: null, cost: 12 },
+    { scenario: "重新查得兩人", members: 2, cost: 2 },
+  ])("人數未知且剩十一則仍被拒收，$scenario 時按 $cost 人計費", async ({ members, cost }) => {
+    const id = await task();
+    await notifyGroup(db, id, "answered", "answered:estimated", "示範答案");
+    billedApi({ push: monthlyLimit, quota: { limit: 200, used: 189 }, members: null });
+    await line.flushNotifications();
+    const dashboardGroup = async () => {
+      const state = await app.inject({ url: "/api/state", headers });
+      return state.json().groups.find((g: { id: string }) => g.id === "group-a");
+    };
+    expect(await dashboardGroup()).toMatchObject({ member_count: null, member_count_estimate: 12 });
+    await setQuota(true, "本月已用 20／上限 200 則");
+    if (members !== null)
+      await db.query("UPDATE groups SET member_count_at=now()-interval '25 hours' WHERE id='group-a'");
+    const resume = billedApi({ push: delivered, quota: null, members });
+    await line.flushNotifications();
+    expect(resume.pushes).toEqual(["group-a"]);
+    expect(resume.members).toBe(members === null ? 0 : 1);
+    expect(await dashboardGroup()).toMatchObject({ member_count: members, member_count_estimate: members === null ? 12 : null });
+    expect((await quota())?.detail).toBe(`本月已用 ${20 + cost}／上限 200 則`);
   });
 
   it("私訊撞到每月上限就封鎖；額度 API 讀不到時沿用原本說明裡的用量，不把看板的用量蓋掉", async () => {

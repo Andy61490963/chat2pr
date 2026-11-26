@@ -316,6 +316,11 @@ test("在設定頁的手機畫面查看 LINE 本月用量、上限與預估用�
   await page.clock.setFixedTime(new Date("2028-02-11T12:00:00+08:00"));
   await mockDashboard(page, {
     state: {
+      groups: [
+        { ...group, name: "範例甲群" },
+        { ...group, id: "SampleGroupB", name: "範例乙群", member_count_estimate: 12 },
+        { ...group, id: "SampleGroupC", name: "範例丙群", member_count: 2 },
+      ],
       health: [{
         name: "line_quota",
         ok: true,
@@ -328,7 +333,9 @@ test("在設定頁的手機畫面查看 LINE 本月用量、上限與預估用�
   const card = page.getByRole("region", { name: "LINE 推播（群組回覆與私訊）", exact: true });
   await expect(card.getByText("本月已用 100／上限 200", { exact: true })).toBeVisible();
   await expect(card.getByText("按本月平均每日用量，預估 2 月 20 日用完。")).toBeVisible();
-  await expect(card.getByText(/人數未知，以 8 人估算/)).toBeVisible();
+  await expect(card.getByText(/範例甲群.*人數未知，以 8 人估算/)).toBeVisible();
+  await expect(card.getByText(/範例乙群.*人數未知，以 12 人估算/)).toBeVisible();
+  await expect(card.getByText(/範例丙群.*人數未知/)).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(375);
 });
 
