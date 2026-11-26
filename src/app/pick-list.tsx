@@ -59,9 +59,9 @@ export function PickListForm({
       className="min-w-0 p-4 [overflow-wrap:anywhere] max-lg:flex max-lg:min-h-0 max-lg:flex-1 max-lg:flex-col max-lg:pb-0"
       aria-labelledby={`pick-list-${list.id}`}
     >
-      <h3 id={`pick-list-${list.id}`} className="font-semibold">
+      <h2 id={`pick-list-${list.id}`} className="font-semibold">
         {pickListLabels.pending}
-      </h3>
+      </h2>
       <p className="mt-1 text-sm text-muted-foreground">{group}</p>
       {!mobile && actions}
       <fieldset className="mt-4 min-w-0 max-lg:min-h-0 max-lg:flex-1 max-lg:overflow-y-auto" disabled={busy}>

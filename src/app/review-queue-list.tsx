@@ -94,7 +94,7 @@ export function ReviewQueue({
   return (
     <div className="min-w-0">
       {batchControls}
-      <ul role="list" aria-label="待決策佇列" className="work-ledger divide-y">
+      <ul role="list" aria-label="待決策佇列" className="work-ledger grid auto-rows-fr divide-y">
         {items.map((item, index) => {
           const task = tasks.get(item.id);
           const candidate = quickApproval(task, state, admin);
@@ -110,10 +110,10 @@ export function ReviewQueue({
           const source = [item.group, item.platform ? groupPlatformLabels[item.platform] : "平台未記錄", target].filter(Boolean).join(" ");
           return (
             <li key={item.id} className={cn(
-              "grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] grid-rows-[2.5rem_2.75rem] items-center py-1 pr-2 lg:grid-rows-[1.25rem_2rem] lg:py-1.5",
+              "grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] grid-rows-[minmax(1.25rem,1fr)_2.75rem] items-center py-1 pr-2 lg:grid-rows-[1.25rem_2rem] lg:py-1.5",
               selected === item.id && "bg-primary-soft shadow-[inset_3px_0_var(--primary)]",
             )}>
-              {check && <div className="z-1 col-start-1 row-start-1 lg:row-span-2">{check}</div>}
+              {check && <div className="z-1 col-start-1 row-[1/3]">{check}</div>}
               <button
                 type="button"
                 data-review-row={item.id}
@@ -122,7 +122,7 @@ export function ReviewQueue({
                 tabIndex={tabbable === item.id ? 0 : -1}
                 className={cn(
                   "col-span-full row-span-2 row-start-1 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-subgrid items-center gap-x-2 self-stretch rounded-sm pl-3 text-left outline-none hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-foreground",
-                  check && "lg:pl-11",
+                  check && "pl-11",
                 )}
                 onClick={() => choose(item.id, "click")}
                 onKeyDown={(event) => {
@@ -144,10 +144,7 @@ export function ReviewQueue({
                     ?.focus();
                 }}
               >
-                <span id={titleId} title={item.title} className={cn(
-                  "col-span-full row-start-1 line-clamp-2 min-w-0 text-base leading-5 font-semibold [overflow-wrap:anywhere] lg:col-span-1 lg:block lg:truncate",
-                  check && "ml-8 lg:ml-0",
-                )}>
+                <span id={titleId} title={item.title} className="col-span-full row-start-1 line-clamp-2 min-w-0 text-base leading-5 font-semibold [overflow-wrap:anywhere] lg:col-span-1 lg:block lg:truncate">
                   {item.title}
                 </span>
                 <span className="col-start-1 row-start-2 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground lg:col-span-full lg:mr-[4.5rem]">

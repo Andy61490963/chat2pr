@@ -435,9 +435,9 @@ export function InboxView({
             <TabsTrigger
               key={value}
               value={value}
-              className="min-h-11 flex-none gap-0.5 rounded-none border-0 border-b-2 border-transparent px-0.5 text-xs data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none sm:gap-1.5 sm:px-3 sm:text-sm dark:data-[state=active]:border-primary"
+              className="min-h-11 min-w-11 flex-none gap-0.5 rounded-none border-0 border-b-2 border-transparent px-0 text-xs data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none sm:gap-1.5 sm:px-3 sm:text-sm dark:data-[state=active]:border-primary"
             >
-              {label}{" "}<span className="rounded bg-muted px-1 text-xs tabular-nums">{count}</span>
+              {label}{" "}<span className="rounded text-xs tabular-nums sm:bg-muted sm:px-1">{count}</span>
             </TabsTrigger>
           ))}
         </TabsList>
@@ -451,8 +451,8 @@ export function InboxView({
                 className={cn("inline-flex min-h-11 min-w-11 items-center justify-center gap-1 whitespace-nowrap rounded-sm text-xs font-medium hover:underline", batchFocus)}
                 onClick={() => stuckHeading.current?.focus()}
               >
-                <CircleAlert aria-hidden="true" className="size-3.5 text-warn" />
-                <span className="sr-only sm:not-sr-only">卡住的任務</span>{" "}
+                <CircleAlert aria-hidden="true" className="hidden size-3.5 text-warn sm:block" />
+                <span>卡住的任務</span>{" "}
                 <span className="tabular-nums">{stuckTasksTotal}</span>
               </button>
             )}
