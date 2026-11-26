@@ -1,5 +1,6 @@
 import { validateLabel } from "../shared/project-setup.js";
 import { baselineFailurePlain } from "../shared/failure-text.js";
+import { upstreamFailureText, type UpstreamFailure } from "../shared/upstream-failure.js";
 import { redact } from "./policy.js";
 import { clip } from "./pr-body.js";
 
@@ -418,9 +419,18 @@ export function classifyFailure(
   phase = "",
   context: FailureContext = "task",
   project?: Parameters<typeof validateLabel>[0],
+  upstreamFailure?: UpstreamFailure,
 ): FailureExplanation {
   const body = redact(raw.replace(ansi, ""));
   const rule = rules.find((r) => r.test(body, phase)) ?? fallback;
+  if (upstreamFailure)
+    return {
+      category: rule.category,
+      plain: upstreamFailureText(upstreamFailure),
+      detail: "未使用其他計費方式",
+      action: "請查看這次執行紀錄的訂閱失敗原因，再決定是否重試",
+      group: "請管理者查看這次執行紀錄，再決定是否重試。",
+    };
   // 摘要只放錯誤重點；開頭的「安裝失敗：」這類前綴已經由白話說明表達。
   const stripped = `\n${body
     .replace(/^\s*[\p{Script=Han}A-Za-z ]{1,16}?(?:失敗|未通過驗證)：/u, "")
