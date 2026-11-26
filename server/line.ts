@@ -67,6 +67,14 @@ import {
   quotaUsageOf,
   quotaTestBlocked,
 } from "../shared/line-quota.js";
+function withUncertainHint(messages: ChatReplyMessage[], uncertain: number) {
+  if (!messages.length || !uncertain) return messages;
+  const hint = `\n\n有 ${uncertain} 則回覆不確定是否送達，需要時輸入 /進度 取回`;
+  const last = messages[messages.length - 1];
+  const text = groupText(typeof last === "string" ? last : last.text, 5000 - hint.length) + hint;
+  return [...messages.slice(0, -1), typeof last === "string" ? text : { ...last, text }];
+}
+
 const Event = z
   .object({
     webhookEventId: z.string(),
@@ -222,18 +230,20 @@ export class Line {
             data,
             e.webhookEventId,
           );
-          if (replyOn)
+          if (replyOn) {
+            const { uncertain } = await claimPendingGroupReplies(c, group, 0, "line", null, "important");
             acks.push({
               token: e.replyToken!,
               expiresAt,
-              messages: [
+              messages: withUncertainHint([
                 !t
                   ? staleAnswerAck
                   : t.status === "queued"
                     ? answerAck
                     : answerHeldAck,
-              ],
+              ], uncertain),
             });
+          }
           return;
         }
         if (e.type === "unsend" && e.unsend) {
@@ -273,7 +283,7 @@ export class Line {
               return;
             }
             const { tasks, total } = await progressTasks(c, group);
-            const { replies, remaining, claim } =
+            const { replies, remaining, claim, uncertain } =
               await claimPendingGroupReplies(c, group, lineReplyLimit - 1);
             const notes: ChatReplyMessage[] = replies.map((r, i) => ({
               text:
@@ -285,10 +295,10 @@ export class Line {
             acks.push({
               token: e.replyToken!,
               expiresAt,
-              messages: [
+              messages: withUncertainHint([
                 progressSummary(tasks, total, replies.length, "群組", replies.some((r) => r.unconfirmed)),
                 ...notes,
-              ],
+              ], uncertain),
               claim,
             });
             return;
@@ -525,23 +535,25 @@ export class Line {
       aiQuotaOut: !!s?.ai_out,
     });
   }
-  private async replyWithPending(group: string, token: string, expiresAt: number, messages: ChatReplyMessage[]) {
+  private async replyWithPending(
+    group: string,
+    token: string,
+    expiresAt: number,
+    messages: ChatReplyMessage[],
+    freshEvent = true,
+  ) {
     if (expiresAt <= Date.now()) return;
     const slots = lineReplyLimit - messages.length;
-    if (slots <= 0) {
-      await this.reply(token, messages);
-      return;
-    }
     const pending = await this.db.transaction(async (c) => {
       const { rows: [quota] } = await c.query<{ ok: boolean; detail: string }>(
         "SELECT ok,detail FROM service_health WHERE name=$1", [LINE_QUOTA],
       );
       const exhausted = quota?.ok === false || quotaRemaining(quotaUsageOf(quota?.detail)) === 0;
-      return claimPendingGroupReplies(c, group, slots, "line", null, exhausted ? "important" : "all");
+      return claimPendingGroupReplies(c, group, slots, "line", null, exhausted ? "important" : "all", freshEvent);
     });
     if (!pending.claim) {
       if (expiresAt <= Date.now()) return;
-      if (messages.length) await this.reply(token, messages);
+      if (messages.length) await this.reply(token, withUncertainHint(messages, pending.uncertain));
       else if (expiresAt > (this.unusedReplies.get(group)?.expiresAt ?? 0))
         this.unusedReplies.set(group, { token, expiresAt });
       return;
@@ -552,10 +564,11 @@ export class Line {
       : "";
     const notices = pending.replies.map((notice, i) => {
       const suffix = i === pending.replies.length - 1 ? more : "";
-      return { text: groupText(redact(notice.text), 4900 - suffix.length) + suffix, quick: notice.quick_replies };
+      const prefix = notice.unconfirmed ? "（補送：先前可能沒送到，看過可略過）\n" : "";
+      return { text: prefix + groupText(redact(notice.text), 4900 - suffix.length - prefix.length) + suffix, quick: notice.quick_replies };
     });
     const result = expiresAt > Date.now()
-      ? await this.reply(token, [...messages, ...notices])
+      ? await this.reply(token, withUncertainHint([...messages, ...notices], pending.uncertain))
       : { ids: null, status: null };
     const claim = pending.claim;
     await this.db.transaction((c) => this.settleClaimed(c, claim, result, messages.length));
@@ -563,14 +576,14 @@ export class Line {
     if (messages.length && expiresAt > Date.now() && result.status === 400 &&
         typeof result.message === "string" && /request body|invalid message|messages?\[\d+\]/i.test(result.message) &&
         replyRejected(result.status, result.message)) {
-      await this.reply(token, messages);
+      await this.reply(token, withUncertainHint(messages, pending.uncertain));
     }
   }
   private async flushRecentReplies() {
     for (const [group, reply] of [...this.unusedReplies]) {
       if (this.unusedReplies.get(group) !== reply) continue;
       this.unusedReplies.delete(group);
-      await this.replyWithPending(group, reply.token, reply.expiresAt, []);
+      await this.replyWithPending(group, reply.token, reply.expiresAt, [], false);
     }
   }
   private async sendAck({ token, expiresAt, messages, claim }: Ack) {
@@ -607,7 +620,7 @@ export class Line {
   }
   /**
    * 核對領取時間後依回覆順序寫回訊息 ID，讓「詳細」、引用追問與作答能接續。
-   * 未確認 LINE 是否收件時只開放手動 /進度 取回，以免自動重送。
+   * 未確認 LINE 是否收件時保留給 /進度，重要通知冷卻後可再用一次免費回覆。
    * LINE 以內容問題拒收（replyRejected）時，這批每則 reply_failures+1；到 REPLY_FAILURE_LIMIT 次就改寫成
    * replyGaveUpNote、不再被 /進度 取回，之後的 /進度 至少能回摘要。限流、5xx、逾時、沒有權杖不計。
    */
@@ -623,6 +636,7 @@ export class Line {
       await c.query(
         `UPDATE notifications SET sent_at=NULL,reply_failures=reply_failures+$3,
            line_reply_policy=CASE WHEN $8 THEN 'manual' ELSE line_reply_policy END,
+           line_reply_uncertain_at=CASE WHEN $8 THEN now() ELSE line_reply_uncertain_at END,
            last_error=CASE WHEN reply_failures+$3>=$4 THEN $5 ELSE $2 END
          WHERE id=ANY($1::uuid[]) AND sent_at=$6 AND last_error=$7 AND sent_message_id IS NULL`,
         [

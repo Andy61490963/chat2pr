@@ -286,7 +286,6 @@ const pendingFrom = (automatic: boolean) => `FROM notifications n LEFT JOIN task
       SELECT 1 FROM notifications p WHERE p.line_digest_id=n.line_digest_id AND p.sent_at IS NULL
         AND p.attempts<3 AND p.line_reply_policy IS NULL AND COALESCE(p.last_error,'') NOT LIKE '${quotaShortPrefix}%')))
   AND (n.line_reply_policy IS DISTINCT FROM 'free' OR NOT (${staleNotification}))
-  ${automatic ? "AND n.line_reply_policy IS DISTINCT FROM 'manual'" : ""}
   AND ((${retrievable("n")} AND ${newestOfTask}) OR (
     g.platform='line' AND n.group_id=$1 AND n.sent_at IS NULL AND n.reply_failures<${REPLY_FAILURE_LIMIT}
     AND (n.task_id IS NULL OR t.group_id=$1) AND NOT (${staleNotification})
@@ -311,16 +310,24 @@ export async function claimPendingGroupReplies(
   platform: "line" | "discord" = "line",
   threadId: string | null = null,
   automatic?: "important" | "all",
+  freshEvent = true,
 ) {
-  const rows = (
-    await c.query<ClaimedReply & { kind: string; unconfirmed: boolean }>(
-      `SELECT n.id,n.kind,n.text,n.quick_replies,n.line_reply_policy IS NOT DISTINCT FROM 'manual' AS unconfirmed ${pendingFrom(!!automatic)}
+  const candidates = (
+    await c.query<ClaimedReply & { kind: string; unconfirmed: boolean; important: boolean; retryable: boolean }>(
+      `SELECT n.id,n.kind,n.text,n.quick_replies,n.line_reply_policy IS NOT DISTINCT FROM 'manual' AS unconfirmed,
+         ${importantLineGroupNotice} AS important,
+         (n.line_reply_retry_count=0 AND (n.line_reply_uncertain_at IS NOT NULL OR n.last_error=$6) AND
+           COALESCE(n.line_reply_uncertain_at,n.created_at) <= $5::timestamptz - interval '5 minutes') AS retryable
+       ${pendingFrom(!!automatic)}
        ${automatic ? `AND g.enabled AND g.left_at IS NULL AND g.reply_mode<>'off' AND ${groupRepliesOn}` : ""}
        ${automatic === "important" ? `AND (${importantLineGroupNotice} OR n.line_reply_policy='free')` : ""}
        ORDER BY ${automatic ? `(${importantLineGroupNotice}) DESC,` : ""} n.created_at,n.id FOR UPDATE OF n SKIP LOCKED`,
-      [groupId, platform, claimingNote, threadId],
+      [groupId, platform, claimingNote, threadId, new Date(Date.now()), replyFailedNote],
     )
   ).rows;
+  const rows = automatic
+    ? candidates.filter((r) => !r.unconfirmed || (freshEvent && r.important && r.retryable))
+    : candidates;
   // LINE 只顯示最後一則訊息的快速回覆。其他補問先摘要，下一次發言仍能收到可直接作答的原訊息。
   const question = automatic && rows.find((r) => r.quick_replies?.length);
   const picked = rows.filter((r) => !question || !r.quick_replies?.length || r === question).slice(0, limit);
@@ -330,8 +337,10 @@ export async function claimPendingGroupReplies(
   if (picked.length) {
     const ids = picked.map((r) => r.id);
     const stamped = await c.query<{ claimed_at: string }>(
-      "UPDATE notifications SET sent_at=statement_timestamp(),last_error=$2 WHERE id=ANY($1::uuid[]) RETURNING sent_at::text AS claimed_at",
-      [ids, claimingNote],
+      `UPDATE notifications SET sent_at=statement_timestamp(),last_error=$2,
+         line_reply_retry_count=line_reply_retry_count + CASE WHEN $3 AND line_reply_policy='manual' THEN 1 ELSE 0 END
+       WHERE id=ANY($1::uuid[]) RETURNING sent_at::text AS claimed_at`,
+      [ids, claimingNote, !!automatic],
     );
     claim = { ids, claimedAt: stamped.rows[0].claimed_at };
     if (platform === "line") await supersedeOlderGroupReplies(c, groupId, ids);
@@ -342,6 +351,7 @@ export async function claimPendingGroupReplies(
         ? { ...r, text: splitQueryAnswer(r.text).body }
         : r,
     ),
+    uncertain: candidates.filter((r) => r.unconfirmed && r.important && !pickedIds.has(r.id)).length,
     remaining: rows.length - picked.length,
     summaries: automatic ? rows.filter((r) => !pickedIds.has(r.id)).slice(0, 20).map((r) => {
       const text = r.kind === "group_answered" ? splitQueryAnswer(r.text).body : r.text;

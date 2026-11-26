@@ -1070,7 +1070,7 @@ describe("用 reply token 取回與說實話", () => {
       "DELETE FROM service_health WHERE name IN ('line_quota','notifications','codex_subscription_gate')",
     );
   let pushes: { to: string; text: string }[];
-  let replyCalls: { token: string; messages: { text: string }[] }[];
+  let replyCalls: { token: string; messages: { text: string; quickReply?: unknown }[] }[];
   let push: () => Promise<Response>;
   let replyStatus: number;
   let replyMessage: string;
@@ -1839,6 +1839,7 @@ describe("用 reply token 取回與說實話", () => {
       expect(replyCalls).toHaveLength(2);
       expect(lastReply()[0]).toMatch(/^（補送：先前可能沒送到，看過可略過）/);
       expect(lastReply()[0]).toContain("是按了沒下載");
+      expect(replyCalls[0].messages[0]).toHaveProperty("quickReply.items");
       expect(replyCalls[1].messages[0].quickReply).toEqual(replyCalls[0].messages[0].quickReply);
       expect((await notice(asking.id)).sent_message_id).toBe("reply-2-0");
     } finally {
