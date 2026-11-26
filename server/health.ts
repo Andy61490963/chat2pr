@@ -24,7 +24,7 @@ type HealthReading = {
   checked_at: Date;
   outage_started_at: Date | null;
   line_outage_confirmed?: boolean;
-  probe_info?: { started?: string } | null;
+  probe_info?: { started?: string; model?: string | null } | null;
 };
 
 const minute = 60_000;
@@ -123,6 +123,7 @@ export async function recordHealth(
     confirm?: boolean; silent?: boolean; trackOutage?: boolean;
     probe?: { model: string | null; latencyMs: number | null; failure?: UpstreamFailure };
     inferenceObservation?: { model: string | null; started: Date };
+    firstWorkFailure?: boolean;
   } = {},
 ) {
   const observation = options.inferenceObservation;
@@ -178,6 +179,7 @@ export async function recordHealth(
     );
     if (observation && before.probe_info?.started &&
         Date.parse(before.probe_info.started) >= observation.started.getTime()) return;
+    if (options.firstWorkFailure && before.reading_ok === false && before.probe_info?.model === observation?.model) return;
     const {
       rows: [{ observed_at: observedAt }],
     } = await c.query<{ observed_at: Date }>(

@@ -44,7 +44,7 @@ import { config, secrets, token } from "./config.js";
 import { hash } from "./auth.js";
 import { AppError, classifyRisk, redact, taipeiDay } from "./policy.js";
 import { subscriptionLimited } from "./triage.js";
-import { recordWorkInference } from "./inference-health.js";
+import { recordWorkInference, recordWorkInferenceFailure } from "./inference-health.js";
 import { parseUpstreamFailure, type UpstreamFailure } from "../shared/upstream-failure.js";
 import {
   classifyFailure,
@@ -285,21 +285,31 @@ export class RunInferenceDiagnostics {
   async phase(
     subscription: boolean, name: string, pending: Promise<PhaseResult>,
     assertCurrent: () => Promise<void>, recover: () => Promise<void>,
+    recordFailure?: (failure: UpstreamFailure) => Promise<void>,
   ) {
     const observed = subscription && (name === "code" || name === "review");
+    const observeFailure = async (failure: UpstreamFailure | undefined) => {
+      this.failure = failure;
+      if (!failure) return;
+      try {
+        await recordFailure?.(failure);
+      } catch {
+        console.warn("訂閱工作推論失敗，但無法更新健康讀數。");
+      }
+    };
     let result: PhaseResult;
     try {
       result = await pending;
     } catch (error) {
       if (observed && error instanceof RunnerResponseError && error.upstreamFailure) {
         await assertCurrent();
-        this.failure = error.upstreamFailure;
+        await observeFailure(error.upstreamFailure);
       }
       throw error;
     }
     await assertCurrent();
     if (observed && !result.sqlReviewFailure) {
-      if (result.exitCode !== 0) this.failure = parseUpstreamFailure(result.upstreamFailure);
+      if (result.exitCode !== 0) await observeFailure(parseUpstreamFailure(result.upstreamFailure));
       else if (result.inferenceCompleted === true) {
         try {
           await recover();
@@ -1471,7 +1481,8 @@ export class Execution {
             return safe;
           });
         const r = await inference.phase(subscription, name, pendingPhase, assertCurrent,
-          () => recordWorkInference(this.db, s.codex_model ?? null, started))
+          () => recordWorkInference(this.db, s.codex_model ?? null, started),
+          failure => recordWorkInferenceFailure(this.db, s.codex_model ?? null, started, failure))
           .catch(async (error: unknown) => {
             if (
               subscription &&

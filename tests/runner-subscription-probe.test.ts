@@ -138,7 +138,6 @@ it.each([
   ["上游故障", () => new Response(identity.accessToken, { status: 502 }), { kind: "upstream_http", status: 502 }],
   ["缺少完成事件", () => stream({ type: "response.created" }), { kind: "stream_interrupted", status: 200 }],
   ["受保護資料", () => stream(completed(1, identity.secrets[0])), { kind: "protected_data", status: 200 }],
-  ["超出輸出上限", () => stream(completed(65)), { kind: "output_limit", status: 200 }],
   ["上游回報固定短提示超過輸入預算", () => stream({ type: "response.completed", response: { ...completed().response, usage: { input_tokens: 129, output_tokens: 1 } } }), { kind: "usage_limit", status: 200 }],
   ["毫無輸出", () => stream(completed(0, "")), { kind: "invalid_usage", status: 200 }],
   ["僅有推理用量而沒有文字", () => stream(completed(5, "")), { kind: "missing_body", status: 200 }],
@@ -149,6 +148,15 @@ it.each([
   expect(result.statusCode).toBe(200);
   expect(result.json()).toStrictEqual({ ok: false, failure });
   expect(sample.fetchUpstream).toHaveBeenCalledTimes(1);
+});
+
+it("上游完成時保留六十四個輸出 token 的硬上限，只有超限才略過健康判斷", async () => {
+  const sample = await fixture(async () => stream(completed(tokens)));
+  let tokens = 64;
+  expect((await sample.probe()).json()).toStrictEqual({ ok: true });
+  tokens = 65;
+  expect((await sample.probe()).json()).toStrictEqual({ ok: false, skipped: "output_limit" });
+  expect(sample.fetchUpstream).toHaveBeenCalledTimes(2);
 });
 
 it("完成事件未重送文字時，串流中真正產生的文字仍算推論成功", async () => {
