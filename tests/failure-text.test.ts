@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   categoryLabels,
   classifyFailure,
+  explainUpstreamFailure,
   failureNotice,
+  groupFailureText,
+  upstreamWaitText,
 } from "../server/failure.js";
 import {
   failureBrief,
@@ -13,6 +16,76 @@ import {
   primaryFix,
   waitHint,
 } from "../shared/failure-text.js";
+import type { UpstreamFailureKind } from "../shared/upstream-failure.js";
+
+describe("訂閱推論失敗的看板與群組說明", () => {
+  const samples: [UpstreamFailureKind, string, string][] = [
+    ["server_error", "服務暫時無法回應", "服務恢復後"],
+    ["connection", "連不上 Codex", "網路"],
+    ["stream_interrupted", "回應在完成前中斷", "稍後"],
+    ["stream_error", "未能完成這次推論", "稍後"],
+    ["invalid_response", "回應格式無法辨識", "維護者"],
+    ["model_unavailable", "模型目前不可用", "到「設定」確認模型"],
+    ["rejected", "不接受這次請求", "維護者"],
+    ["context_too_long", "內容超過模型能處理的長度", "縮小需求範圍"],
+    ["quota", "訂閱額度不足", "額度恢復後"],
+    ["auth", "訂閱登入失效", "重新登入"],
+  ];
+  for (const [kind, why, action] of samples)
+    it(`看板與群組都說明「${why}」和下一步`, () => {
+      const failure = explainUpstreamFailure({ kind });
+      const parsed = parseFailure(failureNotice(failure));
+      expect(parsed?.plain).toContain(why);
+      expect(parsed?.action).toContain(action);
+      const group = groupFailureText(failure);
+      expect(group).toContain(why);
+      expect(group).toContain(action);
+    });
+
+  it("錯誤重點只含固定類別與實際狀態碼，重試用實際次數", () => {
+    const result = {
+      kind: "server_error" as const, status: 503,
+      message: 'if (event.type === "turn.failed") https://demo.invalid/internal',
+    };
+    const failure = explainUpstreamFailure(result);
+    const notice = failureNotice(failure, 3, "Codex 修改程式");
+    const group = groupFailureText(failure, 3);
+    expect(parseFailure(notice)?.detail).toBe("上游伺服器錯誤（HTTP 503）");
+    for (const text of [notice, group]) {
+      expect(text).toContain("已自動重試 3 次");
+      expect(text).not.toMatch(/turn\.failed|demo\.invalid|自動重試一次/);
+      expect(text).toContain("從頭開始");
+    }
+    expect(failureNotice(explainUpstreamFailure({ kind: "connection" }))).not.toContain("HTTP");
+  });
+
+  it("永久錯誤先改模型或縮小需求，不會叫人等自動重試", () => {
+    for (const [kind, expected] of [
+      ["model_unavailable", { kind: "page", page: "settings" }],
+      ["context_too_long", { kind: "amend" }],
+    ] as const) {
+      const failure = explainUpstreamFailure({ kind }, "verify");
+      expect(primaryFix(parseFailure(failureNotice(failure)))).toEqual(expected);
+      expect(groupFailureText(failure)).not.toContain("自動重試");
+    }
+  });
+
+  for (const [next, progress] of [
+    [undefined, "從頭開始"],
+    ["verify", "從測試與獨立審查接續"],
+    ["repair", "沿用審查意見接續修復"],
+  ] as const)
+    it(`等待與最終失敗都說明下一次會${progress}`, () => {
+      const result = { kind: "server_error" as const, status: 503 };
+      const text = upstreamWaitText(result, 180, next);
+      expect(text).toMatch(/^等待 AI 服務恢復/);
+      expect(text).toContain("3 分鐘後自動再試");
+      expect(text).toContain("503");
+      const failure = explainUpstreamFailure(result, next);
+      for (const copy of [text, failureNotice(failure), groupFailureText(failure)])
+        expect(copy).toContain(progress);
+    });
+});
 
 // 看板把 failureNotice 的輸出拆成白話說明、建議與錯誤重點；兩邊格式必須一致（docs/conventions.md 第 3 節）。
 describe("parseFailure 拆解 failureNotice 的實際輸出", () => {

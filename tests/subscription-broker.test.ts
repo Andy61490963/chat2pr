@@ -449,6 +449,21 @@ describe("訂閱主憑證隔離與有限階段能力", () => {
 });
 
 describe("上游失敗只留下固定類別與狀態碼（#264）", () => {
+  it("可信執行器只回報本階段的上游結果，未使用上游不能清除故障", async () => {
+    const success = await fixture();
+    expect(success.lease.outcome()).toEqual({});
+    expect((await success.send()).statusCode).toBe(200);
+    expect(success.lease.outcome()).toEqual({ upstreamSucceeded: true });
+    const blocked = await fixture();
+    expect((await blocked.send({ model: "invalid" })).statusCode).toBe(403);
+    expect(blocked.lease.outcome()).toEqual({});
+    const failed = await fixture({
+      credentials: async () => identity,
+      upstreamFetch: async () => new Response(null, { status: 503 }),
+    });
+    expect((await failed.send()).statusCode).toBe(502);
+    expect(failed.lease.outcome()).toEqual({ upstreamFailure: { kind: "server_error", status: 503 } });
+  });
   const upstreamText = "虛構上游錯誤：內部節點 node-7 回應 overloaded";
   const failing = (
     upstreamFetch: typeof fetch,
@@ -460,6 +475,55 @@ describe("上游失敗只留下固定類別與狀態碼（#264）", () => {
       headers: { "Content-Type": type, "X-Upstream-Node": "node-7" },
     });
   const frames = (...events: unknown[]) => sse(events);
+  it("串流正在讀取時取消不當成上游斷線", async () => {
+    let reading!: () => void;
+    const started = new Promise<void>((resolve) => { reading = resolve; });
+    const work = await failing(async (_url, options) => new Response(new ReadableStream({
+      start(controller) {
+        options!.signal!.addEventListener("abort", () => controller.error(new Error(upstreamText)), { once: true });
+      },
+      pull() { reading(); },
+    }, { highWaterMark: 0 }), { headers: { "Content-Type": "text/event-stream" } }));
+    const pending = work.send().then(response => response);
+    await started;
+    work.broker.revoke(work.runId);
+    expect((await pending).statusCode).toBe(408);
+    expect(work.lease.outcome()).toEqual({});
+  });
+  it("刷新登入時取消不當成登入失效", async () => {
+    let refreshing!: () => void;
+    const started = new Promise<void>((resolve) => { refreshing = resolve; });
+    const work = await failing(async () => body(upstreamText, 401), async (refresh) => {
+      if (refresh) {
+        refreshing();
+        return new Promise<typeof identity>(() => {});
+      }
+      return identity;
+    });
+    const pending = work.send().then(response => response);
+    await started;
+    work.broker.revoke(work.runId);
+    expect((await pending).statusCode).toBe(408);
+    expect(work.lease.outcome()).toEqual({});
+  });
+  it.each([
+    [503, 401, "auth"],
+    [429, 429, "quota"],
+  ] as const)("上游回 401 後刷新失敗（%i）仍保留原狀態，不再推論或傳出原文", async (refreshStatus, relayStatus, kind) => {
+    let requests = 0;
+    const work = await failing(async () => {
+      requests++;
+      return body(upstreamText, 401);
+    }, async (refresh) => {
+      if (refresh) throw new AppError(refreshStatus, upstreamText);
+      return identity;
+    });
+    const reply = await work.send();
+    expect(reply.statusCode).toBe(relayStatus);
+    expect(reply.body).not.toContain(upstreamText);
+    expect(work.lease.outcome()).toEqual({ upstreamFailure: { kind, status: 401 } });
+    expect(requests).toBe(1);
+  });
   it.each([
     ["上游 503", async () => body(upstreamText, 503), { kind: "server_error", status: 503 }],
     ["上游 500", async () => body(upstreamText, 500), { kind: "server_error", status: 500 }],
@@ -493,6 +557,8 @@ describe("上游失敗只留下固定類別與狀態碼（#264）", () => {
         }),
       { kind: "invalid_response" },
     ],
+    ["串流事件是空值", async () => frames(null), { kind: "invalid_response" }],
+    ["串流事件缺少類型", async () => frames({}), { kind: "invalid_response" }],
     [
       "串流缺少用量",
       async () => frames(event("完成", null)),
@@ -559,7 +625,8 @@ describe("上游失敗只留下固定類別與狀態碼（#264）", () => {
     const f = await failing(upstreamFetch as typeof fetch);
     const response = await f.send();
     expect(response.statusCode).toBeGreaterThanOrEqual(400);
-    expect(f.broker.upstreamFailure(f.runId)).toEqual(expected);
+    const receivedHeaders = !["connection"].includes((expected as { kind: string }).kind);
+    expect(f.broker.upstreamFailure(f.runId)).toEqual(receivedHeaders ? { status: 200, ...(expected as object) } : expected);
     // 記錄與回給工作容器的內容都不含上游的字串或標頭。
     const recorded = JSON.stringify(f.broker.upstreamFailure(f.runId));
     for (const text of [upstreamText, "node-7", "overloaded", "ECONNRESET", "socket hang up"]) {
@@ -575,6 +642,21 @@ describe("上游失敗只留下固定類別與狀態碼（#264）", () => {
     );
     expect((await f.send()).statusCode).toBe(401);
     expect(f.broker.upstreamFailure(f.runId)).toEqual({ kind: "auth", status: 401 });
+  });
+  it("刷新後憑證未更換也保留上游的 401", async () => {
+    const rejected = await failing(async () => body(upstreamText, 401));
+    expect((await rejected.send()).statusCode).toBe(401);
+    expect(rejected.broker.upstreamFailure(rejected.runId)).toEqual({ kind: "auth", status: 401 });
+  });
+  it.each([
+    ["model_not_found", "model_unavailable"],
+    ["context_length_exceeded", "context_too_long"],
+    ["constructor", "rejected"],
+  ])("拒絕請求只採用已知的結構化代碼 %s", async (code, kind) => {
+    const rejected = await failing(async () => Response.json({ error: { code, message: upstreamText } }, { status: 400 }));
+    const response = await rejected.send();
+    expect(response.body).not.toContain(upstreamText);
+    expect(rejected.broker.upstreamFailure(rejected.runId)).toEqual({ kind, status: 400 });
   });
   it("成功的呼叫與代理自己擋下的請求沒有上游失敗", async () => {
     const ok = await fixture();

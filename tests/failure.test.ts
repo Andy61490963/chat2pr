@@ -18,6 +18,19 @@ import { codexSdkCrash, codexSdkStackOnly } from "./failure-samples.js";
 
 // 正式環境近 30 天看得到、但使用者看不懂的失敗訊息（#22），各自固定分類與白話說明。
 describe("實際錯誤樣本的分類", () => {
+  it("只有轉送層的 502 時不猜上游原因，錯誤重點不含程式碼或內部網址", () => {
+    const raw = [
+      "Codex 執行失敗：",
+      'if (event.type === "turn.failed") {',
+      "Error: unexpected status 502 Bad Gateway: 訂閱轉送失敗，未使用其他計費方式，url: http://demo.invalid/internal",
+    ].join("\n");
+    const failure = classifyFailure(raw, "code");
+    expect(failure.category).toBe("transient");
+    expect(parseFailure(failureNotice(failure))?.detail).toBe("訂閱轉送回覆 502，無法確認上游狀態");
+    expect(groupFailureText(failure)).toContain("訂閱請求沒有完成");
+    expect(failureNotice(failure)).not.toMatch(/turn\.failed|demo\.invalid|上游 502/);
+  });
+
   it("系統套件（#18）：來源被白名單擋下或計畫不再通過固定規則是設定問題，其他安裝失敗是環境問題", () => {
     for (const raw of [
       "系統套件安裝失敗（退出碼 100）：Err:1 https://deb.debian.org/debian bookworm InRelease\n  403  Forbidden [IP: 172.18.0.2 3128]",

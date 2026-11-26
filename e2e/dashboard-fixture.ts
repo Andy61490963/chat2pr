@@ -421,6 +421,7 @@ export const task: Task = {
   pr_url: null,
   parent_id: null,
   last_error: null,
+  retry_at: null,
   answer: null,
   created_at: timestamp,
   updated_at: timestamp,

@@ -2,10 +2,31 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 import {
   diskReport,
+  emitDashboardEvent,
+  firstSetupHealth,
   mockDashboard,
   statusProjects,
   systemSnapshot,
 } from "./dashboard-fixture";
+
+test("訂閱登入正常時仍顯示推論失敗的類別、狀態碼與時間，恢復後自動移除", async ({ page }) => {
+  const reading = {
+    name: "codex_upstream",
+    ok: false,
+    detail: "上游伺服器錯誤（HTTP 503）",
+    checked_at: "2026-01-02T00:15:00Z",
+  };
+  const health = [...firstSetupHealth, reading];
+  await mockDashboard(page, { state: { health } });
+  await page.goto("/system?tab=execution");
+  const notice = page.getByRole("status", { name: "Codex 訂閱推論" });
+  await expect(notice).toContainText("上游伺服器錯誤（HTTP 503）");
+  await expect(notice.locator("time")).toHaveAttribute("datetime", reading.checked_at);
+  await expect(notice.locator("time")).toContainText("08:15");
+  health[health.length - 1] = { ...reading, ok: true, detail: "最近一次推論成功" };
+  await emitDashboardEvent(page, "update");
+  await expect(notice).toHaveCount(0);
+});
 
 const tabs = [
   { name: "執行", query: "execution", content: "每件任務要切到看板" },

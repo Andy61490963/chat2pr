@@ -1,5 +1,8 @@
 import { afterEach, expect, it } from "vitest";
 import http from "node:http";
+import { randomUUID } from "node:crypto";
+import Fastify from "fastify";
+import { SubscriptionBroker } from "../server/subscription-broker.js";
 import type { request as httpsRequest } from "node:https";
 import {
   createSubscriptionTransport,
@@ -89,6 +92,38 @@ it("不跟隨重導也不回顯Location或上游原因", async () => {
   });
   await expect(f.send()).rejects.toThrow("不接受重新導向");
   expect(f.calls).toHaveLength(1);
+});
+it.each([
+  [302, "rejected"],
+  [204, "invalid_response"],
+  [205, "invalid_response"],
+] as const)("代理保留上游 HTTP %i 與故障類別，不跟隨重新導向", async (status, kind) => {
+  const upstream = await fixture((req, res) => {
+    req.resume();
+    res.writeHead(status, { location: "https://example.invalid/privatepath" });
+    res.end(status === 302 ? "privatebody" : undefined);
+  });
+  const app = Fastify();
+  const broker = new SubscriptionBroker({
+    credentials: async () => ({
+      accessToken: "testaccess123", accountId: "testaccount123", secrets: [],
+      models: ["test"], defaultModel: "test",
+    }),
+    upstreamFetch: upstream.transport,
+  });
+  broker.register(app);
+  clean.push(async () => { broker.close(); await app.close(); });
+  const lease = await broker.issue({ runId: randomUUID(), phase: "code", deadline: Date.now() + 10000 });
+  const reply = await app.inject({
+    method: "POST", url: `${lease.basePath}/responses`,
+    headers: { authorization: `Bearer ${lease.token}` },
+    payload: { model: "test", stream: true, input: [] },
+  });
+  expect(reply.statusCode).toBe(502);
+  expect(lease.outcome()).toEqual({ upstreamFailure: { kind, status } });
+  expect(reply.body).not.toMatch(/privatebody|privatepath/);
+  expect(reply.headers.location).toBeUndefined();
+  expect(upstream.calls).toEqual([{ address: SUBSCRIPTION_RESPONSES_URL, method: "POST" }]);
 });
 it("錯誤目的地、方法或無phase signal不送出網路請求", async () => {
   const f = await fixture((_req, res) => res.end());

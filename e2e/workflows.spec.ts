@@ -11,6 +11,31 @@ import {
   task,
 } from "./dashboard-fixture";
 
+test("任務列表與詳情顯示等待 AI 服務恢復，而不是宣告失敗", async ({ page }) => {
+  const retryAt = new Date(Date.now() + 180_000).toISOString();
+  const queued = {
+    ...task, status: "queued" as const, retry_at: retryAt,
+    last_error: "等待 AI 服務恢復：Codex 服務暫時無法回應。系統會在 3 分鐘後自動再試。修改已保留，重試會從測試與獨立審查接續。",
+  };
+  await mockDashboard(page, {
+    state: { tasks: [queued] },
+    routes: {
+      [`/api/tasks/${queued.id}`]: {
+        ...detail, task: queued,
+        queue: { code: "retry", position: 1, text: "等待 AI 服務恢復，約 08:15 自動重試", hint: null, retry_at: retryAt },
+      },
+    },
+  });
+  await page.goto("/tasks");
+  const row = page.getByRole("button", { name: new RegExp(queued.title) });
+  await expect(row.getByText("等待 AI 服務恢復", { exact: true })).toBeVisible();
+  await row.click();
+  const drawer = page.getByRole("dialog", { name: queued.title });
+  await expect(drawer.getByRole("status", { name: "排隊原因" })).toContainText("08:15 自動重試");
+  await expect(drawer.getByText(/從測試與獨立審查接續/)).toBeVisible();
+  await expect(drawer.getByRole("button", { name: "重試", exact: true })).toHaveCount(0);
+});
+
 test("任務詳情顯示排隊原因與失敗後的處理建議", async ({ page }) => {
   const queued: Task = { ...task, title: "整理範例清單", status: "queued" };
   const failed: Task = {
