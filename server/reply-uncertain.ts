@@ -9,14 +9,17 @@ export const groupReplyStillUncertain = `n.id IN (SELECT n.line_reply_alert_id $
   AND n.line_reply_alert_id IS NOT NULL AND n.line_reply_policy='manual')`;
 
 export async function queueUncertainReplyAlerts(c: DbClient, ids: string[]) {
-  const { rows } = await c.query<{ id: string; task_id: string | null; name: string; kind: string; summary: string }>(
-    `SELECT n.id,n.task_id,g.name,n.kind,COALESCE(t.title,n.text) AS summary
+  const { rows } = await c.query<{ id: string; task_id: string | null; name: string; kind: string; title: string | null }>(
+    `SELECT n.id,n.task_id,g.name,n.kind,t.title
      FROM notifications n JOIN groups g ON g.id=n.group_id LEFT JOIN tasks t ON t.id=n.task_id
      WHERE n.id=ANY($1::uuid[]) AND n.line_reply_alert_id IS NULL AND ${importantLineGroupNotice}
      ORDER BY n.created_at,n.id`, [ids],
   );
   if (!rows.length) return;
-  const summaries = rows.map((r) => `${groupKindLabels[r.kind] ?? "指令判讀"}：${Array.from(redact(r.summary).replace(/\s+/g, " ")).slice(0, 60).join("")}`);
+  const summaries = rows.map((r) => {
+    const kind = groupKindLabels[r.kind] ?? "指令判讀";
+    return r.title ? `${kind}：${Array.from(redact(r.title).replace(/\s+/g, " ")).slice(0, 60).join("")}` : kind;
+  });
   const text = `LINE 未確認「${redact(rows[0].name)}」的 ${rows.length} 則重要回覆是否送達。請到群組聊天室查看，必要時代為轉達。\n${summaries.join("\n")}`;
   const { rows: [alert] } = await c.query<{ id: string }>(
     `INSERT INTO notifications(task_id,kind,dedupe_key,text) VALUES($1,'reply_uncertain',$2,$3) RETURNING id`,

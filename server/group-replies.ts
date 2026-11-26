@@ -292,7 +292,7 @@ export function pendingGroupRepliesFrom(automatic: boolean, forAlert = false) {
     OR (n.line_reply_policy IS NOT NULL AND NOT EXISTS (
       SELECT 1 FROM notifications p WHERE p.line_digest_id=n.line_digest_id AND p.sent_at IS NULL
         AND p.attempts<3 AND p.line_reply_policy IS NULL AND COALESCE(p.last_error,'') NOT LIKE '${quotaShortPrefix}%')))
-  AND (n.line_reply_policy IS NULL OR NOT (${staleNotification}))
+  AND (n.line_reply_policy IS DISTINCT FROM 'free' OR NOT (${staleNotification}))
   AND ((${retrievable("n", group, claimed)} AND ${newestOfTask}) OR (
     g.platform='line' AND n.group_id=${group} AND (n.sent_at IS NULL${claimed}) AND n.reply_failures<${REPLY_FAILURE_LIMIT}
     AND (n.task_id IS NULL OR t.group_id=${group}) AND NOT (${staleNotification})
