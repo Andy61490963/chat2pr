@@ -501,7 +501,7 @@ export function InboxView({
             </div>
           </div>
         )}
-        {(!stuckTasks.length || items.length > 0 || confirmEnd) && <ReviewWorkbench
+        {activeTab === "decisions" && (!stuckTasks.length || items.length > 0 || confirmEnd) && <ReviewWorkbench
           items={items}
           sort={sort}
           lists={lists}

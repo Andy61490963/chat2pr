@@ -33,7 +33,7 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 375, height: 812 
         await page.goto("/");
         const row = page.getByRole("list", { name: "待決策佇列" })
           .getByRole("listitem").filter({ hasText: tasks[0].title });
-        const approve = row.getByRole("button", { name: /核准修改/ });
+        const approve = row.getByRole("button", { name: "核准修改", exact: true });
         await expect(approve).toBeEnabled();
         await approve.focus();
         await expect(approve).toBeInViewport();
