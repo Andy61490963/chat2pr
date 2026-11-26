@@ -44,8 +44,22 @@ for (const width of [375, 1440]) {
       await expect(
         page.getByRole("checkbox", { name: "需要複核" }),
       ).toBeChecked();
+      const toggle = page.getByRole("switch", { name: "啟用工序" });
+      await toggle.press("Space");
+      await expect(toggle).toBeChecked();
       await page.getByRole("combobox", { name: "站別" }).press("Enter");
-      await page.getByRole("option", { name: "複核站" }).press("Enter");
+      const option = page.getByRole("option", { name: "複核站" });
+      if (width === 375) {
+        for (const control of [toggle, option]) {
+          expect(
+            await control.evaluate((el) => (el as HTMLElement).offsetHeight),
+          ).toBeGreaterThanOrEqual(44);
+          expect(
+            await control.evaluate((el) => (el as HTMLElement).offsetWidth),
+          ).toBeGreaterThanOrEqual(44);
+        }
+      }
+      await option.press("Enter");
       await expect(page.getByRole("combobox")).toHaveText("複核站");
       await page.getByRole("tab", { name: "工序" }).focus();
       await page.keyboard.press("ArrowRight");

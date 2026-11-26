@@ -27,6 +27,27 @@ function declarations(rule: Container) {
 }
 
 describe("看板的設計代幣", () => {
+  it("手機的開關與選項各自保留四十四像素的觸控範圍", () => {
+    for (const slot of ["switch", "select-item"]) {
+      const sizes = new Map<string, string>();
+      sheet.walkAtRules("media", (media) => {
+        if (!media.params.includes("max-width")) return;
+        media.walkRules((rule) => {
+          if (!rule.selectors.includes(`[data-slot="${slot}"]`)) return;
+          for (const [name, value] of declarations(rule))
+            sizes.set(name, value);
+        });
+      });
+      for (const axis of ["min-height", "min-width"]) {
+        const units = /^--spacing\((\d+)\)$/.exec(sizes.get(axis) ?? "");
+        expect(
+          Number(units?.[1] ?? 0) * pixels("--spacing"),
+          slot,
+        ).toBeGreaterThanOrEqual(44);
+      }
+    }
+  });
+
   it("元件與頁面的類別合併時，保留字級與字色並讓頁面覆寫同類尺寸", () => {
     expect(cn("text-caption", "text-muted-foreground")).toBe(
       "text-caption text-muted-foreground",

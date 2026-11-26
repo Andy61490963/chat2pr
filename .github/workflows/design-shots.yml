@@ -1,0 +1,48 @@
+name: 看板畫面對照
+on:
+  pull_request:
+    paths:
+      - "src/**"
+      - "e2e/design-*"
+      - ".github/workflows/design-shots.yml"
+permissions:
+  contents: read
+jobs:
+  screenshots:
+    name: 設計系統前後截圖
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: proposed
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: previous
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: "*/package-lock.json"
+      - name: 準備相同瀏覽器與兩版各自的依賴
+        run: |
+          npm ci --prefix previous
+          npm ci --prefix proposed
+          cd proposed
+          npx playwright install --with-deps chromium --only-shell
+      - name: 使用同一組頁面驗收情境擷取兩版畫面
+        env:
+          E2E_PORT: "5340"
+        run: |
+          cp proposed/e2e/design-pages.spec.ts previous/e2e/design-pages.spec.ts
+          (cd previous && DESIGN_SHOTS_DIR="$RUNNER_TEMP/shots/改版前" npx playwright test e2e/design-pages.spec.ts --workers=1)
+          (cd proposed && DESIGN_SHOTS_DIR="$RUNNER_TEMP/shots/改版後" npx playwright test e2e/design-pages.spec.ts e2e/design-system.spec.ts --workers=1)
+      - name: 保留畫面供審查
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: 看板畫面對照
+          path: ${{ runner.temp }}/shots/
+          if-no-files-found: error
+          retention-days: 14

@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/dialog";
 import {
   Checkbox,
+  Switch,
   Label,
   Textarea,
   Tabs,
@@ -108,6 +109,10 @@ function Gallery() {
           <Label htmlFor="review">
             <Checkbox id="review" />
             需要複核
+          </Label>
+          <Label htmlFor="enabled">
+            <Switch id="enabled" />
+            啟用工序
           </Label>
           <InlineNotice tone="info">設備異動後請重新複核工單。</InlineNotice>
           <Tabs defaultValue="work">

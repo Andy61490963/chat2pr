@@ -419,6 +419,8 @@ button.work-row:hover {
 
   [data-slot="button"],
   [data-slot="select-trigger"],
+  [data-slot="select-item"],
+  [data-slot="switch"],
   [data-slot="input"],
   [data-slot="tabs-trigger"],
   [data-slot="dropdown-menu-item"],
