@@ -75,10 +75,11 @@ export function inspectScript(
 ) {
   type Binding = ts.Expression | ts.FunctionDeclaration;
   const bindings = new Map<ts.Node, Map<string, Binding>>();
-  const classProperty = /(?:^|[a-z])Class(?:Name|es)?$|^class(?:Name)?$/;
+  const classProperty = /(?:^|[a-z])Class(?:Names?|es)?$|^class(?:Names?)?$/;
   const roots: (() => void)[] = [];
   const inspectedClasses = new Set<ts.Node>();
   const inspectedObjects = new Set<ts.Node>();
+  const inspectedShared = new Set<ts.Node>();
 
   function initializer(name: ts.Identifier) {
     for (
@@ -112,11 +113,11 @@ export function inspectScript(
     bindings.set(scope, names);
   }
 
-  function returnedClasses(node: ts.Node) {
+  function visitReturns(node: ts.Node, inspect: (value: ts.Expression) => void) {
     if (ts.isReturnStatement(node)) {
-      if (node.expression) classes(node.expression);
+      if (node.expression) inspect(node.expression);
     } else if (!ts.isFunctionLike(node)) {
-      ts.forEachChild(node, returnedClasses);
+      ts.forEachChild(node, (child) => visitReturns(child, inspect));
     }
   }
 
@@ -144,7 +145,7 @@ export function inspectScript(
       ts.isArrowFunction(node) ||
       ts.isFunctionExpression(node)
     ) {
-      if (node.body && ts.isBlock(node.body)) returnedClasses(node.body);
+      if (node.body && ts.isBlock(node.body)) visitReturns(node.body, classes);
       else if (node.body) classes(node.body);
     } else if (
       ts.isStringLiteralLike(node) ||
@@ -267,9 +268,27 @@ export function inspectScript(
   }
 
   // 匯出對照表只讀屬性值；敘述句中的範例類別、物件鍵與網址不當作類別清單。
-  function sharedValues(value: ts.Expression) {
-    const node = unwrap(value);
-    if (ts.isObjectLiteralExpression(node)) {
+  function sharedValues(value: Binding) {
+    const node = ts.isFunctionDeclaration(value) ? value : unwrap(value);
+    if (inspectedShared.has(node)) return;
+    inspectedShared.add(node);
+    if (ts.isIdentifier(node)) {
+      const init = initializer(node);
+      if (init) sharedValues(init);
+    } else if (
+      ts.isElementAccessExpression(node) ||
+      ts.isPropertyAccessExpression(node)
+    ) {
+      sharedValues(node.expression);
+    } else if (
+      ts.isFunctionDeclaration(node) ||
+      ts.isFunctionExpression(node) ||
+      ts.isArrowFunction(node)
+    ) {
+      if (node.body && ts.isBlock(node.body))
+        visitReturns(node.body, sharedValues);
+      else if (node.body) sharedValues(node.body);
+    } else if (ts.isObjectLiteralExpression(node)) {
       for (const prop of node.properties)
         if (ts.isPropertyAssignment(prop)) sharedValues(prop.initializer);
     } else if (ts.isArrayLiteralExpression(node)) {
@@ -280,7 +299,14 @@ export function inspectScript(
   }
 
   function gather(n: ts.Node) {
-    if (ts.isFunctionDeclaration(n) && n.name) bind(n.name, n, n.parent);
+    if (ts.isFunctionDeclaration(n)) {
+      if (n.name) bind(n.name, n, n.parent);
+      if (
+        file.startsWith("shared/") &&
+        n.modifiers?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
+      )
+        roots.push(() => sharedValues(n));
+    }
     if (
       ts.isVariableDeclaration(n) &&
       ts.isIdentifier(n.name) &&
@@ -297,13 +323,19 @@ export function inspectScript(
         )
       ) {
         if (classProperty.test(n.name.text)) roots.push(() => classes(init));
-        else if (
-          file.startsWith("shared/") &&
-          ts.isObjectLiteralExpression(unwrap(init))
-        ) {
+        else if (file.startsWith("shared/")) {
           roots.push(() => sharedValues(init));
         }
       }
+    }
+    if (
+      ts.isBindingElement(n) &&
+      ts.isObjectBindingPattern(n.parent) &&
+      classProperty.test(propertyName(n.propertyName ?? n.name)) &&
+      n.initializer
+    ) {
+      const value = n.initializer;
+      roots.push(() => classes(value));
     }
     if (ts.isJsxAttribute(n) || ts.isPropertyAssignment(n)) {
       const name = propertyName(n.name);

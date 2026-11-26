@@ -63,7 +63,11 @@
 
 Radix 狀態與子元素選擇器、媒體查詢斷點、IntersectionObserver 的 `rootMargin`、連結錨點、工單編號屬於選擇條件或資料。數字間距工具依 `--spacing` 的倍數運作；間距是否適合資料密度仍須看畫面。渲染後的對比、觸控範圍與版面由瀏覽器驗收檢查。第三方套件、應用程式執行時載入的圖形內容及 `src/`、`shared/` 以外的文件不屬於這份來源盤點。
 
-掃描器辨認 JSX 和物件中的 `className`、`valueClassName`、`footerClassName`、`indicatorClassName` 等類別屬性，追蹤同檔函式與箭頭函式的回傳值。`shared/` 直接匯出的物件字面值會檢查巢狀對照表與陣列中的類別字串；一般敘述、物件鍵與網址不列入。另檢查 `cn` 等組合函式、DOM 樣式的字面屬性名稱及 `Object.assign(el.style, ...)`。跨檔函式回傳的類別、執行期拼出的完整類別，動態計算的 DOM 屬性名稱、混有未知自訂單字的匯出對照、經重匯出或展開建立的對照表，以及經 `{...props}` 隱含傳入的屬性須由審查者核對。具名資料變數按檔案登記在 `scripts/design-style-context.ts`。磁碟的 `--disk-used-width` 取自容量比例，查詢報告的 `--diagram-width` 取自 SVG 實測寬度與使用者縮放倍率，進度條的 `--progress-offset` 取自目前的完成比例。
+掃描器辨認 JSX 與物件的 `className`、`innerClassName`、`classNames` 等屬性，以及解構時給這些屬性的預設值。同檔函式與箭頭函式傳回的類別也會追蹤。`shared/` 會檢查匯出的陣列與物件，包括匯出函式直接傳回或依鍵取得的本檔對照值。一般敘述、物件鍵與網址不列入。另檢查 `cn` 等組合函式、DOM 樣式的字面屬性名稱及 `Object.assign(el.style, ...)`。跨檔函式回傳的類別、執行期拼出的完整類別，動態計算的 DOM 屬性名稱、混有未知自訂單字的匯出對照、經重匯出或展開建立的對照表，以及經 `{...props}` 隱含傳入的屬性須由審查者核對。具名資料變數按檔案登記在 `scripts/design-style-context.ts`。磁碟的 `--disk-used-width` 取自容量比例，查詢報告的 `--diagram-width` 取自 SVG 實測寬度與使用者縮放倍率，進度條的 `--progress-offset` 取自目前的完成比例。
+
+### 審查者人工核對清單
+
+- `shape-pill` 限用於狀態點、數量徽章、頭像、單選指示器等小元素。面板使用 `rounded-md` 或更小的圓角。
 
 ## 其他 PR 遇到 token 檢查失敗時怎麼改
 
@@ -84,15 +88,15 @@ Radix 狀態與子元素選擇器、媒體查詢斷點、IntersectionObserver �
 
 盤點數字依同一版掃描器計算。每一筆紀錄一個樣式，同一工具中的色碼或單位計一次。逐項原因和來源識別見[基準清單](../tests/design-tokens.baseline.tsv)。
 
-主線 `edade94` 共 426 筆，本輪保留 152 筆。下表記錄這次盤點，後續各分支以基準清單查詢即時數量。
+主線 `50145b6` 共 440 筆，本輪保留 166 筆。下表記錄首次導入的盤點，後續各分支以基準清單查詢即時數量。
 
 | 原因 | 主線 | 本輪保留 |
 | --- | ---: | ---: |
-| 任意工具值須改用具名 token | 184 | 71 |
+| 任意工具值須改用具名 token | 196 | 83 |
 | 動態樣式須使用已登記的 CSS 變數 | 20 | 17 |
 | 只有浮層可用陰影代幣 | 14 | 0 |
 | 固定字級、間距或圓角須改用 token | 58 | 21 |
-| 大圓角須改用規範圓角 | 141 | 39 |
+| 大圓角須改用規範圓角 | 143 | 41 |
 | 漸層或毛玻璃須改用單色表面 | 1 | 1 |
 | 行內像素須改用尺寸 token | 5 | 3 |
 | 預設色盤須改用語意色 | 3 | 0 |
@@ -110,7 +114,7 @@ Radix 狀態與子元素選擇器、媒體查詢斷點、IntersectionObserver �
 | `src/app/egress.tsx` | 3 | 0 |
 | `src/app/friction.tsx` | 2 | 0 |
 | `src/app/groups.tsx` | 24 | 0 |
-| `src/app/inbox.tsx` | 10 | 9 |
+| `src/app/inbox.tsx` | 13 | 12 |
 | `src/app/members.tsx` | 4 | 0 |
 | `src/app/memory-overview.tsx` | 7 | 0 |
 | `src/app/page-notices.tsx` | 1 | 1 |
@@ -121,14 +125,15 @@ Radix 狀態與子元素選擇器、媒體查詢斷點、IntersectionObserver �
 | `src/app/projects.tsx` | 22 | 0 |
 | `src/app/query-report.css` | 26 | 0 |
 | `src/app/query-report.tsx` | 14 | 0 |
-| `src/app/review-workbench.tsx` | 6 | 6 |
+| `src/app/review-queue-list.tsx` | 10 | 10 |
+| `src/app/review-workbench.tsx` | 3 | 3 |
 | `src/app/run-observer.tsx` | 6 | 6 |
 | `src/app/settings.tsx` | 12 | 11 |
 | `src/app/shared.tsx` | 5 | 2 |
 | `src/app/system.tsx` | 20 | 19 |
 | `src/app/task-actions.tsx` | 5 | 5 |
 | `src/app/task-clarification.tsx` | 2 | 0 |
-| `src/app/task-review-panel.tsx` | 29 | 28 |
+| `src/app/task-review-panel.tsx` | 33 | 32 |
 | `src/app/tasks.tsx` | 5 | 0 |
 | `src/components/brand.tsx` | 2 | 0 |
 | `src/components/ui/button.tsx` | 2 | 0 |
@@ -148,12 +153,12 @@ Radix 狀態與子元素選擇器、媒體查詢斷點、IntersectionObserver �
 
 ## 分階段接手與重跑
 
-本階段遷移群組、記憶總覽、專案與連線、成員、定期檢查、聊天室、任務及報告，另包含系統頁內的容量、使用摩擦、磁碟與網路區塊。第二輪核對的平行 PR 包含 #269、#270、#274、#275、#277、#282、#283。#274 與 #283 已先合併，#277 仍在審查。同步 #283 後重新產生基準，164 筆的內容逐筆相同。重新套用主線時，兩個來自 #274 的 `[overflow-wrap:anywhere]` 分別位於收件匣與系統頁，替換方式見上表。主殼與審核頁的其餘整理留到第二階段。本輪已遷移全部九個圓形使用處及通知鈴鐺的數量徽章。
+本階段遷移群組、記憶總覽、專案與連線、成員、定期檢查、聊天室、任務及報告，另包含系統頁內的容量、使用摩擦、磁碟與網路區塊。#277 與 #282 已合入主線。收件匣改版引入的樣式一併納入首次基準，留待第二階段遷移。
 
 第二階段依合併後的版本處理以下檔案，估計 2 至 4 個人日，包含鍵盤與版面驗收。
 
 1. 導覽殼與通知的 `src/App.tsx`、`src/app/shared.tsx`、`src/app/page-notices.tsx`。待主殼接入時再實作 PageHeader 與側欄元件。
-2. 收件匣及審核的 `inbox.tsx`、`pick-list.tsx`、`review-workbench.tsx`、`task-review-panel.tsx`、`task-actions.tsx`，以及其他 PR 新增的 `review-queue-list.tsx`。如需警示式確認，連同真正的呼叫端導入。
+2. #277 的收件匣與審核介面涵蓋 `src/App.tsx`、`src/app/inbox.tsx`、新增的 `review-queue-list.tsx`、更新的 `review-workbench.tsx`、`pick-list.tsx`、`task-actions.tsx` 與 `task-review-panel.tsx`。遷移時沿用 #277 的佇列、快速核准、分頁及鍵盤驗收。
 3. 系統、設定及紀錄的 `system.tsx`、`settings.tsx`、`run-observer.tsx`。獨立架構圖的 `src/flow/architecture-flow.js` 及 `docs/architecture-flow.html` 需一併驗證內嵌、獨立視窗與縮放。
 
 驗收伺服器的展示入口為 `/e2e/design-system.html`。更新[展示元件](../e2e/design-system-gallery.tsx)後，執行[元件操作與截圖測試](../e2e/design-system.spec.ts)及[頁面對照測試](../e2e/design-pages.spec.ts)。PR 的「設計系統前後截圖」工作會保留「看板畫面對照」成品 14 天。下載後可對照「改版前」與「改版後」相同檔名的 PNG，`新增畫面.md` 列出只有新版才有的截圖。本輪新增[形狀驗收](../e2e/design-shapes.spec.ts)，只補收件匣、審核面板、設定、系統的 375px 與 1440px 淺色前後圖。需重建完整展示時，可手動執行「看板畫面對照」。設定 `DESIGN_SHOTS_DIR` 可在驗收環境指定輸出位置。

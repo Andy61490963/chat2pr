@@ -9,6 +9,31 @@ const classes = (value: string) => values('<div className="' + value + '" />');
 
 describe("依樣式的語法位置檢查設計代幣", () => {
   it.each([
+    'export const buttonClassNames = { root: "p-[13px]" };',
+    'const box = <Box classNames={{ root: "p-[13px]" }} />;',
+  ])("辨認複數類別名稱的樣式對照（%#）", (source) => {
+    expect(values(source)).toEqual(["p-[13px]"]);
+  });
+  it.each([
+    ['function Box({ className = "p-[13px]" }) {}', "p-[13px]"],
+    ['const Box = ({ innerClassName = "m-[7px]" }) => null;', "m-[7px]"],
+    [
+      'const { innerClassName: inner = "m-[7px]", note = "rounded-lg" } = props;',
+      "m-[7px]",
+    ],
+  ])("解構時只檢查類別屬性的預設值（%#）", (source, expected) => {
+    expect(values(source)).toEqual([expected]);
+  });
+  it.each([
+    'export const tones = ["p-[13px] rounded-3xl", "請見 rounded-lg"];',
+    'const tones = { warn: "p-[13px] rounded-3xl" }; export function tone(k) { return tones[k]; }',
+    'const tones = { warn: "p-[13px] rounded-3xl" }; export const tone = () => tones.warn;',
+  ])("檢查共用匯出陣列或匯出函式傳回的本檔對照值（%#）", (source) => {
+    expect(
+      values('const help = ["m-[7px]"]; ' + source, "shared/example.ts"),
+    ).toEqual(["p-[13px]", "rounded-3xl"]);
+  });
+  it.each([
     "valueClassName",
     "footerClassName",
     "indicatorClassName",
