@@ -27,43 +27,64 @@ for (const example of [
   {
     name: "取消後又收到重複訊息",
     task: cancelledTask,
-    ending: { kind: "cancel", detail: "小陳 取消（需求版本 1；目標分支 main），原因：改由小林整理" },
+    ending: {
+      kind: "cancel",
+      detail: "小陳 取消（需求版本 1；目標分支 main），原因：改由小林整理",
+    },
     badge: "已取消",
     timeline: [laterDuplicate],
   },
   {
     name: "管理者因重複而拒絕任務",
     task: { ...rejectedTask, end_reason: "duplicate" as const },
-    ending: { kind: "reject", detail: "小林 拒絕（需求版本 1；目標分支 main），原因：重複" },
+    ending: {
+      kind: "reject",
+      detail: "小林 拒絕（需求版本 1；目標分支 main），原因：重複",
+    },
     badge: "重複需求",
     timeline: [],
   },
 ]) {
-  test(`${example.name}時，工作站與詳情顯示結束原因，時間軸保留判讀經過`, async ({ page }) => {
+  test(`${example.name}時，工作站與詳情顯示結束原因，時間軸保留判讀經過`, async ({
+    page,
+  }) => {
     const ending = { ...example.ending, created_at: endedAt };
     const ended = { ...example.task, updated_at: endedAt };
     ended.end_summary = taskEndSummary(ended, ending);
     const history = [ending, ...example.timeline].map((event, i) => ({
-      ...event, id: i + 1, task_id: ended.id,
+      ...event,
+      id: i + 1,
+      task_id: ended.id,
     }));
     await mockDashboard(page, {
       state: { tasks: [ended] },
-      routes: { [`/api/tasks/${ended.id}`]: { ...detail, task: ended, history } },
+      routes: {
+        [`/api/tasks/${ended.id}`]: { ...detail, task: ended, history },
+      },
     });
     await page.goto("/tasks");
     await page.getByRole("tab", { name: /^已結束/ }).click();
-    const row = page.getByRole("tabpanel", { name: /^已結束/ })
+    const row = page
+      .getByRole("tabpanel", { name: /^已結束/ })
       .getByRole("button", { name: new RegExp(ended.title) });
     await expect(row.getByText(example.badge, { exact: true })).toBeVisible();
+    if (ended.status === "answered")
+      await expect(
+        row.getByRole("img", { name: "站別軌道，結束前到達回覆站" }),
+      ).toBeVisible();
     await row.click();
     const drawer = page.getByRole("dialog", { name: ended.title });
     const header = drawer.locator('[data-slot="sheet-header"]');
-    await expect(header.getByText(example.badge, { exact: true })).toBeVisible();
+    await expect(
+      header.getByText(example.badge, { exact: true }),
+    ).toBeVisible();
     await expect(header.locator("time")).toHaveAttribute("datetime", endedAt);
     await drawer.getByRole("tab", { name: "時間軸" }).click();
     const timeline = drawer.getByRole("tabpanel", { name: "時間軸" });
     for (const event of history) {
-      await expect(timeline.getByText(event.detail, { exact: true })).toBeVisible();
+      await expect(
+        timeline.getByText(event.detail, { exact: true }),
+      ).toBeVisible();
     }
   });
 }

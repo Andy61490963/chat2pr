@@ -242,7 +242,6 @@ export const endReasonText = {
   required: "請選一個拒絕原因",
 } as const;
 
-export const taskEndSystemActor = "系統";
 export const taskCompletionEvents = {
   merged: "合併",
   answered: "回覆",

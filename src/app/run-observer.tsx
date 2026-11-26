@@ -8,6 +8,7 @@ import {
   phaseDurations,
   phaseLabels,
   phaseMinutes,
+  runEventKind,
 } from "../../shared/observation.js";
 import { statusLabels, type TaskStatus } from "../../shared/types.js";
 import { notificationLabels } from "../../shared/status-glossary.js";
@@ -342,41 +343,44 @@ export function RunObserver({
             {/* 事件依發生時間排列；進度連線恢復後補抓的事件不會排在較晚的紀錄後面。 */}
             {[...(page?.events ?? [])]
               .sort((a, b) => a.at.localeCompare(b.at) || a.seq - b.seq)
-              .map((e) => (
-                <li key={e.seq} className="min-w-0">
-                  <p
-                    className={`flex flex-wrap gap-x-3 gap-y-1 [overflow-wrap:anywhere] ${
-                      e.kind === "error" ||
-                      (e.exitCode != null && e.exitCode !== 0)
-                        ? "text-danger"
-                        : "font-medium"
-                    }`}
-                  >
-                    <span>{phaseLabels[e.phase] ?? e.phase}</span>
-                    <span>{eventLabels[e.kind] ?? e.kind}</span>
-                    {e.exitCode != null && <span>結束碼 {e.exitCode}</span>}
-                  </p>
-                  <p className="text-muted-foreground">{time(e.at)}</p>
-                  {e.threadId && (
-                    <p className="mt-1 select-all break-all font-mono">
-                      Codex thread ID：{e.threadId}
+              .map((e) => {
+                const kind = runEventKind(e);
+                return (
+                  <li key={e.seq} className="min-w-0">
+                    <p
+                      className={`flex flex-wrap gap-x-3 gap-y-1 [overflow-wrap:anywhere] ${
+                        kind === "error" ||
+                        (e.exitCode != null && e.exitCode !== 0)
+                          ? "text-danger"
+                          : "font-medium"
+                      }`}
+                    >
+                      <span>{phaseLabels[e.phase] ?? e.phase}</span>
+                      <span>{eventLabels[kind] ?? kind}</span>
+                      {e.exitCode != null && <span>結束碼 {e.exitCode}</span>}
                     </p>
-                  )}
-                  {e.containerId && (
-                    <p className="mt-1 select-all break-all font-mono">
-                      容器 ID：{e.containerId}
-                    </p>
-                  )}
-                  {e.detail && (
-                    <details className="mt-1">
-                      <summary className="cursor-pointer">檢視內容</summary>
-                      <pre className="mt-1 whitespace-pre-wrap break-all rounded bg-muted p-2 font-mono">
-                        {e.detail}
-                      </pre>
-                    </details>
-                  )}
-                </li>
-              ))}
+                    <p className="text-muted-foreground">{time(e.at)}</p>
+                    {e.threadId && (
+                      <p className="mt-1 select-all break-all font-mono">
+                        Codex thread ID：{e.threadId}
+                      </p>
+                    )}
+                    {e.containerId && (
+                      <p className="mt-1 select-all break-all font-mono">
+                        容器 ID：{e.containerId}
+                      </p>
+                    )}
+                    {e.detail && (
+                      <details className="mt-1">
+                        <summary className="cursor-pointer">檢視內容</summary>
+                        <pre className="mt-1 whitespace-pre-wrap break-all rounded bg-muted p-2 font-mono">
+                          {e.detail}
+                        </pre>
+                      </details>
+                    )}
+                  </li>
+                );
+              })}
           </ol>
           {run.observed && page?.events.length === 0 && (
             <p className="text-xs text-muted-foreground">尚未收到執行事件。</p>
