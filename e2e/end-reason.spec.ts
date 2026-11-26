@@ -40,11 +40,7 @@ for (const width of [1440, 375]) {
       return route.fulfill({ json: { ...task, status: "rejected" } });
     });
     await page.goto(`/?review=${task.id}`);
-    // 手機的審核內容開在抽屜裡，桌面在右欄的審核面板。
-    const panel =
-      width === 375
-        ? page.getByRole("dialog", { name: task.title })
-        : page.getByRole("region", { name: "審核面板" });
+    const panel = page.getByRole("dialog", { name: task.title });
     await panel.getByRole("button", { name: "結束任務", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "結束任務？" });
     const reasons = dialog.getByRole("group", { name: "拒絕原因" });

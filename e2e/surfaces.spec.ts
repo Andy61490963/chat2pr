@@ -508,6 +508,7 @@ test("收件匣只在開啟系統紀錄時顯示技術細節", async ({ page }) 
     },
   });
   await page.goto("/");
+  await page.getByRole("tab", { name: "最近動態" }).click();
   const activity = page.getByRole("region", { name: "最近動態" });
   await activity.getByRole("button", { name: /^展開步驟/ }).click();
   await expect(page.getByText("開始調查", { exact: true })).toBeVisible();

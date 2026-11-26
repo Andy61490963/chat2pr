@@ -54,6 +54,8 @@ for (const width of [1280, 375]) {
     await expect(
       page.getByRole("button", { name: "近 7 天已合併 0" }),
     ).toBeInViewport();
+    await expect(page.getByRole("heading", { name: "最近動態" })).toBeHidden();
+    await page.getByRole("tab", { name: "最近動態" }).click();
     await expect(
       page.getByRole("heading", { name: "最近動態" }),
     ).toBeInViewport();
@@ -96,12 +98,12 @@ for (const width of [1280, 375]) {
   });
 }
 
-test("有待處理任務時保留收件匣三段", async ({ page }) => {
+test("有待處理任務時，各分頁顯示對應筆數", async ({ page }) => {
   await readyDashboard(page, [task]);
   await page.goto("/");
-  for (const name of ["需要你處理 1", "進行中 0", "待合併 0"]) {
+  for (const name of ["需要你決定 1", "進行中 0", "待合併 0"]) {
     await expect(
-      page.getByRole("heading", { name, exact: true }),
+      page.getByRole("tab", { name, exact: true }),
     ).toBeVisible();
   }
   await expect(page.getByRole("heading", { name: "都處理完了" })).toHaveCount(

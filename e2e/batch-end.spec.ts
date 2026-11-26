@@ -183,11 +183,12 @@ test("成員仍可結束單張任務", async ({ page }) => {
   });
   await page.goto("/");
   const inbox = page.getByRole("region", { name: /需要你處理/ });
+  await expect(inbox).toBeVisible();
+  await expect(inbox.getByRole("checkbox")).toHaveCount(0);
+  await expect(inbox.getByRole("button", { name: "全選本頁" })).toHaveCount(0);
   await inbox.getByRole("list", { name: "待決策佇列" })
     .getByRole("button", { name: new RegExp(task.title) }).click();
   await expect(
     page.getByRole("button", { name: "結束任務", exact: true }),
   ).toBeVisible();
-  await expect(inbox.getByRole("checkbox")).toHaveCount(0);
-  await expect(inbox.getByRole("button", { name: "全選本頁" })).toHaveCount(0);
 });

@@ -1,5 +1,11 @@
 import AxeBuilder from "@axe-core/playwright";
-import { expect, test, type Page, type TestInfo } from "@playwright/test";
+import {
+  expect,
+  test,
+  type Locator,
+  type Page,
+  type TestInfo,
+} from "@playwright/test";
 import {
   assignmentWorkbenchFixture,
   meetingPickList,
@@ -11,9 +17,11 @@ import {
 test.use({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
 
 const queue = (page: Page) => page.getByRole("list", { name: "待決策佇列" });
-const panel = (page: Page) => page.getByRole("region", { name: "審核面板" });
+const panel = (page: Page) => page.getByRole("dialog");
+const entry = (page: Page, title: string) =>
+  queue(page).getByRole("listitem").filter({ hasText: title });
 const row = (page: Page, title: string) =>
-  queue(page).getByRole("button", { name: new RegExp(title) });
+  entry(page, title).getByRole("button", { name: /查看詳情/ });
 const approve = (page: Page) =>
   panel(page).getByRole("button", { name: "確認專案與分支並核准修改" });
 
@@ -74,18 +82,15 @@ test("桌面佇列依等待時間排序，每列只有一個狀態，審核面�
   const { tasks, reviewSource } = await openFixture(page, fixture);
   await page.goto("/");
   await expect(
-    page.getByRole("heading", { name: "需要你處理 30" }),
+    page.getByRole("tab", { name: /^需要你決定\s*30$/ }),
   ).toBeVisible();
   const rows = queue(page).getByRole("listitem");
   await expect(rows).toHaveCount(30);
   await expect(rows.first()).toContainText(tasks[0].title);
   await expect(rows.first()).toContainText("等了 10 小時");
   await expect(rows.nth(1)).toContainText("Discord");
-  // 桌面右欄不留白：沒指定案件時直接打開等最久的一筆。
-  await expect(page).toHaveURL(`/?review=${tasks[0].id}`);
-  await expect(
-    panel(page).getByRole("heading", { name: tasks[0].title }),
-  ).toBeVisible();
+  await expect(page).toHaveURL("/");
+  await expect(panel(page)).toHaveCount(0);
   expect(
     await rows.evaluateAll((items) =>
       items.map((item) => item.querySelectorAll("[data-review-status]").length),
@@ -107,12 +112,10 @@ test("桌面佇列依等待時間排序，每列只有一個狀態，審核面�
   await page.getByRole("tab", { name: "最新" }).click();
   await expect(rows.first()).toContainText(tasks.at(-1)!.title);
   await page.getByRole("tab", { name: "等最久" }).click();
-  await row(page, tasks[0].title).click();
-  await expect(row(page, tasks[0].title)).toHaveAttribute(
-    "aria-current",
-    "true",
-  );
+  await row(page, tasks[0].title).press("Enter");
   const review = panel(page);
+  await expect(review).toHaveAccessibleName(tasks[0].title);
+  await expect(page).toHaveURL(`/?review=${tasks[0].id}`);
   await expect(approve(page)).toBeEnabled();
   await expect(review.locator('button[data-variant="default"]')).toHaveCount(1);
   const headings = await review
@@ -163,44 +166,31 @@ test("桌面佇列依等待時間排序，每列只有一個狀態，審核面�
   await expect(
     review.getByRole("region", { name: "我先這樣假設" }),
   ).toContainText("沿用示範表單的欄位順序。");
-  for (const name of [/^進行中/, /^待合併/, /^最近動態/]) {
-    const heading = page.getByRole("heading", { name });
-    await expect(heading).toBeVisible();
-    await expect(review.getByRole("heading", { name })).toHaveCount(0);
-  }
   await checkAxe(page);
   await capture(page, testInfo, "1440px 審核工作台");
-  const reviewHeader = review.locator('[data-slot="sheet-header"]');
-  await expect(review).toHaveCSS("overflow-y", "visible");
-  await page.evaluate(() => window.scrollTo(0, 500));
-  await expect
-    .poll(async () => Math.round((await reviewHeader.boundingBox())!.y))
-    .toBe(16);
-  expect((await review.boundingBox())!.y).toBeLessThan(0);
-  await expect(reviewHeader.locator("..").getByRole("button", {
-    name: "確認專案與分支並核准修改",
-  })).toBeVisible();
+  await acceptance.scrollIntoViewIfNeeded();
+  await expect(approve(page)).toBeInViewport({ ratio: 1 });
+  await review.getByRole("button", { name: "返回佇列" }).click();
+  await expect(row(page, tasks[0].title)).toBeFocused();
+  await expect(row(page, tasks[0].title)).toHaveAttribute("aria-current", "true");
+  for (const name of [/^進行中/, /^待合併/, /^最近動態/])
+    await expect(page.getByRole("tab", { name })).toBeVisible();
 });
 
 for (const colorScheme of ["light", "dark"] as const) {
-  test(`佇列列的等待時間與狀態固定靠右、數字等寬，佇列與面板是和頁面分得開的卡片（${colorScheme === "dark" ? "深色" : "淺色"}）`, async ({
+  test(`清單的核准按鈕靠右對齊，等待時間使用等寬數字，清單與抽屜和頁面有別（${colorScheme === "dark" ? "深色" : "淺色"}）`, async ({
     page,
   }) => {
     await page.emulateMedia({ colorScheme });
-    await openFixture(page);
+    const { tasks } = await openFixture(page);
     await page.goto("/");
     await expect(queue(page).getByRole("listitem")).toHaveCount(30);
-    await expect(
-      panel(page).getByRole("heading", { name: "核對範例需求 01" }),
-    ).toBeVisible();
-    for (const column of ["[data-review-waiting]", "[data-review-status]"]) {
-      const edges = await queue(page)
-        .locator(column)
-        .evaluateAll((items) =>
-          items.map((item) => Math.round(item.getBoundingClientRect().right)),
-        );
-      expect(new Set(edges).size, `${column} 的右緣應對齊`).toBe(1);
-    }
+    const decisions = queue(page).getByRole("button", { name: "核准修改", exact: true });
+    const edges = await decisions.evaluateAll((items) =>
+      items.map((item) => Math.round(item.getBoundingClientRect().right)),
+    );
+    expect(edges.length).toBeGreaterThan(1);
+    expect(new Set(edges).size).toBe(1);
     await expect(
       queue(page).locator("[data-review-waiting]").first(),
     ).toHaveCSS("font-variant-numeric", "tabular-nums");
@@ -215,18 +205,21 @@ for (const colorScheme of ["light", "dark"] as const) {
     const page_ = await page.evaluate(
       () => getComputedStyle(document.body).backgroundColor,
     );
-    for (const surface of [queue(page), panel(page)]) {
+    const checkSurface = async (surface: Locator) => {
       const card = await surface.evaluate(
         (element) => getComputedStyle(element).backgroundColor,
       );
       const [light, dark] = [luminance(card), luminance(page_)].sort((a, b) => b - a);
       expect((light + 0.05) / (dark + 0.05)).toBeGreaterThanOrEqual(1.08);
-    }
+    };
+    await checkSurface(queue(page));
+    await row(page, tasks[0].title).press("Enter");
+    await checkSurface(panel(page));
     await checkAxe(page);
   });
 }
 
-test("桌面佇列將等最久的待挑選清單排第一、顯示等待時間並自動開啟", async ({
+test("桌面佇列將等最久的待挑選清單排第一，顯示等待時間，按 Enter 才開啟", async ({
   page,
 }) => {
   const fixture = reviewWorkbenchFixture();
@@ -242,16 +235,19 @@ test("桌面佇列將等最久的待挑選清單排第一、顯示等待時間�
   const title = list.items[0].title;
   await expect(rows.first()).toContainText(title);
   await expect(rows.first()).toContainText("等了 12 小時");
-  await expect(row(page, title)).toHaveAttribute("aria-current", "true");
+  await expect(panel(page)).toHaveCount(0);
+  await row(page, title).press("Enter");
   await expect(page).toHaveURL(`/?review=list-${list.id}`);
   await expect(panel(page).getByRole("checkbox", { name: title })).toBeVisible();
 
+  await panel(page).getByRole("button", { name: "返回佇列" }).click();
+  await expect(row(page, title)).toBeFocused();
   await page.getByRole("tab", { name: "最新" }).click();
   await expect(rows.first()).toContainText(fixture.tasks.at(-1)!.title);
   await expect(rows.last()).toContainText(title);
 });
 
-test("方向鍵移動選取，Enter 只把焦點移到主動作，下一個 Tab 到次要動作", async ({
+test("方向鍵只移動選取，Enter 開啟抽屜並聚焦主動作，下一個 Tab 到次要動作", async ({
   page,
 }) => {
   const { tasks } = await openFixture(page);
@@ -268,11 +264,11 @@ test("方向鍵移動選取，Enter 只把焦點移到主動作，下一個 Tab 
   await expect(first).toBeFocused();
   await expect(first).toHaveAttribute("aria-current", "true");
   const action = approve(page);
-  await expect(action).toBeEnabled();
+  await expect(panel(page)).toHaveCount(0);
+  await expect(queue(page).getByRole("listitem")).toHaveCount(30);
   await page.keyboard.press("Enter");
   await expect(action).toBeFocused();
   await expect(page).toHaveURL(new RegExp(`review=${tasks[0].id}$`));
-  await expect(queue(page).getByRole("listitem")).toHaveCount(30);
   await expect(page.getByRole("alert")).toHaveCount(0);
   await page.keyboard.press("Tab");
   await expect(
@@ -287,20 +283,18 @@ test("審核網址可重整、上一頁與分享，無效的案件取代網址�
   await page.goto("/");
   await row(page, tasks[0].title).click();
   await expect(page).toHaveURL(new RegExp(`review=${tasks[0].id}$`));
-  await row(page, tasks[1].title).click();
+  await panel(page).getByRole("button", { name: "下一筆" }).click();
   await expect(panel(page).getByText("要整理哪一個月份？")).toBeVisible();
   await expect(panel(page).getByText("原始內容已到期。")).toBeVisible();
   const sharedUrl = page.url();
   await page.reload();
   await expect(page).toHaveURL(sharedUrl);
-  await expect(row(page, tasks[1].title)).toHaveAttribute(
-    "aria-current",
-    "true",
-  );
+  await expect(panel(page)).toHaveAccessibleName(tasks[1].title);
   await expect(panel(page).getByText("要整理哪一個月份？")).toBeVisible();
   await page.goBack();
   await expect(page).toHaveURL(new RegExp(`review=${tasks[0].id}$`));
   await expect(approve(page)).toBeVisible();
+  await panel(page).getByRole("button", { name: "返回佇列" }).click();
   await row(page, pickLists[0].items[0].title).click();
   await expect(page).toHaveURL(new RegExp(`review=list-${pickLists[0].id}$`));
   await expect(
@@ -379,7 +373,6 @@ test("核准、回答、指定專案與結束成功後前進並聚焦下一筆�
   });
   await expect(answerAction).toBeFocused();
   await expect(page).toHaveURL(new RegExp(`review=${questioned.id}$`));
-  await expect(row(page, first.title)).toHaveCount(0);
   await answerAction.press("Enter");
   const answer = panel(page).getByRole("textbox", { name: "回答這個問題" });
   await expect(answer).toBeFocused();
@@ -393,7 +386,6 @@ test("核准、回答、指定專案與結束成功後前進並聚焦下一筆�
   await assignAction.press("Enter");
   await expect(approve(page)).toBeFocused();
   await expect(page).toHaveURL(new RegExp(`review=${ending.id}$`));
-  await expect(row(page, unassigned.title)).toContainText("等你核准修改");
   await panel(page)
     .getByRole("button", { name: "結束任務", exact: true })
     .click();
@@ -404,7 +396,11 @@ test("核准、回答、指定專案與結束成功後前進並聚焦下一筆�
     .press("Enter");
   await expect(answerAction).toBeFocused();
   await expect(page).toHaveURL(new RegExp(`review=${fifth.id}$`));
-  await expect(row(page, ending.title)).toHaveCount(0);
+  await panel(page).getByRole("button", { name: "返回佇列" }).click();
+  await expect(row(page, fifth.title)).toBeFocused();
+  await expect(entry(page, first.title)).toHaveCount(0);
+  await expect(entry(page, unassigned.title)).toContainText("等你核准修改");
+  await expect(entry(page, ending.title)).toHaveCount(0);
 });
 
 for (const width of [1440, 375]) {
@@ -440,15 +436,14 @@ for (const width of [1440, 375]) {
         0,
       );
       await row(page, task.title).click();
-      const review =
-        width === 375
-          ? page.getByRole("dialog", { name: task.title })
-          : panel(page);
+      const review = page.getByRole("dialog", { name: task.title });
       // 「結束任務」只出現一次（手機曾在專案清單與動作列各出現一個）。
       await expect(
         review.getByRole("button", { name: "結束任務" }),
       ).toHaveCount(1);
+      await review.getByText("任務資料", { exact: true }).press("Enter");
       const fields = review.locator('[data-slot="sheet-header"] dl');
+      await expect(fields).toBeVisible();
       await expect(fields.locator("dt")).toHaveText([
         "任務類型",
         "群組",
@@ -617,7 +612,7 @@ test("回答遭拒保留伺服器原因與草稿，鍵盤切換與上一頁會�
   );
   await page.goto("/");
   await row(page, first.title).click();
-  await row(page, questioned.title).click();
+  await panel(page).getByRole("button", { name: "下一筆" }).press("Enter");
   const answer = panel(page).getByRole("textbox", { name: "回答這個問題" });
   await answer.fill("整理十月的範例資料。");
   await panel(page).getByRole("button", { name: "送出回答" }).click();
@@ -629,14 +624,10 @@ test("回答遭拒保留伺服器原因與草稿，鍵盤切換與上一頁會�
   await guard.getByRole("button", { name: "繼續編輯" }).click();
   await expect(page).toHaveURL(original);
   await expect(answer).toHaveValue("整理十月的範例資料。");
-  await row(page, questioned.title).focus();
-  await page.keyboard.press("ArrowDown");
+  await panel(page).getByRole("button", { name: "下一筆" }).press("Enter");
   await expect(guard).toBeVisible();
   await guard.getByRole("button", { name: "放棄修改" }).click();
-  await expect(row(page, unassigned.title)).toHaveAttribute(
-    "aria-current",
-    "true",
-  );
+  await expect(panel(page)).toHaveAccessibleName(unassigned.title);
 });
 
 test("載入失敗顯示伺服器原因並可重新載入，完成最後一筆會清空佇列", async ({
@@ -686,28 +677,19 @@ test("載入失敗顯示伺服器原因並可重新載入，完成最後一筆�
   await expect(queue(page)).toHaveCount(0);
 });
 
-test("1024px 的佇列與面板並排且沒有水平捲動", async ({ page }) => {
+test("1024px 可從佇列開啟右側抽屜，清單與詳情都沒有水平捲動", async ({ page }) => {
   await page.setViewportSize({ width: 1024, height: 812 });
   const { tasks } = await openFixture(page);
-  await page.goto(`/?review=${tasks[0].id}`);
+  await page.goto("/");
+  await expect(queue(page)).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(1024);
+  await row(page, tasks[0].title).press("Enter");
   await expect(approve(page)).toBeVisible();
-  const left = (await queue(page).boundingBox())!;
+  await waitForVisuals(page);
   const right = (await panel(page).boundingBox())!;
-  expect(left.width).toBeGreaterThanOrEqual(360);
-  expect(left.x + left.width).toBeLessThan(right.x);
-  expect(right.x + right.width).toBeLessThanOrEqual(1024);
-  // 右欄跟頁面一起捲動，不另外產生一層捲軸。
-  expect(
-    await panel(page).evaluate((el) =>
-      [el, ...el.querySelectorAll("*")].some((node) => {
-        const { overflowY } = getComputedStyle(node);
-        return (
-          (overflowY === "auto" || overflowY === "scroll") &&
-          node.scrollHeight > node.clientHeight + 1
-        );
-      }),
-    ),
-  ).toBe(false);
+  expect(right.x).toBeGreaterThan(0);
+  expect(right.x + right.width).toBeCloseTo(1024, 0);
+  expect(await panel(page).evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(
     1024,
   );

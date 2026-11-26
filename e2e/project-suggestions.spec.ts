@@ -165,9 +165,7 @@ for (const width of [1280, 375]) {
     await page.goto("/");
     await page.getByRole("list", { name: "待決策佇列" })
       .getByRole("button", { name: new RegExp(pending.title) }).click();
-    const drawer = width < 1024
-      ? page.getByRole("dialog", { name: pending.title })
-      : page.getByRole("region", { name: "審核面板" });
+    const drawer = page.getByRole("dialog", { name: pending.title });
     await expect(
       drawer.getByText("看起來是 範例倉庫（尚未綁定這個群組）"),
     ).toBeVisible();

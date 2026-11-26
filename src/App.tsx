@@ -1090,6 +1090,7 @@ export function App() {
         <header
           className={cn(
             "mb-7 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3",
+            current.id === "inbox" && "mb-3 items-center",
             current.id === "chat" && "mb-4 shrink-0",
           )}
         >
@@ -1101,7 +1102,7 @@ export function App() {
             >
               {current.label}
             </h1>
-            {"hint" in current && (
+            {"hint" in current && current.id !== "inbox" && (
               <p
                 className={cn(
                   "mt-0.5 text-sm text-muted-foreground",
@@ -1165,7 +1166,7 @@ export function App() {
             </div>
           )}
         </header>
-        <PageNotices incident={noticeIncident} count={noticeCount}>
+        <PageNotices incident={noticeIncident} count={noticeCount} subdued={current.id === "inbox" && !!lineQuota && noticeCount === 1}>
           {admin && goneProjects.length > 0 && view !== "projects" && (
             <p
               role="alert"
@@ -1343,7 +1344,17 @@ export function App() {
             </p>
           )}
         </PageNotices>
-        {!state ? (
+        {!state && current.id === "inbox" ? (
+          <section aria-label="收件匣狀態" className="rounded-lg border bg-card px-5 py-6">
+            {error ? (
+              <p>目前無法顯示收件匣。請依上方訊息重試。</p>
+            ) : (
+              <p role="status" className="flex items-center gap-2 text-muted-foreground">
+                <Loader2 aria-hidden className="size-4 animate-spin motion-reduce:animate-none" /> 正在整理待決策的工作…
+              </p>
+            )}
+          </section>
+        ) : !state ? (
           <div className="flex min-h-60 items-center justify-center gap-2 text-muted-foreground">
             <Loader2 className="size-4 animate-spin" /> 載入中…
           </div>

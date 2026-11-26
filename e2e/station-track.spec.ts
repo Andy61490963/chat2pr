@@ -80,20 +80,16 @@ for (const colorScheme of ["light", "dark"] as const) {
         page.getByRole("heading", { name: "需要你處理 3", exact: true }),
       ).toBeVisible();
       expect(await withinViewport()).toBe(true);
-      for (const name of [
-        "需要你處理 3",
-        "進行中 1",
-        "待合併 1",
-        "近 7 天已合併 0",
+      await expect(page.getByRole("button", { name: "近 7 天已合併 0", exact: true })).toHaveCount(1);
+      for (const [tab, name] of [
+        ["需要你決定 3", "需要你處理 3"],
+        ["進行中 1", "進行中 1"],
+        ["待合併 1", "待合併 1"],
       ]) {
-        await expect(
-          page.getByRole("button", { name, exact: true }),
-        ).toHaveCount(1);
-        await expect(page.getByText(name, { exact: true })).toHaveCount(1);
-      }
-      for (const name of ["需要你處理 3", "進行中 1", "待合併 1"]) {
+        await page.getByRole("tab", { name: tab, exact: true }).click();
         const section = page.getByRole("region", { name, exact: true });
         const heading = section.getByRole("heading", { name, exact: true });
+        await expect(heading.getByRole("button", { name, exact: true })).toHaveCount(1);
         const ledger = name.startsWith("需要你處理")
           ? section.getByRole("list", { name: "待決策佇列" })
           : section.locator(":scope > .work-ledger");
@@ -103,6 +99,7 @@ for (const colorScheme of ["light", "dark"] as const) {
         await expect(ledger).toHaveCSS("border-top-width", "1px");
         await expect(firstRow).toHaveCSS("border-top-width", "0px");
       }
+      await page.getByRole("tab", { name: "需要你決定 3", exact: true }).click();
       await capture("收件匣");
       await page.getByRole("list", { name: "待決策佇列" })
         .getByRole("button", { name: new RegExp(task.title) }).click();

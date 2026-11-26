@@ -56,6 +56,7 @@ import {
 import { failureBrief, waitHint } from "../../shared/failure-text.js";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/form-controls";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
@@ -192,6 +193,7 @@ export function InboxView({
 }) {
   const [selected, setSelected] = useState(new Map<string, EndTaskSelection>());
   const [confirmEnd, setConfirmEnd] = useState(false);
+  const [tab, setTab] = useState("decisions");
   const [endReason, setEndReason] = useState<EndReason | null>(null);
   const [missingReason, setMissingReason] = useState(false);
   const firstReason = useRef<HTMLInputElement>(null);
@@ -353,313 +355,341 @@ export function InboxView({
     </Card>
   );
   return (
-    <div
-      className={cn(
-        "work-surface flex min-w-0 flex-col",
-        clear ? "gap-4" : "gap-7",
-      )}
+    <Tabs
+      value={reviewId ? "decisions" : tab}
+      onValueChange={setTab}
+      className="work-surface min-w-0 gap-4"
     >
-      {stuckTasks.length > 0 && (
-        <section aria-labelledby="inbox-stuck">
-          <SectionTitle count={stuckTasks.length}>
-            <span id="inbox-stuck">卡住的任務</span>
-          </SectionTitle>
-          <ul className="work-ledger">
-            {stuckTasks.map(({ taskId, title, reason, actionLabel, target }) => {
-              const needsAdmin = target === "system" && !admin;
-              return (
-                <li key={taskId} className="work-row">
-                  <div className="grid min-w-0 gap-1 [overflow-wrap:anywhere] md:grid-cols-2 md:gap-4">
-                    <span className="font-semibold">{title}</span>
-                    <div className="text-sm">
-                      <p>{reason}</p>
-                      {needsAdmin && <p>請管理者查看系統。</p>}
-                    </div>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className={cn(batchControl, "justify-self-start md:justify-self-end")}
-                    onClick={() => target === "system" && admin ? go("system") : open(taskId)}
-                  >
-                    {needsAdmin ? "查看任務" : actionLabel}
-                    <span className="sr-only">：{title}</span>
-                  </Button>
-                </li>
-              );
-            })}
-          </ul>
-        </section>
-      )}
-      {!items.length && onboarding}
-      <section
-        hidden={stuckTasks.length > 0 && items.length === 0 && !confirmEnd}
-        ref={decisionSection}
-        tabIndex={-1}
-        aria-labelledby="inbox-todo"
-        className={batchFocus}
+      <TabsList
+        aria-label="收件匣分類"
+        className="h-auto w-full justify-start gap-1 rounded-none border-b bg-transparent p-0"
       >
-        {!clear && (
-          <TaskSectionTitle
-            id="inbox-todo"
-            count={items.length}
-            open={() => showTasks("todo")}
+        {[
+          { value: "decisions", label: "需要你決定", count: items.length },
+          {
+            value: "moving",
+            label: taskStatusFilterLabels.moving,
+            count: movingCount,
+          },
+          { value: "ready", label: statusLabels.ready, count: readyCount },
+          { value: "activity", label: "最近動態" },
+        ].map(({ value, label, count }) => (
+          <TabsTrigger
+            key={value}
+            value={value}
+            className="min-h-11 flex-none gap-1 rounded-none border-0 border-b-2 border-transparent px-2 data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none sm:px-4 dark:data-[state=active]:border-primary"
           >
-            {notificationLabels.action}
-          </TaskSectionTitle>
-        )}
-        <ReviewWorkbench
-          items={items}
-          lists={lists}
-          reviewId={reviewId}
-          setReview={setReview}
-          state={state}
-          admin={admin}
-          busy={busy}
-          suspended={reviewSuspended}
-          actionError={reviewError}
-          loadTaskDetail={loadTaskDetail}
-          actions={reviewActions}
-          resolvePickList={resolvePickList}
-          empty={
-            clear ? (
-              <Card className="flex-row items-center gap-4 px-5 py-5">
-                <span
-                  aria-hidden
-                  className="grid size-10 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground"
-                >
-                  <CircleCheck className="size-5" />
+            {label}
+            {count !== undefined && (
+              <>
+                {" "}
+                <span className="rounded bg-muted px-1.5 text-xs tabular-nums">
+                  {count}
                 </span>
-                <div className="min-w-0">
-                  <h2 id="inbox-todo" className="font-semibold">
-                    {inboxStatusLabels.clear}
-                  </h2>
-                  <p className="text-sm text-muted-foreground">
-                    {inboxStatusLabels.clearDescription}
-                  </p>
-                </div>
-              </Card>
-            ) : undefined
-          }
-          batchControls={batchControls}
-          checkbox={(item) =>
-            canBatch && item.kind === "task" && eligible.has(item.id) ? (
-              <label className="grid size-11 shrink-0 cursor-pointer self-center place-items-center rounded-md">
-                <input
-                  type="checkbox"
-                  className={batchCheckbox}
-                  checked={selected.has(item.id)}
-                  disabled={busy}
-                  onChange={(event) =>
-                    toggleTask(item.id, event.target.checked)
-                  }
-                />
-                <span className="sr-only">選取「{item.title}」</span>
-              </label>
-            ) : undefined
-          }
-        />
-        {!clear && admin && (
-          <Dialog open={confirmEnd} onOpenChange={setConfirmEnd}>
-            <DialogContent
-              showCloseButton={false}
-              className="max-h-[calc(100dvh-2rem)] overflow-y-auto motion-reduce:animate-none"
-              onCloseAutoFocus={(event) => {
-                if (
-                  !endButton.current &&
-                  document.activeElement === document.body
-                ) {
-                  event.preventDefault();
-                  decisionSection.current?.focus();
-                }
-              }}
+              </>
+            )}
+          </TabsTrigger>
+        ))}
+      </TabsList>
+      <TabsContent value="decisions" className="grid min-w-0 gap-4">
+        {stuckTasks.length > 0 && (
+          <section aria-labelledby="inbox-stuck">
+            <SectionTitle count={stuckTasks.length}>
+              <span id="inbox-stuck">卡住的任務</span>
+            </SectionTitle>
+            <ul className="work-ledger">
+              {stuckTasks.map(
+                ({ taskId, title, reason, actionLabel, target }) => {
+                  const needsAdmin = target === "system" && !admin;
+                  return (
+                    <li key={taskId} className="work-row">
+                      <div className="grid min-w-0 gap-1 [overflow-wrap:anywhere] md:grid-cols-2 md:gap-4">
+                        <span className="font-semibold">{title}</span>
+                        <div className="text-sm">
+                          <p>{reason}</p>
+                          {needsAdmin && <p>請管理者查看系統。</p>}
+                        </div>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className={cn(
+                          batchControl,
+                          "justify-self-start md:justify-self-end",
+                        )}
+                        onClick={() =>
+                          target === "system" && admin
+                            ? go("system")
+                            : open(taskId)
+                        }
+                      >
+                        {needsAdmin ? "查看任務" : actionLabel}
+                        <span className="sr-only">：{title}</span>
+                      </Button>
+                    </li>
+                  );
+                },
+              )}
+            </ul>
+          </section>
+        )}
+        <section
+          hidden={stuckTasks.length > 0 && items.length === 0 && !confirmEnd}
+          ref={decisionSection}
+          tabIndex={-1}
+          aria-labelledby="inbox-todo"
+          className={batchFocus}
+        >
+          {!clear && (
+            <TaskSectionTitle
+              id="inbox-todo"
+              count={items.length}
+              open={() => showTasks("todo")}
             >
-              <DialogHeader className="text-left">
-                <DialogTitle>結束 {selected.size} 張任務？</DialogTitle>
-                <DialogDescription>
-                  你結束的任務不會派工，之後可在任務詳情重新開啟。
-                  {!notify && "你這次不會通知群組。"}
-                </DialogDescription>
-              </DialogHeader>
-              <EndReasonFields
-                value={endReason}
-                onChange={(value) => {
-                  setEndReason(value);
-                  setMissingReason(false);
+              {notificationLabels.action}
+            </TaskSectionTitle>
+          )}
+          <ReviewWorkbench
+            items={items}
+            lists={lists}
+            reviewId={reviewId}
+            setReview={setReview}
+            state={state}
+            admin={admin}
+            busy={busy}
+            suspended={reviewSuspended}
+            actionError={reviewError}
+            loadTaskDetail={loadTaskDetail}
+            actions={reviewActions}
+            resolvePickList={resolvePickList}
+            empty={
+              !items.length ? (
+                <Card className="flex-row items-center gap-4 px-5 py-5">
+                  <span
+                    aria-hidden
+                    className="grid size-10 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground"
+                  >
+                    <CircleCheck className="size-5" />
+                  </span>
+                  <div className="min-w-0">
+                    <h2
+                      id={clear ? "inbox-todo" : undefined}
+                      className="font-semibold"
+                    >
+                      {inboxStatusLabels.clear}
+                    </h2>
+                    <p className="text-sm text-muted-foreground">
+                      {clear
+                        ? inboxStatusLabels.clearDescription
+                        : "其餘工作可到進行中或待合併查看。"}
+                    </p>
+                  </div>
+                </Card>
+              ) : undefined
+            }
+            batchControls={batchControls}
+            checkbox={(item) =>
+              canBatch && item.kind === "task" && eligible.has(item.id) ? (
+                <label className="grid size-11 shrink-0 cursor-pointer self-center place-items-center rounded-md">
+                  <input
+                    type="checkbox"
+                    className={batchCheckbox}
+                    checked={selected.has(item.id)}
+                    disabled={busy}
+                    onChange={(event) =>
+                      toggleTask(item.id, event.target.checked)
+                    }
+                  />
+                  <span className="sr-only">選取「{item.title}」</span>
+                </label>
+              ) : undefined
+            }
+          />
+          {!clear && admin && (
+            <Dialog open={confirmEnd} onOpenChange={setConfirmEnd}>
+              <DialogContent
+                showCloseButton={false}
+                className="max-h-[calc(100dvh-2rem)] overflow-y-auto motion-reduce:animate-none"
+                onCloseAutoFocus={(event) => {
+                  if (
+                    !endButton.current &&
+                    document.activeElement === document.body
+                  ) {
+                    event.preventDefault();
+                    decisionSection.current?.focus();
+                  }
                 }}
-                note={reason}
-                onNote={setReason}
-                error={missingReason}
-                firstRef={firstReason}
-              />
-              <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm">
-                <input
-                  type="checkbox"
-                  className={batchCheckbox}
-                  checked={notify}
-                  onChange={(event) => setNotify(event.target.checked)}
+              >
+                <DialogHeader className="text-left">
+                  <DialogTitle>結束 {selected.size} 張任務？</DialogTitle>
+                  <DialogDescription>
+                    你結束的任務不會派工，之後可在任務詳情重新開啟。
+                    {!notify && "你這次不會通知群組。"}
+                  </DialogDescription>
+                </DialogHeader>
+                <EndReasonFields
+                  value={endReason}
+                  onChange={(value) => {
+                    setEndReason(value);
+                    setMissingReason(false);
+                  }}
+                  note={reason}
+                  onNote={setReason}
+                  error={missingReason}
+                  firstRef={firstReason}
                 />
-                依群組回覆設定通知
-              </label>
-              <DialogFooter>
-                <DialogClose asChild>
+                <label className="flex min-h-11 cursor-pointer items-center gap-3 text-sm">
+                  <input
+                    type="checkbox"
+                    className={batchCheckbox}
+                    checked={notify}
+                    onChange={(event) => setNotify(event.target.checked)}
+                  />
+                  依群組回覆設定通知
+                </label>
+                <DialogFooter>
+                  <DialogClose asChild>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className={cn(batchControl, "border-muted-foreground")}
+                    >
+                      保留任務
+                    </Button>
+                  </DialogClose>
                   <Button
                     type="button"
-                    variant="outline"
-                    className={cn(batchControl, "border-muted-foreground")}
+                    variant="destructive"
+                    disabled={busy}
+                    className={batchControl}
+                    onClick={() => void submitEnd()}
                   >
-                    保留任務
+                    結束任務
                   </Button>
-                </DialogClose>
-                <Button
-                  type="button"
-                  variant="destructive"
-                  disabled={busy}
-                  className={batchControl}
-                  onClick={() => void submitEnd()}
-                >
-                  結束任務
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-        )}
-      </section>
-      {items.length > 0 && onboarding}
-      {/* 等待額度的工作會自動繼續，不需要決定；放在較低調的段落，只說明什麼時候恢復。 */}
-      {held.length > 0 && (
-        <section aria-labelledby="waiting-title">
-          <div className="mb-3 flex items-center gap-2">
-            <TaskSectionTitle
-              id="waiting-title"
-              count={countOf(state, waitingStatuses)}
-              open={() => showTasks("waiting")}
-              subdued
-            >
-              {`${taskStatusFilterLabels.waiting}（會自動繼續）`}
-            </TaskSectionTitle>
-            {admin && (
-              <Button
-                variant="link"
-                size="sm"
-                className="ml-auto h-auto p-0"
-                onClick={() => go("settings")}
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          )}
+        </section>
+        {onboarding}
+        {/* 等待額度的工作會自動繼續，不需要決定；放在較低調的段落，只說明什麼時候恢復。 */}
+        {held.length > 0 && (
+          <section aria-labelledby="waiting-title">
+            <div className="mb-3 flex items-center gap-2">
+              <TaskSectionTitle
+                id="waiting-title"
+                count={countOf(state, waitingStatuses)}
+                open={() => showTasks("waiting")}
+                subdued
               >
-                調整額度設定
-              </Button>
+                {`${taskStatusFilterLabels.waiting}（會自動繼續）`}
+              </TaskSectionTitle>
+              {admin && (
+                <Button
+                  variant="link"
+                  size="sm"
+                  className="ml-auto h-auto p-0"
+                  onClick={() => go("settings")}
+                >
+                  調整額度設定
+                </Button>
+              )}
+            </div>
+            <div className="work-ledger">
+              {held.map((t) => (
+                <WaitingRow
+                  key={t.id}
+                  task={t}
+                  state={state}
+                  busy={busy}
+                  open={open}
+                  act={act}
+                />
+              ))}
+            </div>
+          </section>
+        )}
+      </TabsContent>
+      <TabsContent value="moving">
+        <section aria-labelledby="inbox-moving">
+          <TaskSectionTitle
+            id="inbox-moving"
+            count={movingCount}
+            open={() => showTasks("moving")}
+          >
+            {taskStatusFilterLabels.moving}
+          </TaskSectionTitle>
+          <div className="work-ledger">
+            {working.length ? (
+              working.map((t) => (
+                <TaskRow key={t.id} task={t} state={state} open={open} />
+              ))
+            ) : (
+              <Empty compact icon={<Loader2 />} title="目前沒有執行中的工作">
+                你核准需求後，就能在這裡追蹤進度。
+              </Empty>
             )}
           </div>
+        </section>
+      </TabsContent>
+      <TabsContent value="ready">
+        <section aria-labelledby="inbox-ready">
+          <TaskSectionTitle
+            id="inbox-ready"
+            count={readyCount}
+            open={() => showTasks("ready")}
+          >
+            {statusLabels.ready}
+          </TaskSectionTitle>
           <div className="work-ledger">
-            {held.map((t) => (
-              <WaitingRow
-                key={t.id}
-                task={t}
-                state={state}
-                busy={busy}
-                open={open}
-                act={act}
-              />
-            ))}
+            {ready.length ? (
+              ready.map((t) => (
+                <TaskRow
+                  key={t.id}
+                  task={t}
+                  state={state}
+                  open={open}
+                  trailing={
+                    t.pr_url && (
+                      <Button variant="outline" size="sm" asChild>
+                        <a href={t.pr_url} target="_blank" rel="noreferrer">
+                          PR #{t.pr_number} <ArrowUpRight />
+                        </a>
+                      </Button>
+                    )
+                  }
+                />
+              ))
+            ) : (
+              <Empty
+                compact
+                icon={<GitPullRequest />}
+                title="沒有等待合併的 PR"
+              >
+                修改通過驗證並建立 PR 後，你就能在這裡開啟 PR。
+              </Empty>
+            )}
           </div>
         </section>
-      )}
-      <div
-        className={cn(
-          "grid grid-cols-1",
-          clear
-            ? "gap-4"
-            : "gap-8 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]",
-        )}
-      >
-        <div className="flex flex-col gap-8">
-          {!clear && (
-            <>
-              <section aria-labelledby="inbox-moving">
-                <TaskSectionTitle
-                  id="inbox-moving"
-                  count={movingCount}
-                  open={() => showTasks("moving")}
-                >
-                  {taskStatusFilterLabels.moving}
-                </TaskSectionTitle>
-                <div className="work-ledger">
-                  {working.length ? (
-                    working.map((t) => (
-                      <TaskRow key={t.id} task={t} state={state} open={open} />
-                    ))
-                  ) : (
-                    <Empty
-                      compact
-                      icon={<Loader2 />}
-                      title="目前沒有執行中的工作"
-                    >
-                      你核准需求後，就能在這裡追蹤進度。
-                    </Empty>
-                  )}
-                </div>
-              </section>
-              <section aria-labelledby="inbox-ready">
-                <TaskSectionTitle
-                  id="inbox-ready"
-                  count={readyCount}
-                  open={() => showTasks("ready")}
-                >
-                  {statusLabels.ready}
-                </TaskSectionTitle>
-                <div className="work-ledger">
-                  {ready.length ? (
-                    ready.map((t) => (
-                      <TaskRow
-                        key={t.id}
-                        task={t}
-                        state={state}
-                        open={open}
-                        trailing={
-                          t.pr_url && (
-                            <Button variant="outline" size="sm" asChild>
-                              <a
-                                href={t.pr_url}
-                                target="_blank"
-                                rel="noreferrer"
-                              >
-                                PR #{t.pr_number} <ArrowUpRight />
-                              </a>
-                            </Button>
-                          )
-                        }
-                      />
-                    ))
-                  ) : (
-                    <Empty
-                      compact
-                      icon={<GitPullRequest />}
-                      title="沒有等待合併的 PR"
-                    >
-                      修改通過驗證並建立 PR 後，你就能在這裡開啟 PR。
-                    </Empty>
-                  )}
-                </div>
-              </section>
-            </>
-          )}
-          <div className="flex flex-wrap items-center gap-x-4 border-t pt-2 text-sm text-muted-foreground">
-            <button
-              type="button"
-              className="work-touch font-medium hover:underline"
-              onClick={() => showTasks({ mergedWeek: weekDay })}
-            >
-              {taskListLabels.mergedWeek}{" "}
-              <span className="tabular-nums">{mergedWeek}</span>
-            </button>
-            <span className="tabular-nums">
-              累計 {state.totals?.tasks ?? state.tasks.length} 個需求
-            </span>
-          </div>
-        </div>
+      </TabsContent>
+      <TabsContent value="activity">
         <ActivityFeed state={state} open={open} more={more} />
+      </TabsContent>
+      <div className="flex flex-wrap items-center gap-x-4 border-t pt-2 text-sm text-muted-foreground">
+        <button
+          type="button"
+          className="work-touch font-medium hover:underline"
+          onClick={() => showTasks({ mergedWeek: weekDay })}
+        >
+          {taskListLabels.mergedWeek}{" "}
+          <span className="tabular-nums">{mergedWeek}</span>
+        </button>
+        <span className="tabular-nums">
+          累計 {state.totals?.tasks ?? state.tasks.length} 個需求
+        </span>
       </div>
-    </div>
+    </Tabs>
   );
 }
 

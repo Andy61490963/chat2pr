@@ -928,12 +928,14 @@ export function reviewWorkbenchFixture() {
   return { state, tasks, details, pickLists, reviewSource };
 }
 
-export async function mockInboxFlow(page: Page, empty = false) {
+export async function mockInboxFlow(page: Page, empty = false, scenario?: "成員" | "風險" | "版本變更") {
   const fixture = reviewWorkbenchFixture();
   fixture.state.health = [...fixture.state.health.filter(check => check.name !== "notifications"), ...exhaustedPushHealth];
   fixture.state.activity = recentActivity;
   fixture.state.stuckTasks = empty ? [] : [stuckTasks[0]];
   const first = fixture.details.get(fixture.tasks[0].id)!;
+  if (scenario === "風險") first.task.risk_reasons = ["需要核對示範專案的資料存取範圍。"];
+  if (scenario === "版本變更") first.task = { ...first.task, version: first.task.version + 1 };
   first.sources[0].text = Array.from({ length: 18 }, (_, index) =>
     `第 ${index + 1} 項：請核對示範專案的匯出欄位與顯示順序。`,
   ).join("\n");
@@ -943,7 +945,10 @@ export async function mockInboxFlow(page: Page, empty = false) {
   }
   await mockDashboard(page, {
     state: { ...fixture.state },
-    routes: Object.fromEntries([...fixture.details].map(([id, item]) => [`/api/tasks/${id}`, item])),
+    routes: {
+      ...Object.fromEntries([...fixture.details].map(([id, item]) => [`/api/tasks/${id}`, item])),
+      ...(scenario === "成員" ? { "/api/me": { id: "2", login: "示範成員", role: "member", owner: false, csrf: "demoCsrf" } } : {}),
+    },
   });
   await page.route(/\/api\/state(\?|$)/, route => route.fulfill({ json: fixture.state }));
   return fixture;
@@ -1010,7 +1015,7 @@ export const derivedImageCleanup: ActivityEvent = {
   created_at: "2026-01-10T08:31:00Z",
 };
 export const repeatedActivity = "管理者 小林 更新示範專案的設定";
-export const recentActivity: ActivityEvent[] = [
+export const recentActivity: State["activity"] = [
   {
     ...activityTaskFields,
     id: 6,

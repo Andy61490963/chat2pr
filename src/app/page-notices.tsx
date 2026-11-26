@@ -1,14 +1,17 @@
 import { useEffect, useId, useState, type ReactNode } from "react";
 import { ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 
 export function PageNotices({
   incident,
   count,
+  subdued = false,
   children,
 }: {
   incident: string | null | undefined;
   count: number;
+  subdued?: boolean;
   children: ReactNode;
 }) {
   const contentId = useId();
@@ -38,7 +41,7 @@ export function PageNotices({
   if (!incident || !count) return null;
   const collapsed = saved === incident;
   return (
-    <div className="mb-4 flex flex-wrap items-start gap-x-2 gap-y-1 border-y border-warn/40 bg-warn-soft px-2 text-warn">
+    <div className={cn("mb-4 flex flex-wrap items-start gap-x-2 gap-y-1 border-y border-warn/40 bg-warn-soft px-2 text-warn", subdued && "mb-2 rounded-md border-0 bg-muted text-muted-foreground")}>
       <div
         id={contentId}
         hidden={collapsed}

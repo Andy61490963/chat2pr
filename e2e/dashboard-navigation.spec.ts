@@ -176,7 +176,6 @@ for (const pending of [false, true]) {
     const firstRequest = page.waitForRequest(isStateRequest);
     await page.goto("/");
     await firstRequest;
-    // 桌面會自動打開第一筆，標題同時出現在佇列與審核面板；只看佇列。
     const initialTask = page
       .getByRole("list", { name: "待決策佇列" })
       .getByText(task.title, { exact: true });
@@ -211,7 +210,6 @@ test("首次讀取失敗後，連線成功會重新讀取看板狀態", async ({
   ).toBeVisible();
   await page.unroute("**/api/state?activity=*");
   await emitDashboardEvent(page, "connected");
-  // 桌面會自動打開第一筆，標題同時出現在佇列與審核面板；只看佇列。
   await expect(
     page
       .getByRole("list", { name: "待決策佇列" })

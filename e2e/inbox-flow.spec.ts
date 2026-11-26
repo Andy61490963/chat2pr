@@ -23,6 +23,28 @@ test("核准一筆後留在清單，按 Enter 直接開啟下一筆", async ({ p
   await expect(page.getByRole("dialog").getByRole("heading", { name: next.title }).first()).toBeVisible();
 });
 
+for (const scenario of ["成員", "風險", "版本變更"] as const) {
+  test(`${scenario}時不送出快速核准`, async ({ page }) => {
+    const { tasks: [first] } = await mockInboxFlow(page, false, scenario);
+    const actions: string[] = [];
+    await page.route(/\/api\/tasks\/[^/]+\/actions$/, route => {
+      actions.push(route.request().url());
+      return route.fulfill({ status: 409, json: { error: "示範版本已變更" } });
+    });
+    await page.goto("/");
+    await expect(page.getByRole("tab", { name: /^需要你決定/ })).toBeVisible();
+    const quick = row(page, first.title).getByRole("button", { name: /核准/, disabled: false });
+    if (scenario === "版本變更") {
+      await quick.click();
+      await expect(page.getByText(/版本.*變更|內容.*更新|資料.*更新|重新確認/).first()).toBeVisible();
+    } else {
+      if (scenario === "風險") await expect(details(page, first.title)).toBeVisible();
+      await expect(quick).toHaveCount(0);
+    }
+    expect(actions).toEqual([]);
+  });
+}
+
 test("鍵盤切換案件不開啟抽屜，按 Enter 開啟、Esc 返回", async ({ page }) => {
   const { tasks: [first, second, third] } = await mockInboxFlow(page);
   await page.goto("/");

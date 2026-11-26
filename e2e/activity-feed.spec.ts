@@ -27,6 +27,7 @@ for (const width of [1280, 375]) {
       },
     });
     await page.goto("/");
+    await page.getByRole("tab", { name: "最近動態" }).click();
     const feed = page.getByRole("region", { name: "最近動態" });
     const title = feed.getByRole("button", {
       name: activityTask.title,
@@ -144,6 +145,7 @@ test("載入較早的稽核紀錄後，既有任務列接上更早的步驟", as
     });
   });
   await page.goto("/");
+  await page.getByRole("tab", { name: "最近動態" }).click();
   const feed = page.getByRole("region", { name: "最近動態" });
   const title = feed.getByRole("button", {
     name: activityTask.title,

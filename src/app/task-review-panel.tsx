@@ -1,13 +1,14 @@
 import { splitQueryAnswer } from "../../shared/query-answer.js";
 import { fullTaskTitle, taskListTitle } from "../../shared/task-title.js";
 import { riskNotes } from "../../shared/risk-notes.js";
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { TaskContextEvidence } from "./context-evidence";
 import { RunObserver } from "./run-observer";
 import { QueryReport } from "./query-report";
 import { TaskBranchPicker } from "./task-branch-picker";
 import { TaskClarification } from "./task-clarification";
 import {
+  failureBrief,
   fixPage,
   fixPageLabels,
   parseFailure,
@@ -156,6 +157,46 @@ const clock = (v: string) =>
     minute: "2-digit",
     hour12: false,
   });
+
+function ReviewSourceText({ text }: { text: string }) {
+  const paragraph = useRef<HTMLParagraphElement>(null);
+  const id = useId();
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  useLayoutEffect(() => {
+    const element = paragraph.current;
+    if (!element || expanded) return;
+    const measure = () => setOverflows(element.scrollHeight > element.clientHeight + 1);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [text, expanded]);
+  return (
+    <>
+      <p
+        id={id}
+        ref={paragraph}
+        className={cn("whitespace-pre-wrap [overflow-wrap:anywhere]", !expanded && "line-clamp-3")}
+      >
+        {text}
+      </p>
+      {(expanded || overflows) && (
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          className="min-h-11 px-0 underline"
+          aria-controls={id}
+          aria-expanded={expanded}
+          onClick={() => setExpanded(!expanded)}
+        >
+          {expanded ? "收合原文" : "展開原文"}
+        </Button>
+      )}
+    </>
+  );
+}
 
 export type TaskReviewPanelProps = {
   detail: Detail;
@@ -367,6 +408,7 @@ export function TaskReviewPanel({
       ? waitHint(t.last_error, state.settings.ai_mode)
       : null;
   const failure = t.status === "failed" ? parseFailure(t.last_error) : null;
+  const failureReason = inWorkbench && t.status === "failed" ? failureBrief(t.last_error) : null;
   const failureNotice = useRef<HTMLDivElement>(null);
   // 前往設定頁只給管理者。
   const fix = primaryFix(failure);
@@ -465,25 +507,39 @@ export function TaskReviewPanel({
                   {m.sender}
                 </span>
               )}
-              <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">
-                {m.availability === "revoked"
-                  ? unavailableMessageLabels.revoked
-                  : m.availability === "expired"
-                    ? unavailableMessageLabels.expired(
-                        state.settings.retention_days,
-                      )
-                    : (m.text ??
-                      (m.type === "image" ? "（圖片）" : "（沒有文字內容）"))}
-              </p>
+              {inWorkbench && m.availability === "readable" && m.text ? (
+                <ReviewSourceText text={m.text} />
+              ) : (
+                <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">
+                  {m.availability === "revoked"
+                    ? unavailableMessageLabels.revoked
+                    : m.availability === "expired"
+                      ? unavailableMessageLabels.expired(state.settings.retention_days)
+                      : (m.text ?? (m.type === "image" ? "（圖片）" : "（沒有文字內容）"))}
+                </p>
+              )}
               {m.has_image && m.availability === "readable" && (
-                <img
-                  className={cn(
-                    "mt-2 max-w-full rounded-lg",
-                    inWorkbench && "max-h-32 object-contain",
-                  )}
-                  src={`/api/messages/${m.id}/image`}
-                  alt="來源圖片"
-                />
+                inWorkbench ? (
+                  <a
+                    href={`/api/messages/${encodeURIComponent(m.id)}/image`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-2 inline-flex size-16 items-center justify-center rounded-md border bg-surface focus-visible:outline-2 focus-visible:outline-offset-2"
+                  >
+                    <img
+                      src={`/api/messages/${encodeURIComponent(m.id)}/image`}
+                      alt="來源圖片"
+                      className="size-full rounded-md object-contain"
+                    />
+                    <span className="sr-only">（另開原圖）</span>
+                  </a>
+                ) : (
+                  <img
+                    className="mt-2 max-w-full rounded-lg"
+                    src={`/api/messages/${m.id}/image`}
+                    alt="來源圖片"
+                  />
+                )
               )}
               <span className="mt-1 block text-[11px] text-muted-foreground">
                 {date(m.received_at)}
@@ -809,17 +865,10 @@ export function TaskReviewPanel({
         <SheetFooter
           className={cn(
             "shrink-0 items-center",
-            inWorkbench && "mt-0 border-t-0 border-b",
+            inWorkbench &&
+              "sticky bottom-0 z-10 mt-0 gap-2 border-border-raised bg-popover px-4 py-2.5 pb-[max(.625rem,env(safe-area-inset-bottom))] [&_button]:max-w-full [&_button]:whitespace-normal max-sm:[&_button]:h-auto max-sm:[&_button]:min-h-11 max-sm:[&>button[data-variant=default]]:basis-full",
           )}
         >
-          {inWorkbench && (
-            <div className="basis-full">
-              <h3 className="text-sm font-semibold">下一步</h3>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {reviewStatus}
-              </p>
-            </div>
-          )}
           {canAnswer && (
             <Button ref={onPrimaryMount} onClick={focusAnswer}>
               {taskClarificationLabels.action}
@@ -985,7 +1034,14 @@ export function TaskReviewPanel({
           </span>
         </p>
       )}
-      {inWorkbench ? metadata : (
+      {inWorkbench ? (
+        <details className="min-w-0">
+          <summary className="w-fit cursor-pointer content-center text-sm text-muted-foreground underline-offset-4 hover:underline focus-visible:outline-2 max-sm:min-h-11">
+            任務資料
+          </summary>
+          <div className="pt-2">{metadata}</div>
+        </details>
+      ) : (
         <SheetDescription asChild>{metadata}</SheetDescription>
       )}
 
@@ -1003,23 +1059,31 @@ export function TaskReviewPanel({
       )}
     </SheetHeader>
   );
-  return (
-    <>
-      {inWorkbench ? (
-        <div className="lg:sticky lg:top-4 lg:z-10 lg:bg-surface">
-          {actionNotice}
-          {header}
-          {actions}
-        </div>
-      ) : header}
+  const body = (
       <div
         className={cn(
           "flex min-h-0 flex-1 flex-col gap-6 p-5",
-          !inWorkbench && "overflow-y-auto",
+          inWorkbench ? "gap-4 px-4 py-4 sm:px-5" : "overflow-y-auto",
         )}
       >
         {inWorkbench && (
           <>
+            <section className="space-y-2 border-l-2 border-primary pl-3">
+              <h3 className="heading-label">下一步</h3>
+              <p className="font-semibold">{reviewStatus}</p>
+              {deciding && !canAnswer && t.target_branch && (
+                <p className="text-sm [overflow-wrap:anywhere]">
+                  請核對{review?.project_name ?? projectName(state, t)}的
+                  <code className="mx-1">{t.target_branch}</code>分支。
+                </p>
+              )}
+              {failureReason && (
+                <p className="text-sm [overflow-wrap:anywhere]">{failureReason}</p>
+              )}
+              {riskSection}
+            </section>
+            {canAnswer && clarificationSection}
+            {assignPrimary && projectSection}
             <section
               aria-label="來源原文"
               className="flex min-w-0 flex-col gap-2"
@@ -1027,10 +1091,9 @@ export function TaskReviewPanel({
               <h3 className="text-sm font-semibold">來源原文</h3>
               {sourceMessages}
             </section>
-            {projectSection}
+            {!assignPrimary && projectSection}
             {acceptanceSection}
-            {riskSection}
-            {clarificationSection}
+            {!canAnswer && clarificationSection}
             {externalLinks}
             {stationTrack}
           </>
@@ -1571,7 +1634,18 @@ export function TaskReviewPanel({
           )}
         </Tabs>
       </div>
-      {!inWorkbench && actions}
-    </>
   );
+  if (inWorkbench) {
+    return (
+      <div className="flex h-full min-h-0 flex-col">
+        {actionNotice}
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {header}
+          {body}
+        </div>
+        {actions}
+      </div>
+    );
+  }
+  return <>{header}{body}{actions}</>;
 }
