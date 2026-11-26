@@ -20,6 +20,7 @@
     "typecheck": "tsc --noEmit",
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
+    "acceptance:flows": "tsx scripts/acceptance/flows/run.ts",
     "test:e2e": "playwright test",
     "test:watch": "vitest",
     "db:migrate": "tsx server/migrate.ts",

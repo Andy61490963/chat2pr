@@ -46,7 +46,18 @@ export function instanceName(
     );
   return value;
 }
+export function flowSubscriptionOrigin(env: NodeJS.ProcessEnv = process.env) {
+  const origin = env.ACCEPTANCE_MODEL_ORIGIN;
+  if (origin === undefined) return;
+  if (!instanceName(env.AGENTFLOW_INSTANCE).startsWith("verify-") || !/^http:\/\/127\.0\.0\.1:[1-9][0-9]{3,4}$/.test(origin))
+    throw new Error("劇本模型只能使用隔離驗收實例的本機專用埠");
+  const port = Number(origin.slice(origin.lastIndexOf(":") + 1));
+  if (port < 1024 || port > 65535 || [4310, 4311, 4312, 4313, 4314, 5439].includes(port))
+    throw new Error("劇本模型不可使用正式或無效的埠");
+  return origin;
+}
 export function validateRunnerEnvironment(env = process.env) {
+  flowSubscriptionOrigin(env);
   const instance = instanceName(env.AGENTFLOW_INSTANCE);
   if (instance === "production") {
     subscriptionBrokerPort(env);
@@ -87,6 +98,7 @@ export function subscriptionBrokerPort(env = process.env) {
   return port;
 }
 export function config() {
+  flowSubscriptionOrigin();
   const s = secrets();
   return {
     instance: instanceName(),

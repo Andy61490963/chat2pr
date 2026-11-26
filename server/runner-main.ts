@@ -17,6 +17,7 @@ import { SourceCache, SourceAccess } from "./source-cache.js";
 import { readCodexAccount, type CodexAccount } from "./codex-account.js";
 import {
   validateRunnerEnvironment,
+  flowSubscriptionOrigin,
   subscriptionBrokerPort,
 } from "./config.js";
 import { replyRunnerError } from "./error-reply.js";
@@ -65,8 +66,12 @@ const observations = new ObservationBuffer();
 // 不放在 .local：該目錄會唯讀掛載進應用程式容器。
 const codexHome = resolve(process.env.CODEX_SERVICE_HOME ?? ".codex-service");
 const authFile = join(codexHome, "auth.json");
+const modelOrigin = flowSubscriptionOrigin();
+const scripted = modelOrigin && (await import("../scripts/acceptance/flows/subscription.js")).scriptedSubscription(modelOrigin);
+const readAccount = scripted ? scripted.readAccount : readCodexAccount;
 const broker = new SubscriptionBroker({
-  credentials: subscriptionIdentity(codexHome),
+  credentials: subscriptionIdentity(codexHome, readAccount),
+  upstreamFetch: scripted ? scripted.upstreamFetch : undefined,
 });
 const brokerApp = Fastify({ logger: false });
 brokerApp.setErrorHandler((err, _req, reply) => {
@@ -155,7 +160,7 @@ app.get("/codex/account", async (req) => {
     );
   const fresh = (req.query as { fresh?: string }).fresh === "1";
   if (!account || fresh || Date.now() - account.at > 60000)
-    account = { at: Date.now(), data: await readCodexAccount(codexHome) };
+    account = { at: Date.now(), data: await readAccount(codexHome) };
   return account.data;
 });
 app.post("/prepare", async (req) => {

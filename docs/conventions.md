@@ -1,5 +1,7 @@
 # 專案慣例與注意事項
 
+修改 `server/execution.ts`、需求判讀、訂閱代理、群組回覆或背景工作時，合併前要在隔離實例執行 `npm run acceptance:flows`。各元件的單元測試全綠，仍可能在交接時卡住而沒有送出群組通知。共用主機的排隊規則見 `docs/agents/parallel-development.md`，操作與已接上的情境見 `scripts/acceptance/README.md`。
+
 新增任務、專案或群組的狀態時，請先在 `shared/status-glossary.ts` 加入顯示名稱，再由看板引用。
 
 這份文件收集「不寫下來就容易踩到」的規則：哪些事一定要一起改、哪些指令不能在哪裡執行、哪些錯誤其實是正常現象。人和 AI 代理在這個儲存庫工作前都應該讀過一次；發現新的潛規則就補在這裡，不要只留在對話或個人筆記。

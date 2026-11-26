@@ -1,5 +1,20 @@
 # 可續跑的隔離驗收
 
+## 群組訊息全流程驗收
+
+將 `ACCEPTANCE_OUTPUT_ROOT` 設為本次派工專屬暫存目錄的絕對路徑。以下是要交給重型工作排隊腳本的參數；在共用主機不要直接執行。每次啟動使用新的實例，主控會印出證據帳本目錄。
+
+| 排隊執行的指令 | 用途 |
+| --- | --- |
+| `npm run acceptance:flows` | 依序跑全部情境；任何失敗或未實作都不算通過。 |
+| `npm run acceptance:flows -- 1` | 從已簽章的 LINE 查詢檢查群組是否收到回答。 |
+| `npm run acceptance:flows -- 2` | 從 Discord 修改需求檢查測試、審查、PR 與合併通知。 |
+| `npm run acceptance:flows -- 1 --fault=model` | 讓模型持續回覆 502；預期案例失敗。 |
+| `npm run acceptance:flows -- 2 --fault=pr` | 模擬建立 PR 失敗；預期案例失敗。 |
+| `npm run acceptance:flows -- 1 --real` | 經既有驗收登入複製流程使用真實訂閱，須先指定 `ACCEPTANCE_AUTH_SOURCE`；不要讀取或列印登入檔。 |
+
+目前只接上情境 1、2 的劇本。情境 3–20 在帳本標記為 `blocked`，不是通過，也不是已知產品缺陷。若驗收在第一個外部事件前就中止，請先排除環境問題，再判定產品行為。已確認的產品缺陷及登錄標準見 `flows/KNOWN-FAILURES.md`。
+
 每次驗收使用新的 `suiteId`，例如 `20261106-a`，對應 `AGENTFLOW_INSTANCE=verify-20261106-a`。正式服務固定為 `production`。工作容器、工作卷、基底卷、來源快取及代理網路全部依 instance 隔離；同一個 run ID 出現在兩套環境也不能互相取消或清理。
 
 ## 啟動邊界
