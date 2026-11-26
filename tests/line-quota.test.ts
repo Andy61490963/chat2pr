@@ -55,9 +55,9 @@ describe("剩餘額度對群組人數", () => {
     expect(quotaRemaining(quotaUsageOf(quotaExhaustedDetail))).toBeNull();
     expect(quotaRemaining({ limit: null, used: 5 })).toBe(Infinity);
   });
-  it("群組推播依人數計費，人數未知時當 1 則；私訊 1 則", () => {
+  it("群組人數未知時先估八人，私訊仍計一人", () => {
     expect(pushCost(8)).toBe(8);
-    expect(pushCost(null)).toBe(1);
+    expect(pushCost(null)).toBe(8);
     expect(pushCost(undefined)).toBe(1);
     expect(pushCost(0)).toBe(1);
     // 剩 5 則、群組 8 人：不夠；私訊只要 1 則。

@@ -166,8 +166,8 @@ it("群組關閉回覆或離開後才輪到的待送通知不推播", async () =
   await db.query("UPDATE groups SET left_at=now() WHERE id='GroupB'");
   await flush();
   expect(pushes).toHaveLength(0);
-  expect(await db.query("SELECT last_error FROM notifications WHERE group_id IS NOT NULL")).toEqual([
-    { last_error: repliesOffNote }, { last_error: repliesOffNote },
+  expect(await db.query("SELECT last_error FROM notifications WHERE group_id IS NOT NULL ORDER BY text DESC")).toEqual([
+    { last_error: repliesOffNote }, { last_error: "機器人已離開群組，未送出" },
   ]);
   await db.query("UPDATE groups SET reply_mode='results',left_at=NULL");
   await flush();
@@ -187,7 +187,7 @@ it("未確認收件的舊批次跨日後略過過期通知，保留仍有效的�
   expect(await db.one("SELECT last_error FROM notifications WHERE text='過期的查詢答案'")).toEqual({ last_error: "已過期，未補送" });
 });
 
-it("已有重試批次時降至兩成，只以新鍵推仍需送達的重要通知", async () => {
+it("已有重試批次時降至兩成，縮批仍沿用原鍵，首次收下時依本次順序記錄", async () => {
   const keys: string[] = [];
   const pushes = lineApi(async (body, key) => {
     keys.push(key);
@@ -200,7 +200,72 @@ it("已有重試批次時降至兩成，只以新鍵推仍需送達的重要通�
   await setUsage(160);
   await flush();
   expect(pushes.map((p) => p.messages.map((m) => m.text))).toEqual([["這項已收到", "查詢的答覆"], ["查詢的答覆"]]);
-  expect(keys[0]).not.toBe(keys[1]);
+  expect(keys[1]).toBe(keys[0]);
+  expect(await db.one("SELECT sent_message_id FROM notifications WHERE kind='group_answered'"))
+    .toEqual({ sent_message_id: "Retry0" });
+});
+
+it("等待說明已過時，原批已收件的重試只確認送達，不將舊訊息識別碼寫給答案", async () => {
+  const accepted = new Set<string>();
+  const keys: string[] = [];
+  const pushes = lineApi(async (_body, key) => {
+    keys.push(key);
+    if (accepted.has(key)) return Response.json({
+      sentMessages: [{ id: "OriginalWaiting" }, { id: "OriginalAnswer" }],
+    }, { status: 409, headers: { "x-line-accepted-request-id": "OriginalBatch" } });
+    accepted.add(key);
+    if (keys.length === 1) throw new Error("模擬收件後遺失回應");
+    return Response.json({ sentMessages: [{ id: "DuplicateAnswer" }] });
+  });
+  await notice("group_waiting", "仍在等候");
+  await notice("group_answered", "範例查詢答案");
+  await flush();
+  await db.query("UPDATE tasks SET status='running' WHERE title='仍在等候'");
+  await flush();
+  expect(pushes.map((p) => p.messages.map((m) => m.text))).toEqual([["仍在等候", "範例查詢答案"], ["範例查詢答案"]]);
+  expect(accepted.size).toBe(1);
+  expect(keys[1]).toBe(keys[0]);
+  expect(await db.one("SELECT sent_at IS NOT NULL AS done,sent_message_id,last_error FROM notifications WHERE kind='group_answered'"))
+    .toEqual({ done: true, sent_message_id: null, last_error: null });
+  expect(await usage()).toEqual({ detail: "本月已用 10／上限 200 則" });
+});
+
+it("已領取批次遇到群組人數不足，恢復時仍用原鍵", async () => {
+  const keys: string[] = [];
+  lineApi(async (_body, key) => {
+    keys.push(key);
+    if (keys.length === 1) throw new Error("模擬回應遺失");
+    return Response.json({ sentMessages: [{ id: "FirstAnswer" }] }, {
+      status: 409, headers: { "x-line-accepted-request-id": "OriginalBatch" },
+    });
+  });
+  await notice("group_answered", "範例查詢答案");
+  await flush();
+  await setUsage(198);
+  await flush();
+  expect(keys).toHaveLength(1);
+  await setUsage(10);
+  await flush();
+  expect(keys).toEqual([keys[0], keys[0]]);
+});
+
+it("縮批重試確認 LINE 已收下原本整批時，中間進度也不會又用免費回覆補送", async () => {
+  const keys: string[] = [];
+  lineApi(async (_body, key) => {
+    keys.push(key);
+    if (keys.length === 1) throw new Error("模擬收件後遺失回應");
+    return Response.json({ sentMessages: [{ id: "OriginalNotice" }, { id: "OriginalAnswer" }] }, {
+      status: 409, headers: { "x-line-accepted-request-id": "OriginalBatch" },
+    });
+  });
+  await notice("group_received", "範例收件通知");
+  await notice("group_answered", "範例查詢答案");
+  await flush();
+  await setUsage(160);
+  await flush();
+  expect(keys).toEqual([keys[0], keys[0]]);
+  expect(await db.query("SELECT sent_message_id,last_error FROM notifications WHERE sent_at IS NOT NULL"))
+    .toEqual([{ sent_message_id: null, last_error: null }, { sent_message_id: null, last_error: null }]);
 });
 
 it("每輪最多查五十個群組的人數，下一輪會輪到額度夠用的小群組", async () => {
@@ -280,13 +345,12 @@ it("LINE 拒收含錯誤內容的整批時，分開送出正常答案，只讓�
     : Response.json({ sentMessages: body.messages.map((_, i) => ({ id: `Valid${i}` })) }));
   const expected = ["第一題答案", "錯誤內容", "第三題答案", "第四題答案", "第五題答案"];
   for (const text of expected) await notice("group_answered", text);
-  for (let i = 0; i < 10; i++) {
-    await flush();
-    await db.query("UPDATE notifications SET sent_at=now()-interval '2 minutes' WHERE sent_message_id IS NOT NULL");
-  }
+  await flush();
   expect(pushes[0].messages.map((m) => m.text)).toEqual(expected);
   expect(await db.query("SELECT text FROM notifications WHERE sent_message_id IS NOT NULL ORDER BY created_at"))
     .toEqual(expected.filter((text) => text !== "錯誤內容").map((text) => ({ text })));
+  await flush();
+  await flush();
   expect(await db.one("SELECT sent_at,attempts FROM notifications WHERE text='錯誤內容'")).toEqual({ sent_at: null, attempts: 3 });
   expect(pushes.filter((p) => p.messages.length === 1 && p.messages[0].text === "錯誤內容")).toHaveLength(3);
 });
