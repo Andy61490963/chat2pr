@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { RunEvent, RunView } from "../../shared/observation.js";
+import { parseUpstreamFailureDetail, upstreamFailureText } from "../../shared/upstream-failure.js";
 import { heartbeatStale } from "../../shared/run-progress.js";
 import { InstallReportView } from "./egress";
 import {
@@ -30,6 +31,28 @@ type Page = {
 };
 const time = (s: string) =>
   new Date(s).toLocaleString("zh-TW", { hour12: false });
+
+function EventHeading({ event }: { event: RunEvent }) {
+  const { phase, kind, detail, exitCode } = event;
+  let label = eventLabels[kind] ?? kind;
+  let failed = kind === "error" || (exitCode != null && exitCode !== 0);
+  if (detail && (phase === "code" || phase === "review")) {
+    if (kind === "phase_end" && exitCode != null && exitCode !== 0) {
+      const cause = parseUpstreamFailureDetail(detail);
+      if (cause) label = `階段失敗原因：${upstreamFailureText(cause)}`;
+    } else if (kind === "error" && /^Reconnecting\.\.\. \d+\/\d+ \(unexpected status 403\b/i.test(detail)) {
+      label = "重連被拒（HTTP 403）";
+      failed = false;
+    }
+  }
+  return (
+    <p className={`flex flex-wrap gap-x-3 gap-y-1 [overflow-wrap:anywhere] ${failed ? "text-danger" : "font-medium"}`}>
+      <span>{phaseLabels[phase] ?? phase}</span>
+      <span>{label}</span>
+      {exitCode != null && <span>結束碼 {exitCode}</span>}
+    </p>
+  );
+}
 // 這次執行本身的結果；任務之後的狀態（合併、關閉）看任務標頭，不寫在這裡。
 const runOutcomes: Record<string, string> = {
   ready: "已建立 PR",
@@ -344,18 +367,7 @@ export function RunObserver({
               .sort((a, b) => a.at.localeCompare(b.at) || a.seq - b.seq)
               .map((e) => (
                 <li key={e.seq} className="min-w-0">
-                  <p
-                    className={`flex flex-wrap gap-x-3 gap-y-1 [overflow-wrap:anywhere] ${
-                      e.kind === "error" ||
-                      (e.exitCode != null && e.exitCode !== 0)
-                        ? "text-danger"
-                        : "font-medium"
-                    }`}
-                  >
-                    <span>{phaseLabels[e.phase] ?? e.phase}</span>
-                    <span>{eventLabels[e.kind] ?? e.kind}</span>
-                    {e.exitCode != null && <span>結束碼 {e.exitCode}</span>}
-                  </p>
+                  <EventHeading event={e} />
                   <p className="text-muted-foreground">{time(e.at)}</p>
                   {e.threadId && (
                     <p className="mt-1 select-all break-all font-mono">

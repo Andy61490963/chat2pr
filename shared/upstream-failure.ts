@@ -99,3 +99,10 @@ export function upstreamFailureDetail(failure: UpstreamFailure): string {
   if (!safe) return "訂閱推論失敗";
   return safe.status === undefined ? safe.kind : `${safe.kind}（HTTP ${safe.status}）`;
 }
+
+/** 從階段結束事件讀回代理寫入的固定類別與狀態碼。 */
+export function parseUpstreamFailureDetail(detail: string): UpstreamFailure | undefined {
+  const match = /^([a-z_]+)(?:（HTTP ([1-5]\d\d)）)?$/.exec(detail);
+  if (!match || !isKind(match[1])) return undefined;
+  return match[2] ? { kind: match[1], status: Number(match[2]) } : { kind: match[1] };
+}

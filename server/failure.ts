@@ -90,6 +90,26 @@ const validationDefaults: Record<FailureCategory, Advice> = {
 };
 const matches = (pattern: RegExp) => (body: string) => pattern.test(body);
 
+const resumableRules = [
+  {
+    category: "project",
+    // 逾時前已收集到修改（execution.ts 加上前綴）：重試會從測試與獨立審查接續，縮小需求範圍不是對的處理（#241）。
+    test: matches(/^修改已保留，/),
+    plain: "時間用完前修改已完成，修改已保留，但測試或獨立審查還沒做完",
+    action: "按「重試」會沿用保留的修改，從測試與獨立審查接續",
+    group: "管理者重試後會從驗證接續。",
+  },
+  {
+    category: "project",
+    // 第一次修改驗證沒過、唯一一次自動修復途中逾時（execution.ts 加上前綴）：重試直接修復，不重做驗證（#241）。
+    test: matches(/^修改與審查意見已保留，/),
+    plain:
+      "時間用完前第一次修改的驗證沒有通過，修改與審查意見已保留，唯一一次自動修復還沒做完",
+    action: "按「重試」會沿用保留的修改與審查意見，直接進行唯一一次自動修復",
+    group: "管理者重試後會接著自動修復。",
+  },
+] satisfies Rule[];
+
 // 規則依序比對，先中先贏：先認「專案／設定」這類明確的訊息，
 // 再認暫時性錯誤，避免測試輸出裡剛好出現的 ECONNREFUSED 被誤當成網路問題而重試。
 const rules: Rule[] = [
@@ -200,23 +220,7 @@ const rules: Rule[] = [
     group: "這次修改的內容超過交付上限，請管理者依看板上的說明調整後重試。",
     keep: true,
   },
-  {
-    category: "project",
-    // 逾時前已收集到修改（execution.ts 加上前綴）：重試會從測試與獨立審查接續，縮小需求範圍不是對的處理（#241）。
-    test: matches(/^修改已保留，/),
-    plain: "時間用完前修改已完成，修改已保留，但測試或獨立審查還沒做完",
-    action: "按「重試」會沿用保留的修改，從測試與獨立審查接續",
-    group: "管理者重試後會從驗證接續。",
-  },
-  {
-    category: "project",
-    // 第一次修改驗證沒過、唯一一次自動修復途中逾時（execution.ts 加上前綴）：重試直接修復，不重做驗證（#241）。
-    test: matches(/^修改與審查意見已保留，/),
-    plain:
-      "時間用完前第一次修改的驗證沒有通過，修改與審查意見已保留，唯一一次自動修復還沒做完",
-    action: "按「重試」會沿用保留的修改與審查意見，直接進行唯一一次自動修復",
-    group: "管理者重試後會接著自動修復。",
-  },
+  ...resumableRules,
   {
     category: "project",
     // 訂閱代理在階段期限到了會回「訂閱階段已超過期限」（runner-main、subscription-broker）。
@@ -423,14 +427,17 @@ export function classifyFailure(
 ): FailureExplanation {
   const body = redact(raw.replace(ansi, ""));
   const rule = rules.find((r) => r.test(body, phase)) ?? fallback;
-  if (upstreamFailure)
+  if (upstreamFailure) {
+    const reason = upstreamFailureText(upstreamFailure);
+    const kept = resumableRules.find((r) => r.test(body));
     return {
       category: rule.category,
-      plain: upstreamFailureText(upstreamFailure),
+      plain: kept ? `${reason}。${kept.plain}` : reason,
       detail: "未使用其他計費方式",
-      action: "請查看這次執行紀錄的訂閱失敗原因，再決定是否重試",
-      group: "請管理者查看這次執行紀錄，再決定是否重試。",
+      action: kept?.action ?? "請查看這次執行紀錄的訂閱失敗原因，再決定是否重試",
+      group: kept?.group ?? "請管理者查看這次執行紀錄，再決定是否重試。",
     };
+  }
   // 摘要只放錯誤重點；開頭的「安裝失敗：」這類前綴已經由白話說明表達。
   const stripped = `\n${body
     .replace(/^\s*[\p{Script=Han}A-Za-z ]{1,16}?(?:失敗|未通過驗證)：/u, "")
