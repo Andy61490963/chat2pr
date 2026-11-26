@@ -39,6 +39,15 @@ async function main() {
     await disposeRetainedWorkspaces(instance, runs, async runId => { await runner.call("dispose", { runId }, 20000); });
   };
   const retainedRuns = () => db.query<RetainedRun>("SELECT id,workspace,completed_at FROM runs WHERE workspace IS NOT NULL");
+  const diagnose = async (packet: { event?: string }) => {
+    if (packet?.event !== "diagnose") return;
+    const evidence = await capture();
+    const queue = evidence.stranded && app ? queueDiagnosis(await app.ctx.admin("GET", "/api/capacity").catch(() => null)) : "";
+    const detail = [formatFlowFailure(`${step}：整案超時`, evidence, input.canaries), queue].filter(Boolean).join("\n");
+    if (process.connected) process.send?.({ event: "diagnosis", detail });
+  };
+  const onMessage = (packet: { event?: string }) => { void diagnose(packet).catch(() => {}); };
+  process.on("message", onMessage);
   try {
     const github = await createGitHubProvider({ omitPullRequest: input.fault === "pr" });
     step = "登入、啟用專案及驗證基底";
@@ -49,7 +58,7 @@ async function main() {
     process.send({ event: "project", id: ctx.projectId });
     await ack;
     const poll = ctx.poll;
-    ctx.poll = (label, probe) => { step = label; return poll(label, probe); };
+    ctx.poll = (label, probe) => { step = label; process.send?.({ event: "step", detail: label }); return poll(label, probe); };
     step = `投遞情境 ${input.number} 的來源事件`;
     const result = input.number === 1 ? await runLineQuery(ctx) : input.number === 2 ? await runDiscordChange(ctx) :
       input.number <= 9 ? await conversationFlows[input.number as ConversationNumber]({ ...ctx, setModelSteps: installModelSteps }) :
@@ -77,6 +86,7 @@ async function main() {
     const queue = evidence.stranded && app ? queueDiagnosis(await app.ctx.admin("GET", "/api/capacity").catch(() => null)) : "";
     return { passed: false, detail: [formatFlowFailure(label, evidence, input.canaries), queue].filter(Boolean).join("\n") };
   } finally {
+    process.off("message", onMessage);
     try { await app?.close(); } finally { try { await chat.close(); } finally { await db.close(); } }
   }
 }

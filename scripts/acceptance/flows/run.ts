@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { selectFlowCases } from "./catalog.js";
 import { classifyFlowFailure } from "./known-failures.js";
+import { expiredCase } from "./script-control.js";
 import type { ModelStep } from "./model-upstream.js";
 import type { ModelFault } from "./model-service.js";
 import type { FlowStack } from "./stack.js";
@@ -23,11 +24,21 @@ async function drive(stack: FlowStack, number: number, fault: string | undefined
   const child = fork(fileURLToPath(new URL("./run-case.ts", import.meta.url)), [], { env, execArgv: ["--import", "tsx"], stdio: ["ignore", "ignore", "ignore", "ipc"] });
   let outcome: Outcome | undefined;
   const abort = () => child.kill();
-  const timeout = setTimeout(abort, (number > 2 ? 30 : 12) * 60_000);
+  let step = "建立隔離應用程式";
+  let receiveDiagnosis: ((text: string) => void) | undefined;
+  let expired: Promise<string> | undefined;
+  const timeout = setTimeout(() => {
+    expired = expiredCase(step, () => new Promise<string>((done, fail) => {
+      receiveDiagnosis = done;
+      child.send({ event: "diagnose" }, error => { if (error) fail(error); });
+    }), abort);
+  }, 30 * 60_000);
   signal.addEventListener("abort", abort, { once: true });
   try {
     return await new Promise<Outcome>((done, fail) => {
       child.on("message", (packet: { event: string; id?: string; steps?: ModelStep[]; fault?: ModelFault; runId?: string } & Partial<Outcome>) => {
+        if (packet.event === "step" && typeof packet.detail === "string") step = packet.detail;
+        if (packet.event === "diagnosis" && typeof packet.detail === "string") receiveDiagnosis?.(packet.detail);
         if (packet.event === "ready") child.send({ number, fault, canaries });
         if (packet.event === "project" && typeof packet.id === "string") {
           if (number <= 2) model?.script((number === 1 ? lineQuerySteps : discordChangeSteps)(packet.id));
@@ -45,6 +56,7 @@ async function drive(stack: FlowStack, number: number, fault: string | undefined
       });
       child.once("error", fail);
       child.once("exit", code => {
+        if (expired) { void expired.then(detail => done({ passed: false, detail }), fail); return; }
         if (!outcome || code !== 0) fail(new Error(outcome?.detail || "案例程序逾時、中斷或未交回結果"));
         else if (outcome.passed && model && model.requests() === 0) fail(new Error("沒有請求抵達訂閱上游，不列為通過"));
         else done(outcome);

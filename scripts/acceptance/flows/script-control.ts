@@ -2,6 +2,16 @@ import { once } from "node:events";
 import type { ModelStep } from "./model-upstream.js";
 import type { ModelFault } from "./model-service.js";
 
+export async function expiredCase(step: string, diagnose: () => Promise<string>, stop: () => void, grace = 5000) {
+  const fallback = `步驟：${step}\n案例超時，未能取得診斷`;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const timeout = new Promise<string>(done => { timer = setTimeout(() => done(fallback), grace); });
+    return await Promise.race([diagnose(), timeout]);
+  } catch { return fallback; }
+  finally { clearTimeout(timer); stop(); }
+}
+
 async function exchangeControl(packet: Record<string, unknown>) {
   if (!process.send || !process.connected || process.env.ACCEPTANCE_FLOW_REAL !== "0") throw new Error("僅固定劇本可設定驗收模型");
   const ack = once(process, "message", { signal: AbortSignal.timeout(packet.event === "restart" ? 90000 : 5000) });
