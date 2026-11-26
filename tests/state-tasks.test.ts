@@ -238,8 +238,8 @@ it("已回答、補充後再次回答，採用最新回答時間並保留之後�
   const project = await fixture();
   const at = "2026-11-20T02:30:00.000Z";
   const task = await db.one<{ id: string }>(
-    `INSERT INTO tasks(project_id,group_id,title,summary,mode,status,dedupe_key,updated_at)
-     VALUES ($1,'group-a','範例報表查詢','查詢報表','query','answered','demo-answer',$2) RETURNING id`,
+    `INSERT INTO tasks(project_id,group_id,title,summary,mode,status,version,answer,dedupe_key,updated_at)
+     VALUES ($1,'group-a','範例報表查詢','查詢報表','query','answered',2,'補充後的回答','demo-answer',$2) RETURNING id`,
     [project, "2026-11-20T03:20:00.000Z"],
   );
   await db.query(
@@ -255,7 +255,7 @@ it("已回答、補充後再次回答，採用最新回答時間並保留之後�
     const response = await app.inject({ url: `/api/tasks/${task.id}`, headers: await session() });
     expect(response.statusCode).toBe(200);
     const body = response.json();
-    expect(body.task).toMatchObject({ status: "answered", end_summary: { kind: "other", at } });
+    expect(body.task).toMatchObject({ status: "answered", version: 2, answer: "補充後的回答", end_summary: { kind: "other", at } });
     expect(body.history.map((event: { kind: string }) => event.kind)).toEqual(["answered", "amend", "answered", "duplicate"]);
   } finally {
     await app.close();

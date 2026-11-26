@@ -213,7 +213,12 @@ export const taskEndLabels = {
   cancel: { badge: "已取消", event: "取消" },
   closed: { badge: "PR 已關閉", event: "在 GitHub 關閉" },
   unsend: { badge: "來源已撤回", event: "來源訊息被撤回" },
-  duplicate: { badge: "重複需求", event: "辨識為重複需求" },
+  duplicate: {
+    badge: "重複需求",
+    event: "辨識為重複需求",
+    rejected: "以重複需求拒絕",
+    cancelled: "以重複需求取消",
+  },
   other: { badge: taskListLabels.ended, event: "結束" },
 } as const;
 

@@ -76,7 +76,7 @@ export const eventLabels: Record<string, string> = {
 };
 
 const modelMetadataFallback =
-  /^Model metadata for `[A-Za-z0-9._-]+` not found\. Defaulting to fallback metadata; this can degrade performance and cause issues\.$/;
+  /^Model metadata for `[A-Za-z0-9._:/-]+` not found\. Defaulting to fallback metadata; this can degrade performance and cause issues\.$/;
 
 export function runEventKind({
   kind,

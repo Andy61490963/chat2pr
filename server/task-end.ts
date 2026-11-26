@@ -55,19 +55,11 @@ export function taskEndSummary(
     return summary;
   }
 
-  switch (audit?.kind) {
-    case "closed":
-      // 同一種稽核也用於專案刪除與停止追蹤，只有 GitHub 確認關閉才標成 PR 已關閉。
-      if (/^PR #\d+ 已在 GitHub 關閉(?:（定期同步）)?$/.test(audit.detail)) {
-        summary.kind = "closed";
-        // 關閉的是 GitHub 上的人，系統只是同步到；不寫操作者。
-        summary.station = "pr";
-      }
-      break;
-    case "unsend":
-      summary.kind = "unsend";
-      // 撤回的是群組成員，不寫操作者。
-      break;
+  // 同一種稽核也用於專案刪除與停止追蹤，只有 GitHub 確認關閉才標成 PR 已關閉。
+  if (audit?.kind === "closed" && /^PR #\d+ 已在 GitHub 關閉(?:（定期同步）)?$/.test(audit.detail)) {
+    summary.kind = "closed";
+    // 關閉的是 GitHub 上的人，系統只是同步到；不寫操作者。
+    summary.station = "pr";
   }
   return summary;
 }
@@ -77,19 +69,18 @@ export type TaskWithEndAudit = Task & {
   ending_phase: string | null;
 };
 
-// 依目前狀態找出結案操作。舊任務只有同時撤回的稽核時才採用撤回，後續判讀仍留在時間軸。
+// 依目前狀態找出結案操作，後續判讀與來源撤回仍留在時間軸。
 export const taskEndColumns =
   "row_to_json(ending) AS ending_audit, previous_run.status AS ending_phase";
 export const taskEndJoins = `
   LEFT JOIN LATERAL (
     SELECT kind,detail,created_at FROM audit
     WHERE task_id=t.id AND t.status IN ('${endedStatuses.join("','")}')
-      AND kind IN ('reject','cancel','closed','answered','merged','unsend')
-      AND (kind=CASE t.status WHEN 'rejected' THEN 'reject' WHEN 'cancelled' THEN 'cancel' ELSE t.status END
-        OR (kind='unsend' AND t.status IN ('closed','rejected','cancelled') AND created_at=t.updated_at))
+      AND kind IN ('reject','cancel','closed','answered','merged')
+      AND kind=CASE t.status WHEN 'rejected' THEN 'reject' WHEN 'cancelled' THEN 'cancel' ELSE t.status END
       AND (kind<>'merged' OR detail IN (
         'PR #'||t.pr_number||' 已在 GitHub 合併','PR #'||t.pr_number||' 已在 GitHub 合併（定期同步）'))
-    ORDER BY (kind='unsend'),created_at DESC,id DESC LIMIT 1
+    ORDER BY created_at DESC,id DESC LIMIT 1
   ) ending ON true
   LEFT JOIN LATERAL (
     SELECT status FROM runs

@@ -470,8 +470,9 @@ END $legacy_images$;
 
 CREATE INDEX IF NOT EXISTS tasks_sources_gin ON tasks USING gin(source_ids);
 CREATE INDEX IF NOT EXISTS tasks_updated_id ON tasks (updated_at DESC, id DESC);
-CREATE INDEX IF NOT EXISTS audit_task_end_transition ON audit (task_id, (kind='unsend'), created_at DESC, id DESC)
-  WHERE kind IN ('reject','cancel','closed','answered','merged','unsend');
+CREATE INDEX IF NOT EXISTS audit_task_terminal ON audit (task_id, created_at DESC, id DESC)
+  WHERE kind IN ('reject','cancel','closed','answered','merged');
+DROP INDEX IF EXISTS audit_task_end_transition;
 DROP INDEX IF EXISTS audit_task_ending;
 CREATE INDEX IF NOT EXISTS runs_task_started ON runs (task_id, started_at DESC, id DESC);
 CREATE TABLE IF NOT EXISTS chat_revision(id integer PRIMARY KEY CHECK(id=1),revision bigint NOT NULL DEFAULT 0);
