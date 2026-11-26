@@ -525,6 +525,7 @@ export const availabilityChat: ChatPage = {
 };
 
 export const completedRun: RunView = {
+  upstream_failure: null,
   id: "demo-run",
   version: task.version,
   status: "done",

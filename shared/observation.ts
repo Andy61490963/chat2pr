@@ -1,4 +1,5 @@
 import type { InstallReport } from "./install-plan.js";
+import type { UpstreamFailure } from "./upstream-failure.js";
 export type RunVerificationScope = {
   kind: "build" | "partial";
   limitations?: string;
@@ -12,9 +13,12 @@ export interface RunEvent {
   detail?: string | null;
   threadId?: string;
   containerId?: string;
-  exitCode?: number;
+  exitCode?: number | null;
+  rejectedCount?: number | null;
 }
 export interface RunView {
+  /** 這次執行的訂閱代理診斷；舊紀錄可能沒有這個欄位。 */
+  upstream_failure?: UpstreamFailure | null;
   pr_summary?: string | null;
   /** 本次執行實際使用的有限驗證範圍。 */
   verification_scope?: RunVerificationScope | null;
@@ -65,6 +69,7 @@ export const eventLabels: Record<string, string> = {
   truncated: "部分紀錄已截斷",
   observer_error: "進度連線中斷",
   observer_restored: "進度連線恢復",
+  worker_event_rejected: "容器事件已丟棄",
   upstream_retry: "訂閱上游重試",
 };
 
