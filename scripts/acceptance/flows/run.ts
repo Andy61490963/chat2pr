@@ -5,6 +5,8 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { selectFlowCases } from "./catalog.js";
 import { classifyFlowFailure } from "./known-failures.js";
+import type { ModelStep } from "./model-upstream.js";
+import type { ModelFault } from "./model-service.js";
 import type { FlowStack } from "./stack.js";
 import type { RecordInput } from "../ledger.js";
 import type { startModelService } from "./model-service.js";
@@ -16,19 +18,28 @@ async function drive(stack: FlowStack, number: number, fault: string | undefined
   const { lineQuerySteps, discordChangeSteps } = await import("./basic.js");
   signal.throwIfAborted();
   const env: NodeJS.ProcessEnv = { ...stack.env, ADMIN_GITHUB_ID: "266001", ACCEPTANCE_FLOW_REAL: model ? "0" : "1" };
+  if (model && (number === 11 || number === 12)) env.ACCEPTANCE_RECOVERY_TIMING = String(number);
   for (const key of ["PATH", "PATHEXT", "SystemRoot", "ComSpec", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP", "ProgramFiles"]) if (process.env[key]) env[key] = process.env[key];
   const child = fork(fileURLToPath(new URL("./run-case.ts", import.meta.url)), [], { env, execArgv: ["--import", "tsx"], stdio: ["ignore", "ignore", "ignore", "ipc"] });
   let outcome: Outcome | undefined;
   const abort = () => child.kill();
-  const timeout = setTimeout(abort, 12 * 60_000);
+  const timeout = setTimeout(abort, (number > 2 ? 30 : 12) * 60_000);
   signal.addEventListener("abort", abort, { once: true });
   try {
     return await new Promise<Outcome>((done, fail) => {
-      child.on("message", (packet: { event: string; id?: string } & Partial<Outcome>) => {
+      child.on("message", (packet: { event: string; id?: string; steps?: ModelStep[]; fault?: ModelFault; runId?: string } & Partial<Outcome>) => {
         if (packet.event === "ready") child.send({ number, fault, canaries });
         if (packet.event === "project" && typeof packet.id === "string") {
-          model?.script((number === 1 ? lineQuerySteps : discordChangeSteps)(packet.id));
+          if (number <= 2) model?.script((number === 1 ? lineQuerySteps : discordChangeSteps)(packet.id));
           child.send({ event: "continue" });
+        }
+        if (packet.event === "script" && model && Array.isArray(packet.steps)) {
+          model.script(packet.steps, packet.fault);
+          child.send({ event: "script-ready" });
+        }
+        if (packet.event === "hits" && model) child.send({ event: "hits", count: model.faultHits() });
+        if (packet.event === "restart" && number === 16 && model && typeof packet.runId === "string") {
+          void stack.restartRunner(packet.runId).then(receipt => { if (child.connected) child.send({ event: "restarted", receipt }); }, () => { if (child.connected) child.send({ event: "restart-failed" }); });
         }
         if (packet.event === "result" && typeof packet.detail === "string") outcome = { passed: packet.passed === true, detail: packet.detail, references: packet.references };
       });
@@ -44,6 +55,7 @@ async function drive(stack: FlowStack, number: number, fault: string | undefined
 
 async function main() {
   const { real, fault, cases } = selectFlowCases(process.argv.slice(2));
+  const started = performance.now();
   const scratch = process.env.ACCEPTANCE_OUTPUT_ROOT;
   if (!scratch || resolve(scratch) !== scratch) throw new Error("請將 ACCEPTANCE_OUTPUT_ROOT 指向本次驗收的專屬暫存目錄（絕對路徑）");
   if (process.env.AGENTFLOW_INSTANCE === "production" || process.env.NODE_ENV === "production") throw new Error("不可由正式實例啟動流程驗收");
@@ -68,10 +80,6 @@ async function main() {
       controller.signal.throwIfAborted();
       const row = { caseId: item.id, attempt: 1 };
       await ledger.append({ ...row, status: "started" });
-      if (item.number > 2) {
-        await ledger.append({ ...row, status: "blocked", detail: "尚未接上全流程劇本，不列為通過或已知失敗" });
-        console.error(`${item.id} 尚未實作`); process.exitCode = 1; continue;
-      }
       const start = performance.now();
       const keys = { githubAppId: "26601", githubClientId: "AcceptanceClient266", githubClientSecret: randomBytes(24).toString("hex"), githubWebhookSecret: randomBytes(24).toString("hex"), lineSecret: randomBytes(24).toString("hex"), lineToken: "AcceptanceLineToken266", discordToken: "AcceptanceDiscord266", discordApplicationId: "100000000000000003", githubPrivateKey: generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs1", format: "pem" }).toString() };
       const canaries = [keys.githubClientSecret, keys.githubWebhookSecret, keys.lineSecret, keys.lineToken, keys.discordToken, keys.githubPrivateKey, "ExampleInstallation266", "AcceptanceModelToken266"];
@@ -96,7 +104,7 @@ async function main() {
       console.log(`${item.id} ${verdict}（${elapsed} 秒）\n${detail}`);
       if (!outcome.passed && !known) process.exitCode = 1;
     }
-  } finally { process.off("SIGINT", cancel); process.off("SIGTERM", cancel); }
+  } finally { process.off("SIGINT", cancel); process.off("SIGTERM", cancel); console.log(`驗收總耗時 ${Math.round((performance.now() - started) / 1000)} 秒（不含排隊）`); }
 }
 
 main().catch(error => { console.error(error instanceof Error ? error.message : "驗收主控失敗"); process.exitCode = 1; });
