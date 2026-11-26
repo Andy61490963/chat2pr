@@ -113,6 +113,37 @@ test("重讀失敗會保留伺服器原因，不送出核准", async ({ page }) 
   expect(writes).toEqual([]);
 });
 
+test("送出核准被伺服器拒絕時保留原因與佇列，不誤報成功", async ({ page }) => {
+  const { tasks: [first, , , current] } = await mockInboxReview(page);
+  await page.route(`**/api/tasks/${current.id}/actions`, (route) =>
+    route.fulfill({ status: 409, json: { error: inboxDetailUnavailable } }));
+  await page.goto("/");
+  await row(page, current.title).getByRole("button", quickName).click();
+  await expect(page.getByRole("alert").filter({ hasText: inboxDetailUnavailable })).toBeVisible();
+  await expect(panel(page).getByRole("heading", { name: first.title })).toBeVisible();
+  await expect(row(page, current.title).getByRole("button", quickName)).toBeEnabled();
+  await expect(page.getByRole("status").filter({ hasText: /已.*核准/ })).toHaveCount(0);
+});
+
+test("手機從清單核准後留在清單，選取下一筆並可按 Enter 開啟", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  const { tasks, state } = await mockInboxReview(page);
+  const current = tasks[3];
+  const next = tasks[4];
+  await page.route(`**/api/tasks/${current.id}/actions`, (route) => {
+    state.tasks = state.tasks.filter(({ id }) => id !== current.id);
+    return route.fulfill({ json: { ...current, status: "queued" } });
+  });
+  await page.goto("/");
+  await row(page, current.title).getByRole("button", quickName).click();
+  const nextRow = row(page, next.title).getByRole("button", { name: new RegExp(next.title) });
+  await expect(nextRow).toBeFocused();
+  await expect(nextRow).toHaveAttribute("aria-current", "true");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("dialog", { name: next.title })).toBeVisible();
+});
+
 for (const scenario of ["成員", "有風險", "查詢", "回答補問", "選專案", "重試"] as const) {
   test(`${scenario}在列上只能開啟審核，不會直接送出`, async ({ page }) => {
     const { tasks, state } = await mockInboxReview(page);
@@ -198,7 +229,7 @@ for (const change of ["切到其他分頁", "改選其他案件", "開始編輯�
       if (change === "切到其他分頁") {
         await page.getByRole("tab", { name: /^進行中/ }).click();
       } else if (change === "改選其他案件") {
-        await row(page, other.title).getByRole("button", { name: new RegExp(other.title) }).click();
+        await row(page, other.title).getByRole("button", openName).click();
       } else if (change === "開始編輯審核草稿") {
         await panel(page).getByRole("button", { name: /修改這一題/ }).click();
         await panel(page).getByRole("textbox", { name: "需求說明" }).fill(other.summary);

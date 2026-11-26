@@ -63,7 +63,7 @@ export function ReviewKeyboardHint() {
 export type SelectionMode = "move" | "enter" | "click";
 
 export function ReviewQueue({
-  items, selected, desktop, choose, decide, busy, state, admin, detail, batchControls, checkbox,
+  items, selected, desktop, choose, decide, busy, checking, state, admin, detail, batchControls, checkbox,
 }: {
   items: readonly ReviewItem[];
   selected: string | null;
@@ -71,6 +71,7 @@ export function ReviewQueue({
   choose: (id: string, mode: SelectionMode) => void;
   decide: (approval: QuickApproval) => void;
   busy: boolean;
+  checking: boolean;
   state: State;
   admin: boolean;
   detail?: Detail;
@@ -147,7 +148,7 @@ export function ReviewQueue({
               <Button
                 type="button" variant={approval ? "default" : "secondary"} size="sm"
                 aria-describedby={titleId}
-                disabled={busy}
+                disabled={busy || (!!approval && checking)}
                 className="min-h-11 w-[4.25rem] px-1 text-xs lg:min-h-8"
                 onClick={() => approval ? decide(approval) : choose(item.id, "click")}
               >

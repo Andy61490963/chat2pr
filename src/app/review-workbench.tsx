@@ -47,6 +47,12 @@ export type ReviewActions = Pick<
 
 type DetailResult = { id: string; detail?: Detail; error?: string };
 
+function readError(cause: unknown) {
+  if (cause instanceof TypeError && /^(Failed to fetch|Load failed|NetworkError when attempting to fetch resource\.?)$/i.test(cause.message))
+    return navigator.onLine ? "未收到服務回應，請確認連線後再試。" : "裝置目前離線，請恢復網路連線後再試。";
+  return message(cause);
+}
+
 export function ReviewWorkbench({
   items,
   sort,
@@ -87,6 +93,7 @@ export function ReviewWorkbench({
   const desktop = useSyncExternalStore(subscribeToReviewLayout, isDesktopWidth);
   const guard = useGuard();
   const [checking, setChecking] = useState(false);
+  const [queueCursor, setQueueCursor] = useState<string | null>(null);
   const [actorChanged, setActorChanged] = useState(false);
   const [quickNotice, setQuickNotice] = useState<{ id: string; text: string } | null>(null);
   const [result, setResult] = useState<DetailResult | null>(null);
@@ -153,7 +160,7 @@ export function ReviewWorkbench({
           setResult((current) => ({
             id: taskId,
             detail: current?.id === taskId ? current.detail : undefined,
-            error: message(e),
+            error: readError(e),
           }));
       },
     );
@@ -233,6 +240,7 @@ export function ReviewWorkbench({
         keepScroll.current = true;
         const next = nextReviewItem(sorted, id)?.id ?? null;
         if (!desktop && initialSelection === null) {
+          setQueueCursor(next);
           requestAnimationFrame(() => focusQueue(next));
         } else if (next) {
           focusId.current = next;
@@ -295,7 +303,7 @@ export function ReviewWorkbench({
       }
       await finish(id, () => quickAct(fresh.task, "approve", expected.body, "已確認專案並核准，開始排程"), "advance", initialSelection);
     } catch (cause) {
-      if (stillHere()) reviewInstead(`無法重新確認案件，尚未核准。${message(cause)} 請重新載入後再試。`);
+      if (stillHere()) reviewInstead(`無法重新確認案件，尚未核准。${readError(cause)} 請重新載入後再試。`);
     } finally {
       if (activeCheck.current === token && workbench.current) cancelQuickCheck();
     }
@@ -465,8 +473,9 @@ export function ReviewWorkbench({
       {items.length ? (
         <ReviewQueue
           items={sorted}
-          selected={item?.id ?? null}
-          busy={busy || checking}
+          selected={item?.id ?? (!desktop && sorted.some(({ id }) => id === queueCursor) ? queueCursor : null)}
+          busy={busy || suspended}
+          checking={checking}
           state={state}
           admin={admin && !actorChanged}
           detail={detail}
