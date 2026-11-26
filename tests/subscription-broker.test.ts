@@ -11,6 +11,7 @@ import { AppError } from "../server/policy.js";
 import { phaseEndEvents } from "../server/test-failures.js";
 import {
   parseUpstreamFailure,
+  parseUpstreamFailureDetail,
   upstreamFailureDetail,
   upstreamFailureText,
 } from "../shared/upstream-failure.js";
@@ -93,6 +94,25 @@ async function fixture(
   return { app, broker, runId, lease, send, calls: () => calls };
 }
 describe("訂閱上游診斷的白名單", () => {
+  it("代理明細有無上游 HTTP 狀態碼都能還原原本的診斷", () => {
+    for (const failure of [
+      { kind: "connection" },
+      { kind: "upstream_http", status: 503 },
+    ] as const) {
+      expect(parseUpstreamFailureDetail(upstreamFailureDetail(failure))).toStrictEqual(failure);
+    }
+  });
+
+  it("代理明細含未知類別、無效狀態碼或額外文字時不予解析", () => {
+    for (const detail of [
+      "", "unknown_kind", "__proto__",
+      "upstream_http（HTTP 099）", "upstream_http（HTTP 600）", "upstream_http（HTTP 50）",
+      "auth (HTTP 401)", "範例文字 auth（HTTP 401）", "auth（HTTP 401）\n範例文字",
+    ]) {
+      expect(parseUpstreamFailureDetail(detail)).toBeUndefined();
+    }
+  });
+
   it("只採用固定類別和有效數字，不把附加資料帶到文字或事件", () => {
     const input = { kind: "invalid_usage", status: 200, message: identity.accessToken } as const;
     expect(parseUpstreamFailure(input)).toStrictEqual({ kind: "invalid_usage", status: 200 });
@@ -215,6 +235,43 @@ describe("訂閱主憑證隔離與有限階段能力", () => {
     expect(response.body).not.toContain(identity.accessToken);
     expect(f.lease.failure()).toStrictEqual({ kind: "protected_data", status: 200 });
     expect((await f.send()).statusCode).toBe(403);
+  });
+
+  it.each(["字串未結束", "物件未結束", "含跳脫字元"])("主憑證跨越完整事件與未收完的文字欄位（%s）時，記為受保護資料並撤銷授權", async (ending) => {
+    const first = identity.accessToken.slice(0, 12);
+    const second = identity.accessToken.slice(12);
+    const frame = JSON.stringify({ type: "response.output_text.delta", delta: first });
+    const partial = ending === "含跳脫字元"
+      ? `\\u${second.charCodeAt(0).toString(16).padStart(4, "0")}${second.slice(1)}`
+      : second;
+    const tail = `data: {"type":"response.output_text.delta","delta":"${partial}${ending === "物件未結束" ? '"' : ""}`;
+    const f = await fixture({
+      credentials: async () => identity,
+      upstreamFetch: async () => new Response(`data: ${frame}\n\n${tail}`, {
+        headers: { "content-type": "text/event-stream" },
+      }),
+    });
+    const response = await f.send();
+    expect(response.statusCode).toBe(502);
+    expect(response.body).not.toContain(first);
+    expect(response.body).not.toContain(second);
+    expect(f.lease.failure()).toStrictEqual({ kind: "protected_data", status: 200 });
+    expect((await f.send()).statusCode).toBe(403);
+    expect(f.broker.usage(f.runId)).toMatchObject({ requests: 1, revoked: true });
+  });
+
+  it("未收完的另一個欄位恰好含有憑證後半段時，仍可重試", async () => {
+    const frame = JSON.stringify({ type: "response.output_text.delta", delta: identity.accessToken.slice(0, 12) });
+    const tail = `data: {"type":"response.output_text.delta","other":"${identity.accessToken.slice(12)}`;
+    const f = await fixture({
+      credentials: async () => identity,
+      upstreamFetch: async () => new Response(`data: ${frame}\n\n${tail}`, {
+        headers: { "content-type": "text/event-stream" },
+      }),
+    });
+    expect((await f.send()).statusCode).toBe(502);
+    expect(f.lease.failure()).toStrictEqual({ kind: "stream_interrupted", status: 200 });
+    expect(f.broker.usage(f.runId)?.revoked).toBe(false);
   });
 
   it("刷新時查不到額度仍拒絕新推論，並記下最後的上游狀態", async () => {

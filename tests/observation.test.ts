@@ -84,6 +84,54 @@ it("分頁無遺漏且重複串流事件不重複保存", async () => {
   expect(b.events).toHaveLength(5);
   expect(b.hasOlder).toBe(false);
 });
+it("執行紀錄保存安全的非 UUID 對話識別碼與沒有結束碼的命令", async () => {
+  const { taskId, runId } = await fixtureRun();
+  const buffer = new ObservationBuffer();
+  buffer.add(runId, "code", { kind: "thread", threadId: "sample_thread-27" });
+  for (const kind of ["command_start", "command_end"])
+    buffer.add(runId, "code", { kind, detail: "範例命令", exitCode: null });
+  await saveEvents(db, runId, "runner", buffer.read(runId));
+  expect((await new Tasks(db).runEvents(taskId, runId)).events).toMatchObject([
+    { kind: "thread", threadId: "sample_thread-27" },
+    { kind: "command_start", detail: "範例命令", exitCode: null },
+    { kind: "command_end", detail: "範例命令", exitCode: null },
+  ]);
+});
+it("同一次執行跨階段只保存第一筆拒收原因，重送舊輪詢不會減少累計筆數", async () => {
+  const { taskId, runId } = await fixtureRun();
+  const buffer = new ObservationBuffer();
+  buffer.rejectWorkerEvent(runId, "code", "command_end", "欄位不符");
+  const first = structuredClone(buffer.read(runId));
+  await saveEvents(db, runId, "runner", first);
+  for (let i = 0; i < 50; i++)
+    buffer.rejectWorkerEvent(runId, "review", "未知", "種類不符");
+  buffer.add(runId, "review", { kind: "message", detail: "審查完成" });
+  await saveEvents(db, runId, "runner", buffer.read(runId, first[0].seq));
+  await saveEvents(db, runId, "runner", first);
+  expect((await new Tasks(db).runEvents(taskId, runId)).events).toMatchObject([
+    { phase: "code", kind: "worker_event_rejected", rejectedCount: 51,
+      detail: "容器事件已丟棄（種類：command_end，原因：欄位不符）" },
+    { phase: "review", kind: "message", detail: "審查完成" },
+  ]);
+  const next = randomUUID();
+  buffer.rejectWorkerEvent(next, "code", "未知", "無法解析");
+  expect(buffer.read(next)).toMatchObject([{ rejectedCount: 1 }]);
+  buffer.forget(runId);
+  buffer.rejectWorkerEvent(runId, "review", "未知", "種類不符");
+  expect(buffer.read(runId)).toEqual([]);
+});
+it("一般事件已截斷時仍保留一筆拒收紀錄及累計", () => {
+  const runId = randomUUID();
+  const buffer = new ObservationBuffer();
+  for (let i = 0; i < 2001; i++)
+    buffer.add(runId, "code", { kind: "message" });
+  buffer.rejectWorkerEvent(runId, "code", "message", "欄位不符");
+  buffer.rejectWorkerEvent(runId, "review", "未知", "種類不符");
+  expect(buffer.read(runId, 2000)).toMatchObject([
+    { kind: "truncated" },
+    { kind: "worker_event_rejected", rejectedCount: 2 },
+  ]);
+});
 it.each([
   { phase: "code", outcome: "修改恢復成功", status: 200 },
   { phase: "review", outcome: "審查遭上游拒絕", status: 400 },
@@ -142,21 +190,38 @@ it.each([
     await app.close();
   }
 });
+it("只有一般階段輸出時，管理 API 保留明細且不回報代理失敗", async () => {
+  const { taskId, runId } = await fixtureRun();
+  const stderr = "auth（HTTP 401）";
+  const [end] = phaseEndEvents("code", { exitCode: 1, stdout: "", stderr });
+  await saveEvents(db, runId, "runner", [{ ...end, phase: "code", seq: 1, at: new Date().toISOString() }]);
+  const tasks = new Tasks(db);
+  expect((await tasks.runEvents(taskId, runId)).events).toMatchObject([{ kind: "phase_end", detail: stderr }]);
+  expect((await tasks.detail(taskId)).runs[0]).toMatchObject({ upstream_failure: null });
+});
+
 it("到期立即不可讀，撤回清除內容且延遲事件不能寫回；備份排除執行輸出", async () => {
   const { taskId, runId } = await fixtureRun(),
     tasks = new Tasks(db);
+  const reason = { kind: "connection" };
+  const saveReason = () => db.query("UPDATE runs SET upstream_failure=$2 WHERE id=$1", [runId, reason]);
   await saveEvents(db, runId, "runner", [event()]);
+  await saveReason();
   await db.query("UPDATE runs SET started_at=now()-interval '31 days'");
+  expect((await tasks.detail(taskId)).runs[0]).toMatchObject({ upstream_failure: null });
   expect((await tasks.runEvents(taskId, runId)).events[0]).toMatchObject({
     detail: null,
   });
   await cleanup(db);
+  expect(await db.one("SELECT upstream_failure FROM runs WHERE id=$1", [runId])).toEqual({ upstream_failure: null });
   expect((await db.one("SELECT detail FROM run_events")).detail).toBeNull();
   await db.query("UPDATE runs SET started_at=now()");
+  await saveReason();
   await saveEvents(db, runId, "runner", [event(2)]);
   await db.query(
     "UPDATE messages SET revoked=true,text=NULL WHERE id='source'",
   );
+  expect(await db.one("SELECT upstream_failure FROM runs WHERE id=$1", [runId])).toEqual({ upstream_failure: null });
   await saveEvents(db, runId, "runner", [event(3)]);
   expect(
     (await db.query("SELECT detail FROM run_events")).every(

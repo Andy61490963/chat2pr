@@ -348,7 +348,7 @@ function bindingBlock(t: QueuedRow): QueueReason | null {
  *
  * 帶 `taskId` 時只算到這個任務為止（前面的任務會影響空位），不受 50 筆上限限制。
  */
-export async function queueSnapshot(db: Database, taskId?: string) {
+export async function queueSnapshot(db: Database, taskId?: string, rowLimit: number | null = taskId ? 10000 : 50) {
   const settings = await db.settings();
   const limit = maxRuns(settings);
   const running = await db.query<CapacityRun & { project_id: string | null }>(
@@ -369,7 +369,7 @@ export async function queueSnapshot(db: Database, taskId?: string) {
      FROM tasks t LEFT JOIN projects p ON p.id=t.project_id LEFT JOIN groups g ON g.id=t.group_id
      WHERE t.status='queued' AND ($1::uuid IS NULL OR t.created_at<=(SELECT created_at FROM tasks WHERE id=$1))
      ORDER BY t.created_at,t.id LIMIT $2`,
-    [taskId ?? null, taskId ? 10000 : 50],
+    [taskId ?? null, rowLimit],
   );
   const changing = new Set(
     running.filter((r) => r.mode !== "query").map((r) => r.project_id),

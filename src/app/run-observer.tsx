@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { RunEvent, RunView } from "../../shared/observation.js";
+import { upstreamFailureText } from "../../shared/upstream-failure.js";
 import { heartbeatStale } from "../../shared/run-progress.js";
 import { InstallReportView } from "./egress";
 import {
@@ -8,6 +9,7 @@ import {
   phaseDurations,
   phaseLabels,
   phaseMinutes,
+  runEventKind,
 } from "../../shared/observation.js";
 import { statusLabels, type TaskStatus } from "../../shared/types.js";
 import { notificationLabels } from "../../shared/status-glossary.js";
@@ -30,6 +32,24 @@ type Page = {
 };
 const time = (s: string) =>
   new Date(s).toLocaleString("zh-TW", { hour12: false });
+
+function EventHeading({ event }: { event: RunEvent }) {
+  const { phase, exitCode } = event;
+  const kind = runEventKind(event);
+  const label = eventLabels[kind] ?? kind;
+  const failed = kind === "error" ||
+    (kind !== "reconnect_rejected" && exitCode != null && exitCode !== 0);
+  return (
+    <p className={`flex flex-wrap gap-x-3 gap-y-1 [overflow-wrap:anywhere] ${failed ? "text-danger" : "font-medium"}`}>
+      <span>{phaseLabels[phase] ?? phase}</span>
+      <span>{label}</span>
+      {exitCode != null && <span>結束碼 {exitCode}</span>}
+      {kind === "worker_event_rejected" && event.rejectedCount != null && (
+        <span>累計 {event.rejectedCount} 筆</span>
+      )}
+    </p>
+  );
+}
 // 這次執行本身的結果；任務之後的狀態（合併、關閉）看任務標頭，不寫在這裡。
 const runOutcomes: Record<string, string> = {
   ready: "已建立 PR",
@@ -240,6 +260,12 @@ export function RunObserver({
             <dd>{phaseLabels[run.status] ?? run.status}</dd>
             <dt>執行結果</dt>
             <dd>{outcomeText(run)}</dd>
+            {run.upstream_failure && (
+              <>
+                <dt>訂閱失敗原因</dt>
+                <dd className="text-danger">{upstreamFailureText(run.upstream_failure)}</dd>
+              </>
+            )}
             <dt>開始時間</dt>
             <dd>{time(run.started_at)}</dd>
             <dt>{run.completed_at ? "結束時間" : "執行期限"}</dt>
@@ -344,18 +370,7 @@ export function RunObserver({
               .sort((a, b) => a.at.localeCompare(b.at) || a.seq - b.seq)
               .map((e) => (
                 <li key={e.seq} className="min-w-0">
-                  <p
-                    className={`flex flex-wrap gap-x-3 gap-y-1 [overflow-wrap:anywhere] ${
-                      e.kind === "error" ||
-                      (e.exitCode != null && e.exitCode !== 0)
-                        ? "text-danger"
-                        : "font-medium"
-                    }`}
-                  >
-                    <span>{phaseLabels[e.phase] ?? e.phase}</span>
-                    <span>{eventLabels[e.kind] ?? e.kind}</span>
-                    {e.exitCode != null && <span>結束碼 {e.exitCode}</span>}
-                  </p>
+                  <EventHeading event={e} />
                   <p className="text-muted-foreground">{time(e.at)}</p>
                   {e.threadId && (
                     <p className="mt-1 select-all break-all font-mono">

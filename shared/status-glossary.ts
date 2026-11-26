@@ -213,7 +213,12 @@ export const taskEndLabels = {
   cancel: { badge: "已取消", event: "取消" },
   closed: { badge: "PR 已關閉", event: "在 GitHub 關閉" },
   unsend: { badge: "來源已撤回", event: "來源訊息被撤回" },
-  duplicate: { badge: "重複需求", event: "辨識為重複需求" },
+  duplicate: {
+    badge: "重複需求",
+    event: "辨識為重複需求",
+    rejected: "以重複需求拒絕",
+    cancelled: "以重複需求取消",
+  },
   other: { badge: taskListLabels.ended, event: "結束" },
 } as const;
 
@@ -242,7 +247,6 @@ export const endReasonText = {
   required: "請選一個拒絕原因",
 } as const;
 
-export const taskEndSystemActor = "系統";
 export const taskCompletionEvents = {
   merged: "合併",
   answered: "回覆",
@@ -365,6 +369,12 @@ export const connectionStatusLabels = {
   needsAttention: "需處理",
   noRecord: "尚無紀錄",
   unchecked: "未檢查",
+} as const;
+
+export const inferenceStatusLabels = {
+  healthy: "正常",
+  failed: "異常",
+  unknown: "未確認",
 } as const;
 
 export const systemStatusLabels = {

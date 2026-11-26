@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deployPlan } from "./lib/deploy-plan.mjs";
+import { smokeHealth } from "./lib/smoke-health.mjs";
 import {
   bringHostBack,
   hostStateAdvice,
@@ -246,9 +247,7 @@ async function smoke() {
     add("通道狀態檔", tunnel.ok, tunnel.detail);
   } else add("對外入口 /health", false, "尚未設定固定公開網址", true);
 
-  const failing = sql(
-    "SELECT name FROM service_health WHERE NOT ok ORDER BY 1",
-  );
+  const failing = smokeHealth(sql);
   add(
     "看板「系統」頁的檢查項目",
     failing === "",

@@ -33,3 +33,13 @@ it("Dockerfile 的版本標記與執行器要求一致", () => {
   const dockerfile = readFileSync("worker/Dockerfile", "utf8");
   expect(dockerfile).toContain(`io.agentflow.worker-rev="${WORKER_REV}"`);
 });
+
+it("worker/ 的內容變了就必須升 WORKER_REV（指紋與版本號一致）", async () => {
+  const { workerFingerprint, recordedFingerprint } = await import("../scripts/worker-fingerprint.mjs");
+  const recorded = recordedFingerprint();
+  expect(
+    recorded.sha,
+    "worker/ 有變更：請在 server/containers.ts 與 worker/Dockerfile 升 WORKER_REV，再執行 npm run worker:fingerprint",
+  ).toBe(workerFingerprint());
+  expect(recorded.rev, "worker/fingerprint.json 的版本號與 WORKER_REV 不一致").toBe(WORKER_REV);
+});
