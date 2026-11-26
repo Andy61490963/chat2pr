@@ -32,7 +32,11 @@ for (const example of [
       detail: "小陳 取消（需求版本 1；目標分支 main），原因：改由小林整理",
     },
     badge: "已取消",
-    timeline: [laterDuplicate],
+    timeline: [laterDuplicate, {
+      kind: "unsend",
+      detail: "來源訊息已撤回；請確認已整理需求及既有 PR",
+      created_at: "2026-11-20T04:00:00.000Z",
+    }],
   },
   {
     name: "管理者因重複而拒絕任務",
@@ -42,6 +46,19 @@ for (const example of [
       detail: "小林 拒絕（需求版本 1；目標分支 main），原因：重複",
     },
     badge: "重複需求",
+    action: "小林 以重複需求拒絕",
+    timeline: [],
+  },
+  {
+    name: "管理者因重複而取消任務",
+    task: { ...cancelledTask, end_reason: "duplicate" as const },
+    ending: {
+      kind: "cancel",
+      detail: "小林 取消（需求版本 1；目標分支 main），原因：重複；已另案處理",
+    },
+    badge: "重複需求",
+    action: "小林 以重複需求取消",
+    note: "已另案處理",
     timeline: [],
   },
 ]) {
@@ -68,6 +85,7 @@ for (const example of [
       .getByRole("tabpanel", { name: /^已結束/ })
       .getByRole("button", { name: new RegExp(ended.title) });
     await expect(row.getByText(example.badge, { exact: true })).toBeVisible();
+    if (example.action) await expect(row).toContainText(example.action);
     if (ended.status === "answered")
       await expect(
         row.getByRole("img", { name: "站別軌道，結束前到達回覆站" }),
@@ -79,6 +97,11 @@ for (const example of [
       header.getByText(example.badge, { exact: true }),
     ).toBeVisible();
     await expect(header.locator("time")).toHaveAttribute("datetime", endedAt);
+    if (example.action) {
+      await expect(header).toContainText(example.action);
+      await expect(header).not.toContainText("原因是重複");
+      if (example.note) await expect(header).toContainText(example.note);
+    }
     await drawer.getByRole("tab", { name: "時間軸" }).click();
     const timeline = drawer.getByRole("tabpanel", { name: "時間軸" });
     for (const event of history) {

@@ -48,7 +48,7 @@ describe("任務結束摘要", () => {
       "撤回來源",
       "unsend",
       "來源訊息已撤回；請確認已整理需求及既有 PR",
-      "unsend",
+      "other",
       null,
       null,
       null,

@@ -75,6 +75,15 @@ it.each([
   },
 );
 
+it.each([
+  ["demo/model", "notice"],
+  ["demo-model:7b", "notice"],
+  ["demo model", "error"],
+  ["demo\nmodel", "error"],
+])("備援模型名稱 %j 依完整格式分類", (model, expected) => {
+  expect(runEventKind({ phase: "code", kind: "error", detail: fallback.replace("demo-model.2", model) })).toBe(expected);
+});
+
 it("回覆引述備援訊息仍是回覆，已清除內容的錯誤仍是錯誤", () => {
   expect(
     runEventKind({ phase: "code", kind: "message", detail: fallback }),
