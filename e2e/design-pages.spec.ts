@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 import {
   answeredDetail,
+  blockedCheck,
   discordGroup,
   exampleMember,
   group,
@@ -15,10 +16,15 @@ import {
 const report = "設備範例已完成檢查。";
 const screens = [
   { name: "群組", path: "/groups", content: group.name },
-  { name: "記憶總覽", path: "/groups", content: "記憶總覽" },
+  {
+    name: "記憶總覽",
+    path: "/groups",
+    content: groupMemory.content,
+    center: true,
+  },
   { name: "專案", path: "/projects", content: project.name },
   { name: "成員", path: "/members", content: exampleMember.login },
-  { name: "定期檢查", path: "/checks", content: /^還沒有定期檢查/ },
+  { name: "定期檢查", path: "/checks", content: blockedCheck.name },
   {
     name: "聊天室",
     path: `/chat?group=${encodeURIComponent(discordGroup.id)}`,
@@ -27,7 +33,12 @@ const screens = [
   { name: "任務", path: "/tasks", content: task.title },
   { name: "同時執行", path: "/system", content: "同時執行" },
   { name: "網路", path: "/system?tab=network", content: /^使用預設清單，共/ },
-  { name: "磁碟", path: "/system?tab=disk", content: /^最後盤點 / },
+  {
+    name: "磁碟",
+    path: "/system?tab=disk",
+    content: /^最後盤點 /,
+    center: true,
+  },
   { name: "查詢報告", path: `/tasks?task=${task.id}`, content: report },
 ];
 
@@ -44,6 +55,7 @@ for (const width of [375, 1440]) {
         state: { groups: [group, discordGroup], memories: [groupMemory] },
         routes: {
           "/api/members": [exampleMember],
+          "/api/checks": [blockedCheck],
           [`/api/tasks/${task.id}`]: { ...answeredDetail, task: answer },
         },
       });
@@ -54,8 +66,15 @@ for (const width of [375, 1440]) {
             .getByText(screen.content, { exact: true })
             .first();
           await expect(content).toBeVisible();
-          await content.scrollIntoViewIfNeeded();
           await page.evaluate(() => document.fonts.ready);
+          if (screen.center) {
+            await content.evaluate((el) =>
+              el.scrollIntoView({ block: "center" }),
+            );
+          } else {
+            await content.scrollIntoViewIfNeeded();
+          }
+          await expect(content).toBeInViewport();
           expect(
             await page.locator("html").evaluate((el) => el.scrollWidth),
           ).toBeLessThanOrEqual(width);
