@@ -49,6 +49,7 @@ export type ReviewActions = Pick<
 };
 
 type DetailResult = { id: string; detail?: Detail; error?: string };
+type RowError = Pick<Detail["task"], "version" | "updated_at"> & { text: string };
 
 function readError(cause: unknown) {
   if (cause instanceof TypeError && /^(Failed to fetch|Load failed|NetworkError when attempting to fetch resource\.?)$/i.test(cause.message))
@@ -94,7 +95,13 @@ export function ReviewWorkbench({
   const desktop = useSyncExternalStore(subscribeToReviewLayout, isDesktopWidth);
   const guard = useGuard();
   const [checking, setChecking] = useState(false);
-  const [rowErrors, setRowErrors] = useState<Record<string, string>>({});
+  const [rowErrors, setRowErrors] = useState<Record<string, RowError>>({});
+  const errors = Object.entries(rowErrors);
+  const remaining = errors.filter(([id, failed]) =>
+    items.some((item) => item.kind === "task" && item.id === id) &&
+    state.tasks.some((task) => task.id === id && task.version === failed.version && task.updated_at === failed.updated_at),
+  );
+  if (remaining.length !== errors.length) setRowErrors(Object.fromEntries(remaining));
   const [queueCursor, setQueueCursor] = useState<string | null>(null);
   const [actorChanged, setActorChanged] = useState(false);
   const [quickNotice, setQuickNotice] = useState<{ id: string; text: string } | null>(null);
@@ -305,7 +312,8 @@ export function ReviewWorkbench({
         return;
       }
       await finish(id, () => actions.approveFromQueue(fresh.task, expected.body, (text) => {
-        setRowErrors((errors) => ({ ...errors, [id]: text }));
+        const { version, updated_at } = current.task;
+        setRowErrors((errors) => ({ ...errors, [id]: { version, updated_at, text } }));
       }), "advance", initialSelection);
     } catch (cause) {
       if (stillHere()) reviewInstead(`無法重新確認案件，尚未核准。${readError(cause)} 請重新載入後再試。`);

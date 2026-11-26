@@ -82,7 +82,7 @@ export function ReviewQueue({
   state: State;
   admin: boolean;
   detail?: Detail;
-  rowErrors: Readonly<Record<string, string>>;
+  rowErrors: Readonly<Record<string, { text: string }>>;
   batchControls?: ReactNode;
   checkbox: (item: ReviewItem) => ReactNode;
 }) {
@@ -99,7 +99,7 @@ export function ReviewQueue({
         {items.map((item, index) => {
           const task = tasks.get(item.id);
           const candidate = quickApproval(task, state, admin);
-          const error = rowErrors[item.id];
+          const error = rowErrors[item.id]?.text;
           const approval = candidate && !error && (!detail || detail.task.id !== item.id || matchesApproval(candidate, detail))
             ? candidate : null;
           const check = checkbox(item);

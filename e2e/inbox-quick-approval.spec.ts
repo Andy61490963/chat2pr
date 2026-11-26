@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { Detail } from "../src/app/shared";
 import {
-  cancelledTask, exampleMember, expiredProjectConfirmation, group, inboxDetailUnavailable, mockInboxReview,
+  cancelledTask, emitDashboardEvent, exampleMember, expiredProjectConfirmation, group, inboxDetailUnavailable, mockInboxReview,
   project, projectSectionsState, reviewWorkbenchFixture,
 } from "./dashboard-fixture";
 
@@ -131,6 +131,50 @@ test("送出核准遇到版本衝突會在該列保留原因並重新整理佇�
   await expect(row(page, current.title).getByRole("button", { name: "查看", exact: true })).toBeEnabled();
   await expect(page.getByRole("status").filter({ hasText: /已.*核准/ })).toHaveCount(0);
 });
+
+for (const change of ["版本變更", "更新時間變更", "離開佇列再返回"] as const) {
+  test(`快速核准被拒後，${change}會清掉舊錯誤並重讀後再核准`, async ({ page }) => {
+    const { state, tasks } = await mockInboxReview(page);
+    const current = tasks[3];
+    const target = row(page, current.title);
+    const approve = target.getByRole("button", quickName);
+    await page.route(`**/api/tasks/${current.id}/actions`, (route) =>
+      route.fulfill({ status: 409, json: { error: "需求版本已更新" } }), { times: 1 });
+    await page.goto("/");
+    await approve.click();
+    await expect(target.getByRole("alert")).toHaveText("需求版本已更新");
+    await expect(target.getByRole("button", { name: "查看", exact: true })).toBeEnabled();
+
+    if (change === "離開佇列再返回") {
+      state.tasks = tasks.map((task) => task.id === current.id ? { ...task, status: "queued" } : task);
+      await emitDashboardEvent(page, "update");
+      await expect(target).toHaveCount(0);
+    }
+    const updated = {
+      ...current,
+      version: change === "版本變更" ? current.version + 1 : current.version,
+      updated_at: change === "更新時間變更" ? new Date(Date.parse(current.updated_at) + 1000).toISOString() : current.updated_at,
+    };
+    state.tasks = tasks.map((task) => task.id === current.id ? updated : task);
+    const requests: string[] = [];
+    await page.route(`**/api/tasks/${current.id}`, (route) => {
+      requests.push("重讀");
+      return route.fulfill({ json: { ...reviewWorkbenchFixture().details.get(current.id)!, task: updated } });
+    });
+    await page.route(`**/api/tasks/${current.id}/actions`, (route) => {
+      requests.push("核准");
+      expect(route.request().postDataJSON().version).toBe(updated.version);
+      state.tasks = tasks.filter((task) => task.id !== current.id);
+      return route.fulfill({ json: { ...updated, status: "queued" } });
+    });
+    await emitDashboardEvent(page, "update");
+    await expect(approve).toBeEnabled();
+    await expect(target.getByRole("alert")).toHaveCount(0);
+    await approve.click();
+    await expect(target).toHaveCount(0);
+    expect(requests).toEqual(["重讀", "核准"]);
+  });
+}
 
 test("手機從清單核准後留在清單，選取下一筆並可按 Enter 開啟", async ({ page }) => {
   await page.setViewportSize({ width: 375, height: 812 });
