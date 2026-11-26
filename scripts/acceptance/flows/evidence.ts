@@ -34,6 +34,16 @@ export interface FlowEvidence {
   messages: readonly string[];
 }
 
+export async function settleFlowEvidence(read: () => Promise<FlowEvidence>, timeout = 25_000, interval = 500) {
+  const deadline = performance.now() + timeout;
+  for (;;) {
+    const evidence = await read();
+    const remaining = deadline - performance.now();
+    if (evidence.leaks || !(evidence.stale || evidence.resources.length) || remaining <= 0) return evidence;
+    await delay(Math.min(interval, remaining));
+  }
+}
+
 export async function readFlowEvidence(db: Database, messages: readonly string[], resources: readonly string[], canaries: readonly string[]): Promise<FlowEvidence> {
   const counts = await db.one<Pick<FlowEvidence, "stranded" | "stale" | "leaks">>(`
     SELECT (SELECT count(*)::int FROM tasks t WHERE status IN ('queued','running','reviewing')

@@ -1,8 +1,15 @@
 import { expect, it } from "vitest";
-import { checkFlowEvidence, disposeRetainedWorkspaces, formatFlowFailure, waitForWorkDisposal } from "../scripts/acceptance/flows/evidence.js";
+import { checkFlowEvidence, disposeRetainedWorkspaces, formatFlowFailure, waitForWorkDisposal, settleFlowEvidence } from "../scripts/acceptance/flows/evidence.js";
 
 const clean = { stranded: 0, stale: 0, leaks: 0, resources: [] as string[], states: ["answered"], audit: ["已回答"], events: ["驗證完成"], messages: ["共五張票"] };
 const canary = "ExampleKey266";
+
+it("失敗診斷也等待結案回收與通知排程，逾時後保留所有異常", async () => {
+  let reads = 0;
+  const pending = { ...clean, stale: 1, resources: ["保留副本"] };
+  expect(await settleFlowEvidence(async () => ++reads === 1 ? pending : clean, 300, 1)).toEqual(clean);
+  expect(await settleFlowEvidence(async () => pending, 0, 1)).toEqual(pending);
+});
 
 it("只對已結案且工作副本名稱屬本次實例的任務要求回收", async () => {
   const instance = "verify-266-test";
