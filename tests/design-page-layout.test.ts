@@ -100,6 +100,9 @@ it("側欄與警示對話框的共用模組均有正式看板呼叫端", () => {
       .filter((file) => file.endsWith(".tsx"))
       .map((file) => source("src/app/" + file)),
   ].join("\n");
+  const layout = source("src/components/ui/layout.tsx");
+  if (layout.includes("export function PageHeader("))
+    expect(app).toMatch(/<PageHeader[\s>]/);
   for (const name of ["sidebar", "alert-dialog"]) {
     if (existsSync(`src/components/ui/${name}.tsx`)) {
       expect(app.includes(`from "@/components/ui/${name}"`), name).toBe(true);
