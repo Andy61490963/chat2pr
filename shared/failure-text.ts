@@ -34,6 +34,7 @@ export const failureLabels: Record<FailureCategory, string> = {
  * 看板靠它在失敗卡片提供「請 AI 修好目標分支」（#248）。
  */
 export const baselineFailurePlain = "還沒修改前，目標分支本身就建置或測試失敗";
+export const upstreamContextPlain = "這次請求的內容超過模型能處理的長度";
 
 export interface ParsedFailure {
   category: FailureCategory;
@@ -150,7 +151,8 @@ export function primaryFix(parsed: ParsedFailure | null): PrimaryFix {
   if (!parsed) return { kind: "retry" };
   if (changedDuringRun.test(parsed.plain) || resumable.test(parsed.plain))
     return { kind: "retry" };
-  if (timedOut.test(parsed.plain)) return { kind: "amend" };
+  if (timedOut.test(parsed.plain) || parsed.plain.startsWith(upstreamContextPlain))
+    return { kind: "amend" };
   if (parsed.plain === baselineFailurePlain) return { kind: "repair" };
   if (!fixFirst(parsed.category)) return { kind: "retry" };
   const page = fixPage(parsed.action);

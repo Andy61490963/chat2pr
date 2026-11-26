@@ -6,6 +6,12 @@ import { AppError } from "./policy.js";
 export const SUBSCRIPTION_RESPONSES_URL =
   "https://chatgpt.com/backend-api/codex/responses";
 
+export class SubscriptionRedirectError extends AppError {
+  constructor(readonly upstreamStatus: number) {
+    super(502, "訂閱上游不接受重新導向");
+  }
+}
+
 /** 固定訂閱端點；只由 phase AbortSignal 決定總期限，沒有 fetch 的五分鐘標頭期限。 */
 export function createSubscriptionTransport(
   request = httpsRequest,
@@ -49,7 +55,7 @@ export function createSubscriptionTransport(
           }
           const status = response.statusCode ?? 502;
           if (status >= 300 && status < 400) {
-            fail(new AppError(502, "訂閱上游不接受重新導向"));
+            fail(new SubscriptionRedirectError(status));
             return;
           }
           // 不傳遞上游任意標頭、Location、statusText 或錯誤字串。

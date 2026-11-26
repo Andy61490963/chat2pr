@@ -3,6 +3,7 @@ import type { Database } from "./db.js";
 import type { Settings } from "../shared/types.js";
 import { recordHealth } from "./health.js";
 import { diskPaused } from "./docker-disk.js";
+import { upstreamWaitPrefix } from "../shared/upstream-failure.js";
 import type {
   CapacityRun,
   HoldKind,
@@ -269,6 +270,7 @@ interface QueuedRow {
   created_at: string;
   retry_at: string | null;
   retry_waiting: boolean;
+  upstream_wait: boolean;
   retry_clock: string | null;
   parent_active: boolean;
   has_project: boolean;
@@ -283,6 +285,7 @@ interface QueuedRow {
 export type QueuedEntry = Omit<
   QueuedRow,
   | "retry_waiting"
+  | "upstream_wait"
   | "retry_clock"
   | "parent_active"
   | "has_project"
@@ -359,6 +362,7 @@ export async function queueSnapshot(db: Database, taskId?: string) {
   const queued = await db.query<QueuedRow>(
     `SELECT t.id,t.title,t.mode,t.project_id,p.name AS project,t.created_at,t.retry_at,
       COALESCE(t.retry_at>now(),false) AS retry_waiting,
+      starts_with(t.last_error,$3) IS TRUE AS upstream_wait,
       to_char(t.retry_at AT TIME ZONE 'Asia/Taipei','HH24:MI') AS retry_clock,
       (t.mode<>'query' AND EXISTS(SELECT 1 FROM tasks u WHERE u.id=t.parent_id AND u.status IN ('queued','running','reviewing','budget_wait'))) AS parent_active,
       p.id IS NOT NULL AS has_project,COALESCE(p.enabled,false) AS project_enabled,
@@ -369,7 +373,7 @@ export async function queueSnapshot(db: Database, taskId?: string) {
      FROM tasks t LEFT JOIN projects p ON p.id=t.project_id LEFT JOIN groups g ON g.id=t.group_id
      WHERE t.status='queued' AND ($1::uuid IS NULL OR t.created_at<=(SELECT created_at FROM tasks WHERE id=$1))
      ORDER BY t.created_at,t.id LIMIT $2`,
-    [taskId ?? null, taskId ? 10000 : 50],
+    [taskId ?? null, taskId ? 10000 : 50, upstreamWaitPrefix],
   );
   const changing = new Set(
     running.filter((r) => r.mode !== "query").map((r) => r.project_id),
@@ -406,7 +410,7 @@ export async function queueSnapshot(db: Database, taskId?: string) {
     if (!reason && t.retry_waiting)
       reason = {
         code: "retry",
-        text: `暫時性錯誤，約 ${t.retry_clock} 自動重試`,
+        text: `${t.upstream_wait ? upstreamWaitPrefix : "暫時性錯誤"}，約 ${t.retry_clock} 自動重試`,
         hint: null,
       };
     if (!reason && t.mode !== "query" && changing.has(t.project_id))

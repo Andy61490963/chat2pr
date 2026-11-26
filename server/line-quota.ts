@@ -218,6 +218,20 @@ export async function markGroupTooLarge(
   );
 }
 
+const expiredUpstreamWait = `n.kind='group_waiting' AND starts_with(n.dedupe_key,'group:upstream:')
+  AND NOT EXISTS(SELECT 1 FROM runs r WHERE r.task_id=t.id AND r.version=t.version
+    AND n.dedupe_key='group:upstream:'||r.id AND t.status='queued'
+    AND r.upstream_retry_at=t.retry_at AND t.retry_at>now())`;
+
+export async function expireUpstreamWait(client: DbClient) {
+  await client.query(
+    `UPDATE notifications SET sent_at=now(),last_error=$1 WHERE id IN (
+       SELECT n.id FROM notifications n JOIN tasks t ON t.id=n.task_id
+       WHERE n.sent_at IS NULL AND ${expiredUpstreamWait} FOR UPDATE OF n SKIP LOCKED)`,
+    [expiredNote],
+  );
+}
+
 /**
  * 未送通知是否已過時（需先 LEFT JOIN tasks t）：
  * - 管理者私訊：超過 24 小時（看板鈴鐺本來就有同樣內容，改送一則彙整）。
@@ -230,6 +244,7 @@ export async function markGroupTooLarge(
  */
 export const staleNotification = `COALESCE(CASE
   WHEN n.group_id IS NULL THEN n.created_at<now()-interval '24 hours'
+  WHEN ${expiredUpstreamWait} THEN true
   WHEN n.kind='group_waiting' THEN n.created_at<now()-interval '6 hours' OR t.status IS NULL OR t.status NOT IN ('queued','budget_wait')
   WHEN n.kind='group_received' THEN n.created_at<now()-interval '6 hours' OR t.status IS NULL OR t.status<>'awaiting_approval'
   WHEN n.kind='group_question' THEN t.status IS NULL OR t.status<>'awaiting_approval' OR t.question IS NULL OR n.dedupe_key<>'group:question:'||t.id||':'||t.version

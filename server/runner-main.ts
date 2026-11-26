@@ -80,7 +80,7 @@ const Job = z.object({
   image: z.string().min(1).max(200),
 });
 type AiJob = Record<string, unknown> & { mode?: string };
-async function withCapability<T>(
+async function withCapability<T extends object>(
   runId: string,
   phase: string,
   job: AiJob | undefined,
@@ -100,7 +100,7 @@ async function withCapability<T>(
   try {
     const remaining = deadline - Date.now();
     if (remaining <= 0) throw new AppError(408, "訂閱階段已超過期限");
-    return await execute(
+    const result = await execute(
       {
         ...job,
         token: capability.token,
@@ -110,6 +110,7 @@ async function withCapability<T>(
       },
       remaining,
     );
+    return { ...result, ...capability.outcome() };
   } finally {
     capability.revoke();
   }

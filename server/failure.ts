@@ -1,5 +1,16 @@
 import { validateLabel } from "../shared/project-setup.js";
-import { baselineFailurePlain } from "../shared/failure-text.js";
+import {
+  baselineFailurePlain,
+  upstreamContextPlain,
+} from "../shared/failure-text.js";
+import {
+  upstreamFailureKinds,
+  upstreamFailureText,
+  upstreamWaitPrefix,
+  waitText,
+  type UpstreamFailure,
+  type UpstreamFailureKind,
+} from "../shared/upstream-failure.js";
 import { redact } from "./policy.js";
 import { clip } from "./pr-body.js";
 
@@ -34,6 +45,54 @@ export interface FailureExplanation {
   groupDetail?: string;
 }
 
+const upstreamAdvice = {
+  server_error: ["Codex 服務暫時無法回應", "服務恢復後，請到看板按「重試」"],
+  connection: ["連不上 Codex 服務", "請稍後重試；若持續無法連線，請管理者檢查主機網路"],
+  stream_interrupted: ["Codex 的回應在完成前中斷", "請稍後重試；若再次中斷，請管理者檢查主機網路"],
+  stream_error: ["Codex 未能完成這次推論", "請稍後重試；若持續失敗，請通知維護者"],
+  invalid_response: ["Codex 的回應格式無法辨識", "請稍後重試；若持續失敗，請維護者檢查訂閱服務的回應格式"],
+  rejected: ["Codex 不接受這次請求", "請維護者確認送出的模型與請求格式，再重試"],
+  context_too_long: [upstreamContextPlain, "請縮小需求範圍或拆成較小的需求後再執行"],
+  model_unavailable: ["選用的 Codex 模型目前不可用", "請管理者到「設定」確認模型，改用訂閱可用的模型後再重試"],
+  auth: ["Codex 訂閱登入失效", "請管理者在主機重新登入 Codex，再重試"],
+  quota: ["Codex 訂閱額度不足", "請到「設定」確認訂閱額度，額度恢復後再試"],
+} satisfies Record<UpstreamFailureKind, [string, string]>;
+
+type ResumeStep = "verify" | "repair";
+
+function upstreamProgress(next?: ResumeStep) {
+  if (next === "verify") return "修改已保留，同一版需求重試會從測試與獨立審查接續";
+  if (next === "repair") return "修改與審查意見已保留，同一版需求重試會沿用審查意見接續修復";
+  return "沒有可接續的進度，重試會從頭開始";
+}
+
+export function explainUpstreamFailure(
+  failure: UpstreamFailure,
+  next?: ResumeStep,
+): FailureExplanation {
+  const [plain, advice] = upstreamAdvice[failure.kind];
+  const action = `${advice}。${upstreamProgress(next)}`;
+  return {
+    category: upstreamFailureKinds[failure.kind].retry
+      ? "transient"
+      : failure.kind === "context_too_long" ? "project" : "config",
+    plain,
+    action,
+    group: `${action}。`,
+    detail: upstreamFailureText(failure),
+  };
+}
+
+export function upstreamWaitText(
+  failure: UpstreamFailure,
+  seconds: number,
+  next?: ResumeStep,
+) {
+  const [plain] = upstreamAdvice[failure.kind];
+  const status = failure.status ? `（上游 ${failure.status}）` : "";
+  return `${upstreamWaitPrefix}：${plain}${status}。系統會在 ${waitText(seconds)}後自動再試。${upstreamProgress(next)}。`;
+}
+
 /**
  * 錯誤訊息裡「系統整理過的報告」與「原始輸出結尾」的分隔（基底驗證失敗用，#248）。
  * 分隔前是已遮蔽的失敗測試清單與上次通過的 commit，整段放進錯誤重點；分隔後照舊只挑錯誤行。
@@ -58,6 +117,7 @@ interface Rule {
   validation?: Advice;
   /** 訊息本身就是整理過的說明（審查意見、上限說明），整段保留而不是只挑錯誤行。 */
   keep?: boolean;
+  fixedDetail?: string;
   /** 從堆疊挑出專案原始碼的位置放在錯誤重點最前面（堆疊行本身不放進摘要）。 */
   locate?: boolean;
 }
@@ -298,6 +358,16 @@ const rules: Rule[] = [
   {
     category: "transient",
     test: matches(
+      /^(?:Codex 執行失敗|獨立審查失敗|AI 安裝審查失敗)：[\s\S]*\b502 Bad Gateway:[^\n]*訂閱轉送失敗，未使用其他計費方式/i,
+    ),
+    plain: "Codex 的訂閱請求沒有完成，轉送服務未能交回結果",
+    action: "請稍後重試；若持續失敗，請維護者檢查訂閱轉送服務",
+    group: "請稍後重試；若持續失敗，請管理者聯絡維護者。",
+    fixedDetail: "訂閱轉送回覆 502，無法確認上游狀態",
+  },
+  {
+    category: "transient",
+    test: matches(
       /Codex 執行失敗|獨立審查失敗|AI 安裝審查失敗|@openai\/codex-sdk|Codex Exec exited|stream (?:disconnected|error)|Reconnecting|exceeded retry limit|訂閱(?:推論|上游)連線失敗|訂閱登入讀取或刷新失敗|無法確認(?: Codex )?訂閱額度|AI 環境設定失敗[\s\S]*(?:AbortSignal|AbortError|aborted|Timeout\._onTimeout|timeout)/i,
     ),
     plain: "AI 服務回應中斷或逾時",
@@ -422,7 +492,7 @@ export function classifyFailure(
   const body = redact(raw.replace(ansi, ""));
   const rule = rules.find((r) => r.test(body, phase)) ?? fallback;
   // 摘要只放錯誤重點；開頭的「安裝失敗：」這類前綴已經由白話說明表達。
-  const stripped = `\n${body
+  const stripped = `\n${(rule.fixedDetail ?? body)
     .replace(/^\s*[\p{Script=Han}A-Za-z ]{1,16}?(?:失敗|未通過驗證)：/u, "")
     .trim()}`;
   const at = stripped.indexOf(reportTailMark);
@@ -464,11 +534,13 @@ export function classifyFailure(
 /** 看板摘要與管理者通知用：分類、白話說明、錯誤重點與建議處理，不含堆疊。 */
 export function failureNotice(
   failure: FailureExplanation,
-  retried = false,
+  retried: boolean | number = false,
   where = "",
 ) {
   const label = `${categoryLabels[failure.category]}${where ? `（${where}階段）` : ""}`;
-  const again = retried ? "（已自動重試一次，仍然失敗）" : "";
+  const again = retried
+    ? `（已自動重試${retryCountText(retried)}，仍然失敗）`
+    : "";
   const detail = failure.detail
     ? `\n錯誤重點：${failure.detail}`
     : failure.category === "environment"
@@ -481,6 +553,13 @@ export function failureNotice(
  * 群組訊息：固定的白話句子，不放原始錯誤、堆疊或路徑；
  * 只附系統整理過、已遮蔽的內容（基底驗證失敗的測試清單與上次通過的 commit）。
  */
-export function groupFailureText(failure: FailureExplanation, retried = false) {
-  return `這則需求處理時遇到${categoryLabels[failure.category]}：${failure.plain}。${retried ? "系統已自動重試一次，仍未成功。" : ""}${failure.group}${failure.groupDetail ? `\n${failure.groupDetail}` : ""}`;
+export function groupFailureText(
+  failure: FailureExplanation,
+  retried: boolean | number = false,
+) {
+  const again = retried ? `系統已自動重試${retryCountText(retried)}，仍未成功。` : "";
+  return `這則需求處理時遇到${categoryLabels[failure.category]}：${failure.plain}。${again}${failure.group}${failure.groupDetail ? `\n${failure.groupDetail}` : ""}`;
 }
+
+const retryCountText = (retried: boolean | number) =>
+  retried === true || retried === 1 ? "一次" : ` ${retried} 次`;

@@ -450,19 +450,23 @@ describe("訂閱主憑證隔離與有限階段能力", () => {
 
 describe("上游失敗只留下固定類別與狀態碼（#264）", () => {
   it("可信執行器只回報本階段的上游結果，未使用上游不能清除故障", async () => {
-    const success = await fixture();
+    let now = Date.now();
+    const success = await fixture({ credentials: async () => identity, now: () => now });
     expect(success.lease.outcome()).toEqual({});
     expect((await success.send()).statusCode).toBe(200);
-    expect(success.lease.outcome()).toEqual({ upstreamSucceeded: true });
+    const observed = now;
+    now += 1000;
+    expect(success.lease.outcome()).toEqual({ upstreamSucceeded: true, upstreamObservedAt: observed });
     const blocked = await fixture();
     expect((await blocked.send({ model: "invalid" })).statusCode).toBe(403);
     expect(blocked.lease.outcome()).toEqual({});
     const failed = await fixture({
       credentials: async () => identity,
       upstreamFetch: async () => new Response(null, { status: 503 }),
+      now: () => now,
     });
     expect((await failed.send()).statusCode).toBe(502);
-    expect(failed.lease.outcome()).toEqual({ upstreamFailure: { kind: "server_error", status: 503 } });
+    expect(failed.lease.outcome()).toEqual({ upstreamFailure: { kind: "server_error", status: 503 }, upstreamObservedAt: now });
   });
   const upstreamText = "虛構上游錯誤：內部節點 node-7 回應 overloaded";
   const failing = (
@@ -521,7 +525,7 @@ describe("上游失敗只留下固定類別與狀態碼（#264）", () => {
     const reply = await work.send();
     expect(reply.statusCode).toBe(relayStatus);
     expect(reply.body).not.toContain(upstreamText);
-    expect(work.lease.outcome()).toEqual({ upstreamFailure: { kind, status: 401 } });
+    expect(work.lease.outcome()).toEqual({ upstreamFailure: { kind, status: 401 }, upstreamObservedAt: expect.any(Number) });
     expect(requests).toBe(1);
   });
   it.each([
@@ -638,7 +642,7 @@ describe("上游失敗只留下固定類別與狀態碼（#264）", () => {
     const f = await failing(
       async () => body(upstreamText, 401),
       async (refresh) =>
-        refresh ? { ...identity, accessToken: "synthetic-renewed-access-token-12345" } : identity,
+        refresh ? { ...identity, accessToken: "SyntheticRenewedAccessToken12345" } : identity,
     );
     expect((await f.send()).statusCode).toBe(401);
     expect(f.broker.upstreamFailure(f.runId)).toEqual({ kind: "auth", status: 401 });

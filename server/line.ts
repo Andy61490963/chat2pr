@@ -56,6 +56,7 @@ import {
 import {
   LineQuotaExhausted,
   expireQuotaHeld,
+  expireUpstreamWait,
   fetchLineQuota,
   groupMemberCount,
   lineQuotaBlocked,
@@ -681,6 +682,7 @@ export class Line {
   async flushNotifications() {
     // LINE 與 Discord 停在「補送中」且已逾時的通知都放回待送。LINE 額度用完時也要回收。
     await reclaimStaleClaims(this.db);
+    await expireUpstreamWait(this.db.pool);
     const discord = typeof this.discord === "function" ? this.discord() : this.discord;
     const results = await Promise.allSettled([
       withLinePushLock(this.db, async () => {

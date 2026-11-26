@@ -215,6 +215,7 @@ export interface Task {
   pr_url: string | null;
   parent_id: string | null;
   last_error: string | null;
+  retry_at?: string | null;
   mode: TaskMode;
   /** 查詢任務的調查結果。 */
   answer: string | null;

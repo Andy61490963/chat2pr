@@ -29,6 +29,7 @@ import { DockerDiskCard } from "./docker-disk";
 import type { DiskLevel } from "../../shared/docker-disk.js";
 import { entryText, type EntryKind } from "../../shared/entry.js";
 import { phaseLabels } from "../../shared/observation.js";
+import { upstreamHealthName } from "../../shared/upstream-failure.js";
 import {
   systemStatusLabels,
   workerImageLabels,
@@ -173,12 +174,15 @@ export function SystemView({
       status: workerImageStatus(image.current, usedBy.length > 0),
     };
   });
+  const upstreamFailure = state.health.find(
+    (entry) => entry.name === upstreamHealthName && !entry.ok,
+  );
   const counts: Record<SystemTab, number> = {
     execution: Number(
       !state.settings.paused &&
         !state.diskDispatchPaused &&
         !!memoryHold(state),
-    ),
+    ) + Number(!!upstreamFailure),
     disk: diskAttentionCount({
       probeFailed: stale,
       services: services.map(({ condition }) => condition),
@@ -229,6 +233,23 @@ export function SystemView({
         hidden={tab !== "execution"}
         className="space-y-6"
       >
+        {upstreamFailure && (
+          <div
+            role="status"
+            aria-label="Codex 訂閱推論"
+            className="space-y-1 rounded-lg bg-warn-soft px-3 py-2.5 text-sm text-warn"
+          >
+            <p className="font-medium">Codex 訂閱推論</p>
+            <p>最近一次推論失敗：{upstreamFailure.detail}。</p>
+            <p>
+              發生於{" "}
+              <time dateTime={upstreamFailure.checked_at}>
+                {date(upstreamFailure.checked_at)}
+              </time>
+              （臺北時間）。請到任務詳情查看處理建議。
+            </p>
+          </div>
+        )}
         <CapacityCard request={request} />
         {admin && <FrictionCard state={state} request={request} />}
       </TabsContent>

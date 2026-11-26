@@ -512,6 +512,7 @@ export function StationTrack({
     | "status"
     | "mode"
     | "last_error"
+    | "retry_at"
     | "end_summary"
     | "updated_at"
     | "pr_number"
@@ -560,6 +561,11 @@ export function StationTrack({
         ? stations.length - 1
         : (stationOf[status] ??
           (endStation ? endStationIndex[endStation] : undefined));
+  const waitsForAI =
+    status === "queued" &&
+    task.last_error?.startsWith(copy.waitingForAI) &&
+    task.retry_at &&
+    Date.parse(task.retry_at) > Date.now();
   const label =
     ended && !completion
       ? endCopy.badge
@@ -571,7 +577,7 @@ export function StationTrack({
             ? copy.blockedAtVerification
             : status === "ready"
               ? copy.ready
-              : statusLabels[status];
+              : waitsForAI ? copy.waitingForAI : statusLabels[status];
   const position = at === undefined ? copy.unknownStation : stations[at];
 
   return (

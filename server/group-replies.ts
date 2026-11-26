@@ -1,4 +1,5 @@
 import { splitQueryAnswer } from "../shared/query-answer.js";
+import { upstreamWaitPrefix } from "../shared/upstream-failure.js";
 /**
  * 回覆提出需求的群組。管理者私訊之外，群組成員也要知道需求收到了、結果是什麼。
  *
@@ -172,6 +173,7 @@ export interface ProgressTask {
   status: TaskStatus;
   /** 任務在等群組回答問題。 */
   asking: boolean;
+  waitingForAI?: boolean;
 }
 /** /進度 回覆的第一則：本群組的需求摘要。total 是符合條件的總件數（可能多於列出的）。 */
 export function progressSummary(
@@ -183,7 +185,7 @@ export function progressSummary(
 ) {
   const lines = tasks.map(
     (t) =>
-      `- ${t.title}：${t.asking ? "等你們回答一個問題" : groupStatus[t.status]}`,
+      `- ${t.title}：${t.asking ? "等你們回答一個問題" : t.waitingForAI ? upstreamWaitPrefix : groupStatus[t.status]}`,
   );
   if (total > tasks.length) lines.push(`…另外還有 ${total - tasks.length} 件`);
   const head = tasks.length
@@ -373,15 +375,16 @@ export async function progressTasks(
 ) {
   const rows = (
     await c.query<ProgressTask & { total: string }>(
-      `SELECT t.title,t.status,(t.status='awaiting_approval' AND t.question IS NOT NULL) AS asking,count(*) OVER() AS total
+      `SELECT t.title,t.status,(t.status='awaiting_approval' AND t.question IS NOT NULL) AS asking,count(*) OVER() AS total,
+       (t.status='queued' AND t.retry_at>now() AND starts_with(t.last_error,$4)) IS TRUE AS "waitingForAI"
        FROM tasks t WHERE t.group_id=$1 AND t.discord_thread_id IS NOT DISTINCT FROM $3::text
        AND (t.status NOT IN ('merged','answered','closed','rejected','cancelled') OR t.updated_at>now()-interval '7 days')
        ORDER BY t.updated_at DESC,t.id LIMIT $2`,
-      [groupId, limit, threadId],
+      [groupId, limit, threadId, upstreamWaitPrefix],
     )
   ).rows;
   return {
-    tasks: rows.map(({ title, status, asking }) => ({ title, status, asking })),
+    tasks: rows.map(({ title, status, asking, waitingForAI }) => ({ title, status, asking, waitingForAI })),
     total: Number(rows[0]?.total ?? 0),
   };
 }

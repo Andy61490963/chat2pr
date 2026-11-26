@@ -2,6 +2,14 @@ import { taskDocuments } from "./chat-document.js";
 import { validateLabel } from "../shared/project-setup.js";
 import { reservedQuotaHold } from "../shared/subscription-quota.js";
 import { projectQuotaWaitPrefix } from "../shared/status-glossary.js";
+import {
+  parseUpstreamFailure,
+  upstreamFailureText,
+  upstreamHealthName,
+  type UpstreamFailure,
+} from "../shared/upstream-failure.js";
+import { claimUpstreamRetry } from "./upstream-retry.js";
+import { recordHealth } from "./health.js";
 import { saveEvents, safeDetail, connectionFailure } from "./observation.js";
 import { diskPaused } from "./docker-disk.js";
 import type { RunEvent, RunVerificationScope } from "../shared/observation.js";
@@ -46,6 +54,7 @@ import { AppError, classifyRisk, redact, taipeiDay } from "./policy.js";
 import { subscriptionLimited } from "./triage.js";
 import {
   classifyFailure,
+  explainUpstreamFailure,
   failureDigest,
   timeoutPlain,
   failureNotice,
@@ -60,7 +69,7 @@ import {
   readSubscriptionAccount,
   type SubscriptionAccount,
 } from "./subscription-gate.js";
-import type { Task, Project } from "../shared/types.js";
+import type { Task, Project, Settings } from "../shared/types.js";
 import type { SourceAccess, SourceReport } from "./source-cache.js";
 import { runnerRequest, type RunnerTransport } from "./runner-http.js";
 import { missingTestMessage, suggestStack } from "./stack.js";
@@ -178,6 +187,8 @@ export function isTransientValidationFailure(error: unknown) {
 }
 export interface PhaseResult {
   observations?: RunEvent[];
+  upstreamFailure?: UpstreamFailure;
+  upstreamSucceeded?: true;
   /** 可信執行器在啟動 Codex 前回報的 SQL 審查複驗失敗。 */
   sqlReviewFailure?: true;
   exitCode: number;
@@ -270,6 +281,12 @@ async function resumableCandidate(
   return { ...candidate, run: last.id, files };
 }
 class RunnerResponseError extends AppError {}
+
+class UpstreamPhaseError extends AppError {
+  constructor(readonly failure: UpstreamFailure) {
+    super(failure.kind === "quota" ? 429 : 502, upstreamFailureText(failure));
+  }
+}
 
 export class HttpRunner implements Runner {
   constructor(
@@ -945,15 +962,15 @@ export class Execution {
    * 再派一次執行還有沒有額度：訂閱模式看今日執行次數，API 模式看今日預算（不算這次執行自己的預留，結束時就釋放）。
    * 夠的話回傳空字串，不夠時回傳原因。
    */
-  private async resumeShortfall(reservation: string | undefined) {
-    const s = await this.db.settings();
+  private async resumeShortfall(reservation: string | undefined, client: DbClient) {
+    const { rows: [{ value: s }] } = await client.query<{ value: Settings }>("SELECT value FROM settings WHERE id=1");
     if (s.ai_mode !== "api") {
-      const today = await this.db.one<{ count: number }>(
+      const { rows: [today] } = await client.query<{ count: number }>(
         "SELECT count(*)::int AS count FROM runs WHERE (started_at AT TIME ZONE 'Asia/Taipei')::date=(now() AT TIME ZONE 'Asia/Taipei')::date",
       );
       return today.count >= s.daily_runs ? "今日執行次數已用完" : "";
     }
-    const { total } = await this.db.one<{ total: string }>(
+    const { rows: [{ total }] } = await client.query<{ total: string }>(
       "SELECT (SELECT COALESCE(sum(cost),0) FROM usage WHERE (created_at AT TIME ZONE 'Asia/Taipei')::date=$1::date)+(SELECT COALESCE(sum(GREATEST(amount-spent,0)),0) FROM reservations WHERE NOT released AND id IS DISTINCT FROM $2) AS total",
       [taipeiDay(), reservation ?? null],
     );
@@ -1421,12 +1438,20 @@ export class Execution {
               await this.subscriptionGate.exhausted();
             throw error;
           });
+        const subscriptionPhase =
+          subscription && ["code", "review"].includes(name) && !r.sqlReviewFailure;
+        const upstream = subscriptionPhase
+          ? parseUpstreamFailure(r.upstreamFailure)
+          : undefined;
+        if (upstream) {
+          await recordHealth(this.db, upstreamHealthName, false, upstreamFailureText(upstream));
+          await record("error", upstreamFailureText(upstream));
+        } else if (subscriptionPhase && r.upstreamSucceeded === true) {
+          await recordHealth(this.db, upstreamHealthName, true, "最近一次推論成功");
+        }
         if (
-          subscription &&
-          ["code", "review"].includes(name) &&
-          !r.sqlReviewFailure &&
-          r.exitCode !== 0 &&
-          subscriptionLimited(r.stderr)
+          upstream ? upstream.kind === "quota" :
+            subscriptionPhase && r.exitCode !== 0 && subscriptionLimited(r.stderr)
         )
           await this.subscriptionGate.exhausted();
         // 複驗沒過的候選先標記，之後的暫停或逾時檢查才不會讓它留到下一次接續。
@@ -1447,6 +1472,7 @@ export class Execution {
             : "SQL Server 審查複驗未通過";
           throw new AppError(422, `${reason}（退出碼 ${r.exitCode}）\n${redact(r.stderr).slice(-4000)}`);
         }
+        if (upstream) throw new UpstreamPhaseError(upstream);
         return r;
       };
       let setup: { plan: SetupPlan; cached: boolean } | undefined;
@@ -2359,7 +2385,8 @@ ${querySummary(answer)}`,
         `${where}：${original}${cause === e ? "" : `（停止原因：${raw}）`}`,
       );
       await poll();
-      await record("error", message);
+      const upstream = cause instanceof UpstreamPhaseError ? cause.failure : undefined;
+      if (!upstream) await record("error", message);
       if (cause instanceof PausedStop) {
         // 系統暫停：工作放回排隊，恢復派工後照常經過預算、同時執行與每日次數檢查再繼續；
         // 不算失敗、不占自動重試次數，也不推「工作需要處理」或群組失敗訊息。預留額度由 finally 釋放。
@@ -2380,8 +2407,8 @@ ${querySummary(answer)}`,
       if (e instanceof AppError && e.statusCode === 429) {
         // 訂閱額度用完：保留工作，額度恢復後由排程重新派工，不自動改用 API。
         await this.db.query(
-          "UPDATE tasks SET status='budget_wait',last_error=$2,updated_at=now() WHERE id=$1 AND status IN ('running','reviewing')",
-          [taskId, e.message],
+          "UPDATE tasks SET status='budget_wait',last_error=$2,updated_at=now() WHERE id=$1 AND status IN ('running','reviewing') AND version=(SELECT version FROM runs WHERE id=$3)",
+          [taskId, upstream ? explainUpstreamFailure(upstream, pending?.next).action : e.message, runId],
         );
         await this.db.audit(taskId, "quota", e.message);
         await this.line.notify(
@@ -2399,7 +2426,7 @@ ${querySummary(answer)}`,
       // 逾時時仍有可接續的修改：說明保留了什麼、重試從哪裡接續，而不是建議縮小需求範圍。
       const timedOut = classifyFailure(raw).plain === timeoutPlain;
       const kept = timedOut ? pending : undefined;
-      const failure = classifyFailure(
+      const failure = upstream ? explainUpstreamFailure(upstream, pending?.next) : classifyFailure(
         kept
           ? `${kept.next === "repair" ? "修改與審查意見已保留" : "修改已保留"}，${raw}`
           : raw,
@@ -2423,7 +2450,7 @@ ${querySummary(answer)}`,
           lastError: `單次執行時間用完，修改已保留，系統已自動排入接續，${next}。`,
           detail: (version) =>
             `自動接續：單次執行時間用完前修改已保留，系統自動排入接續（需求版本 ${version}，每個版本一次），接下來${next}。${longest}`,
-          shortfall: () => this.resumeShortfall(reservation),
+          shortfall: client => this.resumeShortfall(reservation, client),
           onClaim: (c, version) =>
             notifyGroup(
               c,
@@ -2453,7 +2480,20 @@ ${querySummary(answer)}`,
           failure.group = `${claim.shortfall}，沒有自動接續；${failure.group}`;
         }
       }
-      const current = await this.db.one<{ version: number }>(
+      let upstreamRetries = 0;
+      if (upstream && runId) {
+        const decision = await claimUpstreamRetry(
+          this.db, taskId, runId, upstream, pending?.next,
+          client => this.resumeShortfall(reservation, client),
+        );
+        if (decision.kind !== "stop") return;
+        upstreamRetries = decision.retries;
+        if (decision.shortfall) {
+          failure.action = `${decision.shortfall}，沒有自動重試。${failure.action}`;
+          failure.group = `${decision.shortfall}，沒有自動重試。${failure.group}`;
+        }
+      }
+      const current = upstream ? undefined : await this.db.one<{ version: number }>(
         "SELECT version FROM tasks WHERE id=$1",
         [taskId],
       );
@@ -2485,11 +2525,11 @@ ${querySummary(answer)}`,
         }
       }
       // 安裝依賴在同一次執行內已重試過一次（install_retry）。
-      const retried = used > 0 || resumedBefore || /^安裝失敗：/.test(raw);
+      const retried = upstream ? upstreamRetries : used > 0 || resumedBefore || /^安裝失敗：/.test(raw);
       const summary = failureNotice(failure, retried, where);
       const failed = await this.db.query(
-        "UPDATE tasks SET status='failed',last_error=$2,updated_at=now() WHERE id=$1 AND status IN ('running','reviewing') RETURNING id",
-        [taskId, summary],
+        "UPDATE tasks SET status='failed',last_error=$2,updated_at=now() WHERE id=$1 AND status IN ('running','reviewing') AND version=(SELECT version FROM runs WHERE id=$3) RETURNING id",
+        [taskId, summary, runId],
       );
       // 任務沒有真的轉為失敗（仍在排隊、已被取消等）時不記錄也不通知，
       // 避免每輪重派都寫一筆動態、推播一次；錯誤仍寫到服務日誌。
@@ -2563,7 +2603,7 @@ export async function claimAutoResume(
   o: {
     lastError: string;
     detail: (version: number) => string;
-    shortfall: () => Promise<string>;
+    shortfall: (client: DbClient) => Promise<string>;
     onClaim?: (c: DbClient, version: number) => Promise<void>;
   },
 ): Promise<
@@ -2585,7 +2625,7 @@ export async function claimAutoResume(
       )
     ).rows[0];
     if (n >= AUTO_RESUMES) return { claimed: false, used: true };
-    const shortfall = await o.shortfall();
+    const shortfall = await o.shortfall(c);
     if (shortfall) return { claimed: false, used: false, shortfall };
     await c.query(
       "UPDATE tasks SET status='queued',retry_at=NULL,last_error=$2,updated_at=now() WHERE id=$1",

@@ -262,6 +262,7 @@ export const pickListLabels = {
 
 export const taskStationStatusLabels = {
   decision: "等你決定",
+  waitingForAI: "等待 AI 服務恢復",
   blockedAtVerification: "卡在驗證",
   unknownStation: "無法判定站別",
   runningQuery: "調查中",

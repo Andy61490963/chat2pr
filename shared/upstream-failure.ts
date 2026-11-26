@@ -1,3 +1,5 @@
+import { taskStationStatusLabels } from "./status-glossary.js";
+
 /**
  * Codex 訂閱上游失敗的固定類別（#264）。
  *
@@ -21,7 +23,7 @@ export type UpstreamFailureKind = keyof typeof upstreamFailureKinds;
 
 export interface UpstreamFailure {
   kind: UpstreamFailureKind;
-  /** 上游 HTTP 狀態碼；串流階段的失敗沒有。 */
+  /** 未收到上游 HTTP 標頭時省略。 */
   status?: number;
 }
 
@@ -73,7 +75,7 @@ export function upstreamFailureText(f: UpstreamFailure) {
 export const UPSTREAM_RETRY_DELAYS = [30, 180, 600] as const;
 
 /** 等待上游恢復時寫在 `tasks.last_error` 的開頭；排隊原因靠它顯示「等待 AI 服務恢復」。 */
-export const upstreamWaitPrefix = "等待 AI 服務恢復";
+export const upstreamWaitPrefix = taskStationStatusLabels.waitingForAI;
 
 /** 系統頁的 Codex 服務回應健康項目名稱。 */
 export const upstreamHealthName = "codex_upstream";

@@ -338,7 +338,7 @@ export class Tasks {
         if (t.missing.length || t.question)
           throw new AppError(409, "請先補充缺漏資訊與驗收條件，再核准");
         await c.query(
-          "UPDATE tasks SET status='queued',approved_version=version,approved_paths=pending_paths,last_error=NULL,updated_at=now() WHERE id=$1",
+          "UPDATE tasks SET status='queued',approved_version=version,approved_paths=pending_paths,last_error=NULL,retry_at=NULL,updated_at=now() WHERE id=$1",
           [id],
         );
         await c.query(
@@ -359,7 +359,7 @@ export class Tasks {
         if (t.risk_reasons.length)
           throw new AppError(409, "此需求涉及敏感範圍，請在看板確認後核准");
         await c.query(
-          "UPDATE tasks SET summary=$2,acceptance=$3,missing='[]',question=NULL,suggestions='[]',version=version+1,approved_version=version+1,approved_paths='{}',pending_paths='{}',base_sha=NULL,branch=NULL,status='queued',last_error=NULL,updated_at=now() WHERE id=$1",
+          "UPDATE tasks SET summary=$2,acceptance=$3,missing='[]',question=NULL,suggestions='[]',version=version+1,approved_version=version+1,approved_paths='{}',pending_paths='{}',base_sha=NULL,branch=NULL,status='queued',last_error=NULL,retry_at=NULL,updated_at=now() WHERE id=$1",
           [
             id,
             withAssumptions(`${s.label}：${s.summary}`, t.assumptions ?? []),
