@@ -47,6 +47,11 @@ for (const width of [375, 1440]) {
       expect(
         await title.evaluate((el) => parseFloat(getComputedStyle(el).fontSize)),
       ).toBeLessThanOrEqual(20);
+      if (width === 375) {
+        for (const name of ["查看工單", "操作說明", "停止工單"]) {
+          await expectTouchTarget(page.getByRole("button", { name }));
+        }
+      }
       await page.getByRole("textbox", { name: "工單名稱" }).fill("範例檢查");
       await page.getByRole("textbox", { name: "備註" }).fill("範例設備已就緒");
       await page.getByRole("checkbox", { name: "需要複核" }).press("Space");
