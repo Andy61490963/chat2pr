@@ -55,17 +55,17 @@ async function claimBatch(db: Database, group: string, importantOnly: boolean, s
     if (importantOnly) await holdOptional(c, group);
     const { rows } = await c.query<Notice>(
       `WITH anchor AS (
-         SELECT n.id,n.line_digest_id,n.attempts,n.last_error FROM notifications n JOIN groups g ON g.id=n.group_id
+         SELECT n.id,n.line_digest_id,n.attempts,g.enabled FROM notifications n JOIN groups g ON g.id=n.group_id
          WHERE n.group_id=$1 AND ${pending} AND g.left_at IS NULL AND g.reply_mode<>'off'
            AND COALESCE((SELECT (value->>'group_replies')::boolean FROM settings WHERE id=1),true)
-           AND (n.line_digest_id IS NOT NULL OR NOT $2 OR ${importantLineGroupNotice})
-           AND ($5::uuid IS NULL OR (n.id=$5 AND n.last_error=$4))
+           AND (n.line_digest_id IS NOT NULL OR NOT $2 OR NOT g.enabled OR ${importantLineGroupNotice})
+           AND (($5::uuid IS NULL AND n.last_error IS DISTINCT FROM $4) OR (n.id=$5 AND n.last_error=$4))
          ORDER BY n.line_digest_id IS NULL,n.created_at,n.id LIMIT 1
        )
        SELECT n.id,n.kind,n.text,n.quick_replies,n.line_digest_id FROM notifications n CROSS JOIN anchor a
        WHERE n.group_id=$1 AND ${pending} AND n.attempts=a.attempts AND n.line_digest_id IS NOT DISTINCT FROM a.line_digest_id
-         AND (n.id=a.id OR (n.last_error IS DISTINCT FROM $4 AND a.last_error IS DISTINCT FROM $4))
-         AND (n.line_digest_id IS NOT NULL OR NOT $2 OR ${importantLineGroupNotice})
+         AND (n.id=a.id OR ($5::uuid IS NULL AND n.last_error IS DISTINCT FROM $4))
+         AND (n.line_digest_id IS NOT NULL OR NOT $2 OR NOT a.enabled OR ${importantLineGroupNotice})
        ORDER BY n.created_at,n.id LIMIT $3 FOR UPDATE OF n SKIP LOCKED`,
       [group, importantOnly, lineReplyLimit, rejectedContent, singleId],
     );
@@ -97,7 +97,7 @@ async function holdOptional(c: DbClient, group: string | null = null) {
   await c.query(
     `UPDATE notifications u SET line_reply_policy='free',last_error=$1
      FROM (SELECT n.id FROM notifications n JOIN groups g ON g.id=n.group_id
-       WHERE g.platform='line' AND ${pending} AND ($2::text IS NULL OR n.group_id=$2) AND NOT ${importantLineGroupNotice}
+       WHERE g.platform='line' AND g.enabled AND ${pending} AND ($2::text IS NULL OR n.group_id=$2) AND NOT ${importantLineGroupNotice}
        FOR UPDATE OF n SKIP LOCKED) held WHERE u.id=held.id`,
     [groupDeliveryText.quotaPriority, group],
   );
@@ -114,8 +114,8 @@ async function confirmRetriedBatch(c: DbClient, key: string, currentSize: number
   if (originalSize > currentSize && messageIds.length === originalSize) {
     await c.query(
       `UPDATE notifications SET sent_at=now(),attempts=attempts+1,last_error=NULL,sent_message_id=NULL,line_reply_policy=NULL
-       WHERE line_digest_id=$1 AND sent_at IS NULL AND line_reply_policy='free'`,
-      [key],
+       WHERE line_digest_id=$1 AND ((sent_at IS NULL AND line_reply_policy='free') OR last_error=$2)`,
+      [key, expiredNote],
     );
   } else if (originalSize > currentSize && messageIds.length !== currentSize) {
     // 無法確認哪些較早的通知已送達，只留給群組自行用 /進度 取回。
@@ -139,6 +139,11 @@ export async function flushLineGroups(db: Database, access: string) {
     [off, groupDeliveryText.botLeft, repliesOffNote],
   );
   if (off) return;
+  // 群組停用後無法在發言時補送，先前保留給免費回覆的通知恢復原有推播途徑。
+  await db.query(
+    `UPDATE notifications n SET line_reply_policy=NULL,last_error=NULL FROM groups g
+     WHERE g.id=n.group_id AND g.platform='line' AND NOT g.enabled AND n.sent_at IS NULL AND n.line_reply_policy='free'`,
+  );
   const blocked = await lineQuotaBlocked(db);
   let usage = await lineQuotaUsage(db);
   if (!blocked && lineQuotaLow(usage)) await holdOptional(db.pool);
@@ -150,8 +155,9 @@ export async function flushLineGroups(db: Database, access: string) {
     [expiredNote],
   );
   if (blocked) return;
-  const groups = await db.query<{ group_id: string; rejected_ids: string[] | null }>(
-    `SELECT n.group_id,(array_agg(n.id ORDER BY n.created_at,n.id) FILTER (WHERE n.last_error=$2))[1:10] AS rejected_ids
+  const groups = await db.query<{ group_id: string; has_batch: boolean; rejected_ids: string[] | null }>(
+    `SELECT n.group_id,bool_or(n.last_error IS DISTINCT FROM $2) AS has_batch,
+       (array_agg(n.id ORDER BY n.created_at,n.id) FILTER (WHERE n.last_error=$2))[1:10] AS rejected_ids
      FROM notifications n JOIN groups g ON g.id=n.group_id
      WHERE g.platform='line' AND ${pending} AND (n.last_error=$2 OR NOT EXISTS (
        SELECT 1 FROM notifications p WHERE p.group_id=n.group_id AND p.line_digest_id IS NOT NULL
@@ -170,8 +176,8 @@ export async function flushLineGroups(db: Database, access: string) {
   );
   const platform = new LineChatPlatform(access);
   let requests = 0;
-  const queue = groups.flatMap(({ group_id, rejected_ids }) =>
-    (rejected_ids ?? [null]).map((singleId) => ({ group_id, singleId })),
+  const queue = groups.flatMap(({ group_id, has_batch, rejected_ids }) =>
+    [...(has_batch ? [null] : []), ...(rejected_ids ?? [])].map((singleId) => ({ group_id, singleId })),
   );
   while (queue.length && requests < 10) {
     const { group_id, singleId } = queue.shift()!;
