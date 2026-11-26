@@ -176,6 +176,7 @@ export async function recordHealth(
     )).rows[0];
     if (observation && before?.probe_info?.started &&
         Date.parse(before.probe_info.started) >= observation.started.getTime()) return;
+    if (options.firstWorkFailure && before?.reading_ok === false && before.probe_info?.model === observation?.model) return;
     if (observation) {
       await c.query(
         `DELETE FROM service_health WHERE name='codex_probe_deferred'
@@ -184,7 +185,6 @@ export async function recordHealth(
       );
     }
     if (!before) return;
-    if (options.firstWorkFailure && before.reading_ok === false && before.probe_info?.model === observation?.model) return;
     const {
       rows: [{ observed_at: observedAt }],
     } = await c.query<{ observed_at: Date }>(

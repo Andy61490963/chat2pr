@@ -29,7 +29,7 @@ afterEach(async () => {
 });
 afterAll(() => db.close());
 
-const deferral = () => db.one("SELECT detail FROM service_health WHERE name='codex_probe_deferred'");
+const deferral = () => db.one<{ detail: string }>("SELECT detail FROM service_health WHERE name='codex_probe_deferred'");
 
 it.each(["成功", "失敗", "工作成功", "工作失敗"])("延後之後取得%s讀數，清除延後列且不產生獨立異常", async source => {
   const runner = new HttpRunner();
@@ -52,10 +52,30 @@ it.each(["成功", "失敗", "工作成功", "工作失敗"])("延後之後取�
   expect((await dashboardAlerts(db, true)).filter(row => row.kind === "service_down" || row.kind === "service_up")).toEqual([]);
 });
 
+it("未採用的工作失敗讀數保留延後原因，不把舊探測時間當成新故障", async () => {
+  const runner = new HttpRunner();
+  vi.spyOn(runner, "call").mockResolvedValue({ ok: false, failure: { kind: "upstream_http", status: 502 } });
+  const revision = (await db.settingsSnapshot()).revision;
+  const probe = (known: boolean) => probeInference(db, runner, revision, async () => ({ known, hold: null }));
+  await probe(true);
+  const previous = await db.one("UPDATE service_health SET checked_at=now()-interval '1 minute' WHERE name='codex_inference' RETURNING checked_at,detail");
+  await probe(false);
+  const pending = await deferral();
+  expect(pending).toBeDefined();
+  await recordWorkInferenceFailure(db, null, new Date(), { kind: "connection" });
+  expect(await deferral()).toEqual(pending);
+  expect(await db.one("SELECT checked_at, detail FROM service_health WHERE name='codex_inference'")).toEqual(previous);
+  expect((await systemHealth(db)).find(row => row.name === "codex")).toMatchObject({
+    inferenceStatus: "unknown", detail: expect.stringContaining(pending.detail),
+  });
+});
+
 it("部署冒煙不列出延後說明，但仍列出真實推論失敗", async () => {
-  const sql = readFileSync(new URL("../scripts/lib/smoke-health.sql", import.meta.url), "utf8");
+  const deploy = readFileSync(new URL("../scripts/deploy.mjs", import.meta.url), "utf8");
+  expect(deploy).toMatch(/const failing\s*=\s*smokeHealth\(sql\)/);
+  const { smokeHealth } = await import("../scripts/lib/smoke-health.mjs");
   await db.query("INSERT INTO service_health(name,ok,detail) VALUES ('codex_probe_deferred',false,'稍後檢查'),('codex_inference',false,'上游回應失敗')");
-  const failures = (await db.query(sql)).map(row => row.name);
+  const failures = (await smokeHealth(query => db.query(query))).map(row => row.name);
   expect(failures).toContain("codex_inference");
   expect(failures).not.toContain("codex_probe_deferred");
 });
