@@ -3,6 +3,7 @@ import {
   categoryLabels,
   classifyFailure,
   failureNotice,
+  groupFailureText,
 } from "../server/failure.js";
 import {
   failureBrief,
@@ -16,6 +17,12 @@ import {
 
 // 看板把 failureNotice 的輸出拆成白話說明、建議與錯誤重點；兩邊格式必須一致（docs/conventions.md 第 3 節）。
 describe("parseFailure 拆解 failureNotice 的實際輸出", () => {
+  it("訂閱代理診斷讓看板與群組顯示同一個失敗原因", () => {
+    const failure = classifyFailure("Codex 執行失敗：訂閱轉送失敗", "code", "task", undefined, { kind: "invalid_usage" });
+    const plain = failureBrief(failureNotice(failure));
+    expect(plain).toContain("訂閱回應缺少有效用量");
+    expect(groupFailureText(failure)).toContain(plain);
+  });
   it("分類標籤與伺服器的 categoryLabels 相同", () => {
     expect(failureLabels).toEqual(categoryLabels);
   });
