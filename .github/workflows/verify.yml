@@ -15,22 +15,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium --only-shell
-      - name: 在原版獨立重現收件匣摘要與重試問題
-        run: |
-          git fetch --depth=1 origin e8195eda9f4024acb8b229b3d0499cc28cb4717b
-          git restore --source=FETCH_HEAD --worktree -- src
-          if npx playwright test e2e/inbox-summary.spec.ts --workers=2; then exit 1; fi
-          git restore --source=HEAD --worktree -- src
-      - name: 收件匣改版後截圖與行為驗證
-        run: |
-          mkdir -p "$RUNNER_TEMP/inbox-shots"
-          INBOX_SHOT_DIR="$RUNNER_TEMP/inbox-shots" npx playwright test e2e/inbox-review-states.spec.ts -g '六種狀態截圖' --workers=2
-          npx playwright test 'inbox-|review-workbench|pick-lists|activity-feed|empty-views|stuck-tasks|surfaces' --workers=2
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: inbox-a-shots
-          path: ${{ runner.temp }}/inbox-shots/*.png
+      - run: npm run test:e2e
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
