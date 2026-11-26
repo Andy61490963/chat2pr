@@ -139,7 +139,7 @@ ALTER TABLE notifications ADD COLUMN IF NOT EXISTS discord_thread_id text;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS discord_thread_id text;
 -- 私訊摘要先保存批次，再對 LINE 推播；重試同一批沿用同一個 LINE 重試鍵。
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_digest_id uuid;
--- LINE 待送通知的免費回覆方式：free 可隨群組發言送出，manual 只在成員輸入 /進度 時取回。
+-- free 可隨群組發言送出。manual 可用 /進度 取回；重要免費回覆送達未確認時，冷卻五分鐘後可隨新發言再補送一次。
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_reply_policy text CHECK (line_reply_policy IN ('free','manual'));
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_reply_uncertain_at timestamptz;
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_reply_retry_count integer NOT NULL DEFAULT 0;
