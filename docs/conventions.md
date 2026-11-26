@@ -48,7 +48,9 @@
 
 調整訂閱重試時，一起核對 `shared/upstream-failure.ts` 的可重試類別、訂閱代理的階段連敗上限與 `worker/provider.mjs` 的 CLI 重試設定。代理保留授權且 CLI 願意重送，工作才有機會恢復。只有下一次請求實際送往上游時才記重試事件，避免把最後一次失敗也算成重試。
 
-修改任務結束稽核的種類或文字格式時，同步更新 `server/task-end.ts` 的解析與 `tests/task-end.test.ts` 的樣本。若調整結束稽核的種類，也要同步更新 `server/schema.sql` 的 `audit_task_ending` 索引條件。看板依同一規則取得最新結束紀錄，才能讓任務列表與詳情顯示一致，又避免逐張查詢。
+新的執行事件顯示分類集中在 `shared/observation.ts` 的 `runEventKind`，讓看板的標籤與錯誤色使用相同判斷，並保留原始事件供查核。
+
+修改任務結束稽核的種類或文字格式時，同步更新 `server/task-end.ts` 的解析與 `tests/task-end.test.ts` 的樣本。若調整結束稽核的種類，也要同步更新 `server/schema.sql` 的 `audit_task_terminal` 索引條件。列表與詳情都依目前狀態找出造成結案的稽核。後續新訊息的 `duplicate` 判讀與來源撤回只留在時間軸，因重複而拒絕或取消的任務則以結案時寫入的 `end_reason` 為準。
 
 修改收集結果（`worker/trusted-changes.mjs` 的 `files`：path、base64 內容、mode）或 `runs.result` 的寫法時，同步核對 `server/execution.ts` 的接續點 `candidate`（`resumableCandidate`、`candidateKey`）與 `server/containers.ts` 的 `applyCandidate`，並跑 `tests/execution.test.ts` 的接續案例與 `tests/containers.test.ts` 的寫回案例。中斷後的下一次執行靠這份紀錄把修改寫回新副本、從測試與獨立審查接續（#241）；`runs.result` 存成 jsonb 後欄位順序會變，比對候選內容要逐欄比，不能直接比 JSON 字串。發布時 `runs.result` 會換成 PR 結果，查接續點時要把有 `prUrl`／`answer` 的執行也算成「最近一次」，否則會撿回更早、已被取代的候選。新增會判定候選不能用的檢查（驗證、複驗、機密、寫回）時，丟錯前先呼叫 `settle()`，再做暫停檢查或切換階段；否則剛好暫停或逾時，下一次重試會再接續同一份註定失敗的修改，重複消耗每日次數與審查額度。派工的基底也由這份接續點決定（#261）：有可接續的候選就用它的 `baseSha`，否則用目標分支（追加修改則是 PR）目前的 head；不要另加旗標或在別處沿用舊的 `tasks.base_sha`，否則修好目標分支後重試會一直卡在舊基底的驗證失敗。
 

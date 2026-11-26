@@ -115,7 +115,7 @@ describe("拒絕時記錄原因", () => {
     expect(await ended(t.id)).toEqual({ status: "rejected", end_reason: null });
   });
 
-  it("批次結束帶原因時，拒絕與取消的任務都記下同一個原因", async () => {
+  it("因重複而批次拒絕或取消的任務，詳情都顯示重複需求及補充說明", async () => {
     const pending = await task("batch-1");
     const failed = await task("batch-2", "failed");
     const response = await app.inject({
@@ -148,5 +148,13 @@ describe("拒絕時記錄原因", () => {
     expect((await audits(failed.id))[0].detail).toContain(
       "原因：重複；和範例群組上週的需求相同",
     );
+    for (const id of [pending.id, failed.id]) {
+      const shown = await detail(id);
+      expect(shown.task.end_summary).toMatchObject({
+        kind: "duplicate",
+        reason: "重複；和範例群組上週的需求相同",
+        at: shown.history[0].created_at,
+      });
+    }
   });
 });
