@@ -139,6 +139,7 @@ it.each([
   ["缺少完成事件", () => stream({ type: "response.created" }), { kind: "stream_interrupted", status: 200 }],
   ["受保護資料", () => stream(completed(1, identity.secrets[0])), { kind: "protected_data", status: 200 }],
   ["超出輸出上限", () => stream(completed(65)), { kind: "output_limit", status: 200 }],
+  ["上游回報固定短提示超過輸入預算", () => stream({ type: "response.completed", response: { ...completed().response, usage: { input_tokens: 129, output_tokens: 1 } } }), { kind: "usage_limit", status: 200 }],
   ["毫無輸出", () => stream(completed(0, "")), { kind: "invalid_usage", status: 200 }],
   ["僅有推理用量而沒有文字", () => stream(completed(5, "")), { kind: "missing_body", status: 200 }],
   ["上游依限制截斷", () => stream({ type: "response.incomplete", response: { incomplete_details: { reason: "max_output_tokens" } } }), { kind: "output_limit", status: 200 }],

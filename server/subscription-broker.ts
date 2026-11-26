@@ -59,7 +59,7 @@ export const subscriptionLimits = {
   frameBytes: 8 * 1024 * 1024,
   lifetimeMs: 30 * 60 * 1000,
 };
-const probeLimits = { outputTokens: 64, deltaBytes: 256, responseBytes: 64 * 1024, timeoutMs: 45000 };
+const probeLimits = { inputTokens: 128, outputTokens: 64, deltaBytes: 256, responseBytes: 64 * 1024, timeoutMs: 45000 };
 const hasText = (value: unknown) => typeof value === "string" && value.trim().length > 0;
 function messageHasText(item: unknown) {
   return item !== null && typeof item === "object" && "type" in item && item.type === "message"
@@ -792,6 +792,8 @@ export class SubscriptionBroker {
                   throw safeError(502, "訂閱回應缺少有效用量", "invalid_usage");
                 if (complete) throw safeError(502, "訂閱回應重複完成", "duplicate_completion");
                 run.outputTokens += u.output_tokens;
+                if (probe && u.input_tokens > probeLimits.inputTokens)
+                  throw safeError(429, "訂閱探測已達輸入用量上限", "usage_limit");
                 if (truncatedProbe || run.outputTokens > (probe ? probeLimits.outputTokens : subscriptionLimits.outputTokens))
                   throw safeError(429, "訂閱工作已達應用程式用量上限", "output_limit");
                 if (event.type === "response.incomplete")

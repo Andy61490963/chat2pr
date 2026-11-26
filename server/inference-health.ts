@@ -153,6 +153,13 @@ export async function probeInference(
     );
     return "unavailable" as const;
   }
+  const reservation = await db.one(`INSERT INTO inference_probe_budget AS budget(id,day,attempts)
+    VALUES(true,(now() AT TIME ZONE 'Asia/Taipei')::date,1)
+    ON CONFLICT(id) DO UPDATE SET day=excluded.day,
+      attempts=CASE WHEN budget.day<excluded.day THEN 1 ELSE budget.attempts+1 END
+    WHERE budget.day<excluded.day OR (budget.day=excluded.day AND budget.attempts<8)
+    RETURNING attempts`);
+  if (!reservation) return "unavailable" as const;
   const started = Date.now();
   let ok = false;
   let detail: string;
