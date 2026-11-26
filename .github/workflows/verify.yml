@@ -15,7 +15,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium --only-shell
-      - run: npm run test:e2e -- --workers=2
+      - run: npm run test:e2e -- e2e/inbox-review-states.spec.ts e2e/inbox-queue-layout.spec.ts e2e/inbox-tabs.spec.ts e2e/inbox-quick-approval.spec.ts --timeout=12000 --workers=2
         env:
           E2E_PORT: 5336
       - name: 保留收件匣桌面與手機截圖

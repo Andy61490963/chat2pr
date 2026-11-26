@@ -12,7 +12,6 @@ const row = (page: Page, title: string) =>
   queue(page).getByRole("listitem").filter({ has: page.getByText(title, { exact: true }) });
 const panel = (page: Page) => page.getByRole("region", { name: "審核面板" });
 const quickName = { name: "核准修改", exact: true };
-const openName = { name: "開啟審核", exact: true };
 const hint = (page: Page) => page.getByText(/J\s*[／/]\s*K.*Enter.*Alt/);
 
 test("列上核准先重讀未選取的任務，只送一次確認過的目標與版本並前進", async ({ page }) => {
@@ -166,7 +165,10 @@ for (const scenario of ["成員", "有風險", "查詢", "回答補問", "選專
     await page.goto("/");
     const target = row(page, current.title);
     await expect(target.getByRole("button", quickName)).toHaveCount(0);
-    const open = target.getByRole("button", openName);
+    const action = { 成員: "查看", 有風險: "查看", 查詢: "查看", 回答補問: "回答補問", 選專案: "選專案", 重試: "重試" }[scenario];
+    const open = target.getByRole("button", { name: action, exact: true });
+    await expect(target.getByText(/^等你/)).toHaveCount(0);
+    await expect(target.getByText("有風險", { exact: true })).toHaveCount(scenario === "有風險" ? 1 : 0);
     await expect(open).toHaveAttribute("data-variant", "secondary");
     await open.click();
     await expect(panel(page).getByRole("heading", { name: current.title })).toBeVisible();
@@ -229,7 +231,7 @@ for (const change of ["切到其他分頁", "改選其他案件", "開始編輯�
       if (change === "切到其他分頁") {
         await page.getByRole("tab", { name: /^進行中/ }).click();
       } else if (change === "改選其他案件") {
-        await row(page, other.title).getByRole("button", openName).click();
+        await row(page, other.title).getByRole("button", { name: "回答補問", exact: true }).click();
       } else if (change === "開始編輯審核草稿") {
         await panel(page).getByRole("button", { name: /修改這一題/ }).click();
         await panel(page).getByRole("textbox", { name: "需求說明" }).fill(other.summary);

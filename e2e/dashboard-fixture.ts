@@ -1117,6 +1117,7 @@ export async function mockInboxReview(page: Page) {
     tasks,
     pickLists: [],
     stuckTasks: [{ ...stuckTasks[1], taskId: tasks[0].id, title: tasks[0].title }],
+    stuckTasksTotal: 1,
     health: [
       ...fixture.state.health.filter(({ name }) => !exhaustedPushHealth.some((entry) => entry.name === name)),
       ...exhaustedPushHealth,

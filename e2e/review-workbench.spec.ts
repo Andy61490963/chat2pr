@@ -14,6 +14,7 @@ const queue = (page: Page) => page.getByRole("list", { name: "待決策佇列" }
 const panel = (page: Page) => page.getByRole("region", { name: "審核面板" });
 const row = (page: Page, title: string) =>
   queue(page).getByRole("button", { name: new RegExp(title) });
+const decisionName = /^(核准修改|回答補問|選專案|重試|查看)$/;
 const approve = (page: Page) =>
   panel(page).getByRole("button", { name: "確認專案與分支並核准修改" });
 
@@ -57,7 +58,7 @@ async function capture(page: Page, testInfo: TestInfo, name: string) {
   });
 }
 
-test("桌面佇列依等待時間排序，每列只有一個狀態，審核面板依序呈現證據", async ({
+test("桌面佇列依等待時間排序，每列只有一個決定按鈕，審核面板依序呈現證據", async ({
   page,
 }, testInfo) => {
   const fixture = reviewWorkbenchFixture();
@@ -86,27 +87,29 @@ test("桌面佇列依等待時間排序，每列只有一個狀態，審核面�
   await expect(
     panel(page).getByRole("heading", { name: tasks[0].title }),
   ).toBeVisible();
-  expect(
-    await rows.evaluateAll((items) =>
-      items.map((item) => item.querySelectorAll("[data-review-status]").length),
-    ),
-  ).toEqual(Array(30).fill(1));
+  const decisions = page.getByRole("button", { name: decisionName });
+  await expect(rows.filter({ has: decisions })).toHaveCount(30);
+  await expect(queue(page).getByRole("button", { name: decisionName })).toHaveCount(30);
+  await expect(rows.first().getByRole("button", { name: "查看", exact: true })).toBeVisible();
   await expect(
-    queue(page).getByText("等你核准修改", { exact: true }),
-  ).toHaveCount(9);
-  await expect(
-    queue(page).getByText("等你回答：補充需求", { exact: true }),
-  ).toHaveCount(9);
-  await expect(
-    queue(page).getByText("等你決定：選專案", { exact: true }),
+    queue(page).getByRole("button", { name: "核准修改", exact: true }),
   ).toHaveCount(8);
   await expect(
-    queue(page).getByText("等你決定：挑選任務", { exact: true }),
+    queue(page).getByRole("button", { name: "回答補問", exact: true }),
+  ).toHaveCount(9);
+  await expect(
+    queue(page).getByRole("button", { name: "選專案", exact: true }),
+  ).toHaveCount(8);
+  await expect(
+    rows.filter({ hasText: "待挑選清單" }).getByRole("button", { name: "查看", exact: true }),
   ).toHaveCount(4);
+  await expect(queue(page).getByText(/^等你(核准修改|回答：|決定：)/)).toHaveCount(0);
 
-  await page.getByRole("group", { name: "待決策排序" }).getByRole("button", { name: "最新" }).click();
+  const sort = page.getByRole("combobox", { name: "待決策排序" });
+  await sort.selectOption({ label: "最新" });
   await expect(rows.first()).toContainText(tasks.at(-1)!.title);
-  await page.getByRole("group", { name: "待決策排序" }).getByRole("button", { name: "等最久" }).click();
+  await sort.selectOption({ label: "等最久" });
+  await expect(rows.first()).toContainText(tasks[0].title);
   await row(page, tasks[0].title).click();
   await expect(row(page, tasks[0].title)).toHaveAttribute(
     "aria-current",
@@ -182,7 +185,7 @@ test("桌面佇列依等待時間排序，每列只有一個狀態，審核面�
 });
 
 for (const colorScheme of ["light", "dark"] as const) {
-  test(`佇列列的等待時間與狀態固定靠右、數字等寬，佇列與面板是和頁面分得開的卡片（${colorScheme === "dark" ? "深色" : "淺色"}）`, async ({
+  test(`桌面佇列等高、時間數字等寬、決定按鈕靠右，佇列與面板層次分明（${colorScheme === "dark" ? "深色" : "淺色"}）`, async ({
     page,
   }) => {
     await page.emulateMedia({ colorScheme });
@@ -192,13 +195,20 @@ for (const colorScheme of ["light", "dark"] as const) {
     await expect(
       panel(page).getByRole("heading", { name: "核對範例需求 01" }),
     ).toBeVisible();
-    for (const column of ["[data-review-waiting]", "[data-review-status]"]) {
-      const edges = await queue(page)
-        .locator(column)
-        .evaluateAll((items) =>
-          items.map((item) => Math.round(item.getBoundingClientRect().right)),
-        );
-      expect(new Set(edges).size, `${column} 的右緣應對齊`).toBe(1);
+    await waitForVisuals(page);
+    const heights = await queue(page).getByRole("listitem").evaluateAll((items) =>
+      items.map((item) => item.getBoundingClientRect().height),
+    );
+    expect(Math.max(...heights) - Math.min(...heights), "各種決策的列高應一致").toBeLessThanOrEqual(1);
+    for (const column of [
+      queue(page).locator("[data-review-waiting]"),
+      queue(page).getByRole("button", { name: decisionName }),
+    ]) {
+      await expect(column).toHaveCount(30);
+      const edges = await column.evaluateAll((items) =>
+        items.map((item) => Math.round(item.getBoundingClientRect().right)),
+      );
+      expect(new Set(edges).size, "所有列的右緣應對齊").toBe(1);
     }
     await expect(
       queue(page).locator("[data-review-waiting]").first(),
@@ -245,7 +255,7 @@ test("桌面佇列將等最久的待挑選清單排第一、顯示等待時間�
   await expect(page).toHaveURL(`/?review=list-${list.id}`);
   await expect(panel(page).getByRole("checkbox", { name: title })).toBeVisible();
 
-  await page.getByRole("group", { name: "待決策排序" }).getByRole("button", { name: "最新" }).click();
+  await page.getByRole("combobox", { name: "待決策排序" }).selectOption({ label: "最新" });
   await expect(rows.first()).toContainText(fixture.tasks.at(-1)!.title);
   await expect(rows.last()).toContainText(title);
 });
@@ -392,7 +402,10 @@ test("核准、回答、指定專案與結束成功後前進並聚焦下一筆�
   await assignAction.press("Enter");
   await expect(approve(page)).toBeFocused();
   await expect(page).toHaveURL(new RegExp(`review=${ending.id}$`));
-  await expect(row(page, unassigned.title)).toContainText("等你核准修改");
+  const assignedRow = queue(page).getByRole("listitem").filter({ hasText: unassigned.title });
+  await expect(assignedRow).toContainText(project.name);
+  await expect(assignedRow.getByRole("button", { name: "查看", exact: true })).toBeVisible();
+  await expect(assignedRow.getByRole("button", { name: "選專案", exact: true })).toHaveCount(0);
   await panel(page)
     .getByRole("button", { name: "結束任務", exact: true })
     .click();
@@ -716,7 +729,7 @@ test("1024px 的佇列與面板並排且沒有水平捲動", async ({ page }) =>
   );
 });
 
-test("375px 首屏看見三筆，可全頁審核、切換上一筆或下一筆並返回佇列", async ({
+test("375px 首屏看見三筆，標題至少佔列寬六成，可全頁審核與換筆", async ({
   page,
 }, testInfo) => {
   await page.setViewportSize({ width: 375, height: 812 });
@@ -734,6 +747,11 @@ test("375px 首屏看見三筆，可全頁審核、切換上一筆或下一筆�
   ).not.toBeInViewport();
   for (const entry of tasks.slice(0, 3)) {
     const button = row(page, entry.title);
+    const item = queue(page).getByRole("listitem").filter({ hasText: entry.title });
+    const title = item.getByText(entry.title, { exact: true });
+    const itemBox = (await item.boundingBox())!;
+    const titleBox = (await title.boundingBox())!;
+    expect(titleBox.width / itemBox.width, entry.title).toBeGreaterThanOrEqual(0.6);
     const viewport = (await button.boundingBox())!;
     expect(viewport.y).toBeGreaterThanOrEqual(0);
     expect(viewport.y + viewport.height).toBeLessThanOrEqual(bottom);

@@ -56,22 +56,29 @@ test("手機收件匣的二十筆待審案件各顯示一個下一步，回答�
   await page.goto("/");
   await expect(page.getByRole("tab", { name: /^決定\s*20$/ })).toBeVisible();
   const queue = page.getByRole("list", { name: "待決策佇列" });
+  const rows = queue.getByRole("listitem");
+  const decisionName = /^(查看|選專案|回答補問)$/;
+  await expect(rows.filter({ has: page.getByRole("button", { name: decisionName }) })).toHaveCount(20);
+  await expect(queue.getByRole("button", { name: decisionName })).toHaveCount(20);
   await expect(
-    queue.getByText("等你決定：確認需求", { exact: true }),
+    rows.filter({ hasText: /確認範例需求/ }).getByRole("button", { name: "查看", exact: true }),
   ).toHaveCount(17);
-  for (const label of [
-    "等你決定：選專案",
-    "等你回答：補充需求",
-    "等你補充：修改需求",
-  ]) {
-    await expect(queue.getByText(label, { exact: true })).toHaveCount(1);
-  }
-  for (const label of ["需求等待確認", "等你決定", "審核站"]) {
+  await expect(
+    rows.filter({ has: page.getByText("確認範例需求 1", { exact: true }) })
+      .getByRole("button", { name: "選專案", exact: true }),
+  ).toHaveCount(1);
+  await expect(
+    rows.filter({ hasText: missingOnly.title }).getByRole("button", { name: "查看", exact: true }),
+  ).toBeVisible();
+  const answerRow = rows.filter({ hasText: withQuestion.title });
+  const answerButton = answerRow.getByRole("button", { name: "回答補問", exact: true });
+  await expect(answerButton).toBeVisible();
+  for (const label of ["需求等待確認", /^等你(決定|回答|補充)/, "審核站"]) {
     await expect(queue.getByText(label, { exact: true })).toHaveCount(0);
   }
   await checkMobileAccessibility(page);
 
-  await queue.getByRole("button", { name: new RegExp(task.title) }).press("Enter");
+  await answerButton.press("Enter");
   const drawer = page.getByRole("dialog", { name: task.title });
   const answerAction = drawer.getByRole("button", { name: "回答問題", exact: true });
   await expect(answerAction).toBeFocused();

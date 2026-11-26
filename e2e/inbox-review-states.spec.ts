@@ -28,14 +28,31 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 375, height: 812 
     test.describe(label, () => {
       test.use({ viewport, colorScheme, reducedMotion: "reduce", timezoneId: "Asia/Taipei" });
 
-      test("列上快速核准截圖", async ({ page }, info) => {
+      test("列上快速核准截圖顯示鍵盤焦點，不代表滑鼠點擊後的外觀", async ({ page }, info) => {
         const { tasks } = await mockInboxReview(page);
         await page.goto("/");
         const row = page.getByRole("list", { name: "待決策佇列" })
           .getByRole("listitem").filter({ hasText: tasks[0].title });
         const approve = row.getByRole("button", { name: "核准修改", exact: true });
         await expect(approve).toBeEnabled();
-        await approve.focus();
+        await approve.hover();
+        const border = () => approve.evaluate((button) => {
+          const style = getComputedStyle(button);
+          return [style.outlineWidth, style.outlineStyle, style.boxShadow];
+        });
+        const resting = await border();
+        await page.mouse.down();
+        try {
+          await expect(approve).toBeFocused();
+          expect(await approve.evaluate((button) => button.matches(":focus-visible"))).toBe(false);
+          expect(await border()).toEqual(resting);
+        } finally {
+          await page.mouse.move(0, 0);
+          await page.mouse.up();
+        }
+        await row.getByRole("button", { name: new RegExp(tasks[0].title) }).press("Tab");
+        await expect(approve).toBeFocused();
+        expect(await approve.evaluate((button) => button.matches(":focus-visible"))).toBe(true);
         await expect(approve).toBeInViewport();
         await capture(page, info, `${label}-列上快速核准`);
       });
@@ -86,6 +103,7 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 375, height: 812 
         await emitDashboardEvent(page, "connected");
         state.tasks = [];
         state.stuckTasks = [];
+        state.stuckTasksTotal = 0;
         await emitDashboardEvent(page, "update");
         await expect(page.getByRole("heading", { name: "都處理完了" })).toBeVisible();
         await expect(queue).toHaveCount(0);

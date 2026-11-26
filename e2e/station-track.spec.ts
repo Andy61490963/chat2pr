@@ -85,15 +85,18 @@ for (const colorScheme of ["light", "dark"] as const) {
         const tab = page.getByRole("tab", { name });
         await tab.click();
         const section = page.getByRole("tabpanel", { name });
-        const title = label === "決定" ? "需要你處理" : label;
-        const heading = section.getByRole("heading", { name: title, exact: true });
-        await expect(heading.getByRole("button", { name: title, exact: true })).toHaveCount(1);
+        if (label === "決定") {
+          await expect(section.getByRole("heading", { name: "需要你處理" })).toHaveCount(0);
+        } else {
+          const heading = section.getByRole("heading", { name: label, exact: true });
+          await expect(heading.getByRole("button", { name: label, exact: true })).toHaveCount(1);
+          await expect(heading).toHaveCSS("border-bottom-width", "0px");
+        }
         const ledger = label === "決定"
           ? section.getByRole("list", { name: "待決策佇列" })
           : section.locator(".work-ledger");
         const firstRow = ledger.locator(":scope > :first-child");
         await expect(firstRow).toBeVisible();
-        await expect(heading).toHaveCSS("border-bottom-width", "0px");
         await expect(ledger).toHaveCSS("border-top-width", "1px");
         await expect(firstRow).toHaveCSS("border-top-width", "0px");
       }

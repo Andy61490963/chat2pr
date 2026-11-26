@@ -24,7 +24,7 @@ test("分類筆數只顯示一次，切換分頁才列出對應的全部工作�
   await expect(decisions).toHaveAttribute("aria-selected", "true");
   await expect(ready).toBeVisible();
   await expect(activity).toBeVisible();
-  await expect(page.getByRole("heading", { name: /需要你處理.*1/ })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: /需要你處理/ })).toHaveCount(0);
   await expect(page.getByRole("button", { name: new RegExp(working[0].title) })).toBeHidden();
   await expect(page.getByRole("region", { name: "最近動態" })).toBeHidden();
   await moving.click();
@@ -41,23 +41,54 @@ test("分類筆數只顯示一次，切換分頁才列出對應的全部工作�
   await expect(feed).toBeHidden();
 });
 
-test("排序位於分類右側，切換後再回來仍依指定順序排列", async ({ page }) => {
+test("鍵盤提示、卡住任務與排序都在分類右側，切換分類不會重設排序", async ({ page }) => {
   const { tasks } = await mockInboxReview(page);
   await page.goto("/");
   const categories = page.getByRole("tablist", { name: "收件匣分類" });
-  const sort = page.getByRole("group", { name: "待決策排序" });
+  const hint = page.getByText(/J／K 切換/);
+  const stuck = page.getByRole("button", { name: "卡住的任務 1" });
+  const sort = page.getByRole("combobox", { name: "待決策排序" });
   const first = page.getByRole("list", { name: "待決策佇列" }).getByRole("listitem").first();
   await expect(first).toContainText(tasks[0].title);
   const tabsBox = (await categories.boundingBox())!;
-  const sortBox = (await sort.boundingBox())!;
-  expect(sortBox.x).toBeGreaterThanOrEqual(tabsBox.x + tabsBox.width - 1);
-  expect(Math.abs((sortBox.y + sortBox.height / 2) - (tabsBox.y + tabsBox.height / 2))).toBeLessThan(3);
-  await sort.getByRole("button", { name: "最新" }).click();
+  for (const control of [hint, stuck, sort]) {
+    await expect(control).toBeVisible();
+    const box = (await control.boundingBox())!;
+    expect(box.x).toBeGreaterThanOrEqual(tabsBox.x + tabsBox.width - 1);
+    expect(Math.abs((box.y + box.height / 2) - (tabsBox.y + tabsBox.height / 2))).toBeLessThan(3);
+  }
+  await sort.selectOption({ label: "最新" });
   await expect(first).toContainText(tasks.at(-1)!.title);
   await categories.getByRole("tab", { name: /進行中/ }).click();
   await expect(sort).toBeHidden();
   await categories.getByRole("tab", { name: /決定/ }).click();
   await expect(first).toContainText(tasks.at(-1)!.title);
+});
+
+test("手機首屏四個分類、排序與卡住任務捷徑同列且能完整點按", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  await mockInboxReview(page);
+  await page.goto("/");
+  const tabs = page.getByRole("tablist", { name: "收件匣分類" }).getByRole("tab");
+  const stuck = page.getByRole("button", { name: "卡住的任務 1" });
+  const sort = page.getByRole("combobox", { name: "待決策排序" });
+  await expect(tabs).toHaveCount(4);
+  await expect(page.getByRole("heading", { name: "需要你處理" })).toHaveCount(0);
+  const firstTab = (await tabs.first().boundingBox())!;
+  let previousRight = firstTab.x;
+  for (const control of [...await tabs.all(), stuck, sort]) {
+    await expect(control).toBeInViewport({ ratio: 1 });
+    const box = (await control.boundingBox())!;
+    expect(box.width).toBeGreaterThanOrEqual(44);
+    expect(box.height).toBeGreaterThanOrEqual(44);
+    expect(box.x).toBeGreaterThanOrEqual(previousRight - 1);
+    expect(Math.abs((box.y + box.height / 2) - (firstTab.y + firstTab.height / 2))).toBeLessThan(3);
+    previousRight = box.x + box.width;
+  }
+  await sort.selectOption({ label: "最新" });
+  await expect(sort).toHaveValue("newest");
+  await stuck.click();
+  await expect(page.getByRole("heading", { name: "卡住的任務" })).toBeFocused();
 });
 
 test("勾選後才出現批次操作，全選、清除及取消最後一筆都更新操作列", async ({ page }) => {
