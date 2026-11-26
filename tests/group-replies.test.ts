@@ -1092,7 +1092,7 @@ describe("用 reply token 取回與說實話", () => {
   async function send(
     id: string,
     text: string,
-    opts: { quoted?: string; group?: string; timestamp?: number } = {},
+    opts: { quoted?: string; group?: string; timestamp?: number; redelivery?: boolean } = {},
   ) {
     const payload = JSON.stringify({
       events: [
@@ -1101,6 +1101,7 @@ describe("用 reply token 取回與說實話", () => {
           type: "message",
           replyToken: `fictionalReply${id.replace(/[^a-z0-9]/gi, "")}`,
           timestamp: opts.timestamp ?? Date.now(),
+          deliveryContext: { isRedelivery: opts.redelivery ?? false },
           source: {
             type: "group",
             groupId: opts.group ?? "group-a",
@@ -1803,8 +1804,14 @@ describe("用 reply token 取回與說實話", () => {
   it("過期發言與已關閉回覆的群組都不消耗回覆權杖", async () => {
     await settings();
     await send("expired", "早安", { timestamp: Date.now() - 61000 });
+    await send("unused", "午安");
     await answeredTask("示範進度");
-    await line.flushNotifications();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 61000);
+    try {
+      await line.flushNotifications();
+    } finally {
+      clock.mockRestore();
+    }
     expect(replyCalls).toHaveLength(0);
     await settings({ reply_mode: "off" });
     await send("off", "有人嗎");
@@ -1814,5 +1821,64 @@ describe("用 reply token 取回與說實話", () => {
     await send("systemOff", "有人嗎");
     await line.flushNotifications();
     expect(replyCalls).toHaveLength(0);
+  });
+
+  it("免費回覆也能送出收到通知，權杖失效後留給下一次發言重試", async () => {
+    await settings({ reply_mode: "all" });
+    const id = await task("示範修改");
+    await notifyGroup(db, id, "received", "received:reply", "已收到示範修改", "all");
+    replyStatus = 400;
+    replyMessage = "Invalid reply token";
+    await send("oldReply", "早安");
+    expect(lastReply()).toEqual(["已收到示範修改"]);
+    expect(await notice(id)).toMatchObject({ sent_at: null, attempts: 0, last_error: replyFailedNote });
+    expect(await failures(id)).toBe(0);
+    replyStatus = 200;
+    await send("newReply", "午安");
+    expect(lastReply()).toEqual(["已收到示範修改"]);
+    expect((await notice(id)).sent_message_id).toBe("reply-2-0");
+    expect(pushes).toHaveLength(0);
+  });
+
+  it.each([false, true])("延遲送達且首次收到的事件，可在收件後一分鐘回覆一次（重送 %s）", async (redelivery) => {
+    await settings();
+    await answeredTask("範例結果");
+    const event = { timestamp: Date.now() - 2 * 60_000, redelivery };
+    await send("delayed", "/任務 示範調整", event);
+    await send("delayed", "/任務 示範調整", { ...event, redelivery: true });
+    expect(replyCalls).toHaveLength(1);
+    expect(lastReply()[0]).toBe(commandAck);
+    expect(lastReply()[1]).toContain("範例結果");
+  });
+
+  it("原事件已過二十分鐘的重送不消耗權杖，待送結果留給下一則有效發言", async () => {
+    await settings();
+    const answer = await answeredTask("範例效期");
+    await send("late", "/進度", { timestamp: Date.now() - 20 * 60_000, redelivery: true });
+    expect(replyCalls).toHaveLength(0);
+    expect((await notice(answer)).sent_at).toBeNull();
+    await send("fresh", "早安");
+    expect(lastReply().join("\n")).toContain("範例效期");
+  });
+
+  it.each([
+    { status: 400, message: "The request body has 1 error(s)", calls: 2 },
+    { status: 400, message: "Invalid reply token", calls: 1 },
+    { status: 503, message: "Internal server error", calls: 1 },
+  ])("指令併送遭 HTTP $status 拒收，只在確認內容問題時單送指令回覆（$message）", async ({ status, message, calls }) => {
+    await settings();
+    const answer = await answeredTask("等待補送的答案");
+    const payloads: string[][] = [];
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+      const { messages } = JSON.parse(String(init.body)) as { messages: { text: string }[] };
+      payloads.push(messages.map((m) => m.text));
+      return messages.length > 1
+        ? Response.json({ message }, { status })
+        : Response.json({ sentMessages: [{ id: "Confirmed" }] });
+    });
+    await send("ack", "/任務 範例修改");
+    expect(payloads).toHaveLength(calls);
+    if (calls === 2) expect(payloads[1]).toEqual([commandAck]);
+    expect((await notice(answer)).sent_at).toBeNull();
   });
 });
