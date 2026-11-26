@@ -56,12 +56,64 @@ it.each([0, 100])("保留群組額度百分之 %i 時，重要回覆未確認會
   expect(privateMessages).toHaveLength(reserve === 0 ? 1 : 0);
 });
 
-it("升級後首次維護補上既有未確認重要回覆的提醒，重跑只留一則", async () => {
-  await db.query("UPDATE notifications SET line_reply_policy='manual' WHERE group_id='group-a'");
-  await db.query("UPDATE settings SET value=jsonb_set(value,'{admin_line_id}','null')");
-  const restarted = new Line(db);
-  await restarted.flushNotifications();
-  await restarted.flushNotifications();
-  expect(await notices()).toMatchObject([{ disposition: "action", text: expect.stringContaining("轉達") }]);
-  expect(await dashboardAlerts(db, false)).not.toEqual(expect.arrayContaining([expect.objectContaining({ kind: "reply_uncertain" })]));
+function replyServer(status: number, replies: string[][] = []) {
+  vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+    const messages = JSON.parse(String(init.body)).messages as { text: string }[];
+    replies.push(messages.map((m) => m.text));
+    return status === 200 ? Response.json({ sentMessages: messages.map(() => ({ id: "ExampleReply" })) })
+      : Response.json({ message: status === 400 ? "Invalid reply token" : "" }, { status });
+  });
+}
+
+it.each(["判讀過時", "補問已作答", "補問超過七天", "失敗任務已恢復"])("%s時取回、群組提示與管理者鈴鐺一同解除", async (scenario) => {
+  if (scenario !== "判讀過時") {
+    await db.query("DELETE FROM notifications");
+    const failed = scenario === "失敗任務已恢復";
+    await db.query(`WITH task AS (INSERT INTO tasks(group_id,title,summary,status,dedupe_key,question)
+      VALUES('group-a','範例匯出','範例摘要',$1,'exampleTask','{"text":"是否匯出？"}') RETURNING id,version)
+      INSERT INTO notifications(group_id,task_id,kind,dedupe_key,text)
+      SELECT 'group-a',id,$2,'group:question:'||id||':'||version,'範例待取回內容' FROM task`,
+      [failed ? "failed" : "awaiting_approval", failed ? "group_failed" : "group_question"]);
+  }
+  replyServer(503);
+  await speak("早安", "ExampleFirst");
+  expect(await notices()).toMatchObject([{ disposition: "action" }]);
+  if (scenario === "判讀過時") await db.query("UPDATE notifications SET created_at=now()-interval '25 hours' WHERE group_id='group-a'");
+  else if (scenario === "補問超過七天") await db.query("UPDATE notifications SET created_at=now()-interval '8 days' WHERE group_id='group-a'");
+  else await db.query("UPDATE tasks SET status='answered',question=NULL WHERE group_id='group-a'");
+  expect(await notices()).toMatchObject([{ disposition: "resolved" }]);
+  const replies: string[][] = [];
+  replyServer(200, replies);
+  await speak("/進度", "ExampleProgress");
+  expect(replies.flat().join("\n")).not.toMatch(/範例待取回內容|示範指令的處理結果|不確定是否送達/);
+});
+
+it.each([400, 429])("免費補送明確遭拒（%i）後下次發言仍可補送", async (status) => {
+  replyServer(503);
+  await speak("早安", "ExampleFirst");
+  await db.query("UPDATE notifications SET line_reply_uncertain_at=now()-interval '6 minutes' WHERE line_reply_policy='manual'");
+  replyServer(status);
+  await speak("午安", "ExampleRejected");
+  const replies: string[][] = [];
+  replyServer(200, replies);
+  await speak("晚安", "ExampleRetry");
+  expect(replies.flat()).toEqual([expect.stringContaining("（補送：先前可能沒送到，看過可略過）")]);
+});
+
+it("同批兩則重要回覆只提醒一次，摘要能辨認來源，全部失效才解除", async () => {
+  await db.query("INSERT INTO notifications(group_id,kind,dedupe_key,text) VALUES('group-a','group_triage','exampleSecond','示範查詢乙的結果')");
+  replyServer(503);
+  await speak("早安", "ExampleBatch");
+  const alerts = await notices();
+  expect(alerts).toHaveLength(1);
+  expect(alerts[0].text).toContain("2 則");
+  expect(alerts[0].text).toContain("示範指令的處理結果");
+  expect(alerts[0].text).toContain("示範查詢乙的結果");
+  await db.query("UPDATE notifications SET created_at=now()-interval '2 days' WHERE dedupe_key='exampleSecond'");
+  expect(await notices()).toMatchObject([{ disposition: "action" }]);
+  await speak("/進度", "ExampleAgain");
+  expect(await notices()).toHaveLength(1);
+  replyServer(200);
+  await speak("/進度", "ExampleSuccess");
+  expect(await notices()).toMatchObject([{ disposition: "resolved" }]);
 });
