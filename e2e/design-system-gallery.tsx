@@ -30,7 +30,6 @@ import {
 } from "@/components/ui/form-controls";
 import { Input } from "@/components/ui/input";
 import {
-  PageHeader,
   SectionHeader,
   EmptyState,
   DataList,
@@ -62,7 +61,7 @@ function Gallery() {
   return (
     <TooltipProvider>
       <main className="mx-auto grid min-h-screen w-full min-w-0 max-w-3xl content-start gap-4 p-4">
-        <PageHeader>範例工單</PageHeader>
+        <h1 className="heading-page">範例工單</h1>
         <SectionHeader>工單資料</SectionHeader>
         <DescriptionList pairs={2}>
           <DescriptionItem label="批號" numeric>

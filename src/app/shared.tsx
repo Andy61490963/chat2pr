@@ -420,7 +420,7 @@ export function Initials({
   return (
     <span
       className={cn(
-        "grid size-7 shrink-0 place-items-center rounded-full bg-muted text-[11px] font-medium text-foreground",
+        "grid size-7 shrink-0 place-items-center shape-pill bg-muted text-caption font-medium text-foreground",
         className,
       )}
       aria-hidden

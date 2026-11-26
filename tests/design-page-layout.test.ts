@@ -92,7 +92,7 @@ it("既有與遷移頁的區塊標題、零筆計數與操作具有一致層級"
   );
 });
 
-it("側欄與警示對話框的共用模組均有正式看板呼叫端", () => {
+it("側欄、警示對話框與頁首元件只在有正式看板呼叫端時提供", () => {
   const source = (path: string) => readFileSync(path, "utf8");
   const app = [
     source("src/App.tsx"),

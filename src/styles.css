@@ -119,6 +119,10 @@
   --radius-xs: 0.125rem;
   --radius-sm: 0.25rem;
   --radius-md: 0.375rem;
+  /* 尚待遷移的面板繼續使用六像素圓角，清空基準時移除這兩個別名。 */
+  --radius-lg: var(--radius-md);
+  --radius-2xl: var(--radius-md);
+  --shape-pill: 9999px;
   --radius: var(--radius-sm);
   --focus-width: 2px;
   --focus-offset: 2px;
@@ -201,6 +205,12 @@
 
 @utility grid-cols-action {
   grid-template-columns: minmax(0, 1fr) auto;
+}
+@utility shape-pill {
+  border-radius: var(--shape-pill);
+}
+@utility right-nav-count {
+  right: calc(50% - --spacing(5));
 }
 @utility grid-cols-group {
   grid-template-columns: minmax(0, 1.6fr) --spacing(32) minmax(0, 2fr) --spacing(20) --spacing(28);

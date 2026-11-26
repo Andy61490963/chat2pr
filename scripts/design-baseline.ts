@@ -62,13 +62,28 @@ export function checkBaseline(
   current: string,
   previous: string | null,
   inherited: () => StyleEntry[] = () => [],
+  currentSource: () => StyleEntry[] = () => [],
 ) {
   const allowed = previous === null ? inherited() : parseBaseline(previous);
   const { added } = baselineDifference(parseBaseline(current), allowed);
   if (added.length) {
     const message =
       previous === null ? "基底版本沒有這筆樣式" : "基準只能刪除既有列";
-    throw new Error(message + "：\n" + added.map(key).join("\n"));
+    const locations = new Map<string, StyleEntry[]>();
+    for (const entry of currentSource()) {
+      const id = key(entry);
+      const matches = locations.get(id) ?? [];
+      matches.push(entry);
+      locations.set(id, matches);
+    }
+    const details = added.map((entry) => {
+      const source = locations.get(key(entry))?.pop();
+      const location = source
+        ? `${source.file}:${source.line}:${source.column}`
+        : entry.file;
+      return `${location}　${entry.value}（${entry.reason}）。若這一行被修改過，請順手換成 token；新增的樣式也須使用 token。`;
+    });
+    throw new Error(message + "：\n" + details.join("\n"));
   }
 }
 

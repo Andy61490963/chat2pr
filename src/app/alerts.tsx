@@ -345,7 +345,7 @@ export function AlertBell({
           {unread > 0 && (
             <span
               aria-hidden
-              className="absolute top-1 right-1 min-w-4 rounded-sm bg-foreground px-1 text-caption leading-4 font-semibold text-background tabular-nums"
+              className="absolute top-1 right-1 min-w-4 shape-pill bg-foreground px-1 text-caption leading-4 font-semibold text-background tabular-nums"
             >
               {unread > 9 ? "9+" : unread}
             </span>

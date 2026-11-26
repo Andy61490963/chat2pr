@@ -1,4 +1,28 @@
 import ts from "typescript";
+import { getDefaultConfig } from "tailwind-merge";
+
+const bareUtilities = new Set<string>(["group", "peer"]);
+for (const group of Object.values(getDefaultConfig().classGroups)) {
+  for (const rule of group) {
+    if (typeof rule === "string") bareUtilities.add(rule);
+    else if (typeof rule === "object")
+      for (const [prefix, suffixes] of Object.entries(rule))
+        if (suffixes.includes("")) bareUtilities.add(prefix);
+  }
+}
+
+function looksLikeClassList(text: string) {
+  return text
+    .trim()
+    .split(/\s+/)
+    .every(
+      (word) =>
+        bareUtilities.has(word) ||
+        (/^[-\w![&*]/.test(word) &&
+          /[-:[(]/.test(word) &&
+          !/[^\x21-\x7e]/.test(word)),
+    );
+}
 
 // 每個例外只允許把該畫面的資料傳給具名 CSS 變數。固定值仍須放在主題或工具類別。
 const dynamicVariables: Record<string, Record<string, string>> = {
@@ -49,7 +73,9 @@ export function inspectScript(
   tree: ts.SourceFile,
   visit: StyleVisitor,
 ) {
-  const bindings = new Map<ts.Node, Map<string, ts.Expression>>();
+  type Binding = ts.Expression | ts.FunctionDeclaration;
+  const bindings = new Map<ts.Node, Map<string, Binding>>();
+  const classProperty = /(?:^|[a-z])Class(?:Name|es)?$|^class(?:Name)?$/;
   const roots: (() => void)[] = [];
   const inspectedClasses = new Set<ts.Node>();
   const inspectedObjects = new Set<ts.Node>();
@@ -72,6 +98,28 @@ export function inspectScript(
     }
   }
 
+  function bind(name: ts.Identifier, value: Binding, parent: ts.Node) {
+    const scope =
+      ts.findAncestor(
+        parent,
+        (owner) =>
+          ts.isBlock(owner) ||
+          ts.isSourceFile(owner) ||
+          ts.isModuleBlock(owner),
+      ) ?? tree;
+    const names = bindings.get(scope) ?? new Map<string, Binding>();
+    names.set(name.text, value);
+    bindings.set(scope, names);
+  }
+
+  function returnedClasses(node: ts.Node) {
+    if (ts.isReturnStatement(node)) {
+      if (node.expression) classes(node.expression);
+    } else if (!ts.isFunctionLike(node)) {
+      ts.forEachChild(node, returnedClasses);
+    }
+  }
+
   function literals(node: ts.Node, check: TextCheck) {
     if (
       ts.isStringLiteralLike(node) ||
@@ -91,6 +139,13 @@ export function inspectScript(
     if (ts.isIdentifier(node)) {
       const init = initializer(node);
       if (init) classes(init);
+    } else if (
+      ts.isFunctionDeclaration(node) ||
+      ts.isArrowFunction(node) ||
+      ts.isFunctionExpression(node)
+    ) {
+      if (node.body && ts.isBlock(node.body)) returnedClasses(node.body);
+      else if (node.body) classes(node.body);
     } else if (
       ts.isStringLiteralLike(node) ||
       ts.isTemplateLiteralToken(node)
@@ -162,7 +217,7 @@ export function inspectScript(
     inspectedObjects.add(node);
     if (ts.isIdentifier(node)) {
       const init = initializer(node);
-      if (init) styleObject(init);
+      if (init && ts.isExpression(init)) styleObject(init);
       else if (node.text !== "undefined")
         visit.dynamic(node.text, node.getStart(tree));
     } else if (ts.isObjectLiteralExpression(node)) {
@@ -211,34 +266,43 @@ export function inspectScript(
     }
   }
 
+  // 匯出對照表只讀屬性值；敘述句中的範例類別、物件鍵與網址不當作類別清單。
+  function sharedValues(value: ts.Expression) {
+    const node = unwrap(value);
+    if (ts.isObjectLiteralExpression(node)) {
+      for (const prop of node.properties)
+        if (ts.isPropertyAssignment(prop)) sharedValues(prop.initializer);
+    } else if (ts.isArrayLiteralExpression(node)) {
+      node.elements.forEach(sharedValues);
+    } else if (ts.isStringLiteralLike(node) && looksLikeClassList(node.text)) {
+      classes(node);
+    }
+  }
+
   function gather(n: ts.Node) {
+    if (ts.isFunctionDeclaration(n) && n.name) bind(n.name, n, n.parent);
     if (
       ts.isVariableDeclaration(n) &&
       ts.isIdentifier(n.name) &&
       n.initializer
     ) {
-      const scope =
-        ts.findAncestor(
-          n.parent,
-          (owner) =>
-            ts.isBlock(owner) ||
-            ts.isSourceFile(owner) ||
-            ts.isModuleBlock(owner),
-        ) ?? tree;
-      const names = bindings.get(scope) ?? new Map<string, ts.Expression>();
-      names.set(n.name.text, n.initializer);
-      bindings.set(scope, names);
+      bind(n.name, n.initializer, n.parent);
       const init = n.initializer;
       if (n.type?.getText(tree).endsWith("CSSProperties"))
         roots.push(() => styleObject(init));
       if (
-        /Class(?:es|Name)?$/.test(n.name.text) &&
         ts.isVariableStatement(n.parent.parent) &&
         n.parent.parent.modifiers?.some(
           (m) => m.kind === ts.SyntaxKind.ExportKeyword,
         )
       ) {
-        roots.push(() => classes(init));
+        if (classProperty.test(n.name.text)) roots.push(() => classes(init));
+        else if (
+          file.startsWith("shared/") &&
+          ts.isObjectLiteralExpression(unwrap(init))
+        ) {
+          roots.push(() => sharedValues(init));
+        }
       }
     }
     if (ts.isJsxAttribute(n) || ts.isPropertyAssignment(n)) {
@@ -248,8 +312,7 @@ export function inspectScript(
         (ts.isJsxExpression(n.initializer)
           ? n.initializer.expression
           : n.initializer);
-      if (value && (name === "class" || name === "className"))
-        roots.push(() => classes(value));
+      if (value && classProperty.test(name)) roots.push(() => classes(value));
       if (value && name === "style" && ts.isExpression(value))
         roots.push(() => styleObject(value));
       if (
@@ -270,6 +333,14 @@ export function inspectScript(
         roots.push(() => n.arguments.forEach(classes));
       }
       const [name, value] = n.arguments;
+      if (
+        callee === "Object.assign" &&
+        name &&
+        ts.isPropertyAccessExpression(name) &&
+        name.name.text === "style"
+      ) {
+        roots.push(() => n.arguments.slice(1).forEach(styleObject));
+      }
       if (name && ts.isStringLiteralLike(name) && value) {
         if (
           callee.endsWith(".setAttribute") &&
@@ -287,15 +358,30 @@ export function inspectScript(
     if (
       ts.isBinaryExpression(n) &&
       n.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
-      ts.isPropertyAccessExpression(n.left)
+      (ts.isPropertyAccessExpression(n.left) ||
+        ts.isElementAccessExpression(n.left))
     ) {
-      const prop = n.left.name;
-      if (prop.text === "className") roots.push(() => classes(n.right));
+      const prop = ts.isPropertyAccessExpression(n.left)
+        ? n.left.name
+        : n.left.argumentExpression;
+      const name = ts.isPropertyAccessExpression(n.left)
+        ? prop.getText(tree)
+        : ts.isStringLiteralLike(prop)
+          ? prop.text
+          : undefined;
+      if (name === "className") roots.push(() => classes(n.right));
       if (
+        name &&
         ts.isPropertyAccessExpression(n.left.expression) &&
         n.left.expression.name.text === "style"
       ) {
-        roots.push(() => styleValue(prop.text, prop.getStart(tree), n.right));
+        roots.push(() =>
+          styleValue(
+            name,
+            prop.getStart(tree) + Number(ts.isStringLiteralLike(prop)),
+            n.right,
+          ),
+        );
       }
     }
     ts.forEachChild(n, gather);

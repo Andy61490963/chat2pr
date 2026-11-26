@@ -431,7 +431,7 @@ export function InboxView({
               <Card className="flex-row items-center gap-4 px-5 py-5">
                 <span
                   aria-hidden
-                  className="grid size-10 shrink-0 place-items-center rounded-full bg-muted text-muted-foreground"
+                  className="grid size-10 shrink-0 place-items-center shape-pill bg-muted text-muted-foreground"
                 >
                   <CircleCheck className="size-5" />
                 </span>

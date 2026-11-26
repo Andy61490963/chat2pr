@@ -8,24 +8,51 @@ const css = (source: string) => values(source, "src/app/example.css");
 const classes = (value: string) => values('<div className="' + value + '" />');
 
 describe("依樣式的語法位置檢查設計代幣", () => {
-  it.each(["valueClassName", "footerClassName", "indicatorClassName", "itemClasses", "rowClass"])(
-    "辨認 JSX 與物件的 %s 樣式屬性", (name) => {
-      expect(values(`const x = <Demo ${name}="text-[19px]" />; const props = { ${name}: "p-[13px]" };`)).toEqual(["text-[19px]", "p-[13px]"]);
-    },
-  );
-  it.each(["function tone(){ const help = 'm-[7px]'; return 'p-[13px]' }", "const tone = () => { const help = 'm-[7px]'; return 'p-[13px]' }", "const tone = () => 'p-[13px]'"])(
-    "只追蹤同檔函式的類別回傳值（%#）", (fn) => {
-      expect(values(fn + '; const row = <div className={tone()} />;')).toEqual(["p-[13px]"]);
-    },
-  );
+  it.each([
+    "valueClassName",
+    "footerClassName",
+    "indicatorClassName",
+    "itemClasses",
+    "rowClass",
+  ])("辨認 JSX 與物件的 %s 樣式屬性", (name) => {
+    expect(
+      values(
+        `const x = <Demo ${name}="text-[19px]" />; const props = { ${name}: "p-[13px]" };`,
+      ),
+    ).toEqual(["text-[19px]", "p-[13px]"]);
+  });
+  it.each([
+    "function tone(){ const help = 'm-[7px]'; return 'p-[13px]' }",
+    "const tone = () => { const help = 'm-[7px]'; return 'p-[13px]' }",
+    "const tone = () => 'p-[13px]'",
+  ])("只追蹤同檔函式的類別回傳值（%#）", (fn) => {
+    expect(values(fn + "; const row = <div className={tone()} />;")).toEqual([
+      "p-[13px]",
+    ]);
+  });
   it("共用匯出物件會檢查樣式對照值，保留工單、連結與敘述文字", () => {
-    expect(values('export const tones = { warn: "p-[13px] rounded-3xl", help: "請勿使用 rounded-lg", issue: "#284", href: "#add" } as const;', "shared/example.ts")).toEqual(["p-[13px]", "rounded-3xl"]);
+    expect(
+      values(
+        'export const tones = { warn: "p-[13px] rounded-3xl", help: "請勿使用 rounded-lg", issue: "#284", href: "#add" } as const;',
+        "shared/example.ts",
+      ),
+    ).toEqual(["p-[13px]", "rounded-3xl"]);
+  });
+  it("共用對照表可混用無連字號工具與任意值", () => {
+    expect(
+      values(
+        'export const tones = { compact: "grow p-[13px]" };',
+        "shared/example.ts",
+      ),
+    ).toEqual(["p-[13px]"]);
   });
   it("辨認 DOM 方括號樣式指定", () => {
     expect(values('el.style["color"]="red";')).toEqual(["red"]);
   });
   it("辨認以 Object.assign 寫入 DOM 樣式的物件", () => {
-    expect(values('Object.assign(el.style,{fontSize:"40px"});')).toEqual(["40px"]);
+    expect(values('Object.assign(el.style,{fontSize:"40px"});')).toEqual([
+      "40px",
+    ]);
   });
   it("盤點保留當前行欄以便定位，與供審查的穩定基準分開輸出", () => {
     const rows = scanStyles(page, '\n<div className="text-red-500" />');

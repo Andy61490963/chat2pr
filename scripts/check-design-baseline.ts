@@ -9,6 +9,9 @@ const git = (...args: string[]) =>
 const exists =
   base && git("ls-tree", "--name-only", base, "--", baselinePath).trim();
 const previous = exists ? git("show", base + ":" + baselinePath) : null;
-checkBaseline(readFileSync(baselinePath, "utf8"), previous, () =>
-  base ? entriesAt(base) : [],
+checkBaseline(
+  readFileSync(baselinePath, "utf8"),
+  previous,
+  () => (base ? entriesAt(base) : []),
+  () => entriesAt(),
 );

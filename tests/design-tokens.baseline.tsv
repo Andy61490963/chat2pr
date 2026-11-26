@@ -12,17 +12,11 @@ src/App.tsx	任意工具值須改用具名 token	min-h-[44px]	48f1eeb512d4c06b
 src/App.tsx	任意工具值須改用具名 token	min-h-[44px]	7c4fabfd30dcec6d
 src/App.tsx	任意工具值須改用具名 token	pb-[calc(4.5rem+env(safe-area-inset-bottom))]	4e09f9b9be3f25a8
 src/App.tsx	任意工具值須改用具名 token	pb-[env(safe-area-inset-bottom)]	93b7c968a822bd3a
-src/App.tsx	任意工具值須改用具名 token	right-[calc(50%-1.25rem)]	3f275175ca9f0966
-src/App.tsx	任意工具值須改用具名 token	text-[10px]	3f275175ca9f0966
 src/App.tsx	任意工具值須改用具名 token	text-[11px]	0efd96f3a8e1b567
 src/App.tsx	任意工具值須改用具名 token	text-[11px]	48f1eeb512d4c06b
 src/App.tsx	任意工具值須改用具名 token	text-[11px]	d675777a1eda895c
 src/App.tsx	任意工具值須改用具名 token	z-[60]	6bc71c13425887dd
 src/App.tsx	動態樣式須使用已登記的 CSS 變數	width	8932a00be3db4d97
-src/App.tsx	大圓角須改用規範圓角	rounded-full	3f275175ca9f0966
-src/App.tsx	大圓角須改用規範圓角	rounded-full	6f1ec1c42a5a549c
-src/App.tsx	大圓角須改用規範圓角	rounded-full	b1ac35f82d22d980
-src/App.tsx	大圓角須改用規範圓角	rounded-full	ec42ddd3cef62589
 src/App.tsx	大圓角須改用規範圓角	rounded-lg	1a12b941beab4e45
 src/App.tsx	大圓角須改用規範圓角	rounded-lg	371c86d8b19f6208
 src/App.tsx	大圓角須改用規範圓角	rounded-lg	6bc71c13425887dd
@@ -38,7 +32,6 @@ src/app/inbox.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	
 src/app/inbox.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	a585bdb360e4bbee
 src/app/inbox.tsx	任意工具值須改用具名 token	grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]	5b4c953797678cf9
 src/app/inbox.tsx	任意工具值須改用具名 token	max-h-[calc(100dvh-2rem)]	43c63d4fc233619c
-src/app/inbox.tsx	大圓角須改用規範圓角	rounded-full	77fa1d12aec6f024
 src/app/inbox.tsx	大圓角須改用規範圓角	rounded-lg	3356389de41783c1
 src/app/page-notices.tsx	任意工具值須改用具名 token	flex-[1_1_12rem]	500e7339156df3bc
 src/app/pick-list.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	939d1194527c927d
@@ -58,7 +51,6 @@ src/app/settings.tsx	任意工具值須改用具名 token	[overflow-wrap:anywher
 src/app/settings.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	fdbb05dd73928699
 src/app/settings.tsx	任意工具值須改用具名 token	grid-cols-[repeat(auto-fit,minmax(20rem,1fr))]	b20d78009dc1ff56
 src/app/settings.tsx	任意工具值須改用具名 token	ring-[3px]	bff83b48d20df1c1
-src/app/settings.tsx	大圓角須改用規範圓角	rounded-full	d95eec6ee997820e
 src/app/settings.tsx	大圓角須改用規範圓角	rounded-lg	23089e6e91d760df
 src/app/settings.tsx	大圓角須改用規範圓角	rounded-lg	3c2a5c9df6d86289
 src/app/settings.tsx	大圓角須改用規範圓角	rounded-lg	b04d7f4fd0e122c6
@@ -68,8 +60,6 @@ src/app/settings.tsx	大圓角須改用規範圓角	rounded-lg	d3f3b7c743da34a3
 src/app/settings.tsx	大圓角須改用規範圓角	rounded-lg	d995659fe51c31e7
 src/app/shared.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	7d96f4b0d023e2cb
 src/app/shared.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	e1fe000f04039f8f
-src/app/shared.tsx	任意工具值須改用具名 token	text-[11px]	b72ada0c4b1b0b93
-src/app/shared.tsx	大圓角須改用規範圓角	rounded-full	b72ada0c4b1b0b93
 src/app/system.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	08e0c835813a593f
 src/app/system.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	a01004f5716416a1
 src/app/system.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	ee7c9b5520e51821
@@ -79,7 +69,6 @@ src/app/system.tsx	任意工具值須改用具名 token	grid-cols-[auto_minmax(0
 src/app/system.tsx	任意工具值須改用具名 token	grid-cols-[minmax(0,2fr)_minmax(0,1fr)]	f7f36411728a1d8b
 src/app/system.tsx	任意工具值須改用具名 token	max-w-[40%]	44e1c8d9d2a2afc1
 src/app/system.tsx	動態樣式須使用已登記的 CSS 變數	height	d196116ff7362e25
-src/app/system.tsx	大圓角須改用規範圓角	rounded-full	f22ba69c0289daa4
 src/app/system.tsx	大圓角須改用規範圓角	rounded-lg	01df8961447e59c7
 src/app/system.tsx	大圓角須改用規範圓角	rounded-lg	05847efe4c01a665
 src/app/system.tsx	大圓角須改用規範圓角	rounded-lg	05847efe4c01a665
@@ -111,7 +100,6 @@ src/app/task-review-panel.tsx	任意工具值須改用具名 token	[overflow-wra
 src/app/task-review-panel.tsx	任意工具值須改用具名 token	flex-[1_1_12rem]	93853e3c717d6ed5
 src/app/task-review-panel.tsx	任意工具值須改用具名 token	text-[11px]	29ed0fca11d40d22
 src/app/task-review-panel.tsx	大圓角須改用規範圓角	rounded-2xl	438995807798798f
-src/app/task-review-panel.tsx	大圓角須改用規範圓角	rounded-full	bfbb026d48bd3962
 src/app/task-review-panel.tsx	大圓角須改用規範圓角	rounded-lg	07240d1611988459
 src/app/task-review-panel.tsx	大圓角須改用規範圓角	rounded-lg	07dd65715c65d35b
 src/app/task-review-panel.tsx	大圓角須改用規範圓角	rounded-lg	516e18c3fac7e89e

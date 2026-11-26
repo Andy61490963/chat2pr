@@ -938,7 +938,7 @@ export function App() {
     <>
       <span
         className={cn(
-          "inline-flex size-1.5 rounded-full",
+          "inline-flex size-1.5 shape-pill",
           live ? "bg-good" : "bg-warn",
         )}
       />
@@ -996,7 +996,7 @@ export function App() {
                 />
                 {label}
                 {id === "inbox" && needs.length > 0 && (
-                  <span className="absolute top-1 right-[calc(50%-1.25rem)] min-w-4 rounded-full bg-foreground px-1 text-[10px] leading-4 font-semibold text-background tabular-nums md:static md:ml-auto md:bg-muted md:px-1.5 md:text-xs md:text-foreground">
+                  <span className="absolute top-1 right-nav-count min-w-4 shape-pill bg-foreground px-1 text-caption leading-4 font-semibold text-background tabular-nums md:static md:ml-auto md:bg-muted md:px-1.5 md:text-xs md:text-foreground">
                     <span aria-hidden="true">{needs.length}</span>
                     <span className="sr-only">，{needs.length} 件待處理</span>
                   </span>
@@ -1789,10 +1789,10 @@ function QuotaLines(props: QuotaProps) {
         )}
       </span>
       {left !== null && (
-        <span className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+        <span className="h-1.5 w-full overflow-hidden shape-pill bg-muted">
           <span
             className={cn(
-              "block h-full rounded-full",
+              "block h-full shape-pill",
               left < 15 ? "bg-danger" : left < 40 ? "bg-warn" : "bg-good",
             )}
             style={{ width: `${left}%` }}

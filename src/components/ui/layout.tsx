@@ -6,35 +6,6 @@ import type {
 import { cn } from "@/lib/utils";
 import { Badge } from "./badge";
 
-export function PageHeader({
-  children,
-  description,
-  action,
-  className,
-  ...props
-}: ComponentPropsWithoutRef<"header"> & {
-  description?: ReactNode;
-  action?: ReactNode;
-}) {
-  return (
-    <header
-      className={cn(
-        "flex flex-wrap items-start justify-between gap-3",
-        className,
-      )}
-      {...props}
-    >
-      <div className="min-w-0">
-        <h1 className="heading-page">{children}</h1>
-        {description && (
-          <p className="mt-1 text-sm text-muted-foreground">{description}</p>
-        )}
-      </div>
-      {action}
-    </header>
-  );
-}
-
 export function SectionHeader({
   children,
   count,
