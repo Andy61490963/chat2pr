@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { z } from "zod";
 import type { Database } from "../../../server/db.js";
 import { staleNotification } from "../../../server/line-quota.js";
 import { redact } from "../../../server/policy.js";
@@ -32,6 +33,13 @@ export interface FlowEvidence {
   audit: readonly string[];
   events: readonly string[];
   messages: readonly string[];
+}
+
+export function queueDiagnosis(input: unknown) {
+  const state = z.object({ queued: z.array(z.object({ code: z.string() })) }).safeParse(input);
+  if (!state.success) return "派工診斷：查不到容量狀態";
+  const reasons = new Map(Object.entries({ paused: "管理者暫停", disk: "磁碟不足", memory: "記憶體不足", parent: "等待上一題", retry: "等待重試", changing: "同專案正在修改", next: "即將開始", waiting: "等待空位" }));
+  return "派工診斷：" + ([...new Set(state.data.queued.map(row => reasons.get(row.code) ?? "原因未辨識"))].join("、") || "容量頁沒有排隊項目");
 }
 
 export async function settleFlowEvidence(read: () => Promise<FlowEvidence>, timeout = 25_000, interval = 500) {

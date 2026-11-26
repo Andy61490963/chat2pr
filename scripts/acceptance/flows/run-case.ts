@@ -9,7 +9,7 @@ import { recoverySetupStep, runRecoveryFlow, type RecoveryNumber } from "./recov
 import { runOperationsFlow } from "./operations.js";
 import { startChatProvider } from "./chat-provider.js";
 import { createGitHubProvider } from "./github-provider.js";
-import { checkFlowEvidence, disposeRetainedWorkspaces, formatFlowFailure, readFlowEvidence, settleFlowEvidence, waitForWorkDisposal, type RetainedRun } from "./evidence.js";
+import { checkFlowEvidence, disposeRetainedWorkspaces, formatFlowFailure, queueDiagnosis, readFlowEvidence, settleFlowEvidence, waitForWorkDisposal, type RetainedRun } from "./evidence.js";
 
 async function resources(instance: string) {
   const docker = new Containers(instance).docker;
@@ -74,7 +74,8 @@ async function main() {
       try { await dispose(await retainedRuns()); } catch { label += "；本次工作副本未確認清除"; }
     }
     const evidence = await settleFlowEvidence(capture).catch(() => ({ stranded: 0, stale: 0, leaks: 0, resources: [], states: ["無法讀取診斷"], audit: [], events: [], messages: chat.records.map(record => record.text) }));
-    return { passed: false, detail: formatFlowFailure(label, evidence, input.canaries) };
+    const queue = evidence.stranded && app ? queueDiagnosis(await app.ctx.admin("GET", "/api/capacity").catch(() => null)) : "";
+    return { passed: false, detail: [formatFlowFailure(label, evidence, input.canaries), queue].filter(Boolean).join("\n") };
   } finally {
     try { await app?.close(); } finally { try { await chat.close(); } finally { await db.close(); } }
   }

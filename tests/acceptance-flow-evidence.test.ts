@@ -1,8 +1,14 @@
 import { expect, it } from "vitest";
-import { checkFlowEvidence, disposeRetainedWorkspaces, formatFlowFailure, waitForWorkDisposal, settleFlowEvidence } from "../scripts/acceptance/flows/evidence.js";
+import { checkFlowEvidence, disposeRetainedWorkspaces, formatFlowFailure, waitForWorkDisposal, settleFlowEvidence, queueDiagnosis } from "../scripts/acceptance/flows/evidence.js";
 
 const clean = { stranded: 0, stale: 0, leaks: 0, resources: [] as string[], states: ["answered"], audit: ["已回答"], events: ["驗證完成"], messages: ["共五張票"] };
 const canary = "ExampleKey266";
+
+it("等待派工時只保留容量頁的原因，不複製名稱或未核實的錯誤", () => {
+  expect(queueDiagnosis({ queued: [{ code: "memory", title: canary }, { code: "retry" }] })).toBe("派工診斷：記憶體不足、等待重試");
+  expect(queueDiagnosis({ queued: [{ code: canary }] })).toBe("派工診斷：原因未辨識");
+  expect(queueDiagnosis(null)).toBe("派工診斷：查不到容量狀態");
+});
 
 it("失敗診斷也等待結案回收與通知排程，逾時後保留所有異常", async () => {
   let reads = 0;
