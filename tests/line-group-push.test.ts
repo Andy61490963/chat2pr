@@ -1,5 +1,6 @@
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
 import { Line } from "../server/line.js";
+import { repliesOffNote } from "../shared/group-delivery.js";
 import { claimPendingGroupReplies } from "../server/group-replies.js";
 import { syncLineQuota } from "../server/line-quota.js";
 import { db, fixture, reset } from "./helpers.js";
@@ -152,6 +153,9 @@ it("群組關閉回覆或離開後才輪到的待送通知不推播", async () =
   await db.query("UPDATE groups SET left_at=now() WHERE id='GroupB'");
   await flush();
   expect(pushes).toHaveLength(0);
+  expect(await db.query("SELECT last_error FROM notifications WHERE group_id IS NOT NULL")).toEqual([
+    { last_error: repliesOffNote }, { last_error: repliesOffNote },
+  ]);
   await db.query("UPDATE groups SET reply_mode='results',left_at=NULL");
   await flush();
   expect(pushes).toHaveLength(0);
