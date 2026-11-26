@@ -200,6 +200,7 @@ it("容器拒收保留種類、未知種類及格式錯誤，通知只含固定�
     { kind: "範例未知種類" },
     { kind: "message", detail: "範例文字", exitCode: 1 },
     { kind: "command_end", detail: "範例文字", exitCode: "失敗" },
+    { kind: "command_end", detail: "範例", exitCode: 2147483648 },
     { kind: "files" },
     { kind: "thread", threadId: "" },
     { kind: "thread", threadId: "範例\n識別碼" },
@@ -214,7 +215,7 @@ it("容器拒收保留種類、未知種類及格式錯誤，通知只含固定�
   expect(result.events).toEqual([{ kind: "message", detail: "後續回覆" }]);
   expect(result.rejected).toEqual([
     ...reserved.map(() => ["未知", "種類不符"]),
-    ["未知", "種類不符"], ["message", "欄位不符"], ["command_end", "欄位不符"], ["files", "欄位不符"],
+    ["未知", "種類不符"], ["message", "欄位不符"], ["command_end", "欄位不符"], ["command_end", "欄位不符"], ["files", "欄位不符"],
     ["thread", "欄位不符"], ["thread", "欄位不符"], ["thread", "欄位不符"], ["未知", "無法解析"],
   ]);
 });
