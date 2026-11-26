@@ -30,6 +30,60 @@ test("佇列可用 J、K 切換，Enter 開啟主動作，回答時輸入不換�
   await expect(page).toHaveURL(new RegExp(`review=${tasks[1].id}$`));
 });
 
+test("在已選列按 Alt+Enter 會依目前版本核准一次並前進", async ({ page }) => {
+  const { tasks, state } = await mockInboxReview(page);
+  const [current, next] = tasks;
+  const requests: unknown[] = [];
+  await page.route(`**/api/tasks/${current.id}/actions`, (route) => {
+    requests.push(route.request().postDataJSON());
+    state.tasks = state.tasks.filter(({ id }) => id !== current.id);
+    state.stuckTasks = [];
+    return route.fulfill({ json: { ...current, status: "queued" } });
+  });
+  await page.goto("/");
+  const review = page.getByRole("region", { name: "審核面板" });
+  await expect(review.getByRole("button", { name: /確認專案與分支並核准修改/ })).toBeEnabled();
+  const row = page.getByRole("list", { name: "待決策佇列" })
+    .getByRole("button", { name: new RegExp(current.title) });
+  await expect(row).toHaveAttribute("aria-current", "true");
+  await row.press("Alt+Enter");
+  await expect(review.getByRole("heading", { name: next.title })).toBeVisible();
+  expect(requests).toEqual([expect.objectContaining({ action: "approve", version: current.version })]);
+});
+
+test("輸入欄、非目前案件列與結束確認視窗中的 Alt+Enter 不送出決定", async ({ page }) => {
+  const { tasks } = await mockInboxReview(page);
+  const [current, , , other] = tasks;
+  const writes: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname.startsWith("/api/tasks/"))
+      writes.push(new URL(request.url()).pathname);
+  });
+  const review = page.getByRole("region", { name: "審核面板" });
+  const queue = page.getByRole("list", { name: "待決策佇列" });
+  await page.goto(`/?review=${current.id}`);
+  await expect(review.getByRole("button", { name: /確認專案與分支並核准修改/ })).toBeEnabled();
+  const otherRow = queue.getByRole("button", { name: new RegExp(other.title) });
+  await expect(otherRow).not.toHaveAttribute("aria-current", "true");
+  await otherRow.press("Alt+Enter");
+  await queue.getByRole("button", { name: new RegExp(current.title) }).click();
+  await review.getByRole("button", { name: /修改這一題/ }).click();
+  const field = review.getByRole("textbox", { name: "需求說明" });
+  await expect(field).toBeFocused();
+  await field.press("Alt+Enter");
+  await expect(field).toBeFocused();
+  await review.getByRole("button", { name: /^結束任務/ }).click();
+  const dialog = page.getByRole("dialog", { name: "結束任務？" });
+  const reason = dialog.getByRole("radio", { name: "需求不清楚" });
+  await reason.check();
+  await reason.press("Alt+Enter");
+  await expect(reason).toBeChecked();
+  await dialog.getByRole("button", { name: "先不要" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(review.getByRole("heading", { name: current.title })).toBeVisible();
+  expect(writes).toEqual([]);
+});
+
 test("長原文預設只預覽，展開能讀到最後一行與檢視縮圖，再收合會還原", async ({ page }) => {
   const { tasks, sourceEnd } = await mockInboxReview(page);
   await page.goto(`/?review=${tasks[3].id}`);
