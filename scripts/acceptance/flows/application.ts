@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { createServer, type RequestListener } from "node:http";
 import { dirname, resolve } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
+import { MEMORY_STEADY_MS } from "../../../server/capacity.js";
 import { z } from "zod";
 import type { FastifyInstance } from "fastify";
 import type { Database } from "../../../server/db.js";
@@ -257,21 +257,24 @@ function fixtureGateway(chat: Chat) {
   };
 }
 
-export async function pollFlowStep<T>(label: string, probe: () => Promise<T | undefined>): Promise<T> {
+export async function pollFlowStep<T>(label: string, probe: () => Promise<T | undefined>, memoryHold?: () => Promise<boolean>): Promise<T> {
   const limit = 3 * 60_000;
-  const deadline = Date.now() + limit;
+  let deadline = Date.now() + limit;
   const expired = new Error(`等待逾時：${label}`);
-  let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(expired), limit); });
-  try {
-    while (Date.now() < deadline) {
-      const result = await Promise.race([probe(), timeout]);
-      if (result !== undefined) return result;
-      await delay(Math.min(1000, deadline - Date.now()));
+  async function before<R>(result: Promise<R>, remaining: number) {
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => reject(expired), remaining); });
+    try { return await Promise.race([result, timeout]); } finally { clearTimeout(timer); }
+  }
+  for (;;) {
+    if (Date.now() >= deadline) {
+      if (!memoryHold || !await before(memoryHold(), 5000)) throw expired;
+      memoryHold = undefined;
+      deadline = Date.now() + MEMORY_STEADY_MS + limit;
     }
-    throw expired;
-  } finally {
-    clearTimeout(timer);
+    const result = await before(probe(), deadline - Date.now());
+    if (result !== undefined) return result;
+    await new Promise<void>(done => setTimeout(done, Math.max(0, Math.min(1000, deadline - Date.now()))));
   }
 }
 
@@ -372,7 +375,11 @@ export async function startFlowApplication({ github, chat, workerImage, autoSetu
     const repository = github.fixture.repo;
     const projectId = await prepareProject(db, admin, repository, workerImage, autoSetup);
     const ctx: BasicFlowContext = {
-      db, projectId, repository, admin, poll: pollFlowStep,
+      db, projectId, repository, admin,
+      poll: (label, probe) => pollFlowStep(label, probe, async () => {
+        const capacity = z.object({ holdKind: z.string().nullable() }).parse(await admin("GET", "/api/capacity"));
+        return capacity.holdKind === "memory";
+      }),
       lineSecret: s.lineSecret, githubWebhookSecret: s.githubWebhookSecret,
       groupMessages: chat.groupMessages, readPr: github.readPr, gateway: gateway.dispatch,
       async webhook(request) {

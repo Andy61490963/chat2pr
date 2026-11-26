@@ -59,6 +59,19 @@ it("劇本模式要求本機模型，只有明確選用真實訂閱才能省略"
   expect(() => flowEnvironment({ ...env, ACCEPTANCE_MODEL_ORIGIN: "https://example.invalid" }, env.SECRETS_FILE)).toThrow();
 });
 
+it.each([true, false])("只有容量頁確認記憶體暫停才能多等一個穩定期（記憶體暫停 %s）", async memory => {
+  vi.useFakeTimers();
+  try {
+    const start = Date.now();
+    const hold = vi.fn(async () => memory);
+    const pending = pollFlowStep("等待派工", async () => Date.now() - start >= 310_000 ? "完成" : undefined, hold);
+    const result = memory ? expect(pending).resolves.toBe("完成") : expect(pending).rejects.toThrow("等待逾時：等待派工");
+    await vi.advanceTimersByTimeAsync(311_000);
+    await result;
+    expect(hold).toHaveBeenCalledTimes(1);
+  } finally { vi.useRealTimers(); }
+});
+
 it("查驗失敗立即傳回原因，沒有回應的步驟最多等待三分鐘", async () => {
   const error = new Error("驗證失敗：測試命令結束碼為 1");
   await expect(pollFlowStep("驗證基底", async () => { throw error; })).rejects.toBe(error);
