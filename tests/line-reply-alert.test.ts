@@ -65,6 +65,32 @@ function replyServer(status: number, replies: string[][] = []) {
   });
 }
 
+async function addQueryAnswer() {
+  await db.query(`WITH task AS (
+      INSERT INTO tasks(group_id,title,summary,status,mode,dedupe_key)
+      VALUES('group-a','範例運費查詢','示範摘要','answered','query','exampleQuery') RETURNING id)
+    INSERT INTO notifications(group_id,task_id,kind,dedupe_key,text)
+    SELECT 'group-a',id,'group_answered','exampleAnswer','範例運費為三十元' FROM task`);
+}
+
+it.each([
+  { age: "25 小時", interval: "25 hours", retrievable: true },
+  { age: "8 天", interval: "8 days", retrievable: false },
+])("查詢回答未確認送達 $age 後，鈴鐺與 /進度 遵守七天取回期限", async ({ interval, retrievable }) => {
+  await db.query("DELETE FROM notifications");
+  await addQueryAnswer();
+  replyServer(503);
+  await speak("早安", "ExampleFirst");
+  expect(await notices()).toMatchObject([{ disposition: "action" }]);
+  await db.query("UPDATE notifications SET created_at=now()-$1::interval WHERE kind='group_answered'", [interval]);
+  expect.soft(await notices()).toMatchObject([{ disposition: retrievable ? "action" : "resolved" }]);
+  const replies: string[][] = [];
+  replyServer(200, replies);
+  await speak("/進度", "ExampleProgress");
+  expect(replies.flat().join("\n")).toContain(retrievable ? "範例運費為三十元" : "目前沒有待取回的結果");
+  expect(await notices()).toMatchObject([{ disposition: "resolved" }]);
+});
+
 it.each(["判讀過時", "補問已作答", "補問超過七天", "失敗任務已恢復"])("%s時取回、群組提示與管理者鈴鐺一同解除", async (scenario) => {
   if (scenario !== "判讀過時") {
     await db.query("DELETE FROM notifications");
@@ -100,16 +126,17 @@ it.each([400, 429])("免費補送明確遭拒（%i）後下次發言仍可補送
   expect(replies.flat()).toEqual([expect.stringContaining("（補送：先前可能沒送到，看過可略過）")]);
 });
 
-it("同批兩則重要回覆只提醒一次，摘要能辨認來源，全部失效才解除", async () => {
-  await db.query("INSERT INTO notifications(group_id,kind,dedupe_key,text) VALUES('group-a','group_triage','exampleSecond','示範查詢乙的結果')");
+it("同批重要回覆只提醒一次，摘要使用任務標題或通知種類，全部失效才解除", async () => {
+  await addQueryAnswer();
   replyServer(503);
   await speak("早安", "ExampleBatch");
   const alerts = await notices();
   expect(alerts).toHaveLength(1);
   expect(alerts[0].text).toContain("2 則");
-  expect(alerts[0].text).toContain("示範指令的處理結果");
-  expect(alerts[0].text).toContain("示範查詢乙的結果");
-  await db.query("UPDATE notifications SET created_at=now()-interval '2 days' WHERE dedupe_key='exampleSecond'");
+  expect(alerts[0].text).toContain("指令判讀");
+  expect(alerts[0].text).toContain("範例運費查詢");
+  expect(alerts[0].text).not.toMatch(/示範指令的處理結果|範例運費為三十元/);
+  await db.query("UPDATE notifications SET created_at=now()-interval '2 days' WHERE dedupe_key='exampleResult'");
   expect(await notices()).toMatchObject([{ disposition: "action" }]);
   await speak("/進度", "ExampleAgain");
   expect(await notices()).toHaveLength(1);
