@@ -54,7 +54,8 @@ test("手機收件匣的二十筆待審案件各顯示一個下一步，回答�
     routes: { [`/api/tasks/${task.id}`]: { ...detail, task: withQuestion } },
   });
   await page.goto("/");
-  const queue = page.getByRole("region", { name: "需要你處理 20" });
+  await expect(page.getByRole("tab", { name: /^決定\s*20$/ })).toBeVisible();
+  const queue = page.getByRole("list", { name: "待決策佇列" });
   await expect(
     queue.getByText("等你決定：確認需求", { exact: true }),
   ).toHaveCount(17);

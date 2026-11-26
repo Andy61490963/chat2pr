@@ -34,13 +34,13 @@ test("收件匣初次讀取失敗後只顯示原因，按重試可讀到待決�
   await expect(alert).toBeHidden();
 });
 
-test("最近動態起初只顯示前三組，按看更多才出現第四組", async ({ page }) => {
+test("決定分頁不重複預覽動態，切到動態便能看到四組任務", async ({ page }) => {
   await mockDashboard(page, { state: { tasks: summaryTasks, activity: summaryActivity } });
   await page.goto("/");
   const feed = page.getByRole("region", { name: "最近動態" });
-  const groups = summaryTasks.map(({ title }) => feed.getByRole("button", { name: title, exact: true }));
-  for (const group of groups.slice(0, 3)) await expect(group).toBeVisible();
-  await expect(groups[3]).toBeHidden();
-  await feed.getByRole("button", { name: "看更多", exact: true }).press("Enter");
-  for (const group of groups) await expect(group).toBeVisible();
+  await expect(page.getByRole("tab", { name: /^決定/ })).toHaveAttribute("aria-selected", "true");
+  await expect(feed).toBeHidden();
+  await page.getByRole("tab", { name: /^動態/ }).press("Enter");
+  for (const { title } of summaryTasks)
+    await expect(feed.getByRole("button", { name: title, exact: true })).toBeVisible();
 });

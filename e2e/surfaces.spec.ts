@@ -431,9 +431,7 @@ test("頁首警示在 375px 可用鍵盤收合，重新整理後保持收合，�
     route.fulfill({ json: { ...defaultState, health } }),
   );
   await page.goto("/");
-  const banner = page.getByText(
-    "LINE 本月推播額度已用完，你仍可在看板查看通知。",
-  );
+  const banner = page.getByRole("button", { name: /LINE 本月推播額度已用完/ });
   await expect(banner).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
   await testInfo.attach("375px 收件匣與額度警示", {
@@ -478,7 +476,7 @@ test("頁首警示在 375px 可用鍵盤收合，重新整理後保持收合，�
 
   // 640px 的瀏覽器在 200% 縮放時，版面以 320 CSS 像素重新排列。
   await page.setViewportSize({ width: 320, height: 812 });
-  await page.getByRole("button", { name: "怎麼辦" }).click();
+  await banner.click();
   await expect(page.getByText(/或在群組輸入 \/進度 取回/)).toBeVisible();
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth),
@@ -508,6 +506,7 @@ test("收件匣只在開啟系統紀錄時顯示技術細節", async ({ page }) 
     },
   });
   await page.goto("/");
+  await page.getByRole("tab", { name: /^動態/ }).click();
   const activity = page.getByRole("region", { name: "最近動態" });
   await activity.getByRole("button", { name: /^展開步驟/ }).click();
   await expect(page.getByText("開始調查", { exact: true })).toBeVisible();

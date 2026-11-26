@@ -39,11 +39,14 @@ test("手機看板的欄位以版面或中文標點分隔，頁面不會水平�
   await page.goto("/");
   const inboxTask = page.getByRole("button", { name: new RegExp(task.title) });
   await expect(inboxTask).toBeVisible();
+  await checkLayout(page, "收件匣");
+  await page.getByRole("tab", { name: /^進行中/ }).click();
   await expect(
     page.getByText("Codex 修改程式，已 12 分，期限 08:30", { exact: true }),
   ).toBeVisible();
-  await checkLayout(page, "收件匣");
+  await checkLayout(page, "進行中");
 
+  await page.getByRole("tab", { name: /^決定/ }).click();
   await inboxTask.press("Enter");
   const taskDrawer = page.getByRole("dialog", { name: task.title });
   await expect(taskDrawer).toBeVisible();

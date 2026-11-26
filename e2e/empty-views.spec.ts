@@ -46,7 +46,7 @@ for (const width of [1280, 375]) {
       page.getByText("目前沒有需要你處理、執行中或待合併的工作。"),
     ).toBeVisible();
     await expect(
-      page.getByRole("heading", { name: /^(需要你處理|進行中|待合併) 0$/ }),
+      page.getByRole("heading", { name: /^(需要你處理|進行中|待合併)$/ }),
     ).toHaveCount(0);
     await expect(
       page.getByText(/目前沒有執行中的工作|沒有等待合併的 PR/),
@@ -54,6 +54,8 @@ for (const width of [1280, 375]) {
     await expect(
       page.getByRole("button", { name: "近 7 天已合併 0" }),
     ).toBeInViewport();
+    await expect(page.getByRole("heading", { name: "最近動態" })).toBeHidden();
+    await page.getByRole("tab", { name: /^動態/ }).click();
     await expect(
       page.getByRole("heading", { name: "最近動態" }),
     ).toBeInViewport();
@@ -96,12 +98,12 @@ for (const width of [1280, 375]) {
   });
 }
 
-test("有待處理任務時保留收件匣三段", async ({ page }) => {
+test("有待處理任務時，收件匣分頁各自標示筆數", async ({ page }) => {
   await readyDashboard(page, [task]);
   await page.goto("/");
-  for (const name of ["需要你處理 1", "進行中 0", "待合併 0"]) {
+  for (const name of [/^決定\s*1$/, /^進行中\s*0$/, /^待合併\s*0$/]) {
     await expect(
-      page.getByRole("heading", { name, exact: true }),
+      page.getByRole("tab", { name }),
     ).toBeVisible();
   }
   await expect(page.getByRole("heading", { name: "都處理完了" })).toHaveCount(

@@ -847,6 +847,10 @@ export const discordOnlySetup: Pick<
 
 const reviewImageId = "demo-review-image";
 const reviewImagePath = `/api/messages/${reviewImageId}/image`;
+const demoReportImage = Buffer.from(
+  "iVBORw0KGgoAAAANSUhEUgAAAUAAAADABAMAAACHeaf1AAAAMFBMVEUhTFXm6ub//vgnfHXVjTXa49+arqe/49XT2dHI1c7prFykt69VgoP3+POrjFWu0sf+TNx5AAAACXBIWXMAAAsTAAALEwEAmpwYAAAC1ElEQVR4nO2dMW/TUBSF7wRSFYXeBTHQ5UGlBJGFJ7HAhDx1jGSWLkUVWbKwZQQ6MXdjQ6iTRyQ6F1hYyy/gJ7CxItdxLENqx7lxfIzPt71YjT6de+97yZOiioIjCo4oOKLgiIIjCo4oOKLgiIIjCo4oOKItEbx9IVD0XuQF74D5ifTe5gTvChxfcoJHAseNnCBchUV6OUEBRCnYxQR7v2cxry9QBW9d+c1mvwRU8OaVnsxeNWbVj36uKvi9+BCv6XCMoqhMUOaC87PwWt7U4dePokWEZYIlfrpbh+BOFEUfkBPcqSDYSA/2S0sc6zU5xVHZkDQt2C/eZuA36h76UQeFUtAIE7TCBK0wwY0m6ABRChphglaYoBUmaIUJWmGCVpigFSYImWCQkns1XOu9KFhPgqGNICUMw44Kdn1Iht+enkILHnv/GFlw6L33p8CCD2PBr84dTpYyHTcteC8WfOTc+XLByScKBi0v8RB9SNyx909WfS9u1K086qrQEUGfQsE18UxQ2YOOU1yE55Aoh8RxSKCGJKyIT0G9PPLVBAdnByc2wdIi2kp8FgQHyIKD+NEJsOCD+NHHZd+L81+JGxO8Hz96tvTqI3frQcGgrSUeoA+JQ99mHPxGXQUKZjDBhCSN4mXQfA9ScAETzGAPJiRpzBecYnf9kBRnBJCgp+BqMMGO9mD4z3VLpWWwjcsjbEGHXmJHwZVhgq3swcNJAZ8BBM+LBKcUdO0vcRUomMEEE5I05gv2oOOQVNgH/9oA8Y66KQX9f1PiKlAwgwkmJGnMF+xBt82fToabvZvZFK6bgrUQrvVXFMxgglbCbvXg/ruUsXVZj+DzxefIl9aljdYK7r9PGVuXNrY4JOtBQStM0AoTtMIErTBBK0ywWwn+cHCM2iW45+C4zAniRTjSvOAemOHosm3/SAoWUXBEwREFRxQcUXBEwREFRxQcUXCkaYEy/gDbCYSWnOY7AQAAAABJRU5ErkJggg==",
+  "base64",
+);
 
 export function reviewWorkbenchFixture(now = Date.now()) {
   const tasks = Array.from({ length: 26 }, (_, index): Task => {
@@ -1214,6 +1218,9 @@ export async function mockDashboard(
       },
     });
   });
+  await page.context().route(reviewImagePath, (route) =>
+    route.fulfill({ contentType: "image/png", body: demoReportImage }),
+  );
   await page.route("**/*", async (route) => {
     const request = route.request();
     const { hostname, pathname } = new URL(request.url());
@@ -1224,13 +1231,7 @@ export async function mockDashboard(
       return route.fulfill({ json: routes[pathname] });
     }
     if (request.method() === "GET" && pathname === reviewImagePath) {
-      return route.fulfill({
-        contentType: "image/png",
-        body: Buffer.from(
-          "iVBORw0KGgoAAAANSUhEUgAAAPAAAAFoAQAAAABBbEulAAAAIklEQVR4nO3BMQEAAADCoPVPbQhfoAAAAAAAAAAAAACA1wArmAAB3qaDtgAAAABJRU5ErkJggg==",
-          "base64",
-        ),
-      });
+      return route.fallback();
     }
     if (request.method() === "PUT" && pathname === "/api/secrets") {
       if (!(routes["/api/me"] as { owner?: boolean }).owner)

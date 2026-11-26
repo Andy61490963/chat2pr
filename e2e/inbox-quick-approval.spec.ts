@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import type { Detail } from "../src/app/shared";
 import {
   cancelledTask, exampleMember, group, inboxDetailUnavailable, mockInboxReview,
-  project, reviewWorkbenchFixture,
+  project, projectSectionsState, reviewWorkbenchFixture,
 } from "./dashboard-fixture";
 
 test.use({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
@@ -58,8 +58,8 @@ test("列上核准先重讀未選取的任務，只送一次確認過的目標�
 const changes: Record<string, (detail: Detail) => Detail> = {
   新增風險: (detail) => ({ ...detail, task: { ...detail.task, risk_reasons: cancelledTask.risk_reasons } }),
   需求版本變更: (detail) => ({ ...detail, task: { ...detail.task, version: detail.task.version + 1 } }),
-  專案不符: (detail) => ({ ...detail, task: { ...detail.task, project_id: null } }),
-  分支不符: (detail) => ({ ...detail, task: { ...detail.task, target_branch: null } }),
+  專案不符: (detail) => ({ ...detail, task: { ...detail.task, project_id: projectSectionsState.projects[0].id } }),
+  分支不符: (detail) => ({ ...detail, task: { ...detail.task, target_branch: `${project.base_branch}/${detail.task.id}` } }),
   專案設定變更: (detail) => ({ ...detail, projectReview: { ...detail.projectReview!, config_version: project.config_version + 1 } }),
   群組綁定變更: (detail) => ({ ...detail, projectReview: { ...detail.projectReview!, binding_version: group.binding_version! + 1 } }),
 };
@@ -88,6 +88,18 @@ function watchActions(page: Page) {
   });
   return writes;
 }
+
+test("選取列的 Alt+Enter 也會重讀，不能用舊面板核准已變更的需求", async ({ page }) => {
+  const { tasks: [first] } = await mockInboxReview(page);
+  await page.goto("/");
+  await expect(panel(page).getByRole("button", { name: "確認專案與分支並核准修改" })).toBeEnabled();
+  const stale = changes.需求版本變更({ ...reviewWorkbenchFixture().details.get(first.id)!, task: first });
+  await page.route(`**/api/tasks/${first.id}`, (route) => route.fulfill({ json: stale }));
+  const writes = watchActions(page);
+  await row(page, first.title).getByRole("button", { name: new RegExp(first.title) }).press("Alt+Enter");
+  await expect(panel(page).getByRole("alert")).toContainText(/重新確認/);
+  expect(writes).toEqual([]);
+});
 
 test("重讀失敗會保留伺服器原因，不送出核准", async ({ page }) => {
   const { tasks } = await mockInboxReview(page);
@@ -161,5 +173,53 @@ for (const width of [375, 1440]) {
       await expect(row(page, tasks[0].title)).toBeVisible();
       await expect(hint(page)).toBeHidden();
     });
+  });
+}
+
+for (const change of ["切到其他分頁", "改選其他案件", "開始編輯審核草稿", "帳號改為成員"] as const) {
+  test(`快速核准重讀期間${change}不會送出`, async ({ page }) => {
+    const { tasks } = await mockInboxReview(page);
+    const [first, other, , current] = tasks;
+    const writes = watchActions(page);
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    const url = `**/api/tasks/${current.id}`;
+    await page.route(url, async (route) => {
+      await pending;
+      await route.fallback();
+    });
+    await page.goto("/");
+    await expect(panel(page).getByRole("heading", { name: first.title })).toBeVisible();
+    const received = page.waitForRequest(url);
+    const read = page.waitForResponse(url);
+    try {
+      await row(page, current.title).getByRole("button", quickName).click();
+      await received;
+      if (change === "切到其他分頁") {
+        await page.getByRole("tab", { name: /^進行中/ }).click();
+      } else if (change === "改選其他案件") {
+        await row(page, other.title).getByRole("button", { name: new RegExp(other.title) }).click();
+      } else if (change === "開始編輯審核草稿") {
+        await panel(page).getByRole("button", { name: /修改這一題/ }).click();
+        await panel(page).getByRole("textbox", { name: "需求說明" }).fill(other.summary);
+      } else {
+        await page.route("**/api/me", (route) => route.fulfill({ json: {
+          login: exampleMember.login, role: exampleMember.role, owner: false,
+        } }));
+      }
+    } finally {
+      release();
+    }
+    await (await read).finished();
+    if (change === "帳號改為成員") {
+      await expect(panel(page).getByRole("alert")).toContainText(/身分/);
+      await expect(panel(page).getByRole("heading", { name: current.title })).toBeVisible();
+    } else {
+      await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+      if (change === "改選其他案件") await expect(panel(page).getByRole("heading", { name: other.title })).toBeVisible();
+      if (change === "開始編輯審核草稿") await expect(panel(page).getByRole("textbox", { name: "需求說明" })).toHaveValue(other.summary);
+      if (change === "切到其他分頁") await expect(page.getByRole("tab", { name: /^進行中/ })).toHaveAttribute("aria-selected", "true");
+    }
+    expect(writes).toEqual([]);
   });
 }

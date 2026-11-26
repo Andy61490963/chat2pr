@@ -1,16 +1,19 @@
 import { expect, test } from "@playwright/test";
-import { mockDashboard, mockInboxReview, summaryActivity, summaryTasks, task } from "./dashboard-fixture";
+import { mockDashboard, mockInboxReview, reviewWorkbenchFixture, summaryActivity, summaryTasks } from "./dashboard-fixture";
 
 test.use({ viewport: { width: 1440, height: 900 }, reducedMotion: "reduce" });
 
 test("分類筆數只顯示一次，切換分頁才列出對應的全部工作與動態", async ({ page }) => {
   const working = summaryTasks.slice(0, 3);
   const pending = summaryTasks[3];
+  const fixture = reviewWorkbenchFixture();
+  const decision = fixture.tasks[0];
   await mockDashboard(page, {
     state: {
-      tasks: [task, ...working.map((entry) => ({ ...entry, status: "running" })), { ...pending, status: "ready" }],
+      tasks: [decision, ...working.map((entry) => ({ ...entry, status: "running" })), { ...pending, status: "ready" }],
       activity: summaryActivity,
     },
+    routes: { [`/api/tasks/${decision.id}`]: fixture.details.get(decision.id) },
   });
   await page.goto("/");
   const tabs = page.getByRole("tablist", { name: "收件匣分類" });
@@ -94,4 +97,9 @@ test("有補問草稿時用鍵盤切換分類，可繼續編輯或放棄後離�
   await guard.getByRole("button", { name: "放棄修改" }).press("Enter");
   await expect(moving).toHaveAttribute("aria-selected", "true");
   await expect(answer).toBeHidden();
+  await expect(page).not.toHaveURL(/review=/);
+  await page.goBack();
+  await expect(page).toHaveURL(`/?review=${tasks[1].id}`);
+  await expect(page.getByRole("tab", { name: /^決定/ })).toHaveAttribute("aria-selected", "true");
+  await expect(answer).toBeVisible();
 });

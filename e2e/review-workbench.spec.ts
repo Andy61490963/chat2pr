@@ -74,7 +74,7 @@ test("桌面佇列依等待時間排序，每列只有一個狀態，審核面�
   const { tasks, reviewSource } = await openFixture(page, fixture);
   await page.goto("/");
   await expect(
-    page.getByRole("heading", { name: "需要你處理 30" }),
+    page.getByRole("tab", { name: /^決定\s*30$/ }),
   ).toBeVisible();
   const rows = queue(page).getByRole("listitem");
   await expect(rows).toHaveCount(30);
@@ -104,9 +104,9 @@ test("桌面佇列依等待時間排序，每列只有一個狀態，審核面�
     queue(page).getByText("等你決定：挑選任務", { exact: true }),
   ).toHaveCount(4);
 
-  await page.getByRole("tab", { name: "最新" }).click();
+  await page.getByRole("group", { name: "待決策排序" }).getByRole("button", { name: "最新" }).click();
   await expect(rows.first()).toContainText(tasks.at(-1)!.title);
-  await page.getByRole("tab", { name: "等最久" }).click();
+  await page.getByRole("group", { name: "待決策排序" }).getByRole("button", { name: "等最久" }).click();
   await row(page, tasks[0].title).click();
   await expect(row(page, tasks[0].title)).toHaveAttribute(
     "aria-current",
@@ -163,10 +163,9 @@ test("桌面佇列依等待時間排序，每列只有一個狀態，審核面�
   await expect(
     review.getByRole("region", { name: "我先這樣假設" }),
   ).toContainText("沿用示範表單的欄位順序。");
-  for (const name of [/^進行中/, /^待合併/, /^最近動態/]) {
-    const heading = page.getByRole("heading", { name });
-    await expect(heading).toBeVisible();
-    await expect(review.getByRole("heading", { name })).toHaveCount(0);
+  for (const name of [/^進行中/, /^待合併/, /^動態/]) {
+    await expect(page.getByRole("tab", { name })).toBeVisible();
+    await expect(review.getByRole("tab", { name })).toHaveCount(0);
   }
   await checkAxe(page);
   await capture(page, testInfo, "1440px 審核工作台");
@@ -246,7 +245,7 @@ test("桌面佇列將等最久的待挑選清單排第一、顯示等待時間�
   await expect(page).toHaveURL(`/?review=list-${list.id}`);
   await expect(panel(page).getByRole("checkbox", { name: title })).toBeVisible();
 
-  await page.getByRole("tab", { name: "最新" }).click();
+  await page.getByRole("group", { name: "待決策排序" }).getByRole("button", { name: "最新" }).click();
   await expect(rows.first()).toContainText(fixture.tasks.at(-1)!.title);
   await expect(rows.last()).toContainText(title);
 });
@@ -430,7 +429,7 @@ for (const width of [1440, 375]) {
         }),
       );
       await page.goto("/");
-      const inbox = page.getByRole("region", { name: /需要你處理/ });
+      const inbox = page.getByRole("tabpanel", { name: /^決定/ });
       await expect(queue(page).getByRole("listitem")).toHaveCount(1);
       await expect(queue(page).getByRole("checkbox")).toHaveCount(0);
       await expect(inbox.getByRole("button", { name: "全選本頁" })).toHaveCount(

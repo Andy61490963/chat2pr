@@ -70,7 +70,7 @@ for (const width of [1280, 375]) {
     });
 
     await page.goto("/");
-    const inbox = page.getByRole("region", { name: /需要你處理/ });
+    const inbox = page.getByRole("region", { name: "待決策佇列" });
     const queue = inbox.getByRole("list", { name: "待決策佇列" });
     const listRow = queue.getByRole("button", { name: /待挑選清單/ });
     const list = page.getByRole("article", { name: "待挑選清單" });
@@ -104,7 +104,10 @@ for (const width of [1280, 375]) {
     const clear = inbox.getByRole("button", { name: "清除選取" });
     await clear.press("Enter");
     await expect(inbox.getByRole("checkbox", { checked: true })).toHaveCount(0);
-    await expect(clear).toBeFocused();
+    await expect(clear).toBeHidden();
+    await expect(selectAll).toBeHidden();
+    await expect(queue.getByRole("checkbox").first()).toBeFocused();
+    await page.keyboard.press("Space");
     await selectAll.press("Enter");
     const trigger = inbox.getByRole("button", { name: "結束選取的 3 張任務" });
     await trigger.press("Enter");
@@ -182,7 +185,7 @@ test("成員仍可結束單張任務", async ({ page }) => {
     },
   });
   await page.goto("/");
-  const inbox = page.getByRole("region", { name: /需要你處理/ });
+  const inbox = page.getByRole("region", { name: "待決策佇列" });
   await inbox.getByRole("list", { name: "待決策佇列" })
     .getByRole("button", { name: new RegExp(task.title) }).click();
   await expect(

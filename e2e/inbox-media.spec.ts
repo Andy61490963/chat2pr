@@ -60,6 +60,7 @@ test("來源縮圖有可辨識的報表圖案，點按後在新分頁顯示完�
   await expect(popup).toHaveURL(image.url);
   const original = popup.locator("img");
   await expect(original).toBeVisible();
+  expect(await popup.evaluate(() => document.contentType)).toBe("image/png");
   expect(await original.evaluate(async (node: HTMLImageElement) => {
     await node.decode();
     return [node.naturalWidth, node.naturalHeight];

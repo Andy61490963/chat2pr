@@ -233,6 +233,7 @@ export function App() {
     [lineQuotaHelpOpen, setLineQuotaHelpOpen] = useState(false),
     [state, setState] = useState<State | null>(null),
     [user, setUser] = useState<{
+      id: string;
       csrf: string;
       login: string;
       role?: "admin" | "member";
@@ -845,6 +846,12 @@ export function App() {
   const visible = views.filter((v) => admin || v.section === "工作區");
   const current = visible.find((v) => v.id === view) ?? visible[0];
   const inbox = current.id === "inbox";
+  const quotaSummary = lineQuota && (
+    <>
+      <BellOff aria-hidden="true" className={cn("size-4 shrink-0", inbox ? "text-warn" : "mt-0.5")} />
+      <span>LINE 本月推播額度已用完<span className={inbox ? "max-md:hidden" : undefined}>，你仍可在看板查看通知。</span></span>
+    </>
+  );
   const noticeError = inbox && !state ? "" : error;
   const morePages = visible.filter((v) => v.section === "管理");
   const moreIsCurrent = current.section === "管理";
@@ -1277,25 +1284,26 @@ export function App() {
           )}
           {lineQuota && (
             <div className={cn("px-2 text-sm", inbox && "px-0")}>
-              <div className="flex flex-wrap items-center gap-x-2">
-                <p
-                  role="status"
-                  className={cn("flex flex-[1_1_9rem] items-start gap-2 py-2", inbox && "py-1")}
-                >
-                  <BellOff
-                    aria-hidden="true"
-                    className={cn("mt-0.5 size-4 shrink-0", inbox && "text-warn")}
-                  />
-                  <span>LINE 本月推播額度已用完，你仍可在看板查看通知。</span>
-                </p>
+              <div role={inbox ? "status" : undefined} className="flex flex-wrap items-center gap-x-2">
+                {!inbox && (
+                  <p role="status" className="flex flex-[1_1_9rem] items-start gap-2 py-2">
+                    {quotaSummary}
+                  </p>
+                )}
                 <button
                   type="button"
                   aria-expanded={lineQuotaHelpOpen}
                   aria-controls="line-quota-help"
                   onClick={() => setLineQuotaHelpOpen((open) => !open)}
-                  className="work-touch inline-flex items-center font-medium underline underline-offset-4"
+                  className={cn(
+                    "work-touch inline-flex items-center",
+                    inbox && "w-full gap-1.5 rounded-sm py-1 text-left focus-visible:outline-2 focus-visible:outline-ring",
+                  )}
                 >
-                  {lineQuotaHelpOpen ? "收起說明" : "怎麼辦"}
+                  {inbox && quotaSummary}
+                  <span className="ml-auto shrink-0 font-medium underline underline-offset-4">
+                    {lineQuotaHelpOpen ? "收起說明" : "怎麼辦"}
+                  </span>
                 </button>
               </div>
               <div
@@ -1303,6 +1311,7 @@ export function App() {
                 hidden={!lineQuotaHelpOpen}
                 className="pb-2"
               >
+                {inbox && <p className="md:hidden">你仍可在看板查看通知。</p>}
                 <p>
                   額度通常在下個月初重置，你可以先從任務詳情複製結果貼回群組，或在群組輸入
                   /進度 取回。
@@ -1378,6 +1387,10 @@ export function App() {
                 }
                 loadTaskDetail={loadTaskDetail}
                 reviewActions={{
+                  verifyQuickActor: async () => {
+                    const current = await request<NonNullable<typeof user>>("/api/me");
+                    return !!user.id && current.id === user.id && current.role === "admin" && user.role === "admin";
+                  },
                   go,
                   open: showTask,
                   followup: followupTask,
