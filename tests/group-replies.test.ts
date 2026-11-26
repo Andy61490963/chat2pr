@@ -1788,7 +1788,7 @@ describe("用 reply token 取回與說實話", () => {
     { firstMessage: "早安", cause: "逾時", status: 200 },
     { firstMessage: "/進度", cause: "逾時", status: 200 },
     { firstMessage: "早安", cause: "伺服器錯誤", status: 503 },
-  ])("「$firstMessage」的免費回覆發生$cause 後，只有成員再次輸入 /進度 可取回", async ({ firstMessage, status }) => {
+  ])("「$firstMessage」的免費回覆發生$cause 後，冷卻期間成員可輸入 /進度 取回", async ({ firstMessage, status }) => {
     await settings();
     const id = await answeredTask("示範回答");
     replyTimeout = status === 200;
@@ -1820,6 +1820,57 @@ describe("用 reply token 取回與說實話", () => {
     expect((await notice(id)).sent_message_id).toBe("reply-3-1");
     await send("done", "/進度");
     expect(lastReply()).toHaveLength(1);
+  });
+
+  it("補問免費回覆逾時後，冷卻五分鐘才在群組發言時補送，保留前綴與作答按鈕", async () => {
+    await settings();
+    const asking = await askingTask("範例匯出問題");
+    replyTimeout = true;
+    await send("firstQuestion", "早安");
+    replyTimeout = false;
+    await send("earlyQuestion", "午安");
+    expect(replyCalls).toHaveLength(1);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 301000);
+    try {
+      await line.flushNotifications();
+      expect(pushes).toHaveLength(0);
+      expect(replyCalls).toHaveLength(1);
+      await send("retryQuestion", "晚安");
+      expect(replyCalls).toHaveLength(2);
+      expect(lastReply()[0]).toMatch(/^（補送：先前可能沒送到，看過可略過）/);
+      expect(lastReply()[0]).toContain("是按了沒下載");
+      expect(replyCalls[1].messages[0].quickReply).toEqual(replyCalls[0].messages[0].quickReply);
+      expect((await notice(asking.id)).sent_message_id).toBe("reply-2-0");
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("重要答案補送仍遇到伺服器錯誤時，後續指令只附未確認數量，成員仍可用 /進度 取回", async () => {
+    await settings();
+    const id = await answeredTask("範例運費答案");
+    replyStatus = 503;
+    await send("firstAnswer", "早安");
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now + 301000);
+    try {
+      await send("retryAnswer", "午安");
+      expect(replyCalls).toHaveLength(2);
+      replyStatus = 200;
+      clock.mockReturnValue(now + 602000);
+      await send("plain", "晚安");
+      expect(replyCalls).toHaveLength(2);
+      await send("command", "/任務 新增匯出欄位");
+      expect(lastReply().join("\n")).toContain("有 1 則回覆不確定是否送達，需要時輸入 /進度 取回");
+      expect(lastReply().join("\n")).not.toContain("範例運費答案");
+      await line.flushNotifications();
+      expect(pushes).toHaveLength(0);
+      await send("manual", "/進度");
+      expect(lastReply().at(-1)).toContain("範例運費答案");
+      expect((await notice(id)).sent_message_id).toBe("reply-4-1");
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("免費回覆建立連線遭拒時，排程仍能推播該則回答", async () => {
