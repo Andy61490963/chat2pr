@@ -29,6 +29,10 @@ export function dashboardAlerts(db: Database, admin: boolean) {
            WHEN n.kind='group_new' AND g.id IS NOT NULL THEN NOT g.enabled AND g.left_at IS NULL
              -- 已綁專案卻停用的群組是管理者刻意停用，不再算待設定的新群組。
              AND NOT EXISTS(SELECT 1 FROM group_projects gp WHERE gp.group_id=g.id)
+           WHEN n.kind='service_down' AND split_part(n.dedupe_key,':',2)='codex_inference'
+             THEN coalesce(NOT h.notified_ok AND h.outage_started_at=n.line_outage_started_at AND EXISTS (
+               SELECT 1 FROM settings WHERE id=1 AND value->>'ai_mode'='subscription'
+               AND (value->>'codex_model') IS NOT DISTINCT FROM (h.probe_info->>'model')),false)
            WHEN n.kind='service_down' AND h.name IS NOT NULL THEN NOT coalesce(h.notified_ok,h.ok)
            WHEN n.kind='stuck_tasks' THEN ${liveStuckNotice}
            WHEN n.kind IN ('group_waiting','budget','group_received','auto_resume','group_resumed') THEN false

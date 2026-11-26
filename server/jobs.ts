@@ -1,6 +1,6 @@
 import { HttpEmbedder, type Embedder } from "./embedder.js";
 import { checkIntegrations } from "./integrations.js";
-import { capacitySample, InferenceSchedule, probeInference, readCapacity } from "./inference-health.js";
+import { capacitySample, InferenceSchedule, lastInference, probeInference, readCapacity } from "./inference-health.js";
 import { RepoIndexer, scheduleRepoIndex } from "./repo-index.js";
 import { Retrieval } from "./retrieval.js";
 import { PgBoss, type JobWithMetadata, type WorkHandler } from "pg-boss";
@@ -180,7 +180,7 @@ export async function startJobs(
       pollingIntervalSeconds?: number;
     } = {},
   ) => boss.work<T>(name, options, safeQueueHandler(handler));
-  const inferenceSchedule = new InferenceSchedule();
+  const inferenceSchedule = new InferenceSchedule(Date.now, model => lastInference(db, model));
   const budget = new Budget(db),
     github = adapters.github ?? new GitHub(),
     line = new Line(db, adapters.discord),
@@ -454,7 +454,7 @@ export async function startJobs(
           return;
         }
         // 真正重新確認訂閱額度恢復，且尚未達每日執行上限，才重新排隊。
-        void inferenceSchedule.tick(() => probeInference(db, runner, snapshot.revision, capacity), s.codex_model ?? null)?.catch(error =>
+        void inferenceSchedule.tick(early => probeInference(db, runner, snapshot.revision, capacity, early), s.codex_model ?? null)?.catch(error =>
           console.warn("真實推論檢查：", redact(String(error))),
         );
         await db.query(

@@ -498,6 +498,51 @@ it.each(["code", "review"])(
   },
 );
 
+it.each(["code", "review"])("訂閱 %s 經代理完成推論後，工作直接恢復目前模型讀數，不要求補測", async (phase) => {
+  const sample = await scenario();
+  await db.query("DELETE FROM service_health WHERE name IN ($1,'codex_inference')", [subscriptionGateName]);
+  await db.query(`UPDATE settings SET value=value || '{"ai_mode":"subscription","codex_model":"model-test"}'::jsonb`);
+  await db.query(`INSERT INTO service_health(name,ok,detail,checked_at,probe_info)
+    VALUES('codex_inference',false,'上游未回應',now()-interval '2 hours','{"model":"model-test"}')`);
+  sample.runner.account = async () => ({ allowed: true, checkedAt: new Date().toISOString() });
+  const original = sample.runner.call.bind(sample.runner);
+  sample.runner.call = async <T>(path: string, body: unknown): Promise<T> => {
+    const result = await original<T>(path, body);
+    return path === "phase" && (body as { phase: string }).phase === phase
+      ? { ...result, inferenceCompleted: true } : result;
+  };
+  const request = vi.fn();
+  await new Execution(db, sample.github, sample.line, sample.budget, sample.runner, undefined, request).execute(sample.task.id);
+  expect(await db.one("SELECT ok,probe_info->>'model' AS model FROM service_health WHERE name='codex_inference'"))
+    .toEqual({ ok: true, model: "model-test" });
+  expect(request).not.toHaveBeenCalled();
+});
+
+it("訂閱任務已逾時才收到上游失敗，保留期限原因而不要求補測", async () => {
+  const sample = await scenario();
+  await db.query("DELETE FROM service_health WHERE name=$1", [subscriptionGateName]);
+  await db.query(`UPDATE settings SET value=value || '{"ai_mode":"subscription","task_minutes":5}'::jsonb`);
+  sample.runner.account = async () => ({ allowed: true, checkedAt: new Date().toISOString() });
+  const original = sample.runner.call.bind(sample.runner);
+  sample.runner.call = async <T>(path: string, body: unknown): Promise<T> => {
+    if (path === "phase" && (body as { phase: string }).phase === "code") {
+      vi.spyOn(Date, "now").mockReturnValue(Date.now() + 6 * 60000);
+      return { exitCode: 1, stdout: "", stderr: "", upstreamFailure: { kind: "upstream_http", status: 502 } } as T;
+    }
+    return original<T>(path, body);
+  };
+  const request = vi.fn();
+  try {
+    await new Execution(db, sample.github, sample.line, sample.budget, sample.runner, undefined, request).execute(sample.task.id);
+  } finally {
+    vi.restoreAllMocks();
+  }
+  const task = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [sample.task.id]);
+  expect(task.last_error).toContain("任務超過 5 分鐘限制");
+  expect(task.status).toBe("failed");
+  expect(request).not.toHaveBeenCalled();
+});
+
 it("訂閱修改失敗後，執行紀錄、看板與群組保留代理原因", async () => {
   const sample = await scenario();
   const original = sample.runner.call.bind(sample.runner);

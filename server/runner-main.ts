@@ -113,11 +113,13 @@ async function withCapability<T extends { exitCode: number }>(
       },
       remaining,
     );
-    const failure =
-      result.exitCode !== 0 && (phase === "code" || phase === "review")
-        ? capability.failure()
-        : undefined;
-    return failure ? { ...result, upstreamFailure: failure } : result;
+    if (phase === "code" || phase === "review") {
+      if (result.exitCode === 0 && capability.inferenceCompleted())
+        return { ...result, inferenceCompleted: true };
+      const failure = result.exitCode !== 0 && capability.failure();
+      if (failure) return { ...result, upstreamFailure: failure };
+    }
+    return result;
   } finally {
     capability.revoke();
   }

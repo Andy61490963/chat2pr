@@ -82,7 +82,7 @@ it("應用程式執行器客戶端以四十五秒期限呼叫，直接得到推�
 });
 
 it.each(["model-default", "model-code"])("以訂閱階段授權經相同代理測試 %s，只送一次固定的短推論", async (model) => {
-  const supported = new Set(["model", "stream", "store", "instructions", "input", "prompt_cache_key"]);
+  const supported = new Set(["model", "stream", "store", "instructions", "input", "prompt_cache_key", "reasoning"]);
   const sample = await fixture(async (_url, init) =>
     Object.keys(JSON.parse(String(init?.body))).every((key) => supported.has(key))
       ? stream(completed())
@@ -99,7 +99,7 @@ it.each(["model-default", "model-code"])("以訂閱階段授權經相同代理�
   expect(url).toBe("https://chatgpt.com/backend-api/codex/responses");
   const payload = JSON.parse(String(init?.body));
   expect(payload).toMatchObject({
-    model, stream: true, store: false,
+    model, stream: true, store: false, reasoning: { effort: "low" },
     input: [{ type: "message", role: "user", content: [{ type: "input_text", text: "1" }] }],
   });
   expect(payload.tools ?? []).toEqual([]);

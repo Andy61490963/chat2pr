@@ -677,7 +677,8 @@ export async function buildApp(
       groups,
       tasks: tasks.map(withTaskEnd),
       pickLists: pendingLists,
-      stuckTasks: stalls,
+      stuckTasks: stalls.items,
+      stuckTasksTotal: stalls.total,
       rag,
       usage: { ...usage, runs_today: runsToday.count },
       diskDispatchPaused,
@@ -1573,21 +1574,29 @@ export async function buildApp(
       );
       if (!checked.ok) throw new AppError(409, "請先執行串接檢查");
     }
-    // 同一個語句先鎖住、讀出舊值再更新，稽核寫的差異才對得上這次實際的改動。
-    // CTE 不叫 old：PostgreSQL 18 起 RETURNING 的 old／new 是保留別名。
-    const { before } = await db.one<{ before: Partial<Settings> }>(
-      `WITH prev AS (SELECT value FROM settings WHERE id=1 FOR UPDATE)
-       UPDATE settings s SET value=s.value || $1::jsonb FROM prev WHERE s.id=1
-       RETURNING prev.value AS before`,
-      [JSON.stringify(b)],
-    );
-    await db.audit(
-      null,
-      "settings",
-      `管理者 ${admin.login} 更新工作流程設定：${describeChanges(settingsDiff(before, b))}`,
-    );
-    if (b.paused && !before.paused)
-      await db.audit(null, "settings", "暫停新派工");
+    await db.transaction(async (client) => {
+      const { rows: [{ value: before }] } = await client.query<{ value: Partial<Settings> }>(
+        "SELECT value FROM settings WHERE id=1 FOR UPDATE",
+      );
+      const inferenceChanged = before.ai_mode !== b.ai_mode || (before.codex_model ?? null) !== b.codex_model;
+      await client.query(
+        `UPDATE settings SET value=value || $1::jsonb || CASE WHEN $2
+         THEN jsonb_build_object('inference_configured_at',clock_timestamp()) ELSE '{}'::jsonb END WHERE id=1`,
+        [JSON.stringify(b), inferenceChanged],
+      );
+      if (inferenceChanged) {
+        await client.query("DELETE FROM service_health WHERE name IN ('codex_inference','codex_probe_deferred')");
+        await client.query(
+          `UPDATE notifications SET sent_at=clock_timestamp(),last_error='已留在看板鈴鐺'
+           WHERE sent_at IS NULL AND kind IN ('service_down','service_up')
+           AND split_part(dedupe_key,':',2)='codex_inference'`,
+        );
+      }
+      await db.audit(null, "settings",
+        `管理者 ${admin.login} 更新工作流程設定：${describeChanges(settingsDiff(before, b))}`, client);
+      if (b.paused && !before.paused)
+        await db.audit(null, "settings", "暫停新派工", client);
+    });
     return { ok: true };
   });
   app.put("/api/settings/line-push", async (req) => {

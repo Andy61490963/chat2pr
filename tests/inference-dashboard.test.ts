@@ -13,7 +13,7 @@ beforeEach(async () => {
   await reset();
   await db.query("DELETE FROM inference_probe_budget");
   await db.query(
-    "DELETE FROM service_health WHERE name IN ('codex','codex_subscription_gate','codex_inference','host_resources')",
+    "DELETE FROM service_health WHERE name IN ('codex','codex_subscription_gate','codex_probe_deferred','codex_inference','host_resources')",
   );
   await db.query(
     'UPDATE settings SET value=value||\'{"ai_mode":"subscription","daily_runs":0,"codex_reserve_percent":30}\'::jsonb',
@@ -21,7 +21,7 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   await db.query(
-    "DELETE FROM service_health WHERE name IN ('codex','codex_subscription_gate','codex_inference','host_resources')",
+    "DELETE FROM service_health WHERE name IN ('codex','codex_subscription_gate','codex_probe_deferred','codex_inference','host_resources')",
   );
 });
 afterAll(() => db.close());
@@ -31,11 +31,12 @@ it("同日含失敗補測最多八次，並行搶最後一次不會超支，也�
   const call = vi.spyOn(runner, "call").mockResolvedValue({ ok: false, failure: { kind: "upstream_http", status: 502 } });
   const revision = (await db.settingsSnapshot()).revision;
   const probe = () => probeInference(db, runner, revision, async () => ({ known: true, hold: null }));
-  for (let attempt = 0; attempt < 7; attempt++) await probe();
+  const age = () => db.query("UPDATE inference_probe_budget SET reserved_at=now()-interval '16 minutes'");
+  for (let attempt = 0; attempt < 7; attempt++) { await probe(); await age(); }
   await Promise.all([probe(), probe(), probe()]);
   expect(call).toHaveBeenCalledTimes(8);
   expect(await db.query("SELECT 1 FROM runs")).toEqual([]);
-  await db.query("UPDATE inference_probe_budget SET day=day-1");
+  await db.query("UPDATE inference_probe_budget SET day=day-1,reserved_at=now()-interval '1 day'");
   await probe();
   expect(call).toHaveBeenCalledTimes(9);
 });
@@ -95,10 +96,29 @@ it("代理回報上游 502 時，兩個系統項目顯示原因與延遲，不�
       await db.query(
         "SELECT 1 FROM notifications WHERE kind='service_down' AND text LIKE '%502%'",
       ),
-    ).toHaveLength(1);
+    ).toHaveLength(0);
   } finally {
     await app.close();
   }
+});
+
+it("一般探測不得動用最後兩次，真實工作成功不需名額就解除異常", async () => {
+  const runner = new HttpRunner();
+  const call = vi.spyOn(runner, 'call').mockResolvedValue({ ok: true });
+  await db.query("INSERT INTO inference_probe_budget(id,day,attempts) VALUES(true,(now() AT TIME ZONE 'Asia/Taipei')::date,6)");
+  const probe = () => probeInference(db, runner, revision, async () => ({ known:true, hold:null }));
+  const revision = (await db.settingsSnapshot()).revision;
+  await probe();
+  expect(call).not.toHaveBeenCalled();
+  const {recordWorkInference,systemHealth} = await import('../server/inference-health.js');
+  await db.query("INSERT INTO service_health(name,ok,detail,probe_info) VALUES('codex_inference',false,'訂閱回應失敗','{\"model\": null}')");
+  await probe();
+  expect(call).toHaveBeenCalledTimes(1);
+  await db.query("UPDATE inference_probe_budget SET attempts=8");
+  await db.query("UPDATE service_health SET ok=false,detail='訂閱回應失敗' WHERE name='codex_inference'");
+  await recordWorkInference(db,null,new Date());
+  expect((await systemHealth(db)).find(row=>row.name==='codex')).toMatchObject({inferenceStatus:'healthy',ok:true});
+  expect(call).toHaveBeenCalledTimes(1);
 });
 
 it("派工暫停或主機記憶體過低不呼叫推論代理", async () => {
@@ -116,4 +136,26 @@ it("派工暫停或主機記憶體過低不呼叫推論代理", async () => {
     await probeInference(db, runner, (await db.settingsSnapshot()).revision),
   ).toBe(false);
   expect(call).not.toHaveBeenCalled();
+});
+
+it('讀不到主機資源只更新略過原因，保留前次 502 類別與時間', async () => {
+  const runner = new HttpRunner();
+  vi.spyOn(runner,'call').mockResolvedValue({ ok:false, failure:{kind:'upstream_http',status:502} });
+  const revision = (await db.settingsSnapshot()).revision;
+  await probeInference(db,runner,revision,async () => ({known:true,hold:null}));
+  const evidence = () => db.one("SELECT ok,probe_info,checked_at FROM service_health WHERE name='codex_inference'");
+  const before = await evidence();
+  await probeInference(db,runner,revision,async () => ({known:false,hold:null}));
+  expect(await evidence()).toEqual(before);
+  const {systemHealth} = await import('../server/inference-health.js');
+  expect((await systemHealth(db)).find(row => row.name==='codex')).toMatchObject({inferenceStatus:'unknown',detail:expect.stringMatching(/讀不到主機資源.*502/)});
+});
+
+it('執行器回應未附有效失敗證據時，只能顯示未確認', async () => {
+  const runner = new HttpRunner();
+  vi.spyOn(runner,'call').mockResolvedValue({ ok:false, failure:{kind:'不明原因'} });
+  await probeInference(db,runner,(await db.settingsSnapshot()).revision,async () => ({known:true,hold:null}));
+  const {systemHealth} = await import('../server/inference-health.js');
+  expect((await systemHealth(db)).find(row => row.name==='codex')).toMatchObject({inferenceStatus:'unknown'});
+  expect(await db.query("SELECT 1 FROM service_health WHERE name='codex_inference'")).toEqual([]);
 });

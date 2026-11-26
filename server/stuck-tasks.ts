@@ -29,11 +29,12 @@ type Observation = Pick<Candidate, "id" | "status" | "version"> & Advice & { epi
 const liveStall = "JOIN tasks t ON t.id=s.task_id AND t.version=s.version AND t.status=s.status";
 export const liveStuckNotice = `EXISTS (SELECT 1 FROM task_stalls s ${liveStall} WHERE s.notice_id=n.id)`;
 
-export function stuckTasks(db: Database) {
-  return db.query<StuckTask>(
-    `SELECT t.id AS "taskId",t.title,s.reason,s.target,s.action_label AS "actionLabel"
-     FROM task_stalls s ${liveStall} ORDER BY s.since,t.updated_at,t.id`,
+export async function stuckTasks(db: Database) {
+  const rows = await db.query<StuckTask & { total: number }>(
+    `SELECT t.id AS "taskId",t.title,s.reason,s.target,s.action_label AS "actionLabel", (count(*) OVER ())::int AS total
+     FROM task_stalls s ${liveStall} ORDER BY s.since,t.updated_at,t.id LIMIT 20`,
   );
+  return { total: rows[0]?.total ?? 0, items: rows.map(({ total, ...item }) => item) };
 }
 
 const taskAdvice = (reason: string, actionLabel: string): Advice => ({ reason, target: "task", actionLabel });
@@ -92,13 +93,13 @@ function waitingAdvice(task: Candidate, mode: Settings["ai_mode"]): Advice {
   return taskAdvice("已等待人工審核滿一天，尚未決定是否派工。", "查看待審需求");
 }
 
-async function repeatedFailures(db: Database) {
+async function repeatedFailures(db: Database, now: Date) {
   const rows = await db.query<Pick<Candidate, "id" | "version" | "status" | "project_id"> & { evidence: FailureEvidence[] }>(
     `WITH recent AS (
        SELECT r.id,r.task_id,r.version,r.outcome,r.started_at,r.completed_at,r.reservation_id,r.status AS phase,coalesce(r.change_project_id,t.project_id) AS project_id,
          row_number() OVER (PARTITION BY coalesce(r.change_project_id,t.project_id) ORDER BY r.completed_at DESC,r.id DESC) AS pos
        FROM runs r JOIN tasks t ON t.id=r.task_id
-       WHERE r.completed_at IS NOT NULL AND r.started_at>message_retention_cutoff()
+       WHERE r.completed_at BETWEEN $1::timestamptz-interval '24 hours' AND $1 AND r.started_at>message_retention_cutoff()
          AND EXISTS (SELECT 1 FROM tasks f WHERE f.status='failed' AND f.project_id=coalesce(r.change_project_id,t.project_id))
      ), streaks AS (
        SELECT r.project_id,(array_agg(r.task_id ORDER BY pos))[1] AS task_id,(array_agg(r.version ORDER BY pos))[1] AS version,
@@ -117,7 +118,7 @@ async function repeatedFailures(db: Database) {
        WHERE pos<=3
        GROUP BY r.project_id HAVING count(*)=3 AND count(*) FILTER (WHERE r.outcome IN ('failed','queued'))=3
      ) SELECT t.id,t.version,t.status,t.project_id,s.evidence FROM streaks s JOIN tasks t
-       ON t.id=s.task_id AND t.project_id=s.project_id AND t.version=s.version WHERE t.status='failed'`,
+       ON t.id=s.task_id AND t.project_id=s.project_id AND t.version=s.version WHERE t.status='failed'`, [now],
   );
   const observations: Observation[] = [];
   for (const row of rows) {
@@ -148,7 +149,7 @@ async function observe(db: Database, now: Date) {
   );
   const queue = rows.some((row) => row.status === "queued") ? await queueConditions(db, now) : null;
   const settings = rows.some((row) => row.status === "budget_wait") ? await db.settings() : null;
-  const observations = await repeatedFailures(db);
+  const observations = await repeatedFailures(db, now);
   for (const row of rows) {
     let advice: Advice;
     if (row.status === "queued") {
@@ -157,7 +158,7 @@ async function observe(db: Database, now: Date) {
       advice = queueAdvice(row, entry, queue);
     } else advice = waitingAdvice(row, settings?.ai_mode ?? "api");
     observations.push({
-      episode: `task:${row.id}:${row.version}:${row.status}:${advice.reason}`,
+      episode: `task:${row.id}:${row.version}:${row.status}`,
       id: row.id, version: row.version, status: row.status, ...advice,
     });
   }
@@ -176,8 +177,10 @@ export async function checkStuckTasks(db: Database, now = new Date()) {
        SELECT x.episode,t.id,t.version,t.status,x.reason,x."actionLabel",x.target,$2
        FROM jsonb_to_recordset($1::jsonb) AS x(episode text,id uuid,version int,status text,reason text,"actionLabel" text,target text)
        JOIN tasks t ON t.id=x.id AND t.version=x.version AND t.status=x.status
-       ON CONFLICT(episode) DO UPDATE SET task_id=excluded.task_id,version=excluded.version,reason=excluded.reason
-       WHERE (task_stalls.task_id,task_stalls.version,task_stalls.reason) IS DISTINCT FROM (excluded.task_id,excluded.version,excluded.reason)`,
+       ON CONFLICT(episode) DO UPDATE SET task_id=excluded.task_id,version=excluded.version,reason=excluded.reason,
+         action_label=excluded.action_label,target=excluded.target
+       WHERE (task_stalls.task_id,task_stalls.version,task_stalls.reason,task_stalls.action_label,task_stalls.target)
+         IS DISTINCT FROM (excluded.task_id,excluded.version,excluded.reason,excluded.action_label,excluded.target)`,
       [JSON.stringify(observations), now],
     );
     const noticeId = randomUUID();

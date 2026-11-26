@@ -8,6 +8,7 @@ import {
 import { phaseLabels, type RunView } from "../../shared/observation.js";
 import { parseFailure } from "../../shared/failure-text.js";
 import {
+  type inferenceStatusLabels,
   taskCompletionEvents,
   taskEndLabels,
   taskStationLabels,
@@ -66,6 +67,7 @@ export type View =
   | "members"
   | "settings";
 export type Health = {
+  inferenceStatus?: keyof typeof inferenceStatusLabels;
   quota?: { ok: boolean; detail: string; checked_at: string } | null;
   name: string;
   ok: boolean;
@@ -73,6 +75,13 @@ export type Health = {
   checked_at: string;
   outage_started_at?: string | null;
 };
+export const healthStatus = (row?: Health) =>
+  row?.inferenceStatus ?? (row ? (row.ok ? "healthy" : "failed") : "unknown");
+export const healthBadge = {
+  healthy: "good",
+  failed: "danger",
+  unknown: "secondary",
+} as const;
 export type Audit = {
   id: number;
   task_id: string | null;
@@ -85,6 +94,7 @@ export type Audit = {
 };
 export type State = {
   stuckTasks?: import("../../shared/stuck-tasks.js").StuckTask[];
+  stuckTasksTotal?: number;
   connectionSecrets?: import("../../shared/connection-secrets.js").ConnectionSecretStatus;
   pickLists?: import("../../shared/pick-list.js").PickList[];
   settings: Settings;

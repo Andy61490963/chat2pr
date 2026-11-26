@@ -317,6 +317,7 @@ export function InboxView({
   const movingCount = countOf(state, moving);
   const readyCount = countOf(state, readyStatuses);
   const stuckTasks = state.stuckTasks ?? [];
+  const stuckTasksTotal = state.stuckTasksTotal ?? stuckTasks.length;
   const lists = admin ? (state.pickLists ?? []) : [];
   const items = reviewItems(needs, lists, state.groups, admin);
   const canBatch = admin && items.length > 1;
@@ -495,7 +496,7 @@ export function InboxView({
                   onClick={() => stuckHeading.current?.focus()}
                 >
                   <CircleAlert aria-hidden="true" className="size-4 text-warn" />
-                  卡住的任務 <span className="tabular-nums">{stuckTasks.length}</span>
+                  卡住的任務 <span className="tabular-nums">{stuckTasksTotal}</span>
                 </button>
               )}
             </div>
@@ -627,8 +628,11 @@ export function InboxView({
             <h2 ref={stuckHeading} id="inbox-stuck" tabIndex={-1} className={cn("scroll-mt-4 font-semibold", batchFocus)}>
               卡住的任務
             </h2>
-            <Badge variant="secondary" className="tabular-nums">{stuckTasks.length}</Badge>
+            <Badge variant="secondary" className="tabular-nums">{stuckTasksTotal}</Badge>
           </div>
+          {stuckTasksTotal > stuckTasks.length && (
+            <p className="text-sm text-muted-foreground">依卡住時間先後，顯示前 {stuckTasks.length} 筆。</p>
+          )}
           <ul className="work-ledger divide-y">
             {stuckTasks.map(({ taskId, title, reason, actionLabel, target }) => {
               const needsAdmin = target === "system" && !admin;

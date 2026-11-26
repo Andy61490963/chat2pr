@@ -75,6 +75,7 @@ import {
   attention,
   cash,
   countOf,
+  healthStatus,
   Initials,
   memoryHold,
   message,
@@ -836,7 +837,7 @@ export function App() {
   const lineQuota = state?.health.find((h) => h.name === LINE_QUOTA && !h.ok);
   const down = (state?.health ?? []).filter(
     (h) =>
-      !h.ok &&
+      healthStatus(h) === "failed" &&
       vital[h.name] &&
       // 額度用完時推播失敗是預期中的，由下方黃色橫幅說明，不算「連線異常」。
       !(lineQuota && h.name === "notifications") &&

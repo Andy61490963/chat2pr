@@ -44,6 +44,7 @@ import { config, secrets, token } from "./config.js";
 import { hash } from "./auth.js";
 import { AppError, classifyRisk, redact, taipeiDay } from "./policy.js";
 import { subscriptionLimited } from "./triage.js";
+import { recordWorkInference } from "./inference-health.js";
 import { parseUpstreamFailure, type UpstreamFailure } from "../shared/upstream-failure.js";
 import {
   classifyFailure,
@@ -179,6 +180,7 @@ export function isTransientValidationFailure(error: unknown) {
 }
 export interface PhaseResult {
   upstreamFailure?: UpstreamFailure;
+  inferenceCompleted?: true;
   observations?: RunEvent[];
   /** 可信執行器在啟動 Codex 前回報的 SQL 審查複驗失敗。 */
   sqlReviewFailure?: true;
@@ -280,17 +282,33 @@ class RunnerResponseError extends AppError {
 export class RunInferenceDiagnostics {
   failure?: UpstreamFailure;
 
-  async phase(subscription: boolean, name: string, pending: Promise<PhaseResult>) {
-    if (!subscription || (name !== "code" && name !== "review")) return pending;
+  async phase(
+    subscription: boolean, name: string, pending: Promise<PhaseResult>,
+    assertCurrent: () => Promise<void>, recover: () => Promise<void>,
+  ) {
+    const observed = subscription && (name === "code" || name === "review");
+    let result: PhaseResult;
     try {
-      const result = await pending;
-      if (result.exitCode !== 0 && !result.sqlReviewFailure)
-        this.failure = parseUpstreamFailure(result.upstreamFailure);
-      return result;
+      result = await pending;
     } catch (error) {
-      if (error instanceof RunnerResponseError) this.failure = error.upstreamFailure;
+      if (observed && error instanceof RunnerResponseError && error.upstreamFailure) {
+        await assertCurrent();
+        this.failure = error.upstreamFailure;
+      }
       throw error;
     }
+    await assertCurrent();
+    if (observed && !result.sqlReviewFailure) {
+      if (result.exitCode !== 0) this.failure = parseUpstreamFailure(result.upstreamFailure);
+      else if (result.inferenceCompleted === true) {
+        try {
+          await recover();
+        } catch {
+          console.warn("訂閱工作已完成推論，但無法更新健康讀數。");
+        }
+      }
+    }
+    return result;
   }
 
   finish(request?: () => void) {
@@ -1417,6 +1435,7 @@ export class Execution {
           [runId, name, ["code", "review"].includes(name)],
         );
         const phaseTimeoutMs = Math.max(1000, deadline - Date.now());
+        const started = new Date();
         const pendingPhase = this.runner.call<PhaseResult>(
             "phase",
             {
@@ -1439,8 +1458,20 @@ export class Execution {
               ...extra,
             },
             phaseTimeoutMs,
-          );
-        let r = await inference.phase(subscription, name, pendingPhase)
+          ).then(async (result) => {
+            // 複驗沒過的候選先標記，之後的暫停或逾時檢查才不會讓它留到下一次接續。
+            if (result.sqlReviewFailure && result.exitCode !== ENVIRONMENT_EXIT)
+              await settle();
+            await pollPending;
+            const safe = access.secrets.length ? scrubResult(result, scrub) : result;
+            await ingest(safe.observations ?? []);
+            if (!safe.observations?.length)
+              await record("phase_end", undefined, safe.exitCode);
+            await this.db.query("UPDATE runs SET proxy_active=false WHERE id=$1", [runId]);
+            return safe;
+          });
+        const r = await inference.phase(subscription, name, pendingPhase, assertCurrent,
+          () => recordWorkInference(this.db, s.codex_model ?? null, started))
           .catch(async (error: unknown) => {
             if (
               subscription &&
@@ -1459,18 +1490,6 @@ export class Execution {
           subscriptionLimited(r.stderr)
         )
           await this.subscriptionGate.exhausted();
-        // 複驗沒過的候選先標記，之後的暫停或逾時檢查才不會讓它留到下一次接續。
-        if (r.sqlReviewFailure && r.exitCode !== ENVIRONMENT_EXIT)
-          await settle();
-        await pollPending;
-        if (access.secrets.length) r = scrubResult(r, scrub);
-        await ingest(r.observations ?? []);
-        if (!r.observations?.length)
-          await record("phase_end", undefined, r.exitCode);
-        await this.db.query("UPDATE runs SET proxy_active=false WHERE id=$1", [
-          runId,
-        ]);
-        await assertCurrent();
         if (r.sqlReviewFailure) {
           const reason = r.exitCode === ENVIRONMENT_EXIT
             ? "測試環境問題：SQL Server 審查複驗無法執行"

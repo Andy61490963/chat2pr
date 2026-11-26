@@ -825,4 +825,6 @@ CREATE INDEX IF NOT EXISTS task_stalls_notice ON task_stalls(notice_id) WHERE no
 CREATE TABLE IF NOT EXISTS inference_probe_budget (
  id boolean PRIMARY KEY CHECK(id), day date NOT NULL, attempts integer NOT NULL CHECK(attempts BETWEEN 1 AND 8)
 );
+ALTER TABLE inference_probe_budget ADD COLUMN IF NOT EXISTS reserved_at timestamptz;
+ALTER TABLE inference_probe_budget ADD COLUMN IF NOT EXISTS early_attempts integer NOT NULL DEFAULT 0 CHECK(early_attempts BETWEEN 0 AND 2);
 CREATE INDEX IF NOT EXISTS audit_task_failure ON audit(task_id,created_at DESC,id DESC) WHERE kind='error';

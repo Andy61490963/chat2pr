@@ -748,6 +748,7 @@ export const answeredDetail: Detail = {
 
 export const defaultState: State = {
   stuckTasks: [],
+  stuckTasksTotal: 0,
   connectionSecrets: {
     lineSecret: { configured: true, updatedAt: null },
     lineToken: { configured: true, updatedAt: timestamp },
@@ -823,10 +824,40 @@ export const firstSetupHealth: State["health"] = [
   { name: "line", ok: true, detail: "LINE 連線正常", checked_at: timestamp },
 ];
 
-export const failedInferenceHealth: State["health"] = [
-  ...firstSetupHealth.filter(({ name }) => name !== "codex"),
-  { name: "codex", ok: false, detail: "真實推論未通過：訂閱上游回應失敗（上游 HTTP 502）。耗時 27 毫秒，請檢查訂閱代理。", checked_at: timestamp },
-];
+export const unknownInferenceScenarios = [
+  { name: "未確認（派工暫停）", detail: "派工暫停中，未送出推論。 上次真實讀數：真實推論成功，耗時 27 毫秒。", paused: true, stale: true },
+  { name: "未確認（訂閱額度）", detail: "已用到 chat2pr 可用的上限（保留 20% 給你），額度恢復或你調低保留比例至額度可用後會自動繼續。", quotaBlocked: true },
+  { name: "未確認（切換模型）", detail: "尚未完成目前模型的真實推論檢查。", modelChanged: true },
+  { name: "未確認（探測次數）", detail: "今日可用的推論探測次數已用完，最後兩次僅供異常後確認。", modelChanged: true },
+  { name: "未確認（讀數過期）", detail: "真實推論讀數已過期。 上次真實讀數：真實推論成功，耗時 27 毫秒。", stale: true },
+  { name: "未確認（主機資源）", detail: "讀不到主機資源，未送出真實推論；一分鐘後再檢查。 上次真實讀數：真實推論未通過：訂閱上游回應失敗（上游 HTTP 502）。耗時 27 毫秒，請檢查訂閱代理。" },
+  { name: "未確認（記憶體不足）", detail: "Windows 主機可用記憶體只剩 1 GB（低於 2 GB），暫停派新工作，回升到 3 GB 以上並穩定 5 分鐘才恢復；執行中的工作不受影響", hostHold: true },
+].map((scenario) => ({ ...scenario, status: "unknown" as const }));
+
+export function inferenceHealthFixture(
+  inferenceStatus: NonNullable<State["health"][number]["inferenceStatus"]>,
+  detail: string,
+  { quotaBlocked = false, hoursAgo = 0 }: { quotaBlocked?: boolean; hoursAgo?: number } = {},
+) {
+  const checked_at = new Date(Date.now() - hoursAgo * 3_600_000).toISOString();
+  const reading = { ok: inferenceStatus === "healthy", inferenceStatus, detail, checked_at };
+  return [
+    ...firstSetupHealth.filter(({ name }) => name !== "codex"),
+    { ...reading, name: "codex" },
+    {
+      ...reading, name: "codex_subscription_gate",
+      quota: {
+        ok: !quotaBlocked, checked_at,
+        detail: quotaBlocked ? detail : "訂閱額度可用",
+      },
+    },
+  ];
+}
+
+export const failedInferenceHealth = inferenceHealthFixture(
+  "failed",
+  "真實推論未通過：訂閱上游回應失敗（上游 HTTP 502）。耗時 27 毫秒，請檢查訂閱代理。",
+);
 
 export const discordOnlySetup: Pick<
   State,
@@ -1124,6 +1155,8 @@ export async function mockDashboard(
   } = {},
 ): Promise<void> {
   const state = { ...defaultState, ...options.state } as State;
+  if (state.stuckTasks && options.state?.stuckTasksTotal === undefined)
+    state.stuckTasksTotal = state.stuckTasks.length;
   if (state.totals) {
     state.totals = { mergedWeekDay: mergedWeekDay(), ...state.totals };
   }
