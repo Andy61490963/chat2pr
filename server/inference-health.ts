@@ -1,5 +1,6 @@
 import {
   parseUpstreamFailure,
+  type UpstreamFailure,
   upstreamFailureText,
 } from "../shared/upstream-failure.js";
 import { subscriptionGateName } from "../shared/subscription-quota.js";
@@ -24,14 +25,16 @@ export function visibleHealth(rows: Reading[], now = Date.now(), skipped = '') {
   const host = rows.find(row => row.name === 'host_resources');
   const gate = rows.find(row => row.name === subscriptionGateName);
   const login = rows.find(row => row.name === 'codex');
-  const reason = skipped || (gate && !gate.ok ? gate.detail : '') || (login && !login.ok ? login.detail : '') || (host && !host.ok ? host.detail : '') ||
+  const reason = skipped || (gate && !gate.ok ? gate.detail : '') || (host && !host.ok ? host.detail : '') ||
     (hold && (!probe || Number(hold.checked_at) > Number(probe.checked_at)) ? hold.detail : '');
   const visible = rows.filter((row) => row.name !== inference && row.name !== deferred);
   for (const name of ["codex", subscriptionGateName]) {
     const index = visible.findIndex((row) => row.name === name);
     const prerequisite = visible[index];
     const unknown = reason || (!probe ? '尚未完成目前模型的真實推論檢查。' : now - Number(probe.checked_at) > interval + 120000 ? '真實推論讀數已過期。' : '');
-    const result: Reading = {
+    const result: Reading = login && !login.ok ? {
+      ...login, name, inferenceStatus: 'failed',
+    } : {
       ...probe,
       name, ok: !unknown && !!probe?.ok, inferenceStatus: unknown ? 'unknown' : probe?.ok ? 'healthy' : 'failed',
       detail: unknown ? `${unknown}${probe ? ` 上次真實讀數：${probe.detail}` : ''}` : probe!.detail,
@@ -73,6 +76,14 @@ export async function recordWorkInference(db: Database, model: string | null, st
 }
 
 type Capacity = { known: boolean; hold: string | null };
+export async function recordWorkInferenceFailure(db: Database, model: string | null, started: Date, failure: UpstreamFailure) {
+  const upstream = ['upstream_http','connection','redirect','auth','missing_body','invalid_stream','invalid_event','stream_error','invalid_usage','duplicate_completion','stream_interrupted'];
+  if (!upstream.includes(failure.kind) && !(failure.kind === 'quota' && failure.status !== undefined)) return;
+  await recordHealth(db, inference, false, `實際訂閱工作推論失敗：${upstreamFailureText(failure)}。請檢查訂閱代理。`, {
+    inferenceObservation: { model, started }, probe: { model, latencyMs: null, failure }, firstWorkFailure: true,
+  });
+}
+
 export function capacitySample(read: () => Promise<Capacity>) {
   let pending: Promise<Capacity> | undefined;
   return () => (pending ??= read());
@@ -166,26 +177,28 @@ export async function probeInference(
   if (!sample.known) {
     return skip('讀不到主機資源，未送出真實推論；一分鐘後再檢查。');
   }
-  const reservation = await db.one(`INSERT INTO inference_probe_budget AS budget(id,day,attempts,reserved_at,early_attempts)
-    VALUES(true,(now() AT TIME ZONE 'Asia/Taipei')::date,1,now(),$3)
+  const reservation = await db.one<{ receipt: string }>(`INSERT INTO inference_probe_budget AS budget(id,day,attempts,reserved_at,early_attempts)
+    VALUES(true,(now() AT TIME ZONE 'Asia/Taipei')::date,0,now(),0)
     ON CONFLICT(id) DO UPDATE SET day=excluded.day,reserved_at=now(),
-      early_attempts=CASE WHEN budget.day<excluded.day THEN $3 ELSE budget.early_attempts+$3 END,
-      attempts=CASE WHEN budget.day<excluded.day THEN 1 ELSE budget.attempts+1 END
+      early_attempts=CASE WHEN budget.day<excluded.day THEN 0 ELSE budget.early_attempts END,
+      attempts=CASE WHEN budget.day<excluded.day THEN 0 ELSE budget.attempts END
     WHERE (budget.reserved_at IS NULL OR budget.reserved_at<=now()-interval '15 minutes') AND
     (budget.day<excluded.day OR (budget.day=excluded.day AND budget.early_attempts+$3<=2 AND budget.attempts<CASE WHEN EXISTS (
       SELECT 1 FROM service_health WHERE name=$1 AND NOT ok AND (probe_info->>'model') IS NOT DISTINCT FROM $2
-    ) THEN 8 ELSE 6 END)) RETURNING attempts`, [inference, model, early ? 1 : 0]);
+    ) THEN 8 ELSE 6 END)) RETURNING reserved_at::text AS receipt`, [inference, model, early ? 1 : 0]);
   if (!reservation) {
     const wait = await db.one<{ cooling: boolean }>("SELECT reserved_at>now()-interval '15 minutes' AS cooling FROM inference_probe_budget WHERE id");
-    return skip(wait?.cooling ? '兩次探測至少相隔十五分鐘，等待下次確認。' : early ? '今日提早補測的次數已用完，仍會依原排程確認推論。' : '今日可用的推論探測次數已用完，最後兩次僅供異常後確認。');
+    if (wait?.cooling) return 'unavailable';
+    return skip(early ? '今日提早補測的次數已用完，仍會依原排程確認推論。' : '今日可用的推論探測次數已用完，最後兩次僅供異常後確認。');
   }
   const started = Date.now();
   let ok = false;
   let detail: string;
   let failure: ReturnType<typeof parseUpstreamFailure>;
+  let completedOverLimit = false;
   try {
     const sent = Date.now();
-    const result = await runner.call<{ ok: boolean; failure?: unknown }>(
+    const result = await runner.call<{ ok: boolean; failure?: unknown; skipped?: string }>(
       "codex/inference-probe",
       {
         model: settings.codex_model ?? null,
@@ -195,7 +208,8 @@ export async function probeInference(
     );
     ok = result.ok === true;
     failure = parseUpstreamFailure(result.failure);
-    if (!ok && !failure) return skip('未取得可確認的推論結果，請檢查訂閱代理。');
+    completedOverLimit = !ok && result.skipped === 'output_limit';
+    if (!ok && !failure && !completedOverLimit) return skip('未取得可確認的推論結果，請檢查訂閱代理。');
     if (!ok && failure && ['quota','quota_unavailable','concurrent_request'].includes(failure.kind) && failure.status === undefined)
       return skip(`${upstreamFailureText(failure)}，未送出真實推論。`);
     const latency = Date.now() - sent;
@@ -206,6 +220,9 @@ export async function probeInference(
     return skip('無法取得推論檢查結果，請確認執行器與主機資源連線。');
   }
   if (!(await eligible())) return false;
+  await db.query(`UPDATE inference_probe_budget SET attempts=attempts+1,early_attempts=early_attempts+$2
+    WHERE id AND reserved_at=$1::timestamptz`, [reservation.receipt, early ? 1 : 0]);
+  if (completedOverLimit) return skip('探測輸出超過本地上限，無法確認推論健康。');
   await recordHealth(db, inference, ok, detail, {
     inferenceObservation: { model, started: new Date(started) },
     probe: {

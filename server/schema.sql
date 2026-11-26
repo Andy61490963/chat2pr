@@ -828,8 +828,14 @@ CREATE TABLE IF NOT EXISTS task_stalls (
 );
 CREATE INDEX IF NOT EXISTS task_stalls_notice ON task_stalls(notice_id) WHERE notice_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS inference_probe_budget (
- id boolean PRIMARY KEY CHECK(id), day date NOT NULL, attempts integer NOT NULL CHECK(attempts BETWEEN 1 AND 8)
+ id boolean PRIMARY KEY CHECK(id), day date NOT NULL, attempts integer NOT NULL CONSTRAINT inference_probe_count CHECK(attempts BETWEEN 0 AND 8)
 );
+DO $$ BEGIN
+ IF EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='inference_probe_budget'::regclass AND conname='inference_probe_budget_attempts_check') THEN
+   ALTER TABLE inference_probe_budget DROP CONSTRAINT inference_probe_budget_attempts_check,
+     ADD CONSTRAINT inference_probe_count CHECK(attempts BETWEEN 0 AND 8);
+ END IF;
+END $$;
 ALTER TABLE inference_probe_budget ADD COLUMN IF NOT EXISTS reserved_at timestamptz;
 ALTER TABLE inference_probe_budget ADD COLUMN IF NOT EXISTS early_attempts integer NOT NULL DEFAULT 0 CHECK(early_attempts BETWEEN 0 AND 2);
 CREATE INDEX IF NOT EXISTS audit_task_failure ON audit(task_id,created_at DESC,id DESC) WHERE kind='error';

@@ -80,6 +80,44 @@ function work(phase: string, job = { mode: "subscription" }) {
 const current = async () => {};
 const recovered = async () => {};
 
+it.each(["code", "review"])("%s 只把主機代理的失敗類別交給健康檢查，容器結束碼零不能取代完成證據", async (phase) => {
+  fixture.credentials.mockResolvedValue(identity);
+  const evidence = vi.fn();
+  const recover = vi.fn();
+  const probe = vi.fn();
+  const diagnostics = new RunInferenceDiagnostics();
+  let exitCode = 0;
+  let callBroker = false;
+  fixture.container.mockImplementation(async (_id, _image, _command, _net, input: string) => {
+    if (callBroker) {
+      const job = JSON.parse(input);
+      const response = await fixture.broker!.inject({
+        method: "POST", url: new URL(job.proxyUrl).pathname + "/responses",
+        headers: { authorization: `Bearer ${job.token}` },
+        payload: { model: job.model, input: [], stream: true, store: false },
+      });
+      expect(response.statusCode).toBeGreaterThanOrEqual(400);
+    }
+    return { exitCode, stdout: JSON.stringify({ inferenceCompleted: true, upstreamFailure: { kind: "auth" } }), stderr: "" };
+  });
+  fixture.upstream.mockImplementation(async () => new Response(null, { status: 502 }));
+  const run = () => diagnostics.phase(true, phase, runner.call<PhaseResult>("phase", work(phase)), current, recover, evidence);
+  await run();
+  exitCode = 1;
+  await run();
+  expect(evidence).not.toHaveBeenCalled();
+  callBroker = true;
+  exitCode = 0;
+  await run();
+  expect(recover).not.toHaveBeenCalled();
+  expect(evidence).not.toHaveBeenCalled();
+  exitCode = 1;
+  await run();
+  expect(evidence.mock.calls).toEqual([[{ kind: "upstream_http", status: 502 }]]);
+  diagnostics.finish(probe);
+  expect(probe).toHaveBeenCalledOnce();
+});
+
 it.each(["code", "review"])("%s 只有本階段代理真的傳回完成的推論才回報恢復", async (phase) => {
   fixture.credentials.mockResolvedValue(identity);
   const recoveredWork = vi.fn(async () => {});
@@ -130,11 +168,29 @@ it.each([
     : Promise.resolve<PhaseResult>(source === "階段成功"
       ? { exitCode: 0, stdout: "", stderr: "", inferenceCompleted: true }
       : { exitCode: 1, stdout: "", stderr: "", upstreamFailure: { kind: "upstream_http", status: 502 } });
-  await expect(diagnostics.phase(true, "code", phase, async () => { throw new Error(stop); }, recover)).rejects.toThrow(stop);
+  const evidence = vi.fn();
+  await expect(diagnostics.phase(true, "code", phase, async () => { throw new Error(stop); }, recover, evidence)).rejects.toThrow(stop);
+  expect(evidence).not.toHaveBeenCalled();
   expect(diagnostics.failure).toBeUndefined();
   diagnostics.finish(probe);
   expect(probe).not.toHaveBeenCalled();
   expect(recover).not.toHaveBeenCalled();
+});
+
+it("失敗證據寫入失敗時不蓋掉原本的訂閱錯誤，也不丟掉補測請求", async () => {
+  fixture.credentials.mockRejectedValue(new Error("SyntheticPrivate1234"));
+  const diagnostics = new RunInferenceDiagnostics();
+  const evidence = vi.fn(async () => { throw new Error("SyntheticPrivate1234"); });
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const request = vi.fn();
+  try {
+    await expect(diagnostics.phase(true, "review", runner.call<PhaseResult>("phase", work("review")), current, recovered, evidence))
+      .rejects.toMatchObject({ statusCode: 503, upstreamFailure: { kind: "auth" } });
+    diagnostics.finish(request);
+    expect(evidence).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledOnce();
+    expect(warn.mock.calls.flat().join(" ")).not.toContain("SyntheticPrivate1234");
+  } finally { warn.mockRestore(); }
 });
 
 it("健康讀數無法寫入仍交回原本的工作結果，不觸發補測也不公開錯誤原文", async () => {
@@ -165,13 +221,15 @@ it.each([
   const body = work(phase);
   const request = vi.fn();
   const diagnostics = new RunInferenceDiagnostics();
-  await expect(diagnostics.phase(true, phase, runner.call<PhaseResult>("phase", body), current, recovered)).rejects.toMatchObject({
+  const evidence = vi.fn();
+  await expect(diagnostics.phase(true, phase, runner.call<PhaseResult>("phase", body), current, recovered, evidence)).rejects.toMatchObject({
     message, statusCode, upstreamFailure: { kind },
   });
   expect(await runner.observations(body.runId, 0)).toContainEqual(expect.objectContaining({
     kind: "phase_end", phase, detail: kind, exitCode: 1,
   }));
   expect(fixture.container).not.toHaveBeenCalled();
+  expect(evidence.mock.calls).toEqual([[{ kind }]]);
   expect(request).not.toHaveBeenCalled();
   diagnostics.finish(request);
   expect(request).toHaveBeenCalledTimes(1);

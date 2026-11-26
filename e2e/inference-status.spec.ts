@@ -1,8 +1,10 @@
 import { expect, test } from "@playwright/test";
+import { visibleHealth } from "../server/inference-health.js";
 import {
   defaultState,
   emitDashboardEvent,
   failedInferenceHealth,
+  firstSetupHealth,
   inferenceHealthFixture,
   mockDashboard,
   unknownInferenceScenarios,
@@ -77,6 +79,37 @@ for (const scenario of scenarios) {
       await expect(row.getByText(label, { exact: true })).not.toHaveClass(/text-(danger|good)\b/);
       await expect(row).not.toContainText("最後確認");
     }
+  });
+}
+
+for (const scenario of ["已有推論失敗讀數", "尚無推論讀數"]) {
+  test(`登入失效且${scenario}時，顯示紅色停擺橫幅並列為需處理`, async ({ page }, info) => {
+    const checked_at = new Date();
+    const detail = "服務的 Codex 尚未登入，請執行 npm run codex:login";
+    const health = visibleHealth([
+      { name: "codex", ok: false, detail, checked_at },
+      { name: "codex_subscription_gate", ok: true, detail: "訂閱額度可用", checked_at },
+      ...(scenario === "已有推論失敗讀數" ? [{ name: "codex_inference", ok: false, detail: "訂閱上游回應失敗", checked_at }] : []),
+    ]);
+    await mockDashboard(page);
+    await page.route(/\/api\/state(\?|$)/, route => route.fulfill({ json: {
+      ...defaultState, health: [...firstSetupHealth.filter(row => row.name !== "codex"), ...health],
+    } }));
+    await page.goto("/system?tab=execution");
+    const banner = page.getByRole("alert").filter({ hasText: /Codex 訂閱推論.*連線異常/ });
+    await expect(banner).toBeVisible();
+    await expect(banner).toHaveClass(/text-danger/);
+    await expect(page.getByRole("tab", { name: /^執行.*1 項$/ })).toBeVisible();
+    const card = page.getByRole("region", { name: "Codex 訂閱推論" });
+    await expect(card.getByText("異常", { exact: true })).toBeVisible();
+    await expect(card.getByText(detail, { exact: true })).toBeVisible();
+    await page.screenshot({ path: info.outputPath(`推論登入失效（${scenario}）.png`), fullPage: true, animations: "disabled" });
+    await page.goto("/settings?tab=connections");
+    const service = page.getByRole("tabpanel", { name: /^連線與金鑰/ }).getByRole("listitem").filter({
+      has: page.getByText("Codex 訂閱推論", { exact: true }),
+    });
+    await expect(service.getByText("異常", { exact: true })).toBeVisible();
+    await expect(service).toContainText(detail);
   });
 }
 

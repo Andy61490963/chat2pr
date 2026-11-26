@@ -27,6 +27,7 @@ export interface SubscriptionIdentity {
   quota?: SubscriptionUsage;
 }
 interface Run {
+  completedProbeOverLimit?: boolean;
   deadline: number;
   requests: number;
   inputBytes: number;
@@ -71,7 +72,7 @@ const ProbeInput = z.strictObject({
   model: z.string().regex(/^[\w.-]{1,80}$/).nullable(),
   reservePercent: z.number().int().min(0).max(maxCodexReserve),
 });
-type ProbeResult = { ok: true } | { ok: false; failure: UpstreamFailure };
+type ProbeResult = { ok: true } | { ok: false; failure: UpstreamFailure } | { ok: false; skipped: "output_limit" };
 const digest = (s: string) => createHash("sha256").update(s).digest("hex");
 export class BrokerError extends AppError {
   constructor(status: number, message: string, readonly kind?: UpstreamFailure["kind"]) {
@@ -457,6 +458,8 @@ export class SubscriptionBroker {
         maxResponseBytes: probeLimits.responseBytes,
       });
       const failure = lease.failure();
+      if (failure?.kind === "output_limit" && this.runs.get(runId)?.completedProbeOverLimit)
+        return { ok: false, skipped: "output_limit" };
       if (failure) return { ok: false, failure };
       if (response.status === 200 && lease.inferenceCompleted()) return { ok: true };
       return { ok: false, failure: { kind: "connection" } };
@@ -844,8 +847,10 @@ export class SubscriptionBroker {
                 run.outputTokens += u.output_tokens;
                 if (probe && u.input_tokens > probeLimits.inputTokens)
                   throw safeError(429, "訂閱探測已達輸入用量上限", "usage_limit");
-                if (truncatedProbe || run.outputTokens > (probe ? probeLimits.outputTokens : subscriptionLimits.outputTokens))
+                if (truncatedProbe || run.outputTokens > (probe ? probeLimits.outputTokens : subscriptionLimits.outputTokens)) {
+                  if (probe && event.type === "response.completed") run.completedProbeOverLimit = true;
                   throw safeError(429, "訂閱工作已達應用程式用量上限", "output_limit");
+                }
                 if (event.type === "response.incomplete")
                   throw safeError(502, "訂閱推論串流回報錯誤", "stream_error");
                 completedTokens = u.output_tokens;

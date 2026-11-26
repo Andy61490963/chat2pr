@@ -3,6 +3,7 @@ import { db, reset, session } from "./helpers.js";
 import { buildApp } from "../server/app.js";
 import { probeInference } from "../server/inference-health.js";
 import { HttpRunner } from "../server/execution.js";
+import { recordWorkInferenceFailure } from '../server/inference-health.js';
 
 vi.mock("../server/config.js", async (original) => ({
   ...(await original<typeof import("../server/config.js")>()),
@@ -25,6 +26,58 @@ afterEach(async () => {
   );
 });
 afterAll(() => db.close());
+
+it.each(['quota', 'quota_unavailable', 'concurrent_request', 'runner'])('代理略過或未取得結果（%s）不耗一般及提早補測名額，仍保留冷卻', async reason => {
+  const runner = new HttpRunner();
+  const call = vi.spyOn(runner, 'call');
+  if (reason === 'runner') call.mockRejectedValue(new Error('無法取樣'));
+  else call.mockResolvedValue({ ok: false, failure: { kind: reason } });
+  const revision = (await db.settingsSnapshot()).revision;
+  const probe = () => probeInference(db, runner, revision, async () => ({ known: true, hold: null }), true);
+  expect(await probe()).toBe('unavailable');
+  await probe();
+  expect(call).toHaveBeenCalledTimes(1);
+  expect(await db.one('SELECT attempts,early_attempts FROM inference_probe_budget')).toEqual({ attempts: 0, early_attempts: 0 });
+  await db.query("UPDATE inference_probe_budget SET reserved_at=now()-interval '16 minutes'");
+  call.mockResolvedValue({ ok: true });
+  expect(await probe()).toBe(true);
+  expect(await db.one('SELECT attempts,early_attempts FROM inference_probe_budget')).toEqual({ attempts: 1, early_attempts: 1 });
+});
+
+it('已完成但超過本地上限的探測計一次用量，維持未確認且不發停擺通知', async () => {
+  const runner = new HttpRunner();
+  vi.spyOn(runner, 'call').mockResolvedValue({ ok:false, skipped:'output_limit' });
+  const revision = (await db.settingsSnapshot()).revision;
+  const probe = () => probeInference(db, runner, revision, async () => ({ known:true, hold:null }));
+  await probe();
+  await db.query("UPDATE inference_probe_budget SET reserved_at=now()-interval '16 minutes'");
+  await probe();
+  await probe();
+  const { systemHealth } = await import('../server/inference-health.js');
+  expect((await systemHealth(db)).find(row => row.name === 'codex')).toMatchObject({ inferenceStatus:'unknown',detail:expect.stringContaining('探測輸出超過本地上限') });
+  expect(await db.one('SELECT attempts FROM inference_probe_budget')).toEqual({ attempts:2 });
+  expect(await db.query("SELECT 1 FROM service_health WHERE name='codex_inference'")).toEqual([]);
+  expect(await db.query("SELECT 1 FROM notifications WHERE kind='service_down'")).toEqual([]);
+});
+
+it('一般名額用完後，可信工作失敗開啟保留名額；後續工作不延後十五分鐘確認與通知', async () => {
+  const runner = new HttpRunner();
+  const failure = { kind: 'upstream_http', status: 502 } as const;
+  const call = vi.spyOn(runner, 'call').mockResolvedValue({ ok: false, failure });
+  const revision = (await db.settingsSnapshot()).revision;
+  const probe = () => probeInference(db, runner, revision, async () => ({ known: true, hold: null }));
+  await db.query("INSERT INTO inference_probe_budget(id,day,attempts,early_attempts) VALUES(true,(now() AT TIME ZONE 'Asia/Taipei')::date,6,2)");
+  await recordWorkInferenceFailure(db, null, new Date(), {kind:'output_limit'});
+  expect(await probe()).toBe('unavailable');
+  await recordWorkInferenceFailure(db, null, new Date(), failure);
+  const aged = await db.one("UPDATE service_health SET checked_at=now()-interval '16 minutes',outage_started_at=now()-interval '16 minutes' WHERE name='codex_inference' RETURNING checked_at");
+  await recordWorkInferenceFailure(db, null, new Date(), failure);
+  expect(await db.one("SELECT checked_at FROM service_health WHERE name='codex_inference'")).toEqual(aged);
+  expect(await probe()).toBe('failed');
+  expect(call).toHaveBeenCalledTimes(1);
+  expect(await db.one('SELECT attempts FROM inference_probe_budget')).toEqual({ attempts: 7 });
+  expect(await db.query("SELECT 1 FROM notifications WHERE kind='service_down' AND text LIKE '%502%' ")).toHaveLength(1);
+});
 
 it("同日含失敗補測最多八次，並行搶最後一次不會超支，也不占用使用者次數", async () => {
   const runner = new HttpRunner();
