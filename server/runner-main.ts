@@ -568,6 +568,8 @@ app.post("/phase", async (req, reply) => {
               ? { output: "collect" as const }
               : {}),
             ...(b.phase === "install" ? { nugetFeed: true } : {}),
+            onRejectedWorkerEvent: (kind, reason) =>
+              observations.rejectWorkerEvent(b.runId, b.phase, kind, reason),
             ...(b.env?.length && b.phase !== "collect" ? { env: b.env } : {}),
             ...(b.phase === "collect" && b.exclude
               ? { collectExclude: b.exclude }

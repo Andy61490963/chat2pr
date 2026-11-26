@@ -1,5 +1,5 @@
 import { validateLabel } from "../shared/project-setup.js";
-import { parseFailure } from "../shared/failure-text.js";
+import { parseFailure, primaryFix } from "../shared/failure-text.js";
 import { describe, expect, it } from "vitest";
 import {
   classifyFailure,
@@ -26,6 +26,27 @@ describe("實際錯誤樣本的分類", () => {
     expect(failure.plain).toContain("訂閱上游回應失敗");
     expect(groupFailureText(failure)).not.toContain("虛構的容器輸出");
   });
+  it.each([
+    { kept: "修改已保留", phase: "review", next: "從測試與獨立審查接續", groupNext: "從驗證接續" },
+    { kept: "修改與審查意見已保留", phase: "code", next: "直接進行唯一一次自動修復", groupNext: "接著自動修復" },
+  ])("$kept時，看板與群組同時說明代理原因與重試接續點", ({ kept, phase, next, groupNext }) => {
+    const failure = classifyFailure(
+      `${kept}，執行超過時間限制\n虛構的容器輸出`,
+      phase, "task", undefined, { kind: "phase_deadline" },
+    );
+    const notice = failureNotice(failure);
+    const parsed = parseFailure(notice);
+    const group = groupFailureText(failure);
+    for (const message of [notice, group]) {
+      expect(message).toContain(kept);
+      expect(message).toContain("訂閱階段已超過期限");
+      expect(message).not.toContain("虛構的容器輸出");
+    }
+    expect(parsed?.action).toContain(next);
+    expect(primaryFix(parsed)).toEqual({ kind: "retry" });
+    expect(group).toContain(groupNext);
+  });
+
   it("系統套件（#18）：來源被白名單擋下或計畫不再通過固定規則是設定問題，其他安裝失敗是環境問題", () => {
     for (const raw of [
       "系統套件安裝失敗（退出碼 100）：Err:1 https://deb.debian.org/debian bookworm InRelease\n  403  Forbidden [IP: 172.18.0.2 3128]",

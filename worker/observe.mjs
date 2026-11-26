@@ -13,11 +13,11 @@ export async function observeTurn(thread, prompt, options, emit) {
     if (e.type === "turn.completed") {
       completed = true;
       usage = e.usage;
-      emit({ kind: "usage", detail: JSON.stringify(e.usage) });
+      emit({ kind: "usage", detail: JSON.stringify(e.usage)?.slice(0, 6000) });
     }
     if (e.type === "turn.failed" || e.type === "error") {
       const message = e.error?.message ?? e.message ?? "Codex 執行失敗";
-      emit({ kind: "error", detail: message });
+      emit({ kind: "error", detail: message.slice(0, 6000) });
       if (e.type === "turn.failed") throw new Error(message);
     }
     const item = e.item;

@@ -162,6 +162,50 @@ function frameData(frame: string) {
     .map((line) => line.slice(5).trimStart())
     .join("\n");
 }
+// 截斷的 JSON 不能整筆解析，但已收到的字串仍要和完整事件的同名欄位一起檢查。
+function visitPartialStrings(data: string, visit: (value: string, key: string) => void) {
+  // 物件等待下一個欄名；陣列裡的字串沿用陣列所屬的欄名，與完整事件相同。
+  const parents: (string | undefined)[] = [];
+  let key: string | undefined = "";
+  for (let i = 0; i < data.length; i++) {
+    switch (data[i]) {
+      case "{":
+        key = undefined;
+        parents.push(key);
+        break;
+      case "[":
+        parents.push(key);
+        break;
+      case "}":
+      case "]":
+        parents.pop();
+        break;
+      case ",":
+        key = parents.at(-1);
+        break;
+      case '"': {
+        const start = i + 1;
+        let end = start;
+        for (i = start; i < data.length && data[i] !== '"'; i++) {
+          if (data[i] === "\\") {
+            i += data[i + 1] === "u" ? 5 : 1;
+            if (i >= data.length) break;
+          }
+          end = i + 1;
+        }
+        let value: string;
+        try {
+          value = JSON.parse(`"${data.slice(start, end)}"`);
+        } catch {
+          return;
+        }
+        if (key === undefined) key = value;
+        else visit(value, key);
+        break;
+      }
+    }
+  }
+}
 function containsCredential(events: unknown[], secrets: Set<string>, tail = "") {
   const lanes = new Map<string, string[]>();
   function visit(value: unknown, key = "") {
@@ -175,10 +219,11 @@ function containsCredential(events: unknown[], secrets: Set<string>, tail = "") 
   }
   events.forEach((event) => visit(event));
   if (tail) {
+    const data = frameData(tail);
     try {
-      visit(JSON.parse(frameData(tail)));
+      visit(JSON.parse(data));
     } catch {
-      // 最後一個事件可能只收到一部分，下面仍會檢查原文。
+      visitPartialStrings(data, visit);
     }
   }
   const serialized = JSON.stringify(events);
