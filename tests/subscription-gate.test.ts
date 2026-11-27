@@ -89,6 +89,17 @@ it("並行檢查只讀一次；首次 quota 立即覆寫正向快取，恢復須
   ).toBe(true);
 });
 
+it.each([
+  ["ECONNREFUSED", "無法連上主機執行器"],
+  ["ETIMEDOUT", "無法確認 Codex 訂閱額度"],
+])("連線錯誤 %s 以錯誤代碼而非訊息記錄關卡原因", async (code, reason) => {
+  const gate = new SubscriptionGate(db, async () => {
+    throw new TypeError("ECONNREFUSED", { cause: { code } });
+  });
+  await expect(gate.ensure()).rejects.toThrow(reason);
+  expect(await db.one("SELECT ok,detail FROM service_health WHERE name=$1", [subscriptionGateName])).toMatchObject({ ok: false, detail: expect.stringContaining(reason) });
+});
+
 it("正向額度快取最多 30 秒；下次讀到 false 就停止", async () => {
   const read = vi.fn(async () => account(true));
   const gate = new SubscriptionGate(db, read);
