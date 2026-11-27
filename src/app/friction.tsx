@@ -9,7 +9,11 @@ import { NativeSelect } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/form-controls";
 import { useEffect, useState } from "react";
-import { maxExcludedGroups, type FrictionMetrics } from "../../shared/friction";
+import {
+  maxExcludedGroups,
+  minP95Samples,
+  type FrictionMetrics,
+} from "../../shared/friction";
 import {
   Card,
   CardContent,
@@ -39,6 +43,7 @@ export function FrictionCard({
   const [excluded, setExcluded] = useState<string[]>([]);
   const [data, setData] = useState<FrictionMetrics | null>(null);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
     let current = true;
     const query = new URLSearchParams({ days: String(days) });
@@ -46,13 +51,19 @@ export function FrictionCard({
     if (group === "exclude")
       excluded.forEach((id) => query.append("exclude_group_id", id));
     setError("");
-    setData(null);
+    setLoading(true);
     void request<FrictionMetrics>(`/api/metrics/friction?${query}`).then(
       (result) => {
-        if (current) setData(result);
+        if (current) {
+          setData(result);
+          setLoading(false);
+        }
       },
       (reason) => {
-        if (current) setError(message(reason));
+        if (current) {
+          setError(message(reason));
+          setLoading(false);
+        }
       },
     );
     return () => {
@@ -60,12 +71,13 @@ export function FrictionCard({
     };
   }, [request, days, group, excluded]);
   const scope = data?.groupId
-    ? state.groups.find((item) => item.id === data.groupId)?.name
+    ? (state.groups.find((item) => item.id === data.groupId)?.name ??
+      "單一群組")
     : data?.excludedGroupIds.length
       ? `全部群組，排除 ${data.excludedGroupIds.length} 個`
       : "全部群組";
   const waitHint = (samples: number, sources: number, tail: number | null) =>
-    `中位數，樣本 ${samples} 筆，其中 ${sources} 筆有來源。第 95 百分位：${duration(tail)}`;
+    `中位數，樣本 ${samples} 筆，其中 ${sources} 筆有來源。第 95 百分位：${samples < minP95Samples ? "樣本不足" : duration(tail)}`;
   const rows: [string, string, string][] = data
     ? [
         [
@@ -113,12 +125,13 @@ export function FrictionCard({
       <CardHeader className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex flex-col gap-1">
           <SectionHeader>使用摩擦</SectionHeader>
-          <CardDescription>
+          <CardDescription role="status">
             {data
-              ? `近 ${data.days} 天建立的 ${data.tasks} 件任務`
+              ? `近 ${data.days} 天，範圍：${scope}（共 ${data.tasks} 件任務）`
               : error
                 ? "尚未取得統計"
                 : "讀取中…"}
+            {data && loading && " 更新中…"}
           </CardDescription>
         </div>
         <Toolbar className="text-sm">
@@ -154,7 +167,7 @@ export function FrictionCard({
           <fieldset className="mb-4 min-w-0">
             <legend className="text-sm font-medium">排除哪些群組？</legend>
             <p className="text-xs text-muted-foreground">
-              只影響等待時間與取消量，最多選 {maxExcludedGroups} 個。
+              最多選 {maxExcludedGroups} 個群組。
             </p>
             <div className="flex flex-wrap items-center gap-x-4">
               {state.groups.map((item) => (
@@ -197,8 +210,7 @@ export function FrictionCard({
         )}
         {data && (
           <p className="mb-2 text-sm">
-            等待時間與取消量：<strong>{scope}</strong>
-            。找不到來源訊息時，以建單時間為起點。
+            等待時間以來源訊息為起點；找不到來源時，以建單時間為起點。
           </p>
         )}
         <DataList variant="bordered">

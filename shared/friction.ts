@@ -1,4 +1,5 @@
 export const maxExcludedGroups = 20;
+export const minP95Samples = 20;
 
 /** 使用摩擦指標：每件任務需要人回應、切到看板的次數，以及等待時間等。 */
 export interface FrictionMetrics {

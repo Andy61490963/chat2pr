@@ -190,7 +190,7 @@ for (const width of [375, 1440]) {
       return route.fulfill({
         json: {
           days: 7,
-          tasks: 6,
+          tasks: 2,
           excludedGroupIds: ids,
           groupId: null,
           firstReplySeconds: 30,
@@ -226,11 +226,14 @@ for (const width of [375, 1440]) {
       await loaded;
       await expect(checkbox).toBeChecked();
     }
-    const scope = page.getByText("全部群組，排除 2 個", { exact: true });
+    const scope = page.getByText(
+      "近 7 天，範圍：全部群組，排除 2 個（共 2 件任務）",
+      { exact: true },
+    );
     await expect(scope).toBeVisible();
     await expect(
       page.getByText(
-        "中位數，樣本 1 筆，其中 1 筆有來源。第 95 百分位：1 分鐘",
+        "中位數，樣本 1 筆，其中 1 筆有來源。第 95 百分位：樣本不足",
         { exact: true },
       ),
     ).toBeVisible();
@@ -241,8 +244,13 @@ for (const width of [375, 1440]) {
       await page.evaluate(() => document.documentElement.scrollWidth),
     ).toBeLessThanOrEqual(width);
     if (width === 375) {
-      await page.setViewportSize({ width, height: (await card.evaluate(element => element.scrollHeight)) + 240 });
-      await card.evaluate(element => element.scrollIntoView({ block: "center", behavior: "instant" }));
+      await page.setViewportSize({
+        width,
+        height: (await card.evaluate((element) => element.scrollHeight)) + 240,
+      });
+      await card.evaluate((element) =>
+        element.scrollIntoView({ block: "center", behavior: "instant" }),
+      );
     }
     await card.screenshot({ path: info.outputPath(`等待時間-${width}.png`) });
     await page
@@ -251,12 +259,77 @@ for (const width of [375, 1440]) {
     await expect(page.getByRole("checkbox", { checked: true })).toHaveCount(0);
     await expect(scope).toHaveCount(0);
     await expect(
-      page.getByText("中位數，樣本 0 筆，其中 0 筆有來源。第 95 百分位：—", {
-        exact: true,
-      }),
+      page.getByText(
+        "中位數，樣本 0 筆，其中 0 筆有來源。第 95 百分位：樣本不足",
+        {
+          exact: true,
+        },
+      ),
     ).toBeVisible();
   });
 }
+
+test("保留上次統計且較慢的回應不能覆蓋新範圍，各列依自己的樣本數顯示百分位", async ({
+  page,
+}) => {
+  await mockDashboard(page);
+  let release = () => {};
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route(/\/api\/metrics\/friction\?/, async (route) => {
+    const days = Number(
+      new URL(route.request().url()).searchParams.get("days"),
+    );
+    if (days === 30) await gate;
+    await route.fulfill({
+      json: {
+        days,
+        tasks: days === 90 ? 40 : 25,
+        groupId: null,
+        excludedGroupIds: [],
+        answerSamples: 19,
+        answerSources: 19,
+        answerSeconds: 40,
+        answerP95Seconds: 90,
+        firstReplySamples: 20,
+        firstReplySources: 19,
+        firstReplySeconds: 20,
+        firstReplyP95Seconds: 48,
+        cancelled: 0,
+        responsesPerTask: 0,
+        dashboardPerTask: 0,
+        restated: 0,
+        relinked: 0,
+        reworkBase: 0,
+        reworkRate: null,
+      },
+    });
+  });
+  await page.goto("/system");
+  const period = page.getByRole("combobox", { name: "期間", exact: true });
+  const slower = page.waitForRequest((request) =>
+    request.url().includes("/metrics/friction?days=30"),
+  );
+  const first = page.getByText(/近 7 天.*25 件任務/);
+  await expect(first).toBeVisible();
+  await period.selectOption("30");
+  await slower;
+  try {
+    await expect(first).toBeVisible();
+    await expect(page.getByText("查詢拿到答案", { exact: true })).toBeVisible();
+    await period.selectOption("90");
+    await expect(page.getByText(/近 90 天.*40 件任務/)).toBeVisible();
+  } finally {
+    release();
+  }
+  await page.waitForLoadState("networkidle");
+  await expect(page.getByText(/近 90 天.*40 件任務/)).toBeVisible();
+  await expect(
+    page.getByText(/樣本 19 筆.*第 95 百分位：樣本不足/),
+  ).toBeVisible();
+  await expect(page.getByText(/樣本 20 筆.*第 95 百分位：48 秒/)).toBeVisible();
+});
 
 test("使用摩擦可在系統頁查看", async ({ page }) => {
   await mockDashboard(page);

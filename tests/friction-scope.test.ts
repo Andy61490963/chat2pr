@@ -32,6 +32,27 @@ beforeAll(async () => {
       "INSERT INTO tasks(project_id,group_id,title,summary,acceptance,status,mode,dedupe_key) VALUES($1,$2,'變更','變更','[]','cancelled','change',$3)",
       [project, group, randomUUID()],
     );
+    if (group === "group-c") {
+      await db.query("UPDATE tasks SET updated_at=created_at WHERE id=$1", [
+        id,
+      ]);
+      await db.query(
+        "INSERT INTO audit(task_id,kind,detail) VALUES($1,'relinked','改接'),($1,'question_answered','群組成員回答')",
+        [id],
+      );
+      const merged = await db.one<{ id: string }>(
+        `INSERT INTO tasks(project_id,group_id,title,summary,acceptance,status,mode,dedupe_key,project_routing,created_at) VALUES($1,$2,'修改','修改','[]','merged','change',$3,'{"basis":"explicit"}',current_date-interval '50 minutes') RETURNING id`,
+        [project, group, randomUUID()],
+      );
+      await db.query(
+        "INSERT INTO audit(task_id,kind,detail,created_at) VALUES($1,'merged','已合併',current_date-interval '45 minutes')",
+        [merged.id],
+      );
+      await db.query(
+        "UPDATE tasks SET parent_id=$1 WHERE group_id=$2 AND status='cancelled'",
+        [merged.id, group],
+      );
+    }
   }
 });
 afterAll(async () => {
@@ -39,12 +60,12 @@ afterAll(async () => {
   await db.close();
 });
 
-it("切換全部、單群及多群排除會重算等待分布與取消量", async () => {
+it("切換全部、單群及多群排除會重算整張卡片的每一列", async () => {
   const headers = await session();
   for (const [query, tasks, samples, sources, median, tail, cancelled] of [
-    ["", 6, 3, 2, 180, 828, 3],
-    ["exclude_group_id=group-c", 6, 2, 1, 120, 174, 2],
-    ["exclude_group_id=group-a&exclude_group_id=group-c", 6, 1, 0, 180, 180, 1],
+    ["", 7, 3, 2, 180, 828, 3],
+    ["exclude_group_id=group-c", 4, 2, 1, 120, 174, 2],
+    ["exclude_group_id=group-a&exclude_group_id=group-c", 2, 1, 0, 180, 180, 1],
     ["group_id=group-a", 2, 1, 1, 60, 60, 1],
   ] as const) {
     const response = await app.inject({
@@ -53,6 +74,12 @@ it("切換全部、單群及多群排除會重算等待分布與取消量", asyn
     });
     expect(response.json()).toMatchObject({
       tasks,
+      responsesPerTask: query ? 0 : 0.29,
+      dashboardPerTask: query ? 0 : 0.14,
+      restated: query ? 0 : 1,
+      relinked: query ? 0 : 1,
+      reworkRate: query ? null : 1,
+      reworkBase: query ? 0 : 1,
       answerSamples: samples,
       answerSources: sources,
       answerSeconds: median,

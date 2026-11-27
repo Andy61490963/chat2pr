@@ -37,18 +37,16 @@ export async function frictionMetrics(
     `WITH scope AS (
        SELECT t.* FROM tasks t
        WHERE t.created_at>now()-make_interval(days=>$1) AND ($2::text IS NULL OR t.group_id=$2)
+         AND (t.group_id IS NULL OR NOT (t.group_id=ANY($5::text[])))
      ),
      human AS (
        SELECT a.task_id,count(*) FILTER (WHERE a.kind=ANY($3)) AS responses,
          count(*) FILTER (WHERE a.kind=ANY($4) OR (a.kind='question_answered' AND a.detail NOT LIKE '群組成員%')) AS dashboard
        FROM audit a JOIN scope s ON s.id=a.task_id GROUP BY a.task_id
      ),
-     wait_scope AS (
-       SELECT * FROM scope WHERE group_id IS NULL OR NOT (group_id=ANY($5::text[]))
-     ),
      started AS (
        SELECT s.id,s.mode,COALESCE(source.at,s.created_at) AS at,source.at IS NOT NULL AS sourced
-       FROM wait_scope s CROSS JOIN LATERAL (SELECT min(m.received_at) AS at FROM messages m WHERE m.id=ANY(s.source_ids)) source
+       FROM scope s CROSS JOIN LATERAL (SELECT min(m.received_at) AS at FROM messages m WHERE m.id=ANY(s.source_ids)) source
      ),
      first_reply AS (
        SELECT extract(epoch FROM min(n.sent_at)-st.at) AS seconds,st.sourced
@@ -73,7 +71,7 @@ export async function frictionMetrics(
             AND p.status IN ('answered','ready','merged') AND p.updated_at BETWEEN s.created_at-interval '30 minutes' AND s.created_at)) AS restated,
        (SELECT count(*) FROM audit a JOIN scope s ON s.id=a.task_id WHERE a.kind='relinked') AS relinked,
        reply_stats.*,answer_stats.*,
-       (SELECT count(*) FROM wait_scope WHERE status='cancelled') AS cancelled,
+       (SELECT count(*) FROM scope WHERE status='cancelled') AS cancelled,
        (SELECT count(*) FROM merged WHERE merged_at IS NOT NULL) AS rework_base,
        (SELECT count(*) FROM merged m WHERE m.merged_at IS NOT NULL AND EXISTS(
           SELECT 1 FROM tasks c WHERE c.parent_id=m.id AND c.mode<>'query' AND c.created_at BETWEEN m.merged_at AND m.merged_at+interval '7 days')) AS rework
