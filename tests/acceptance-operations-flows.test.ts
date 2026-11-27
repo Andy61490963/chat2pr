@@ -1,6 +1,7 @@
 import { createHmac, randomUUID } from "node:crypto";
 import { expect, it, vi, afterEach, beforeEach } from "vitest";
 import { Decisions } from "../server/triage.js";
+import { quotaBellNotice } from "../shared/line-quota.js";
 import { basicFixture, type BasicFlowContext } from "../scripts/acceptance/flows/basic.js";
 import { runOperationsFlow, type OperationsControls } from "../scripts/acceptance/flows/operations.js";
 import { archiveRunner, operationsRunner, prepareProject } from "../scripts/acceptance/flows/application.js";
@@ -197,7 +198,7 @@ function fixture(entry: "normal" | "active" | "approval" | "memory" = "normal") 
         alerts.push({
           task_id: null,
           kind: "line_quota",
-          text: "LINE 推播額度用完，群組回覆與私訊暫停，看板通知照常",
+          text: quotaBellNotice,
         });
     }),
   } satisfies OperationsControls;

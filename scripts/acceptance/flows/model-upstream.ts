@@ -1,4 +1,4 @@
-import type { RequestListener } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 
 export type ModelStep =
   | { kind: "text"; text: string }
@@ -8,9 +8,9 @@ export type ModelStep =
 
 export function createModelUpstreamHandler(
   steps: readonly ModelStep[],
-): RequestListener {
+) {
   let position = 0;
-  return async (request, reply) => {
+  return async (request: IncomingMessage, reply: ServerResponse, body?: Buffer) => {
     if (request.url !== "/backend-api/codex/responses") {
       reply.writeHead(404).end();
       return;
@@ -24,7 +24,7 @@ export function createModelUpstreamHandler(
       const parts: Buffer[] = [];
       let length = 0;
       try {
-        for await (const part of request) {
+        for await (const part of body ? [body] : request) {
           const bytes = Buffer.from(part); length += bytes.length;
           if (length > 1024 * 1024) { reply.writeHead(413).end(); return; }
           parts.push(bytes);
