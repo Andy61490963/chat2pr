@@ -97,6 +97,9 @@ test("執行觀察頁可從分頁開啟並讀到執行結果", async ({ page }) 
   await tab.press("Enter");
   await expect(tab).toHaveAttribute("aria-selected", "true");
   const run = page.getByRole("region", { name: "Codex 執行紀錄" });
-  await expect(run.getByText("執行結果", { exact: true })).toBeVisible();
+  const outcome = run.getByText("執行結果", { exact: true });
+  await expect(run.getByText("執行已結束", { exact: true })).toBeVisible();
+  await run.evaluate(el => el.scrollIntoView({ block: "center" }));
+  await expect(outcome).toBeInViewport({ ratio: 1 });
   await capture(page, "執行觀察");
 });
