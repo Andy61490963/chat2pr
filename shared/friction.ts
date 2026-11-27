@@ -1,3 +1,5 @@
+export const maxExcludedGroups = 20;
+
 /** 使用摩擦指標：每件任務需要人回應、切到看板的次數，以及等待時間等。 */
 export interface FrictionMetrics {
   days: number;
@@ -15,6 +17,14 @@ export interface FrictionMetrics {
   firstReplySeconds: number | null;
   /** 查詢從提出到回答的秒數中位數。 */
   answerSeconds: number | null;
+  answerSamples: number;
+  answerSources: number;
+  answerP95Seconds: number | null;
+  firstReplySamples: number;
+  firstReplySources: number;
+  firstReplyP95Seconds: number | null;
+  cancelled: number;
+  excludedGroupIds: string[];
   /** 修改合併後 7 天內，同一需求又追加修改的比例。 */
   reworkRate: number | null;
   reworkBase: number;

@@ -6,6 +6,7 @@ import { createBaselineRepair } from "./baseline.js";
 import { probeSystem } from "./system-status.js";
 import { answerFromDashboard } from "./answers.js";
 import { frictionMetrics } from "./friction.js";
+import { maxExcludedGroups } from "../shared/friction.js";
 import {
   approveCheck,
   checkDetail,
@@ -741,10 +742,34 @@ export async function buildApp(
     const q = z
       .object({
         days: z.coerce.number().int().min(1).max(90).default(7),
-        group_id: z.string().max(100).optional(),
+        group_id: z.string().min(1).max(100).optional(),
+        exclude_group_id: z
+          .union([
+            z.string().min(1).max(100),
+            z
+              .array(z.string().min(1).max(100))
+              .max(
+                maxExcludedGroups,
+                `最多可排除 ${maxExcludedGroups} 個群組。`,
+              ),
+          ])
+          .optional(),
       })
       .parse(req.query);
-    return frictionMetrics(db, q.days, q.group_id || null);
+    const excluded = [...new Set([q.exclude_group_id ?? []].flat())];
+    if (q.group_id && excluded.length)
+      throw new AppError(
+        400,
+        "查看單一群組時不能同時排除群組，請選擇一種範圍。",
+      );
+    const ids = q.group_id ? [q.group_id] : excluded;
+    if (
+      ids.length &&
+      (await db.query("SELECT id FROM groups WHERE id=ANY($1::text[])", [ids]))
+        .length !== ids.length
+    )
+      throw new AppError(400, "選取的群組不存在，請重新選擇。");
+    return frictionMetrics(db, q.days, q.group_id ?? null, excluded);
   });
   // 定期檢查：成員可以看；建立、修改、試跑、核准、暫停與刪除需要管理者。
   const checkId = (req: { params: unknown }) =>

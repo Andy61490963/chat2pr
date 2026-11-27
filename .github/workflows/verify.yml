@@ -18,6 +18,14 @@ jobs:
       - run: npm run test:e2e -- --workers=2
         env:
           E2E_PORT: 5336
+      - name: 保留等待時間的桌面與手機截圖
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: friction-scope-screenshots
+          path: test-results/**/等待時間-*.png
+          if-no-files-found: warn
+          retention-days: 14
       - name: 保留收件匣桌面與手機截圖
         if: github.event_name == 'pull_request' && always()
         uses: actions/upload-artifact@v4

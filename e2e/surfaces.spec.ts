@@ -166,6 +166,94 @@ for (const width of [1280, 920, 375]) {
   });
 }
 
+for (const width of [375, 1440]) {
+  test(`等待時間群組範圍可用鍵盤選取與清除（${width}）`, async ({
+    page,
+  }, info) => {
+    await page.setViewportSize({ width, height: 900 });
+    const names = ["示範甲群", "示範乙群", "演練群"];
+    await mockDashboard(page, {
+      state: {
+        ...defaultState,
+        groups: names.map((name, index) => ({
+          ...group,
+          id: `demo-${index}`,
+          name,
+        })),
+      },
+    });
+    await page.route(/\/api\/metrics\/friction\?/, async (route) => {
+      const ids = new URL(route.request().url()).searchParams.getAll(
+        "exclude_group_id",
+      );
+      if (ids.length !== 2) return route.fallback();
+      return route.fulfill({
+        json: {
+          days: 7,
+          tasks: 6,
+          excludedGroupIds: ids,
+          groupId: null,
+          firstReplySeconds: 30,
+          firstReplySamples: 1,
+          firstReplySources: 1,
+          firstReplyP95Seconds: 30,
+          answerSeconds: 60,
+          answerSamples: 1,
+          answerSources: 1,
+          answerP95Seconds: 60,
+          cancelled: 1,
+          responsesPerTask: 0,
+          dashboardPerTask: 0,
+          restated: 0,
+          relinked: 0,
+          reworkRate: null,
+          reworkBase: 0,
+        },
+      });
+    });
+    await page.goto("/system");
+    const selector = page.getByRole("combobox", { name: "群組", exact: true });
+    await selector.selectOption({ label: "排除指定群組" });
+    for (const name of names.slice(1)) {
+      const checkbox = page.getByRole("checkbox", { name });
+      await checkbox.focus();
+      const loaded = page.waitForResponse((response) =>
+        new URL(response.url()).searchParams
+          .getAll("exclude_group_id")
+          .includes(`demo-${names.indexOf(name)}`),
+      );
+      await page.keyboard.press("Space");
+      await loaded;
+      await expect(checkbox).toBeChecked();
+    }
+    const scope = page.getByText("全部群組，排除 2 個", { exact: true });
+    await expect(scope).toBeVisible();
+    await expect(
+      page.getByText(
+        "中位數，樣本 1 筆，其中 1 筆有來源。第 95 百分位：1 分鐘",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    const card = page
+      .locator('[data-slot="card"]')
+      .filter({ has: page.getByRole("heading", { name: "使用摩擦" }) });
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth),
+    ).toBeLessThanOrEqual(width);
+    await card.screenshot({ path: info.outputPath(`等待時間-${width}.png`) });
+    await page
+      .getByRole("button", { name: "清除", exact: true })
+      .press("Enter");
+    await expect(page.getByRole("checkbox", { checked: true })).toHaveCount(0);
+    await expect(scope).toHaveCount(0);
+    await expect(
+      page.getByText("中位數，樣本 0 筆，其中 0 筆有來源。第 95 百分位：—", {
+        exact: true,
+      }),
+    ).toBeVisible();
+  });
+}
+
 test("使用摩擦可在系統頁查看", async ({ page }) => {
   await mockDashboard(page);
   await page.goto("/settings");

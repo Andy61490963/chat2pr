@@ -6,8 +6,10 @@ import {
   Toolbar,
 } from "@/components/ui/layout";
 import { NativeSelect } from "@/components/ui/select";
-import { useCallback, useEffect, useState } from "react";
-import type { FrictionMetrics } from "../../shared/friction";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/form-controls";
+import { useEffect, useState } from "react";
+import { maxExcludedGroups, type FrictionMetrics } from "../../shared/friction";
 import {
   Card,
   CardContent,
@@ -34,19 +36,36 @@ export function FrictionCard({
 }) {
   const [days, setDays] = useState(7);
   const [group, setGroup] = useState("");
+  const [excluded, setExcluded] = useState<string[]>([]);
   const [data, setData] = useState<FrictionMetrics | null>(null);
   const [error, setError] = useState("");
-  const load = useCallback(async () => {
-    try {
-      const q = new URLSearchParams({ days: String(days) });
-      if (group) q.set("group_id", group);
-      setData(await request<FrictionMetrics>(`/api/metrics/friction?${q}`));
-      setError("");
-    } catch (e) {
-      setError(message(e));
-    }
-  }, [request, days, group]);
-  useEffect(() => void load(), [load]);
+  useEffect(() => {
+    let current = true;
+    const query = new URLSearchParams({ days: String(days) });
+    if (group.startsWith("id:")) query.set("group_id", group.slice(3));
+    if (group === "exclude")
+      excluded.forEach((id) => query.append("exclude_group_id", id));
+    setError("");
+    setData(null);
+    void request<FrictionMetrics>(`/api/metrics/friction?${query}`).then(
+      (result) => {
+        if (current) setData(result);
+      },
+      (reason) => {
+        if (current) setError(message(reason));
+      },
+    );
+    return () => {
+      current = false;
+    };
+  }, [request, days, group, excluded]);
+  const scope = data?.groupId
+    ? state.groups.find((item) => item.id === data.groupId)?.name
+    : data?.excludedGroupIds.length
+      ? `全部群組，排除 ${data.excludedGroupIds.length} 個`
+      : "全部群組";
+  const waitHint = (samples: number, sources: number, tail: number | null) =>
+    `中位數，樣本 ${samples} 筆，其中 ${sources} 筆有來源。第 95 百分位：${duration(tail)}`;
   const rows: [string, string, string][] = data
     ? [
         [
@@ -68,13 +87,18 @@ export function FrictionCard({
         [
           "第一則群組訊息",
           duration(data.firstReplySeconds),
-          "從訊息送出到機器人在群組的第一則推播（中位數；「收到」不留紀錄，不含在內）",
+          `${waitHint(data.firstReplySamples, data.firstReplySources, data.firstReplyP95Seconds)}。不含未留下紀錄的「收到」回覆。`,
         ],
         [
           "查詢拿到答案",
           duration(data.answerSeconds),
-          "從提出到回答（中位數）",
+          waitHint(
+            data.answerSamples,
+            data.answerSources,
+            data.answerP95Seconds,
+          ),
         ],
+        ["已取消任務", `${data.cancelled} 件`, "期間內建立且目前已取消的任務"],
         [
           "修改返工率",
           data.reworkRate === null
@@ -110,11 +134,15 @@ export function FrictionCard({
           <NativeSelect
             aria-label="群組"
             value={group}
-            onChange={(e) => setGroup(e.target.value)}
+            onChange={(e) => {
+              setGroup(e.target.value);
+              setExcluded([]);
+            }}
           >
             <option value="">全部群組</option>
+            <option value="exclude">排除指定群組</option>
             {state.groups.map((g) => (
-              <option key={g.id} value={g.id}>
+              <option key={g.id} value={`id:${g.id}`}>
                 {g.name}
               </option>
             ))}
@@ -122,10 +150,56 @@ export function FrictionCard({
         </Toolbar>
       </CardHeader>
       <CardContent>
+        {group === "exclude" && (
+          <fieldset className="mb-4 min-w-0">
+            <legend className="text-sm font-medium">排除哪些群組？</legend>
+            <p className="text-xs text-muted-foreground">
+              只影響等待時間與取消量，最多選 {maxExcludedGroups} 個。
+            </p>
+            <div className="flex flex-wrap items-center gap-x-4">
+              {state.groups.map((item) => (
+                <label
+                  key={item.id}
+                  className="flex min-h-11 min-w-0 items-center gap-2 text-sm"
+                >
+                  <Checkbox
+                    checked={excluded.includes(item.id)}
+                    disabled={
+                      !excluded.includes(item.id) &&
+                      excluded.length >= maxExcludedGroups
+                    }
+                    onCheckedChange={(checked) =>
+                      setExcluded((ids) =>
+                        checked
+                          ? [...ids, item.id]
+                          : ids.filter((id) => id !== item.id),
+                      )
+                    }
+                  />
+                  <span className="wrap-anywhere">{item.name}</span>
+                </label>
+              ))}
+              <Button
+                variant="outline"
+                className="min-h-11"
+                disabled={!excluded.length}
+                onClick={() => setExcluded([])}
+              >
+                清除
+              </Button>
+            </div>
+          </fieldset>
+        )}
         {error && (
           <InlineNotice as="p" tone="danger" role="alert">
             {error}
           </InlineNotice>
+        )}
+        {data && (
+          <p className="mb-2 text-sm">
+            等待時間與取消量：<strong>{scope}</strong>
+            。找不到來源訊息時，以建單時間為起點。
+          </p>
         )}
         <DataList variant="bordered">
           {rows.map(([label, value, hint]) => (
