@@ -27,7 +27,7 @@ export function acceptanceSetupConfig(env: NodeJS.ProcessEnv) {
         !Number.isInteger(p) ||
         p < 1024 ||
         p > 65535 ||
-        [4310, 4311, 4312, 4313, 5439].includes(p),
+        [4310, 4311, 4312, 4313, 4314, 5439].includes(p),
     )
   )
     throw new Error("驗收必須使用互不重複且非正式的埠");

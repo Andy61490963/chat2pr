@@ -5,7 +5,7 @@ import { AppError } from "./policy.js";
 import type { SubscriptionIdentity } from "./subscription-broker.js";
 
 /** 由官方 CLI 在可信主機刷新登入；工作輸出永遠不能回寫登入檔。 */
-export function subscriptionIdentity(codexHome: string) {
+export function subscriptionIdentity(codexHome: string, readAccount = readCodexAccount) {
   let cached: { at: number; identity: SubscriptionIdentity } | undefined;
   let pending: Promise<SubscriptionIdentity> | undefined;
   return async (refresh: boolean): Promise<SubscriptionIdentity> => {
@@ -16,7 +16,7 @@ export function subscriptionIdentity(codexHome: string) {
       let timer: NodeJS.Timeout | undefined;
       try {
         const account = await Promise.race([
-          readCodexAccount(codexHome, refresh),
+          readAccount(codexHome, refresh),
           new Promise<never>((_, reject) => {
             timer = setTimeout(() => reject(new DOMException("讀取訂閱登入逾時", "TimeoutError")), 35000);
           }),

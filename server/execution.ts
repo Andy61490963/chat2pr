@@ -40,7 +40,7 @@ import { scheduleRepoIndex } from "./repo-index.js";
 import { validatedWhileMissing } from "./repo-missing.js";
 import { GitHub, BranchUnavailable } from "./github.js";
 import { Line } from "./line.js";
-import { config, secrets, token } from "./config.js";
+import { config, flowSubscriptionOrigin, secrets, token } from "./config.js";
 import { hash } from "./auth.js";
 import { AppError, classifyRisk, redact, taipeiDay } from "./policy.js";
 import { subscriptionLimited } from "./triage.js";
@@ -1254,7 +1254,8 @@ export class Execution {
       }
       const credential = token();
       runId = randomUUID();
-      const deadline = Date.now() + s.task_minutes * 60000;
+      const taskMinutes = Math.min(s.task_minutes, timing.maxTaskMinutes);
+      const deadline = Date.now() + taskMinutes * 60000;
       const claimed = await this.db
         .transaction(async (c): Promise<boolean | "busy" | "daily"> => {
           // 搶位置一次一個：全系統計數、同專案修改鎖與每日執行次數在同一把鎖內判斷，
@@ -1340,7 +1341,7 @@ export class Execution {
         if (!p.validated_at || p.config_version !== project.config_version)
           throw stop("專案設定已變更，需要重新驗證環境，已停止這次執行");
         if (Date.now() >= deadline)
-          throw new AppError(408, `任務超過 ${s.task_minutes} 分鐘限制`);
+          throw new AppError(408, `任務超過 ${taskMinutes} 分鐘限制`);
         await validateTaskImages(this.db, task.id, task.version);
         await validateTaskSources(this.db, task.id, task.version);
       };
@@ -2531,7 +2532,8 @@ ${querySummary(answer)}`,
             [taskId, `%需求版本 ${current.version}，%`],
           ))!.n
         : 0;
-      const delay = taskRetryDelays(failure.category, inference.failure)[used];
+      const scheduledDelay = taskRetryDelays(failure.category, inference.failure)[used];
+      const delay = scheduledDelay === undefined ? undefined : scheduledDelay * timing.retrySeconds / 30;
       if (current && delay !== undefined) {
         const requeued = await this.db.transaction(async (client) => {
           const result = await client.query(
@@ -2662,6 +2664,24 @@ export async function claimAutoResume(
     return { claimed: true, version: task.version };
   });
 }
+
+/** 載入執行器前核對具名的隔離案例、固定模型入口與本機測試資料庫；正式設定不接受驗收計時。 */
+export function recoveryTimings(env: NodeJS.ProcessEnv) {
+  const scenario = env.ACCEPTANCE_RECOVERY_TIMING;
+  if (scenario === undefined) return { maxTaskMinutes: Infinity, retrySeconds: 30 };
+  const instance = env.AGENTFLOW_INSTANCE;
+  const database = URL.canParse(env.DATABASE_URL ?? "") ? new URL(env.DATABASE_URL!) : undefined;
+  if ((scenario !== "11" && scenario !== "12") || env.NODE_ENV === "production" ||
+      env.ACCEPTANCE_FLOW_REAL !== "0" || !instance || !/^verify-266-[a-z0-9-]+$/.test(instance) ||
+      !instance.endsWith("-" + scenario) || !flowSubscriptionOrigin(env) ||
+      !database || !["postgres:", "postgresql:"].includes(database.protocol) || database.hostname !== "127.0.0.1" ||
+      Number(database.port) < 1024 || ["5432", "5439"].includes(database.port) ||
+      !/^\/[a-z][a-z0-9_]*_test$/.test(database.pathname) || database.search || database.hash)
+    throw new Error("縮短恢復計時只適用於對應的本機隔離驗收實例");
+  return { maxTaskMinutes: scenario === "11" ? 1 : Infinity, retrySeconds: scenario === "12" ? 10 : 30 };
+}
+
+const timing = recoveryTimings(process.env);
 
 /** 重跑通常就會成功的錯誤：連線中斷、逾時的網路請求、上游暫時無法服務。 */
 export function transientFailure(message: string, phase = "") {

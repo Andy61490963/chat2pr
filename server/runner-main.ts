@@ -17,6 +17,7 @@ import { SourceCache, SourceAccess } from "./source-cache.js";
 import { readCodexAccount, type CodexAccount } from "./codex-account.js";
 import {
   validateRunnerEnvironment,
+  flowSubscriptionOrigin,
   subscriptionBrokerPort,
 } from "./config.js";
 import { replyRunnerError } from "./error-reply.js";
@@ -57,7 +58,10 @@ import {
 // 必須在任何 Docker 操作（尤其啟動清理）以前拒絕不完整的隔離設定。
 validateRunnerEnvironment();
 const app = Fastify({ logger: false, bodyLimit: 80 * 1024 * 1024 });
-const containers = new Containers();
+const modelOrigin = flowSubscriptionOrigin();
+const containers = modelOrigin && process.env.ACCEPTANCE_FLOW_REAL === "0" && process.env.AGENTFLOW_INSTANCE?.startsWith("verify-266-")
+  ? new (await import("../scripts/acceptance/flows/operations-worker.js")).OperationsContainers()
+  : new Containers();
 const sourceCache = new SourceCache(containers);
 const checkEnvironments = new CheckEnvironments(containers);
 const observations = new ObservationBuffer();
@@ -65,8 +69,11 @@ const observations = new ObservationBuffer();
 // 不放在 .local：該目錄會唯讀掛載進應用程式容器。
 const codexHome = resolve(process.env.CODEX_SERVICE_HOME ?? ".codex-service");
 const authFile = join(codexHome, "auth.json");
+const scripted = modelOrigin && (await import("../scripts/acceptance/flows/subscription.js")).scriptedSubscription(modelOrigin);
+const readAccount = scripted ? scripted.readAccount : readCodexAccount;
 const broker = new SubscriptionBroker({
-  credentials: subscriptionIdentity(codexHome),
+  credentials: subscriptionIdentity(codexHome, readAccount),
+  upstreamFetch: scripted ? scripted.upstreamFetch : undefined,
 });
 const brokerApp = Fastify({ logger: false });
 brokerApp.setErrorHandler((err, _req, reply) => {
@@ -167,7 +174,7 @@ app.get("/codex/account", async (req) => {
     );
   const fresh = (req.query as { fresh?: string }).fresh === "1";
   if (!account || fresh || Date.now() - account.at > 60000)
-    account = { at: Date.now(), data: await readCodexAccount(codexHome) };
+    account = { at: Date.now(), data: await readAccount(codexHome) };
   return account.data;
 });
 app.post("/prepare", async (req) => {

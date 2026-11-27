@@ -1,5 +1,7 @@
 # 專案慣例與注意事項
 
+修改 `server/execution.ts`、需求判讀、訂閱代理、群組回覆或背景工作時，合併前要在隔離實例執行 `npm run acceptance:flows`。各元件的單元測試全綠，仍可能在交接時卡住而沒有送出群組通知。共用主機的排隊規則見 `docs/agents/parallel-development.md`，操作與已接上的情境見 `scripts/acceptance/README.md`。
+
 UI 改動先讀 [`src/AGENTS.md`](../src/AGENTS.md)，以便重用已有元件，讓頁面的尺寸與狀態色跟隨同一組代幣。
 
 新增任務、專案或群組的狀態時，請先在 `shared/status-glossary.ts` 加入顯示名稱，再由看板引用。
