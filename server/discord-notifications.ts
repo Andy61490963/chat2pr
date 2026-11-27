@@ -106,7 +106,7 @@ async function sendNextGroup(
   platform: DiscordChatPlatform,
   seen: string[],
 ) {
-  const notice = await db.transaction(async (c) => {
+  return db.transaction(async (c) => {
     const {
       rows: [n],
     } = await c.query<{
@@ -156,14 +156,9 @@ async function sendNextGroup(
         "UPDATE notifications SET sent_at=now(),last_error=$2 WHERE id=$1",
         [n.id, discordDeliveryNotes.origin],
       );
-      return { id: n.id };
+      return n.id;
     }
-    await c.query("UPDATE notifications SET discord_retry_at=clock_timestamp()+interval '2 minutes' WHERE id=$1", [n.id]);
-    return n;
-  });
-  if (!notice || !("channel_id" in notice)) return notice?.id;
-  const n = notice;
-  await sendNotice(db.pool, n.id, async () => {
+    await sendNotice(c, n.id, async () => {
       if (n.kind === "group_received" && n.origin) {
         await platform.react(n.managed && n.origin === n.channel_id ? n.group_id : n.channel_id, n.origin);
         // 反應沒有自己的訊息識別碼，原文仍屬於群組成員。
@@ -184,7 +179,7 @@ async function sendNextGroup(
       try {
         const result = await send(n.channel_id);
         if (n.managed && n.kind === "group_request_ack") {
-          await db.query("UPDATE groups SET discord_thread_warning=NULL WHERE id=$1 AND discord_thread_warning IS NOT NULL", [n.group_id]);
+          await c.query("UPDATE groups SET discord_thread_warning=NULL WHERE id=$1 AND discord_thread_warning IS NOT NULL", [n.group_id]);
         }
         return result.messageId;
       } catch (error) {
@@ -196,11 +191,12 @@ async function sendNextGroup(
         }
         if (!n.managed) throw error;
         if (discordStatus(error) !== 403 && discordStatus(error) !== 404) throw error;
-        await db.query("UPDATE groups SET discord_thread_warning=$2 WHERE id=$1", [n.group_id, discordDeliveryNotes.sendInThread]);
+        await c.query("UPDATE groups SET discord_thread_warning=$2 WHERE id=$1", [n.group_id, discordDeliveryNotes.sendInThread]);
         return (await send(n.group_id)).messageId;
       }
     });
-  return n.id;
+    return n.id;
+  });
 }
 
 /**

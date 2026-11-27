@@ -4,7 +4,7 @@ import { discordGroupReplyLabels } from "./status-glossary.js";
 
 /** 依已儲存的總開關、群組設定與推播狀態顯示結果。即時回覆不使用推播額度。 */
 export function groupReplyStatus(
-  group: Pick<Group, "reply_mode" | "left_at"> & Partial<Pick<Group, "platform">>,
+  group: Pick<Group, "reply_mode" | "left_at" | "discord_reply_location"> & Partial<Pick<Group, "platform">>,
   settings: Pick<Settings, "group_replies">,
   health: { name: string; ok: boolean }[] | undefined,
   now = new Date(),
@@ -18,7 +18,7 @@ export function groupReplyStatus(
   if (group.platform === "discord")
     return {
       replies: true,
-      text: discordGroupReplyLabels[group.reply_mode === "all" ? "all" : "results"],
+      text: discordGroupReplyLabels[group.discord_reply_location ?? "thread"][group.reply_mode === "all" ? "all" : "results"],
     };
   if (quotaBlocked(health)) {
     const month = Number(

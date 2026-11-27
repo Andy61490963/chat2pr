@@ -136,8 +136,16 @@ export const discordDeliveryNotes = {
   origin: "找不到原訊息，無法加入收到反應。請在看板查看需求。",
 } as const;
 export const discordGroupReplyLabels = {
-  all: "收到需求時會在原訊息加上反應，補問與結果會回到原頻道或討論串",
-  results: "補問與結果會回到原頻道或討論串",
+  thread: {
+    location: "每則需求開一個公開討論串。收到、補問與結果都在串內，頻道只留需求。",
+    all: "收到、補問、整理進度與結果都在需求討論串內回覆",
+    results: "收到、補問與結果都在需求討論串內回覆",
+  },
+  channel: {
+    location: "在提出需求的頻道回覆，不另開討論串。從既有討論串提出的需求仍在原串回覆。",
+    all: "收到需求時會在原訊息加上反應，補問與結果會回到頻道",
+    results: "補問與結果會回到頻道",
+  },
 } as const;
 export const statusLabels: Record<TaskStatus, string> = {
   awaiting_approval: "待審核",

@@ -12,6 +12,7 @@ import { applyAnswer, questionByQuote } from "./answers.js";
 import {
   detailRequest,
   groupRepliesOn,
+  honestAck,
   notifyGroupDirect,
   type ReplyMode,
 } from "./group-replies.js";
@@ -398,7 +399,7 @@ export async function ingestDiscord(db: Database, event: DiscordMessageEvent, pl
       );
     }
     if (attemptedThread && eligible) {
-      await notifyGroupDirect(c, groupId, null, "request_ack", `request_ack:${id}`, "已收到需求。", id);
+      await notifyGroupDirect(c, groupId, null, "request_ack", `request_ack:${id}`, await honestAck(c, groupId), id);
     }
     if (asked) {
       const result = await applyAnswer(
