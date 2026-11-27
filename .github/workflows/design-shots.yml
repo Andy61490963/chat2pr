@@ -54,20 +54,6 @@ jobs:
           (cd previous && DESIGN_REFERENCE=1 DESIGN_SHOTS_DIR="$RUNNER_TEMP/shots/改版前" npx playwright test "${before[@]}" --workers=1)
           (cd proposed && DESIGN_SHOTS_DIR="$RUNNER_TEMP/shots/改版後" npx playwright test "${after[@]}" --workers=1)
           (cd proposed && node --import tsx e2e/design-reference.ts "$RUNNER_TEMP/shots")
-      - name: 以同一組虛構資料比對四個桌面畫面
-        env:
-          E2E_PORT: "5340"
-        run: |
-          cp proposed/e2e/design-shell.spec.ts previous/e2e/
-          (cd previous && DESIGN_SHOTS_DIR="$RUNNER_TEMP/shell/改版前" npx playwright test e2e/design-shell.spec.ts --workers=1)
-          (cd proposed && DESIGN_SHOTS_DIR="$RUNNER_TEMP/shell/改版後" npx playwright test e2e/design-shell.spec.ts --workers=1)
-      - name: 保留四組桌面對照
-        uses: actions/upload-artifact@v4
-        with:
-          name: 主殼與審核桌面對照
-          path: ${{ runner.temp }}/shell/
-          if-no-files-found: error
-          retention-days: 14
       - name: 保留畫面供審查
         if: always()
         uses: actions/upload-artifact@v4

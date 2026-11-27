@@ -161,6 +161,6 @@ Radix 狀態與子元素選擇器、媒體查詢斷點、IntersectionObserver �
 
 ### 驗收與截圖
 
-[四頁桌面驗收](../e2e/design-shell.spec.ts)使用同一份虛構資料與 1440 × 900 淺色視窗，擷取收件匣、任務詳情、設定與執行觀察。PR 的「設計系統前後截圖」工作提供「主殼與審核桌面對照」成品，兩個版本各四張，可按檔名並排對照。[架構圖驗收](../e2e/design-flow.spec.ts)檢查獨立播放與看板內嵌時的縮放、主題和章節進度。
+[四頁桌面驗收](../e2e/design-shell.spec.ts)隨一般看板瀏覽器驗收執行，以虛構資料檢查收件匣、任務詳情、設定與執行觀察的鍵盤操作與焦點。[架構圖驗收](../e2e/design-flow.spec.ts)檢查獨立播放與看板內嵌時的縮放、主題和章節進度。
 
 驗收伺服器的展示入口為 `/e2e/design-system.html`。[展示元件](../e2e/design-system-gallery.tsx)另有[元件操作與截圖測試](../e2e/design-system.spec.ts)、[頁面對照測試](../e2e/design-pages.spec.ts)及[形狀驗收](../e2e/design-shapes.spec.ts)。在「看板畫面對照」成品下載深淺色及手機畫面。「改版前」與「改版後」採用相同檔名，成品保留 14 天。手動執行同名工作可重建展示，驗收環境可用 `DESIGN_SHOTS_DIR` 指定輸出位置。
