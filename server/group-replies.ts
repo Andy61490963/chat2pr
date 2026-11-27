@@ -1,4 +1,5 @@
 import { splitQueryAnswer } from "../shared/query-answer.js";
+import type { QuotaHoldKind } from "../shared/subscription-quota.js";
 import { quotaShortPrefix } from "../shared/line-quota.js";
 /**
  * 回覆提出需求的群組。管理者私訊之外，群組成員也要知道需求收到了、結果是什麼。
@@ -131,19 +132,17 @@ export interface AckState {
   /** 群組沒有已啟用且已驗證的綁定專案（與 triage-window.ts 的條件相同）。 */
   noProject: boolean;
   /** 訂閱模式且 Codex 額度關卡關閉。 */
-  aiQuotaOut: boolean;
+  quotaKind: QuotaHoldKind | null;
 }
 /** 依優先序挑「收到」的文字：暫停 → 判讀停止 → 沒有可用專案 → AI 額度 → 原文字。 */
 export function ackFor(s: AckState) {
-  return s.paused
-    ? pausedAck
-    : s.triageStopped
-      ? triageStoppedAck
-      : s.noProject
-        ? noProjectAck
-        : s.aiQuotaOut
-          ? aiQuotaAck
-          : s.base;
+  if (s.paused) return pausedAck;
+  if (s.triageStopped) return triageStoppedAck;
+  if (s.noProject) return noProjectAck;
+  if (!s.quotaKind) return s.base;
+  return quotaWaitReason(s.quotaKind) === "quota"
+    ? aiQuotaAck
+    : "收到，系統暫時無法確認 AI 額度，這則已保留，確認可用後會自動處理，不用重新提出。";
 }
 
 /** 給群組成員看的任務狀態（成員沒有看板帳號，用白話說明下一步在誰手上）。 */
@@ -412,7 +411,10 @@ export async function progressTasks(
 }
 
 /** 等待原因：每日執行次數用完、Codex 額度用完、系統暫停、執行位置已滿（排隊）。 */
-export type WaitReason = "daily" | "quota" | "paused" | "busy";
+export function quotaWaitReason(kind: QuotaHoldKind) {
+  return kind === "exhausted" || kind === "reserve" ? "quota" : "quota_unconfirmed";
+}
+export type WaitReason = "daily" | ReturnType<typeof quotaWaitReason> | "paused" | "busy";
 /** 排隊時的位置與預估：沒有歷史耗時就不寫時間。 */
 export interface QueuePlace {
   position: number;
@@ -431,6 +433,8 @@ const waitText: Record<WaitReason, string> = {
     "今天的執行次數用完了，這件事已經保留，明天凌晨會自動繼續處理，不用重新提出。",
   quota:
     "chat2pr 暫時沒有可用的 AI 額度，這件事已經保留，額度恢復後會自動繼續處理，不用重新提出。",
+  quota_unconfirmed:
+    "系統暫時無法確認 AI 額度，這件事已經保留，確認可用後會自動繼續處理，不用重新提出。",
   paused:
     "系統目前暫停中，這件事已經保留，恢復後會自動繼續處理，不用重新提出。",
 };
