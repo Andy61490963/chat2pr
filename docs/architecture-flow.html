@@ -8,6 +8,25 @@
 /* 版面：沿用 chat2pr 看板（shadcn/ui Zinc＋品牌綠）。上方是像影片的舞台卡片，下方三欄：旁白、這一步的資料、章節。 */
 :root {
   --radius: 10px;
+  /* 圖中文字依固定 viewBox 排版，隨圖形一起縮放。 */
+  --flow-font-badge: 600 12px var(--font);
+  --flow-font-step-number: 600 11.5px var(--mono);
+  --flow-font-status: 600 14px var(--font);
+  --flow-font-clock: 600 12px var(--mono);
+  --flow-font-chat-title: 600 12.5px var(--font);
+  --flow-font-chat-message: 400 12.5px var(--font);
+  --flow-font-receipt: 400 9.5px var(--font);
+  --flow-font-sender: 500 10.5px var(--font);
+  --flow-font-repository: 400 11.5px var(--mono);
+  --flow-font-action: 600 13px var(--font);
+  --flow-font-note: 400 12px var(--font);
+  --flow-font-phase: 500 14px var(--font);
+  --flow-font-field-label: 500 12.5px var(--font);
+  --flow-font-field-value: 500 13.5px var(--font);
+  --flow-font-pr: 600 13px var(--mono);
+  --flow-title-narrow: 16.5px;
+  --flow-title-entry: 15.5px;
+  --flow-sub-narrow: 12.5px;
   --bg: oklch(0.982 0.002 286);
   --card: oklch(1 0 0);
   --fg: oklch(0.141 0.005 285.8);
@@ -116,7 +135,7 @@ h1 { margin: 6px 0 0; font-size: clamp(22px, 3vw, 30px); font-weight: 700; line-
 .ib.primary .lucide { fill: currentColor; }
 .track { flex: 1 1 280px; min-width: 0; display: flex; gap: 3px; align-items: center; height: 32px; }
 .tick { flex: 1; height: 6px; border-radius: 99px; background: var(--muted); border: 0; padding: 0; cursor: pointer; position: relative; overflow: hidden; transition: height .15s; }
-.tick i { position: absolute; inset: 0 auto 0 0; width: 0; background: var(--brand); border-radius: 99px; }
+.tick i { position: absolute; inset: 0 auto 0 0; width: var(--scene-progress, 0%); background: var(--brand); border-radius: 99px; }
 .tick:hover { height: 10px; }
 .clock { font: 500 12px var(--mono); color: var(--muted-fg); font-variant-numeric: tabular-nums; min-width: 52px; text-align: center; }
 .pill-btn { height: 32px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--fg); font: 500 12.5px var(--mono); cursor: pointer; }
@@ -162,6 +181,24 @@ button:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
 .t-sub { fill: var(--muted-fg); font: 400 13px var(--font); }
 .t-mono { fill: var(--muted-fg); font: 500 11.5px var(--mono); }
 .t-line { fill: var(--fg); font: 400 13px var(--font); opacity: .82; }
+.t-badge { font: var(--flow-font-badge); }
+.t-step-number { font: var(--flow-font-step-number); }
+.t-status { font: var(--flow-font-status); }
+.t-clock { font: var(--flow-font-clock); }
+.t-chat-title { font: var(--flow-font-chat-title); }
+.t-chat-message { font: var(--flow-font-chat-message); }
+.t-receipt { font: var(--flow-font-receipt); }
+.t-sender { font: var(--flow-font-sender); }
+.t-repository { font: var(--flow-font-repository); }
+.t-action { font: var(--flow-font-action); }
+.t-note { font: var(--flow-font-note); }
+.t-phase { font: var(--flow-font-phase); }
+.t-field-label { font: var(--flow-font-field-label); }
+.t-field-value { font: var(--flow-font-field-value); }
+.t-pr { font: var(--flow-font-pr); }
+.t-title-narrow { font-size: var(--flow-title-narrow); }
+.t-title-entry { font-size: var(--flow-title-entry); }
+.t-sub-narrow { font-size: var(--flow-sub-narrow); }
 .t-zone { fill: var(--muted-fg); font: 600 11.5px var(--font); letter-spacing: .12em; }
 .wire { fill: none; stroke: var(--border); stroke-width: 2; stroke-linecap: round; }
 .trail { fill: none; stroke-width: 3.5; stroke-linecap: round; opacity: 0; }

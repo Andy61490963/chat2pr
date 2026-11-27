@@ -112,10 +112,10 @@ export function ReviewQueue({
           const source = [item.group, item.platform ? groupPlatformLabels[item.platform] : "平台未記錄", target].filter(Boolean).join(" ");
           return (
             <li key={item.id} className={cn(
-              "grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] grid-rows-[minmax(1.25rem,1fr)_2.75rem] items-center py-1 pr-2 lg:grid-rows-[1.25rem_2rem] lg:py-1.5",
-              selected === item.id && "bg-primary-soft shadow-[inset_3px_0_var(--primary)]",
+              "relative grid min-w-0 grid-cols-review-row grid-rows-review-touch items-center py-1 pr-2 lg:grid-rows-review-compact lg:py-1.5",
+              selected === item.id && "bg-primary-soft before:pointer-events-none before:absolute before:inset-y-0 before:left-0 before:w-0.75 before:bg-primary",
             )}>
-              {check && <div className="z-1 col-start-1 row-[1/3]">{check}</div>}
+              {check && <div className="z-1 col-start-1 row-span-full">{check}</div>}
               <button
                 type="button"
                 data-review-row={item.id}
@@ -123,7 +123,7 @@ export function ReviewQueue({
                 aria-keyshortcuts="j k ArrowUp ArrowDown Enter Alt+Enter"
                 tabIndex={tabbable === item.id ? 0 : -1}
                 className={cn(
-                  "col-span-full row-span-2 row-start-1 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] grid-rows-subgrid items-center gap-x-2 self-stretch rounded-sm pl-3 text-left outline-none hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-foreground",
+                  "col-span-full row-span-2 row-start-1 grid min-w-0 grid-cols-action grid-rows-subgrid items-center gap-x-2 self-stretch rounded-sm pl-3 text-left outline-none hover:bg-muted/60 focus-visible:outline-2 focus-visible:outline-solid focus-visible:-outline-offset-2 focus-visible:outline-foreground",
                   check && "pl-11",
                 )}
                 onClick={() => choose(item.id, "click")}
@@ -146,10 +146,10 @@ export function ReviewQueue({
                     ?.focus();
                 }}
               >
-                <span id={titleId} title={item.title} className="col-span-full row-start-1 line-clamp-2 min-w-0 text-base leading-5 font-semibold [overflow-wrap:anywhere] lg:col-span-1 lg:block lg:truncate">
+                <span id={titleId} title={item.title} className="col-span-full row-start-1 line-clamp-2 min-w-0 text-base leading-5 font-semibold wrap-anywhere lg:col-span-1 lg:block lg:truncate">
                   {item.title}
                 </span>
-                <span className="col-start-1 row-start-2 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground lg:col-span-full lg:mr-[4.5rem]">
+                <span className="col-start-1 row-start-2 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground lg:col-span-full lg:mr-18">
                   {risky && (
                     <span className="shrink-0 rounded bg-warn-soft px-1 py-0.5 font-medium text-warn">
                       {inboxStatusLabels.risk}
@@ -157,7 +157,7 @@ export function ReviewQueue({
                   )}
                   <span title={source} className="truncate">{source}</span>
                 </span>
-                <span data-review-waiting className="col-start-2 row-start-2 mr-[4.5rem] justify-self-end text-xs whitespace-nowrap text-muted-foreground tabular-nums lg:row-start-1 lg:mr-0">
+                <span data-review-waiting className="col-start-2 row-start-2 mr-18 justify-self-end text-xs whitespace-nowrap text-muted-foreground tabular-nums lg:row-start-1 lg:mr-0">
                   {waitingLabel(item.waitingSince)}
                 </span>
               </button>
@@ -170,7 +170,7 @@ export function ReviewQueue({
               >
                 {approval ? "核准修改" : openAction(item.status)}
               </Button>
-              {error && <p role="alert" className="col-span-full row-start-3 px-3 py-1 text-sm text-danger [overflow-wrap:anywhere]">{error}</p>}
+              {error && <p role="alert" className="col-span-full row-start-3 px-3 py-1 text-sm text-danger wrap-anywhere">{error}</p>}
             </li>
           );
         })}

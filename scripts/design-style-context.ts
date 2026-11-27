@@ -26,6 +26,12 @@ function looksLikeClassList(text: string) {
 
 // 每個例外只允許把該畫面的資料傳給具名 CSS 變數。固定值仍須放在主題或工具類別。
 const dynamicVariables: Record<string, Record<string, string>> = {
+  "src/App.tsx": {
+    "--quota-left": "用量摘要顯示目前可用的額度百分比。",
+  },
+  "src/flow/architecture-flow.js": {
+    "--scene-progress": "依所選章節和播放時間顯示每個步驟的完成比例。",
+  },
   "src/app/docker-disk.tsx": {
     "--disk-used-width": "可用空間變動時同步更新磁碟使用比例。",
   },

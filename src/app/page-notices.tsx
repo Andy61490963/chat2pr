@@ -42,7 +42,7 @@ export function PageNotices({
       <div
         id={contentId}
         hidden={collapsed}
-        className="min-w-0 flex-[1_1_12rem]"
+        className="min-w-0 grow shrink basis-48"
       >
         {children}
       </div>

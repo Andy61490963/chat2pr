@@ -56,7 +56,7 @@ export function PickListForm({
   );
   return (
     <article
-      className="min-w-0 p-4 [overflow-wrap:anywhere] max-lg:flex max-lg:min-h-0 max-lg:flex-1 max-lg:flex-col max-lg:pb-0"
+      className="min-w-0 p-4 wrap-anywhere max-lg:flex max-lg:min-h-0 max-lg:flex-1 max-lg:flex-col max-lg:pb-0"
       aria-labelledby={`pick-list-${list.id}`}
     >
       <h2 id={`pick-list-${list.id}`} className="font-semibold">

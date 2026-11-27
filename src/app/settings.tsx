@@ -1,3 +1,4 @@
+import { InlineNotice } from "@/components/ui/layout";
 import { groupReplyStatus } from "../../shared/group-reply-status.js";
 import { useEffect, useRef, useState } from "react";
 import { Check, Copy, RefreshCw, Send } from "lucide-react";
@@ -279,15 +280,15 @@ function QuotaCard({
         {account === null ? (
           <p className="text-sm text-muted-foreground">讀取中…</p>
         ) : typeof account === "string" ? (
-          <p className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">
+          <InlineNotice as="p" tone="danger" variant="soft">
             {account}
-          </p>
+          </InlineNotice>
         ) : (
           <>
             {account.allowed === false && (
-              <p className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">
+              <InlineNotice as="p" tone="danger" variant="soft">
                 目前已無法使用一般額度，工作會保留到額度重置後自動重試。
-              </p>
+              </InlineNotice>
             )}
             {account.limits.flatMap((l) =>
               l.windows.map((w, i) => (
@@ -320,7 +321,7 @@ function QuotaCard({
                 </div>
               )),
             )}
-            <p className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+            <p className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground wrap-anywhere">
               <span>方案 {account.plan ?? "未知"}</span>
               <span>更新於 {ago(account.checkedAt)}</span>
             </p>
@@ -594,7 +595,7 @@ function AiCard({
               <label
                 key={id}
                 className={cn(
-                  "relative flex cursor-pointer flex-col gap-0.5 rounded-lg border p-3 text-left transition-colors hover:bg-accent has-focus-visible:outline-2 has-focus-visible:outline-offset-2",
+                  "relative flex cursor-pointer flex-col gap-0.5 rounded-md border p-3 text-left transition-colors hover:bg-accent has-focus-visible:outline-2 has-focus-visible:outline-offset-2",
                   form.ai_mode === id &&
                     "border-primary bg-accent ring-1 ring-primary",
                 )}
@@ -793,7 +794,7 @@ function AiCard({
             </DialogHeader>
             <ul className="flex flex-col gap-3 text-sm">
               {pending?.changes.map((c) => (
-                <li key={c.key} className="rounded-lg bg-warn-soft px-3 py-2">
+                <li key={c.key} className="rounded-md bg-warn-soft px-3 py-2">
                   <p className="font-medium text-warn">
                     {c.label}：{c.from} → {c.to}
                   </p>
@@ -860,7 +861,7 @@ function ThemeCard() {
               data-state={theme === value ? "active" : "inactive"}
               className={cn(
                 segmentedItemClass,
-                "work-touch h-auto cursor-pointer has-focus-visible:border-ring has-focus-visible:ring-[3px] has-focus-visible:ring-ring/50 has-focus-visible:outline-1",
+                "work-touch h-auto cursor-pointer has-focus-visible:border-ring has-focus-visible:ring-3 has-focus-visible:ring-ring/50 has-focus-visible:outline-1",
               )}
             >
               <input
@@ -896,7 +897,7 @@ function SettingsPanel({
       hidden={active !== value}
       className="@container min-w-0"
     >
-      <div className="grid grid-cols-1 items-start gap-4 @3xl:grid-cols-[repeat(auto-fit,minmax(20rem,1fr))]">
+      <div className="grid grid-cols-1 items-start gap-4 @3xl:grid-cols-settings">
         {children}
       </div>
     </TabsContent>
@@ -987,7 +988,7 @@ function AdminNotifications({
           </Button>
         </div>
         {pairing && (
-          <div className="rounded-lg bg-muted p-3 text-sm">
+          <div className="rounded-md bg-muted p-3 text-sm">
             <p className="text-muted-foreground">
               請在 10 分鐘內私訊 {groupPlatformLabels[platform]} 機器人以下文字。
             </p>
@@ -1117,7 +1118,7 @@ export function SettingsView({
             />
             <span className="flex min-w-0 flex-1 flex-col">
               <span className="text-sm font-medium">{i.name}</span>
-              <span className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
+              <span className="text-xs text-muted-foreground wrap-anywhere">
                 {detail ?? i.hint}
                 {h && !quota && status !== "unknown" && (
                   <span className={cn("block", stale && "text-warn")}>
@@ -1256,12 +1257,9 @@ export function SettingsView({
               </details>
             )}
             {push.notice && (s.admin_line_id || push.blocked) && (
-              <p
-                role="status"
-                className="rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn"
-              >
+              <InlineNotice as="p" tone="warn" variant="soft" role="status">
                 {push.notice}
-              </p>
+              </InlineNotice>
             )}
             <LinePushForm
               key={`${mode}:${reserve}`}
@@ -1292,7 +1290,7 @@ export function SettingsView({
             {push.failedText && (
               <div
                 role="status"
-                className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn"
+                className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md bg-warn-soft px-3 py-2 text-sm text-warn"
               >
                 <span className="min-w-0 flex-1">{push.failedText}</span>
                 <ConfirmButton
