@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
   describeTestFailures,
@@ -296,4 +297,16 @@ describe("測試階段失敗時保留失敗測試的錯誤區塊（執行紀錄�
       }).map((e) => e.kind),
     ).toEqual(["phase_end"]);
   });
+});
+
+it.each(["tap", "spec"])("Node 內建測試的 %s 報告只列真正失敗的葉節點", (reporter) => {
+  const program = `const { describe, it } = require("node:test");
+    describe("示範群組", () => describe("子群組", () => {
+      for (const name of ["甲項", "乙項"]) it(name, () => { throw Error("示範錯誤") });
+    }));`;
+  const run = spawnSync(process.execPath, [`--test-reporter=${reporter}`, "-e", program], { encoding: "utf8" });
+  expect(run.status).toBe(1);
+  const failures = parseTestFailures(run.stdout);
+  expect(failures?.tests.map(test => test.name)).toEqual(["甲項", "乙項"]);
+  expect(failures?.tests.every(test => test.message.includes("示範錯誤"))).toBe(true);
 });

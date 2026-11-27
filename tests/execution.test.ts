@@ -3395,3 +3395,25 @@ it.each([false, true])(
     }
   },
 );
+
+it("用戶端中途斷線且任務仍有效時，容器退出只重試一次並保留中斷原因", async () => {
+  const sample = await scenario();
+  await db.query("DELETE FROM service_health WHERE name=$1", [subscriptionGateName]);
+  await db.query(`UPDATE settings SET value=jsonb_set(value,'{ai_mode}','"subscription"')`);
+  sample.runner.account = async () => ({ allowed: true, checkedAt: new Date().toISOString() });
+  const original = sample.runner.call.bind(sample.runner);
+  sample.runner.call = async <T>(path: string, body: unknown): Promise<T> => {
+    if (path !== "phase" || (body as { phase?: string }).phase !== "code") return original<T>(path, body);
+    return { exitCode: 137, stdout: "", stderr: "", upstreamFailure: { kind: "phase_cancelled" } } as T;
+  };
+  const execution = new Execution(db, sample.github, sample.line, sample.budget, sample.runner);
+  for (const status of ["queued", "failed"]) {
+    await execution.execute(sample.task.id);
+    const task = await db.one<Task>("SELECT * FROM tasks WHERE id=$1", [sample.task.id]);
+    expect(task.status).toBe(status);
+    expect(task.last_error).toContain("容器");
+    expect(task.last_error).not.toContain("已取消");
+    expect((await new Tasks(db).detail(sample.task.id)).runs[0].upstream_failure).toBeNull();
+    await db.query("UPDATE tasks SET retry_at=now()-interval '1 second' WHERE id=$1", [sample.task.id]);
+  }
+});

@@ -10,6 +10,8 @@ import {
 import { AppError } from "../server/policy.js";
 import { phaseEndEvents } from "../server/test-failures.js";
 import {
+  taskRetryDelays,
+  type UpstreamFailure,
   parseUpstreamFailure,
   parseUpstreamFailureDetail,
   upstreamFailureDetail,
@@ -766,7 +768,7 @@ describe("訂閱主憑證隔離與有限階段能力", () => {
     expect(response.statusCode).toBe(502);
     expect(response.json().error.message).toBe("訂閱推論連線失敗，未使用其他計費方式");
     expect(f.lease.failure()).toStrictEqual(stage === "連線" ? { kind: "connection" } :
-      stage === "刷新登入" ? { kind: "auth", status: 401 } : { kind: "stream_interrupted", status: 200 });
+      stage === "刷新登入" ? { kind: "connection", status: 401 } : { kind: "stream_interrupted", status: 200 });
     expect(f.broker.usage(f.runId)?.revoked).toBe(stage === "刷新登入");
   });
   it("發出授權前讀取登入失敗也只回固定訊息", async () => {
@@ -828,4 +830,32 @@ describe("訂閱主憑證隔離與有限階段能力", () => {
     await expect(pending).rejects.toThrow("已取消");
     resolve(identity);
   });
+});
+
+// 舊版訂閱修改與審查失敗統一退避 30 秒一次；額度保留與逾時接續另有專用流程。
+const taskRetryCases = {
+  model_denied: [], model_unavailable: [], invalid_request: [], invalid_tools: [],
+  tool_denied: [], tool_limit: [], tool_choice_denied: [], phase_deadline: [],
+  phase_cancelled: [30], concurrent_request: [30], usage_limit: [], request_limit: [],
+  upstream_http: [30], connection: [30, 180], redirect: [30], auth: [], quota: [],
+  quota_unavailable: [], missing_body: [30], invalid_stream: [30, 180], response_limit: [],
+  frame_limit: [30], invalid_event: [30], stream_error: [30], invalid_usage: [30],
+  duplicate_completion: [30], output_limit: [], stream_interrupted: [30, 180], protected_data: [],
+  stream_server_error: [30, 180],
+} satisfies Record<UpstreamFailure["kind"], number[]>;
+it.each(Object.entries(taskRetryCases))("訂閱任務的 %s 依原因決定退避次數與秒數", (kind, delays) => {
+  expect(taskRetryDelays("transient", { kind: kind as UpstreamFailure["kind"] })).toEqual(delays);
+});
+it.each([
+  ["error", { code: "server_error" }, "stream_server_error"],
+  ["response.failed", { type: "overloaded" }, "stream_server_error"],
+  ["error", { message: "server_error" }, "stream_error"],
+  ["response.failed", { code: "model_not_found" }, "model_unavailable"],
+] as const)("串流依 %s 的固定錯誤代碼分類（%j）", async (type, error, kind) => {
+  const data = { ...error, message: "message" in error ? error.message : identity.accessToken };
+  const f = await fixture({ credentials: async () => identity, upstreamFetch: async () =>
+    sse([type === "error" ? { type, error: data } : { type, response: { error: data } }]) });
+  const response = await f.send();
+  expect(response.body).not.toContain(identity.accessToken);
+  expect(f.lease.failure()).toEqual({ kind, status: 200 });
 });
