@@ -1,5 +1,8 @@
 import Fastify from "fastify";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as account from "../server/codex-account.js";
+import { subscriptionIdentity } from "../server/subscription-identity.js";
+import { classifyFailure, failureNotice, groupFailureText } from "../server/failure.js";
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import {
@@ -892,4 +895,28 @@ it.each([
   [404, []], [502, [30, 180]], [200, [30]],
 ] as const)("訂閱任務依上游 HTTP %i 選擇退避", (status, delays) => {
   expect(taskRetryDelays("config", { kind: "upstream_http", status })).toEqual(delays);
+});
+
+it.each([
+  ["刷新時登入權杖已撤銷，提示重新登入且不重試", new AppError(502, "SyntheticRevoked123"), "auth", []],
+  ["刷新時連線被拒，依序退避重試", new TypeError("連線失敗", { cause: Object.assign(new Error(), { code: "ECONNREFUSED" }) }), "connection", [30, 180]],
+] as const)("%s", async (_name, error, kind, delays) => {
+  const read = vi.spyOn(account, "readCodexAccount").mockRejectedValue(error);
+  try {
+    const load = subscriptionIdentity("SyntheticHome");
+    const f = await fixture({ credentials: async refresh => refresh ? load(true) : identity,
+      upstreamFetch: async () => new Response(null, { status: 401 }) });
+    await f.send();
+    expect(read).toHaveBeenCalledWith("SyntheticHome", true);
+    const failure = f.lease.failure();
+    expect(failure).toEqual({ kind, status: 401 });
+    expect(taskRetryDelays("system", failure)).toEqual(delays);
+    if (kind === "auth") {
+      const notice = classifyFailure("", "code", "task", undefined, failure);
+      for (const text of [failureNotice(notice), groupFailureText(notice)]) {
+        expect(text).toContain("重新登入 Codex");
+        expect(text).not.toContain("SyntheticRevoked123");
+      }
+    }
+  } finally { read.mockRestore(); }
 });

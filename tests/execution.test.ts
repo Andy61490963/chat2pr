@@ -615,7 +615,10 @@ it.each([
   expect(primaryFix(parseFailure(task.last_error))).toEqual({ kind: "page", page: "settings" });
 });
 
-it("可信訂閱額度用完時即使外層回報 403 仍等候額度", async () => {
+it.each([
+  ["可信訂閱額度用完時即使外層回報 403 仍等候額度", "quota", "exhausted", "沒有可用的 AI 額度"],
+  ["訂閱額度未知時保留工作，群組收到暫時無法確認", "quota_unavailable", "unknown", "暫時無法確認 AI 額度"],
+] as const)("%s", async (_name, kind, hold, text) => {
   const s = await scenario();
   await db.query("DELETE FROM service_health WHERE name=$1", [subscriptionGateName]);
   await db.query(`UPDATE settings SET value=value || '{"ai_mode":"subscription"}'::jsonb`);
@@ -623,12 +626,15 @@ it("可信訂閱額度用完時即使外層回報 403 仍等候額度", async ()
   const original = s.runner.call.bind(s.runner);
   s.runner.call = async <T>(path: string, body: unknown) =>
     path === "phase" && (body as { phase: string }).phase === "code"
-      ? { exitCode: 1, stdout: "", stderr: "HTTP 403", upstreamFailure: { kind: "quota", status: 429 } } as T
+      ? { exitCode: 1, stdout: "", stderr: "HTTP 403", upstreamFailure: { kind, status: 429 } } as T
       : original<T>(path, body);
   await new Execution(db, s.github, s.line, s.budget, s.runner).execute(s.task.id);
   expect(await db.one("SELECT status,last_error FROM tasks WHERE id=$1", [s.task.id]))
     .toMatchObject({ status: "budget_wait", last_error: expect.stringContaining("訂閱額度") });
-  expect(await db.one("SELECT ok FROM service_health WHERE name=$1", [subscriptionGateName])).toEqual({ ok: false });
+  expect(await db.one("SELECT ok,probe_info->>'kind' AS kind FROM service_health WHERE name=$1", [subscriptionGateName]))
+    .toEqual({ ok: false, kind: hold });
+  expect(await db.one("SELECT text FROM notifications WHERE kind='group_waiting' AND task_id=$1", [s.task.id]))
+    .toEqual({ text: expect.stringContaining(text) });
 });
 
 it("phase 的容器與 HTTP 使用相同剩餘期限，結束清理另有短期限", async () => {
