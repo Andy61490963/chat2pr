@@ -40,7 +40,7 @@ function EventHeading({ event }: { event: RunEvent }) {
   const failed = kind === "error" ||
     (kind !== "reconnect_rejected" && exitCode != null && exitCode !== 0);
   return (
-    <p className={`flex flex-wrap gap-x-3 gap-y-1 [overflow-wrap:anywhere] ${failed ? "text-danger" : "font-medium"}`}>
+    <p className={`flex flex-wrap gap-x-3 gap-y-1 wrap-anywhere ${failed ? "text-danger" : "font-medium"}`}>
       <span>{phaseLabels[phase] ?? phase}</span>
       <span>{label}</span>
       {exitCode != null && <span>結束碼 {exitCode}</span>}
@@ -88,7 +88,7 @@ function PhaseTimes({ run }: { run: RunView }) {
       <h4 id={`phase-times-${run.id}`} className="font-medium">
         各階段花費時間
       </h4>
-      <dl className="mt-1 grid grid-cols-[5rem_minmax(0,1fr)] gap-x-2 gap-y-1">
+      <dl className="mt-1 grid grid-cols-run-details gap-x-2 gap-y-1">
         {spans.map((span) => (
           <Fragment key={span.group}>
             <dt>{span.label}</dt>
@@ -190,7 +190,7 @@ export function RunObserver({
   }, [page, live]);
   return (
     <section
-      className="min-w-0 rounded-lg border p-3"
+      className="min-w-0 rounded-md border p-3"
       aria-label="Codex 執行紀錄"
     >
       <div className="mb-2 flex items-center justify-between gap-2">
@@ -228,7 +228,7 @@ export function RunObserver({
               <SelectContent>
                 {runs.map((r, i) => (
                   <SelectItem key={r.id} value={r.id}>
-                    <span className="flex flex-wrap gap-x-3 gap-y-1 text-left [overflow-wrap:anywhere]">
+                    <span className="flex flex-wrap gap-x-3 gap-y-1 text-left wrap-anywhere">
                       {i === 0 && <span>最新</span>}
                       <time dateTime={r.started_at}>{time(r.started_at)}</time>
                       <span>{outcomeText(r, true)}</span>
@@ -251,7 +251,7 @@ export function RunObserver({
               </Button>
             )}
           </div>
-          <dl className="mt-3 grid grid-cols-[5rem_minmax(0,1fr)] gap-x-2 gap-y-1 text-xs">
+          <dl className="mt-3 grid grid-cols-run-details gap-x-2 gap-y-1 text-xs">
             <dt>執行 ID</dt>
             <dd className="select-all break-all font-mono">{run.id}</dd>
             <dt>模型設定</dt>
@@ -362,7 +362,7 @@ export function RunObserver({
               atBottom.current =
                 el.scrollHeight - el.scrollTop - el.clientHeight < 40;
             }}
-            className="mt-3 flex max-h-[32rem] flex-col gap-3 overflow-y-auto text-xs"
+            className="mt-3 flex max-h-128 flex-col gap-3 overflow-y-auto text-xs"
             aria-label="執行事件"
           >
             {/* 事件依發生時間排列；進度連線恢復後補抓的事件不會排在較晚的紀錄後面。 */}

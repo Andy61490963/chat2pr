@@ -206,6 +206,55 @@
 @utility grid-cols-action {
   grid-template-columns: minmax(0, 1fr) auto;
 }
+@utility grid-cols-login {
+  grid-template-columns: 1.1fr 1fr;
+}
+@utility grid-cols-shell {
+  grid-template-columns: --spacing(62) minmax(0, 1fr);
+}
+@utility grid-cols-workbench {
+  grid-template-columns: --spacing(90) minmax(0, 1fr);
+}
+@utility grid-cols-workbench-wide {
+  grid-template-columns: --spacing(108) minmax(0, 1fr);
+}
+@utility grid-cols-review-row {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+@utility grid-rows-review-touch {
+  grid-template-rows: minmax(--spacing(5), 1fr) --spacing(11);
+}
+@utility grid-rows-review-compact {
+  grid-template-rows: --spacing(5) --spacing(8);
+}
+@utility grid-cols-run-details {
+  grid-template-columns: --spacing(20) minmax(0, 1fr);
+}
+@utility grid-cols-settings {
+  grid-template-columns: repeat(auto-fit, minmax(--spacing(80), 1fr));
+}
+@utility pb-bottom-nav {
+  padding-bottom: calc(--spacing(18) + env(safe-area-inset-bottom));
+}
+@utility pb-safe-inset {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+@utility pb-safe-compact {
+  padding-bottom: max(--spacing(3), env(safe-area-inset-bottom));
+}
+@utility max-h-review-actions {
+  max-height: 45dvh;
+}
+@utility max-h-overlay {
+  max-height: calc(100dvh - --spacing(8));
+}
+@utility w-quota-left {
+  width: var(--quota-left);
+}
+@utility rounded-t-inherit {
+  border-top-left-radius: inherit;
+  border-top-right-radius: inherit;
+}
 @utility shape-pill {
   border-radius: var(--shape-pill);
 }

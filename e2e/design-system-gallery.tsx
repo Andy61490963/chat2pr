@@ -28,8 +28,10 @@ import {
   TabsTrigger,
   TabsContent,
 } from "@/components/ui/form-controls";
+import { Sidebar } from "@/components/ui/sidebar";
 import { Input } from "@/components/ui/input";
 import {
+  PageHeader,
   SectionHeader,
   EmptyState,
   DataList,
@@ -59,9 +61,12 @@ document.documentElement.classList.toggle(
 function Gallery() {
   const [stopped, setStopped] = useState(false);
   return (
-    <TooltipProvider>
-      <main className="mx-auto grid min-h-screen w-full min-w-0 max-w-3xl content-start gap-4 p-4">
-        <h1 className="heading-page">範例工單</h1>
+    <div className="min-h-screen md:grid md:grid-cols-shell">
+      <Sidebar label="展示導覽" brand="範例看板">
+        <a href="#work-order" className="work-touch flex items-center px-3 text-sm">工單名稱</a>
+      </Sidebar>
+      <main className="mx-auto grid min-h-screen w-full min-w-0 max-w-3xl content-start gap-4 p-4 pb-16 md:pb-4">
+        <PageHeader title="範例工單" />
         <SectionHeader>工單資料</SectionHeader>
         <DescriptionList pairs={2}>
           <DescriptionItem label="批號" numeric>
@@ -99,7 +104,7 @@ function Gallery() {
           <Switch id="enabled" />
           啟用工序
         </Label>
-        <InlineNotice tone="info">設備異動後請重新複核工單。</InlineNotice>
+        <InlineNotice tone="info" variant="soft">設備異動後請重新複核工單。</InlineNotice>
         <Progress aria-label="檢查進度" value={75} />
         <Tabs defaultValue="work">
           <TabsList aria-label="工單內容" className="w-full">
@@ -156,8 +161,10 @@ function Gallery() {
           </ConfirmButton>
         </Toolbar>
       </main>
-    </TooltipProvider>
+    </div>
   );
 }
 
-createRoot(document.getElementById("root")!).render(<Gallery />);
+createRoot(document.getElementById("root")!).render(
+  <TooltipProvider><Gallery /></TooltipProvider>,
+);
