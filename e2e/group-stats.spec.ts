@@ -16,7 +16,9 @@ for (const width of [1440, 375]) {
     await page.getByRole("option", { name: "回覆在頻道" }).click();
     await expect(location).toHaveText("回覆在頻道");
     await location.scrollIntoViewIfNeeded();
-    await testInfo.attach(`頻道回覆位置-${width}`, { body: await page.screenshot(), contentType: "image/png" });
+    const screenshot = testInfo.outputPath(`頻道回覆位置-${width}.png`);
+    await page.screenshot({ path: screenshot });
+    await testInfo.attach(`頻道回覆位置-${width}`, { path: screenshot, contentType: "image/png" });
     const saved = page.waitForRequest(req => req.method() === "PUT" && req.url().includes("/api/groups/"));
     await page.getByRole("button", { name: "儲存變更" }).click();
     expect((await saved).postDataJSON().discord_reply_location).toBe("channel");

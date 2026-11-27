@@ -182,7 +182,11 @@ async function sendNextGroup(
         destination === n.channel_id && !(n.managed && n.origin === n.channel_id) ? n.origin ?? undefined : undefined,
       );
       try {
-        return (await send(n.channel_id)).messageId;
+        const result = await send(n.channel_id);
+        if (n.managed && n.kind === "group_request_ack") {
+          await db.query("UPDATE groups SET discord_thread_warning=NULL WHERE id=$1 AND discord_thread_warning IS NOT NULL", [n.group_id]);
+        }
+        return result.messageId;
       } catch (error) {
         if (n.channel_id !== n.group_id && typeof error === "object" && error && "code" in error && error.code === 50083) {
           try {
@@ -192,7 +196,7 @@ async function sendNextGroup(
         }
         if (!n.managed) throw error;
         if (discordStatus(error) !== 403 && discordStatus(error) !== 404) throw error;
-        await db.query("UPDATE groups SET discord_thread_warning=$2 WHERE id=$1", [n.group_id, "無法送到需求討論串，已改在頻道回覆。請確認討論串仍存在且未鎖定，並允許機器人「在討論串中傳送訊息」。"]);
+        await db.query("UPDATE groups SET discord_thread_warning=$2 WHERE id=$1", [n.group_id, discordDeliveryNotes.sendInThread]);
         return (await send(n.group_id)).messageId;
       }
     });

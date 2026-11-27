@@ -5,7 +5,7 @@ import { documentName } from "./document-text.js";
 import { invalidateMessageSources } from "./message-sources.js";
 import { isProgressCommand, isTaskCommand } from "../shared/chat.js";
 import { containsCredential, redact } from "./policy.js";
-import { discordServiceText } from "../shared/status-glossary.js";
+import { discordDeliveryNotes, discordServiceText } from "../shared/status-glossary.js";
 import { recordHealth } from "./health.js";
 import { clearEmptyTriageWindow } from "./triage-window.js";
 import { applyAnswer, questionByQuote } from "./answers.js";
@@ -23,7 +23,7 @@ import {
   type DiscordInteraction,
   type DiscordPrivateMessage,
 } from "./discord-interactions.js";
-import type { DiscordChatPlatform } from "./discord-platform.js";
+import { discordStatus, type DiscordChatPlatform } from "./discord-platform.js";
 
 type Source = { id: string; channel: string };
 export type DiscordDocument = { name: string; size: number; url: string };
@@ -149,8 +149,10 @@ export async function ingestDiscord(db: Database, event: DiscordMessageEvent, pl
       const name = Array.from(redact(event.text).replace(/^\/任務\s*|<@!?\d+>/g, "").trim() || "需求").slice(0, 90).join("");
       try {
         openedThread = await platform.startThread(event.channel, event.interactionReplyId ?? event.id, name);
-      } catch {
-        await db.query("UPDATE groups SET discord_thread_warning=$2 WHERE id=$1", [channelId, "無法建立需求討論串。請在頻道權限允許機器人「建立公開討論串」，並確認頻道可建立討論串。"]);
+      } catch (error) {
+        await db.query("UPDATE groups SET discord_thread_warning=$2 WHERE id=$1", [
+          channelId, discordStatus(error) === 403 ? discordDeliveryNotes.createThread : discordDeliveryNotes.startThread,
+        ]);
       }
     }
   }
