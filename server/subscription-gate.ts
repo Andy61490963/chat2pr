@@ -69,8 +69,10 @@ export class SubscriptionGate {
         const age = Date.now() - Date.parse(account.checkedAt);
         if (Number.isFinite(age) && age >= -30000 && age <= 120000)
           hold = subscriptionQuotaHold(account, reserve);
-      } catch {
-        // 網路錯誤、登入失效與未知回應皆不能當成額度充足。
+      } catch (error) {
+        const cause = error instanceof Error ? error.cause : null;
+        if (cause && typeof cause === "object" && "code" in cause && cause.code === "ECONNREFUSED")
+          hold = "無法連上主機執行器，無法確認 Codex 訂閱額度；已保留訊息與工作，稍後會重新檢查";
       }
       const ok = hold === null;
       const detail = hold ?? "Codex 訂閱額度可用";
