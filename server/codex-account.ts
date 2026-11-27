@@ -37,6 +37,19 @@ export interface CodexAccount {
   }>;
   checkedAt: string;
 }
+const connectionCodes = new Set([
+  "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH", "ENOTFOUND", "EAI_AGAIN",
+  "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT", "UND_ERR_SOCKET",
+]);
+
+export function accountConnectionFailed(error: unknown): boolean {
+  for (const value of [error, error instanceof Error ? error.cause : undefined]) {
+    if (value instanceof DOMException && ["NetworkError", "TimeoutError"].includes(value.name)) return true;
+    if (value && typeof value === "object" && "code" in value && typeof value.code === "string" && connectionCodes.has(value.code)) return true;
+  }
+  return false;
+}
+
 // 以服務專用登入啟動一次性的 Codex app-server，只讀取額度與模型清單，不送出任何提示詞。
 export async function readCodexAccount(
   codexHome: string,
@@ -52,18 +65,18 @@ export async function readCodexAccount(
   });
   const pending = new Map<
     number,
-    (m: { result?: unknown; error?: { message?: string } }) => void
+    (m: { result?: unknown; error?: { message?: string; code?: unknown; data?: unknown } }) => void
   >();
   let stopped = false;
-  const stopPending = () => {
+  const stopPending = (code?: string) => {
     stopped = true;
     for (const finish of pending.values())
-      finish({ error: { message: "可信 Codex 登入程序已中止" } });
+      finish({ error: { message: "可信 Codex 登入程序已中止", code } });
     pending.clear();
   };
-  child.once("error", stopPending);
-  child.once("exit", stopPending);
-  child.stdin.once("error", stopPending);
+  child.once("error", () => stopPending());
+  child.once("exit", () => stopPending());
+  child.stdin.once("error", () => stopPending());
   let buffer = "",
     next = 0;
   child.stdout.setEncoding("utf8");
@@ -91,14 +104,16 @@ export async function readCodexAccount(
       pending.set(id, (m) =>
         m.error
           ? reject(
-              new AppError(502, `Codex 回應錯誤：${m.error.message ?? method}`),
+              accountConnectionFailed(m.error) || accountConnectionFailed(m.error.data)
+                ? new DOMException("無法連上訂閱服務", "NetworkError")
+                : new AppError(502, `Codex 回應錯誤：${m.error.message ?? method}`),
             )
           : resolve(m.result as T),
       );
       child.stdin.write(`${JSON.stringify({ id, method, params })}\n`);
     });
   const timer = setTimeout(() => {
-    stopPending();
+    stopPending("ETIMEDOUT");
     child.kill();
   }, 30000);
   try {

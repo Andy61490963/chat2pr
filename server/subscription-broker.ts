@@ -7,8 +7,10 @@ import {
   isRetryableUpstreamFailure,
   parseUpstreamFailure,
   upstreamFailureDetail,
+  upstreamFailureText,
   type UpstreamFailure,
 } from "../shared/upstream-failure.js";
+import { accountConnectionFailed } from "./codex-account.js";
 import { AppError } from "./policy.js";
 import { runnerRequest } from "./runner-http.js";
 import {
@@ -90,7 +92,6 @@ const credentialErrors: PublicErrors = new Map([
   ["Codex 訂閱額度已達上限", [429, "quota"]],
   ["無法確認訂閱額度，暫停新的推論", [429, "quota_unavailable"]],
   ["服務需要有效的 ChatGPT 訂閱登入，未使用 API 計費", [503, "auth"]],
-  ["訂閱登入讀取或刷新失敗，請確認服務登入", [503, "auth"]],
 ]);
 function knownError(error: unknown, messages: PublicErrors) {
   if (!(error instanceof AppError)) return undefined;
@@ -102,6 +103,29 @@ const subscriptionQuotaCodes = new Set([
   "usage_limit_reached",
   "rate_limit_exceeded",
 ]);
+
+async function modelNotFound(body: ReadableStream<Uint8Array>, signal: AbortSignal) {
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { value, done } = await interruptible(reader.read(), signal);
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > 8192) return false;
+      chunks.push(value);
+    }
+    const error = JSON.parse(Buffer.concat(chunks).toString("utf8"))?.error;
+    return (error?.code ?? error?.message) === "model_not_found";
+  } catch {
+    return false;
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
+
 type LocalTool = {
   type: "function" | "custom";
   name: string;
@@ -275,8 +299,8 @@ export class SubscriptionBroker {
     } catch (error) {
       const known = knownError(error, credentialErrors);
       if (known) throw known;
-      throw refresh
-        ? safeError(502, connectionMessage, "auth")
+      throw accountConnectionFailed(error)
+        ? safeError(502, connectionMessage, "connection")
         : safeError(503, "訂閱登入讀取失敗，未使用其他計費方式", "auth");
     }
     if (probeReservePercent !== undefined) {
@@ -745,7 +769,10 @@ export class SubscriptionBroker {
             else if (upstreamStatus !== undefined && upstreamStatus >= 300 && upstreamStatus < 400)
               fallbackKind = "redirect";
             else fallbackKind = response?.ok ? "missing_body" : "upstream_http";
-            await response?.body?.cancel();
+            if (response?.status === 404 && response.body) {
+              if (await modelNotFound(response.body, controller.signal))
+                fallbackKind = "model_unavailable";
+            } else await response?.body?.cancel();
             throw safeError(
               status,
               status === 429
@@ -795,20 +822,20 @@ export class SubscriptionBroker {
                 event.error
               ) {
                 // 僅信任真正錯誤事件的既知結構化代碼；模型文字與 message 不參與額度判定。
-                const quota =
-                  ["error", "response.failed"].includes(event.type) &&
-                  [event, event.error, event.response?.error].some(
-                    (error) =>
-                      error &&
-                      typeof error === "object" &&
-                      [error.code, error.type].some((code) =>
-                        subscriptionQuotaCodes.has(code),
-                      ),
-                  );
+                const codes: unknown[] = ["error", "response.failed"].includes(event.type)
+                  ? [event, event.error, event.response?.error].flatMap(error =>
+                      error && typeof error === "object" ? [error.code, error.type] : [])
+                  : [];
+                const quota = codes.some(code => typeof code === "string" && subscriptionQuotaCodes.has(code));
+                let kind: UpstreamFailure["kind"] = "stream_error";
+                if (quota) kind = "quota";
+                else if (codes.includes("model_not_found")) kind = "model_unavailable";
+                else if (codes.includes("invalid_request_error")) kind = "invalid_request";
+                else if (codes.includes("server_error") || codes.includes("overloaded")) kind = "stream_server_error";
                 throw safeError(
                   quota ? 429 : 502,
-                  quota ? "Codex 訂閱額度已達上限" : "訂閱推論串流回報錯誤",
-                  quota ? "quota" : "stream_error",
+                  quota ? "Codex 訂閱額度已達上限" : upstreamFailureText({ kind }),
+                  kind,
                 );
               }
               const truncatedProbe = probe && event.type === "response.incomplete" && event.response?.incomplete_details?.reason === "max_output_tokens";

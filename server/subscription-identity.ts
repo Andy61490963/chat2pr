@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { readCodexAccount } from "./codex-account.js";
+import { accountConnectionFailed, readCodexAccount } from "./codex-account.js";
 import { AppError } from "./policy.js";
 import type { SubscriptionIdentity } from "./subscription-broker.js";
 
@@ -18,7 +18,7 @@ export function subscriptionIdentity(codexHome: string) {
         const account = await Promise.race([
           readCodexAccount(codexHome, refresh),
           new Promise<never>((_, reject) => {
-            timer = setTimeout(() => reject(new Error("timeout")), 35000);
+            timer = setTimeout(() => reject(new DOMException("讀取訂閱登入逾時", "TimeoutError")), 35000);
           }),
         ]);
         if (account.allowed !== true)
@@ -58,7 +58,8 @@ export function subscriptionIdentity(codexHome: string) {
         cached = undefined;
         if (error instanceof AppError && [429, 503].includes(error.statusCode))
           throw error;
-        throw new AppError(503, "訂閱登入讀取或刷新失敗，請確認服務登入");
+        if (accountConnectionFailed(error)) throw new DOMException("無法連上訂閱服務", "NetworkError");
+        throw new AppError(503, "服務需要有效的 ChatGPT 訂閱登入，未使用 API 計費");
       } finally {
         if (timer) clearTimeout(timer);
         pending = undefined;

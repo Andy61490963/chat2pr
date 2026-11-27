@@ -1,5 +1,8 @@
 import Fastify from "fastify";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as account from "../server/codex-account.js";
+import { subscriptionIdentity } from "../server/subscription-identity.js";
+import { classifyFailure, failureNotice, groupFailureText } from "../server/failure.js";
 import { randomUUID } from "node:crypto";
 import { Readable } from "node:stream";
 import {
@@ -10,6 +13,8 @@ import {
 import { AppError } from "../server/policy.js";
 import { phaseEndEvents } from "../server/test-failures.js";
 import {
+  taskRetryDelays,
+  type UpstreamFailure,
   parseUpstreamFailure,
   parseUpstreamFailureDetail,
   upstreamFailureDetail,
@@ -94,6 +99,26 @@ async function fixture(
   return { app, broker, runId, lease, send, calls: () => calls };
 }
 describe("訂閱上游診斷的白名單", () => {
+  it.each([
+    ["代碼指出模型不存在", { code: "model_not_found", message: identity.accessToken }, true],
+    ["訊息恰為模型不存在代碼", { message: "model_not_found" }, true],
+    ["一般說明恰好提及代碼", { message: `model_not_found ${identity.accessToken}` }, false],
+    ["其他資源不存在", { code: "resource_not_found", message: identity.accessToken }, false],
+    ["錯誤本文超過大小上限", { code: "model_not_found", message: "甲".repeat(9000) }, false],
+  ] as const)("上游 404 的固定原因：%s", async (_label, error, modelMissing) => {
+    const f = await fixture({
+      credentials: async () => identity,
+      upstreamFetch: async () => Response.json({ error }, { status: 404 }),
+    });
+    const reply = await f.send();
+    expect(reply.statusCode).toBe(502);
+    expect(reply.body).not.toContain(identity.accessToken);
+    expect(f.lease.failure()).toStrictEqual({ kind: modelMissing ? "model_unavailable" : "upstream_http", status: 404 });
+    const text = upstreamFailureText(f.lease.failure()!);
+    expect(text.includes("模型不可用")).toBe(modelMissing);
+    expect(text).toContain("上游 HTTP 404");
+    expect((await f.send()).statusCode).toBe(403);
+  });
   it("代理明細有無上游 HTTP 狀態碼都能還原原本的診斷", () => {
     for (const failure of [
       { kind: "connection" },
@@ -743,8 +768,8 @@ describe("訂閱主憑證隔離與有限階段能力", () => {
       },
     });
     const response = await f.send();
-    expect(response.statusCode).toBe(502);
-    expect(response.json().error.message).toBe("訂閱推論連線失敗，未使用其他計費方式");
+    expect(response.statusCode).toBe(stage === "刷新登入" ? 503 : 502);
+    expect(response.json().error.message).toBe(stage === "刷新登入" ? "訂閱登入讀取失敗，未使用其他計費方式" : "訂閱推論連線失敗，未使用其他計費方式");
     expect(f.lease.failure()).toStrictEqual(stage === "連線" ? { kind: "connection" } :
       stage === "刷新登入" ? { kind: "auth", status: 401 } : { kind: "stream_interrupted", status: 200 });
     expect(f.broker.usage(f.runId)?.revoked).toBe(stage === "刷新登入");
@@ -808,4 +833,90 @@ describe("訂閱主憑證隔離與有限階段能力", () => {
     await expect(pending).rejects.toThrow("已取消");
     resolve(identity);
   });
+});
+
+// 舊版訂閱修改與審查失敗統一退避 30 秒一次；額度保留與逾時接續另有專用流程。
+const taskRetryCases = {
+  model_denied: [], model_unavailable: [], invalid_request: [], invalid_tools: [],
+  tool_denied: [], tool_limit: [], tool_choice_denied: [], phase_deadline: [],
+  phase_cancelled: [30], concurrent_request: [30], usage_limit: [], request_limit: [],
+  upstream_http: [30], connection: [30, 180], redirect: [30], auth: [], quota: [],
+  quota_unavailable: [], missing_body: [30], invalid_stream: [30, 180], response_limit: [],
+  frame_limit: [30], invalid_event: [30], stream_error: [30], invalid_usage: [30],
+  duplicate_completion: [30], output_limit: [], stream_interrupted: [30, 180], protected_data: [],
+  stream_server_error: [30, 180],
+} satisfies Record<UpstreamFailure["kind"], number[]>;
+it.each(Object.entries(taskRetryCases))("訂閱任務的 %s 依原因決定退避次數與秒數", (kind, delays) => {
+  expect(taskRetryDelays("transient", { kind: kind as UpstreamFailure["kind"] })).toEqual(delays);
+});
+it.each([
+  ["error", { code: "server_error" }, "stream_server_error"],
+  ["response.failed", { type: "overloaded" }, "stream_server_error"],
+  ["error", { message: "server_error" }, "stream_error"],
+  ["response.failed", { code: "model_not_found" }, "model_unavailable"],
+] as const)("串流依 %s 的固定錯誤代碼分類（%j）", async (type, error, kind) => {
+  const data = { ...error, message: "message" in error ? error.message : identity.accessToken };
+  const f = await fixture({ credentials: async () => identity, upstreamFetch: async () =>
+    sse([type === "error" ? { type, error: data } : { type, response: { error: data } }]) });
+  const response = await f.send();
+  expect(response.body).not.toContain(identity.accessToken);
+  expect(f.lease.failure()).toEqual({ kind, status: 200 });
+});
+
+it("工作用戶端在等待上游時斷線，代理只記錄階段連線已取消", async () => {
+  let started!: () => void;
+  const pending = new Promise<void>(resolve => { started = resolve; });
+  const f = await fixture({
+    credentials: async () => identity,
+    upstreamFetch: async (_url, options) => new Promise<Response>((_resolve, reject) => {
+      options?.signal?.addEventListener("abort", () => reject(new Error("連線中斷")), { once: true });
+      started();
+    }),
+  });
+  const origin = await f.app.listen({ host: "127.0.0.1", port: 0 });
+  const client = new AbortController();
+  const request = fetch(`${origin}${f.lease.basePath}/responses`, {
+    method: "POST", signal: client.signal,
+    headers: { authorization: `Bearer ${f.lease.token}`, "content-type": "application/json" },
+    body: JSON.stringify({ model: "model-test", input: [], stream: true, store: false }),
+  });
+  try {
+    await pending;
+    client.abort();
+    await expect(request).rejects.toThrow();
+    await expect.poll(() => f.lease.failure()).toEqual({ kind: "phase_cancelled" });
+  } finally {
+    client.abort();
+    f.app.server.closeAllConnections();
+  }
+});
+
+it.each([
+  [404, []], [502, [30, 180]], [200, [30]],
+] as const)("訂閱任務依上游 HTTP %i 選擇退避", (status, delays) => {
+  expect(taskRetryDelays("config", { kind: "upstream_http", status })).toEqual(delays);
+});
+
+it.each([
+  ["刷新時登入權杖已撤銷，提示重新登入且不重試", new AppError(502, "SyntheticRevoked123"), "auth", []],
+  ["刷新時連線被拒，依序退避重試", new TypeError("連線失敗", { cause: Object.assign(new Error(), { code: "ECONNREFUSED" }) }), "connection", [30, 180]],
+] as const)("%s", async (_name, error, kind, delays) => {
+  const read = vi.spyOn(account, "readCodexAccount").mockRejectedValue(error);
+  try {
+    const load = subscriptionIdentity("SyntheticHome");
+    const f = await fixture({ credentials: async refresh => refresh ? load(true) : identity,
+      upstreamFetch: async () => new Response(null, { status: 401 }) });
+    await f.send();
+    expect(read).toHaveBeenCalledWith("SyntheticHome", true);
+    const failure = f.lease.failure();
+    expect(failure).toEqual({ kind, status: 401 });
+    expect(taskRetryDelays("system", failure)).toEqual(delays);
+    if (kind === "auth") {
+      const notice = classifyFailure("", "code", "task", undefined, failure);
+      for (const text of [failureNotice(notice), groupFailureText(notice)]) {
+        expect(text).toContain("重新登入 Codex");
+        expect(text).not.toContain("SyntheticRevoked123");
+      }
+    }
+  } finally { read.mockRestore(); }
 });

@@ -45,7 +45,7 @@ import { hash } from "./auth.js";
 import { AppError, classifyRisk, redact, taipeiDay } from "./policy.js";
 import { subscriptionLimited } from "./triage.js";
 import { recordWorkInference, recordWorkInferenceFailure } from "./inference-health.js";
-import { parseUpstreamFailure, type UpstreamFailure } from "../shared/upstream-failure.js";
+import { parseUpstreamFailure, taskRetryDelays, upstreamFailureText, type UpstreamFailure } from "../shared/upstream-failure.js";
 import {
   classifyFailure,
   failureDigest,
@@ -158,7 +158,7 @@ export class ValidationPhaseError extends Error {
       failure.detail = "指令沒有留下任何輸出（結束代碼不是 0）";
     return {
       failure,
-      text: `${failureNotice(failure, false, this.label)}${digest.trim() ? `${validationOutputMark}${digest}` : ""}`,
+      text: `${failureNotice(failure, 0, this.label)}${digest.trim() ? `${validationOutputMark}${digest}` : ""}`,
     };
   }
 }
@@ -290,6 +290,8 @@ export class RunInferenceDiagnostics {
   ) {
     const observed = subscription && (name === "code" || name === "review");
     const observeFailure = async (failure: UpstreamFailure | undefined) => {
+      // 工作仍有效時，代理觀察到的用戶端斷線無法說明工作為何退出。
+      if (failure?.kind === "phase_cancelled") failure = undefined;
       this.failure = failure;
       if (!failure) return;
       try {
@@ -1491,29 +1493,37 @@ export class Execution {
               ["code", "review"].includes(name) &&
               error instanceof AppError &&
               error.statusCode === 429
-            )
-              await this.subscriptionGate.exhausted();
+            ) {
+              const kind = inference.failure?.kind === "quota_unavailable" ? "unknown" : "exhausted";
+              await this.subscriptionGate.exhausted(kind);
+              if (kind === "unknown") throw new SubscriptionBlocked(error.message, kind);
+            }
             throw error;
           });
-        if (
-          subscription &&
-          ["code", "review"].includes(name) &&
-          !r.sqlReviewFailure &&
-          r.exitCode !== 0 &&
-          subscriptionLimited(r.stderr)
-        )
-          await this.subscriptionGate.exhausted();
         if (r.sqlReviewFailure) {
           const reason = r.exitCode === ENVIRONMENT_EXIT
             ? "測試環境問題：SQL Server 審查複驗無法執行"
             : "SQL Server 審查複驗未通過";
           throw new AppError(422, `${reason}（退出碼 ${r.exitCode}）\n${redact(r.stderr).slice(-4000)}`);
         }
-        if (subscription && (name === "code" || name === "review") && r.exitCode !== 0 && inference.failure)
-          await this.db.query(
-            "UPDATE runs SET upstream_failure=$2 WHERE id=$1 AND run_content_visible(id)",
-            [runId, inference.failure],
-          );
+        if (subscription && (name === "code" || name === "review") && r.exitCode !== 0) {
+          const failure = inference.failure;
+          if (failure)
+            await this.db.query(
+              "UPDATE runs SET upstream_failure=$2 WHERE id=$1 AND run_content_visible(id)",
+              [runId, failure],
+            );
+          if (!failure && r.exitCode === 137 && !r.stderr.trim())
+            throw new Error("工作容器遭強制終止（退出碼 137）");
+          const limited = failure
+            ? failure.kind === "quota" || failure.kind === "quota_unavailable"
+            : subscriptionLimited(r.stderr);
+          if (limited) {
+            const kind = failure?.kind === "quota_unavailable" ? "unknown" : "exhausted";
+            await this.subscriptionGate.exhausted(kind);
+            throw new SubscriptionBlocked(failure ? upstreamFailureText(failure) : "Codex 訂閱額度已達上限", kind);
+          }
+        }
         return r;
       };
       let setup: { plan: SetupPlan; cached: boolean } | undefined;
@@ -1844,12 +1854,6 @@ export class Execution {
               stderr: "",
             }
           : await phase("code", { job, egress });
-        if (
-          subscription &&
-          code.exitCode !== 0 &&
-          subscriptionLimited(code.stderr)
-        )
-          throw new AppError(429, "Codex 訂閱額度已達上限");
         if (code.exitCode !== 0)
           throw new Error(
             // 堆疊之前那行才是真正的原因；多留一些，摘要時再去掉堆疊。
@@ -2169,12 +2173,6 @@ ${querySummary(answer)}`,
               collectExclude,
             },
           });
-          if (
-            subscription &&
-            review.exitCode !== 0 &&
-            subscriptionLimited(review.stderr)
-          )
-            throw new AppError(429, "Codex 訂閱額度已達上限");
           if (review.exitCode !== 0)
             throw new Error(
               `獨立審查失敗：${redact(review.stderr).slice(-4000)}`,
@@ -2464,7 +2462,9 @@ ${querySummary(answer)}`,
       }
       // 看板、通知與群組只看分類後的白話說明；堆疊與完整輸出只在上面的執行紀錄。
       // 逾時時仍有可接續的修改：說明保留了什麼、重試從哪裡接續，而不是建議縮小需求範圍。
-      const timedOut = classifyFailure(raw).plain === timeoutPlain;
+      const timedOut = inference.failure
+        ? inference.failure.kind === "phase_deadline"
+        : classifyFailure(raw).plain === timeoutPlain;
       const kept = timedOut ? pending : undefined;
       const failure = classifyFailure(
         kept
@@ -2522,38 +2522,35 @@ ${querySummary(answer)}`,
         }
       }
       const current = await this.db.one<{ version: number }>(
-        "SELECT version FROM tasks WHERE id=$1",
-        [taskId],
+        "SELECT version FROM tasks WHERE id=$1 AND ($2::uuid IS NULL OR version=(SELECT version FROM runs WHERE id=$2))",
+        [taskId, runId ?? null],
       );
       const used = current
         ? (await this.db.one<{ n: number }>(
             "SELECT count(*)::int AS n FROM audit WHERE task_id=$1 AND kind='auto_retry' AND detail LIKE $2",
             [taskId, `%需求版本 ${current.version}，%`],
           ))!.n
-        : AUTO_RETRIES;
-      // 連線中斷、上游暫時無法服務這類錯誤重跑通常就會過：同一需求版本退避後自動重試一次，不先通知失敗。
-      // 重試是重新排隊，派工時照樣檢查同時執行上限、預算與每日次數，不會因重試超支或超過上限。
-      if (failure.category === "transient" && current && used < AUTO_RETRIES) {
-        const requeued = await this.db.query(
-          "UPDATE tasks SET status='queued',retry_at=now()+make_interval(secs=>$4),last_error=$2,updated_at=now() WHERE id=$1 AND status IN ('running','reviewing') AND version=$3 AND approved_version=$3 RETURNING id",
-          [
-            taskId,
-            `${failureNotice(failure, false, where).split("\n")[0]}系統會在 ${RETRY_BACKOFF_SECONDS} 秒後自動重試一次。`,
-            current.version,
-            RETRY_BACKOFF_SECONDS,
-          ],
-        );
-        if (requeued.length) {
+        : 0;
+      const delay = taskRetryDelays(failure.category, inference.failure)[used];
+      if (current && delay !== undefined) {
+        const requeued = await this.db.transaction(async (client) => {
+          const result = await client.query(
+            "UPDATE tasks SET status='queued',retry_at=now()+make_interval(secs=>$4),last_error=$2,updated_at=now() WHERE id=$1 AND status IN ('running','reviewing') AND version=$3 AND approved_version=$3 RETURNING id",
+            [taskId, `${failureNotice(failure, 0, where).split("\n")[0]}系統會在 ${delay} 秒後自動重試一次。`, current.version, delay],
+          );
+          if (!result.rowCount) return false;
           await this.db.audit(
             taskId,
             "auto_retry",
-            `暫時性錯誤，${RETRY_BACKOFF_SECONDS} 秒後自動重試（需求版本 ${current.version}，第 ${used + 1} 次）：${where}：${failure.plain}${failure.detail ? `；${failure.detail}` : ""}`,
+            `${failure.category === "system" ? "系統錯誤" : "暫時性錯誤"}，${delay} 秒後自動重試（需求版本 ${current.version}，第 ${used + 1} 次）：${where}：${failure.plain}${failure.detail ? `；${failure.detail}` : ""}`,
+            client,
           );
-          return;
-        }
+          return true;
+        });
+        if (requeued) return;
       }
       // 安裝依賴在同一次執行內已重試過一次（install_retry）。
-      const retried = used > 0 || resumedBefore || /^安裝失敗：/.test(raw);
+      const retried = used || Number(resumedBefore || /^安裝失敗：/.test(raw));
       const summary = failureNotice(failure, retried, where);
       const failed = await this.db.query(
         "UPDATE tasks SET status='failed',last_error=$2,updated_at=now() WHERE id=$1 AND status IN ('running','reviewing') RETURNING id",
@@ -2665,10 +2662,6 @@ export async function claimAutoResume(
     return { claimed: true, version: task.version };
   });
 }
-
-/** 同一需求版本遇到暫時性錯誤時，自動重試的次數與重試前的等待秒數。 */
-export const AUTO_RETRIES = 1;
-export const RETRY_BACKOFF_SECONDS = 30;
 
 /** 重跑通常就會成功的錯誤：連線中斷、逾時的網路請求、上游暫時無法服務。 */
 export function transientFailure(message: string, phase = "") {
