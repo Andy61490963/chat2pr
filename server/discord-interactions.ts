@@ -2,6 +2,7 @@ import { Routes } from "discord.js";
 import type { Database, DbClient } from "./db.js";
 import type { ChatReplyMessage } from "./chat-platform.js";
 import { discordId } from "./chat-platform.js";
+import { redact } from "./policy.js";
 import {
   discordMessage,
   discordMessageId,
@@ -278,8 +279,8 @@ export async function handleDiscordInteraction(
     );
 
   const group = (
-    await db.query<{ enabled: boolean; replies: boolean }>(
-      `SELECT enabled,reply_mode<>'off' AND ${groupRepliesOn} AS replies
+    await db.query<{ enabled: boolean; replies: boolean; discord_reply_location: string }>(
+      `SELECT enabled,discord_reply_location,reply_mode<>'off' AND ${groupRepliesOn} AS replies
      FROM groups WHERE id=$1 AND platform='discord' AND left_at IS NULL`,
       [groupId],
     )
@@ -341,7 +342,8 @@ export async function handleDiscordInteraction(
       await edit("需求沒有內容。請重新使用 /任務，填寫要查詢或修改的事項。");
       return;
     }
-    const anchor = visible
+    const publicAnchor = visible && !threadId && group.discord_reply_location === "thread";
+    const anchor = publicAnchor ? await edit(redact(event.text.trim()).slice(0,1900)) : visible
       ? discordMessageId(await rest.get(original, { auth: false }))
       : undefined;
     await ingestDiscord(db, {
@@ -356,8 +358,8 @@ export async function handleDiscordInteraction(
       images: event.images ?? [],
       documents: event.documents,
       botId: event.botId,
-    });
-    await edit(
+    }, platform);
+    if (!publicAnchor) await edit(
       group?.enabled
         ? "已記下這則需求。可以用 /進度 查看處理狀態。"
         : disabledAck,

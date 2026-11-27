@@ -90,6 +90,10 @@ export class DiscordChatPlatform implements ChatPlatform {
 
   constructor(readonly rest: DiscordRest) {}
 
+  async startThread(channel: string, anchor: string, name: string) {
+    return discordMessageId(await this.rest.post(Routes.threads(channel, anchor), { body: { name } }));
+  }
+
   async sendToGroup(
     groupId: string,
     message: ChatReplyMessage,

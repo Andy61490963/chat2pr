@@ -12,6 +12,7 @@ import { applyAnswer, questionByQuote } from "./answers.js";
 import {
   detailRequest,
   groupRepliesOn,
+  notifyGroupDirect,
   type ReplyMode,
 } from "./group-replies.js";
 import {
@@ -51,6 +52,7 @@ export type DiscordMessageEvent =
   | (Source & { type: "delete" });
 
 type ExistingMessage = {
+  discord_thread_id: string | null;
   id: string;
   user_id: string | null;
   sender_name: string | null;
@@ -126,7 +128,7 @@ function sameDocument(old: ExistingMessage, doc: DiscordDocument | null) {
     : old.document_url === null;
 }
 
-export async function ingestDiscord(db: Database, event: DiscordMessageEvent) {
+export async function ingestDiscord(db: Database, event: DiscordMessageEvent, platform?: DiscordChatPlatform) {
   if (
     event.type === "create" &&
     (event.author.bot || event.author.id === event.botId)
@@ -137,16 +139,32 @@ export async function ingestDiscord(db: Database, event: DiscordMessageEvent) {
   const editedAt = event.type === "update" ? new Date(event.editedAt) : null;
   if (editedAt && !Number.isFinite(editedAt.getTime())) return;
 
+  let openedThread: string | null = null;
+  let attemptedThread = false;
+  if (platform && event.type === "create" && !event.parentChannel && !isProgressCommand(event.text) &&
+      (isTaskCommand(event.text) || event.text.includes(`<@${event.botId}>`) || event.text.includes(`<@!${event.botId}>`))) {
+    const [enabled] = await db.query(`SELECT 1 FROM groups WHERE id=$1 AND platform='discord' AND enabled AND left_at IS NULL AND reply_mode<>'off' AND discord_reply_location='thread' AND ${groupRepliesOn} AND NOT EXISTS(SELECT 1 FROM messages WHERE id=$2)`, [channelId,id]);
+    if (enabled) {
+      attemptedThread = true;
+      const name = Array.from(redact(event.text).replace(/^\/任務\s*|<@!?\d+>/g, "").trim() || "需求").slice(0, 90).join("");
+      try {
+        openedThread = await platform.startThread(event.channel, event.interactionReplyId ?? event.id, name);
+      } catch {
+        await db.query("UPDATE groups SET discord_thread_warning=$2 WHERE id=$1", [channelId, "無法建立需求討論串。請在頻道權限允許機器人「建立公開討論串」，並確認頻道可建立討論串。"]);
+      }
+    }
+  }
+
   return db.transaction(async (c) => {
     const threadId =
-      event.type === "create" && event.parentChannel ? channelId : null;
+      event.type === "create" && event.parentChannel ? channelId : openedThread;
     // 編輯與撤回依已保存的頻道核對，討論串離開快取後仍可處理。
     const groupId =
       event.type === "create"
         ? discordId(event.parentChannel ?? event.channel)
         : (
             await c.query<{ group_id: string }>(
-              "SELECT group_id FROM messages WHERE id=$1 AND COALESCE(discord_thread_id,group_id)=$2",
+              `SELECT group_id FROM messages WHERE id=$1 AND CASE WHEN EXISTS(SELECT 1 FROM discord_request_threads r WHERE r.source_id=messages.id) THEN group_id ELSE COALESCE(discord_thread_id,group_id) END=$2`,
               [id, channelId],
             )
           ).rows[0]?.group_id;
@@ -168,7 +186,7 @@ export async function ingestDiscord(db: Database, event: DiscordMessageEvent) {
     if (!group) return;
     const existing = (
       await c.query<ExistingMessage>(
-        `SELECT id,user_id,sender_name,text,quoted_id,image_source_url,document_name,document_size,document_url,discord_edited_at,revoked,processed,trigger_mode,needs_source_review,
+        `SELECT id,user_id,sender_name,text,quoted_id,image_source_url,document_name,document_size,document_url,discord_thread_id,discord_edited_at,revoked,processed,trigger_mode,needs_source_review,
          received_at<=message_retention_cutoff() AS expired
        FROM messages WHERE (id=$1 OR discord_message_id=$1) AND group_id=$2 ORDER BY id FOR UPDATE`,
         [id, groupId],
@@ -177,6 +195,7 @@ export async function ingestDiscord(db: Database, event: DiscordMessageEvent) {
     const original = existing.find((row) => row.id === id);
     if (event.type === "create" ? original : !original || original.revoked)
       return;
+    if (openedThread) await c.query("INSERT INTO discord_request_threads(thread_id,group_id,source_id) VALUES($1,$2,$3)", [openedThread,groupId,id]);
     if (event.type === "delete") {
       const ids = existing.filter((row) => !row.revoked).map((row) => row.id);
       await clearDiscordMessages(c, ids);
@@ -223,6 +242,13 @@ export async function ingestDiscord(db: Database, event: DiscordMessageEvent) {
     ) {
       quotedNotice = await noticeById(threadId, true);
       if (quotedNotice) quote = threadId;
+      else if (!quote) {
+        const questions = (await c.query<{sent_message_id:string}>(`SELECT n.sent_message_id FROM notifications n JOIN tasks t ON t.id=n.task_id JOIN discord_request_threads r ON r.thread_id=t.discord_thread_id AND r.group_id=t.group_id WHERE r.thread_id=$1 AND r.group_id=$2 AND n.kind='group_question' AND n.sent_message_id IS NOT NULL AND t.status='awaiting_approval' AND t.question IS NOT NULL AND n.dedupe_key='group:question:'||t.id||':'||t.version LIMIT 2`, [threadId,groupId])).rows;
+        if (questions.length === 1) {
+          quote = questions[0].sent_message_id;
+          quotedNotice = await noticeById(quote,true);
+        }
+      }
     }
     const sensitive =
       quotedNotice &&
@@ -361,13 +387,16 @@ export async function ingestDiscord(db: Database, event: DiscordMessageEvent) {
           event.type === "create" && event.interactionReplyId
             ? discordId(event.interactionReplyId)
             : null,
-          channelId === groupId ? null : channelId,
+          threadId ?? original?.discord_thread_id ?? (channelId === groupId ? null : channelId),
           row.document?.url ?? null,
           row.document?.name ?? null,
           row.document?.size ?? null,
           !!(row.document && old && sameDocument(old, row.document)),
         ],
       );
+    }
+    if (attemptedThread && eligible) {
+      await notifyGroupDirect(c, groupId, null, "request_ack", `request_ack:${id}`, "已收到需求。", id);
     }
     if (asked) {
       const result = await applyAnswer(
@@ -477,7 +506,7 @@ export function startDiscord(
         event(event) {
           messages = messages
             .then(async () => {
-              const reply = await ingestDiscord(db, event);
+              const reply = await ingestDiscord(db, event, platform);
               if (reply && platform)
                 void handle(replyDiscordText(db, platform, event, reply));
             })

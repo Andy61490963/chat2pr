@@ -517,6 +517,7 @@ function GroupCard({
     [ids, setIds] = useState(initialIds),
     [enabled, setEnabled] = useState(g.enabled),
     [triggerMode, setTriggerMode] = useState(g.trigger_mode),
+    [location, setLocation] = useState(g.discord_reply_location ?? "thread"),
     [replyMode, setReplyMode] = useState(g.reply_mode ?? "results"),
     [memo, setMemo] = useState(""),
     [memoProject, setMemoProject] = useState("none");
@@ -527,12 +528,14 @@ function GroupCard({
   useEffect(() => setIds(initialIds()), [savedIds, bindingProjectId]);
   useEffect(() => setEnabled(g.enabled), [g.enabled]);
   useEffect(() => setTriggerMode(g.trigger_mode), [g.trigger_mode]);
+  useEffect(() => setLocation(g.discord_reply_location ?? "thread"), [g.discord_reply_location]);
   useEffect(() => setReplyMode(g.reply_mode ?? "results"), [g.reply_mode]);
   const rename = name.trim() || g.name;
   const dirty =
     rename !== g.name ||
     enabled !== g.enabled ||
     triggerMode !== g.trigger_mode ||
+    location !== (g.discord_reply_location ?? "thread") ||
     replyMode !== (g.reply_mode ?? "results") ||
     ids.join() !== savedIds;
   useUnsaved(`group:${g.id}`, dirty);
@@ -637,6 +640,17 @@ function GroupCard({
           </div>
         </details>
       </div>
+      {g.platform === "discord" && <div className="grid gap-2">
+        <label htmlFor={`location-${g.id}`} className="text-sm font-medium">回覆位置</label>
+        <Select value={location} onValueChange={value => setLocation(value as typeof location)}>
+          <SelectTrigger id={`location-${g.id}`} className="min-h-11 w-full sm:max-w-sm"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="thread">每個需求開討論串</SelectItem>
+            <SelectItem value="channel">回覆在頻道</SelectItem>
+          </SelectContent>
+        </Select>
+        {g.discord_thread_warning && <p role="status">{g.discord_thread_warning}</p>}
+      </div>}
       {g.change_stats && (
         <div className="grid gap-2">
           <h3 className="text-sm font-medium">{groupChangeStatsText.heading}</h3>
@@ -814,6 +828,7 @@ function GroupCard({
                       project_ids: ids,
                       enabled,
                       trigger_mode: triggerMode,
+                      ...(g.platform === "discord" && { discord_reply_location: location }),
                       reply_mode: replyMode,
                     }),
                   "群組設定已儲存",
@@ -830,6 +845,7 @@ function GroupCard({
                 setIds(g.project_ids);
                 setEnabled(g.enabled);
                 setTriggerMode(g.trigger_mode);
+                setLocation(g.discord_reply_location ?? "thread");
                 setReplyMode(g.reply_mode ?? "results");
               }}
             >

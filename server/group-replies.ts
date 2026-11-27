@@ -397,8 +397,8 @@ export async function progressTasks(
 ) {
   const rows = (
     await c.query<ProgressTask & { total: string }>(
-      `SELECT t.title,t.status,(t.status='awaiting_approval' AND t.question IS NOT NULL) AS asking,count(*) OVER() AS total
-       FROM tasks t WHERE t.group_id=$1 AND t.discord_thread_id IS NOT DISTINCT FROM $3::text
+      `SELECT CASE WHEN $3::text IS NULL AND r.thread_id IS NOT NULL THEN t.title||' <#'||substr(r.thread_id,9)||'>' ELSE t.title END AS title,t.status,(t.status='awaiting_approval' AND t.question IS NOT NULL) AS asking,count(*) OVER() AS total
+       FROM tasks t LEFT JOIN discord_request_threads r ON r.group_id=t.group_id AND r.thread_id=t.discord_thread_id WHERE t.group_id=$1 AND (t.discord_thread_id IS NOT DISTINCT FROM $3::text OR ($3::text IS NULL AND r.thread_id IS NOT NULL))
        AND (t.status NOT IN ('merged','answered','closed','rejected','cancelled') OR t.updated_at>now()-interval '7 days')
        ORDER BY t.updated_at DESC,t.id LIMIT $2`,
       [groupId, limit, threadId],

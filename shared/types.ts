@@ -135,6 +135,8 @@ export interface Group {
   platform: ChatPlatformId;
   binding_version?: number;
   trigger_mode: "auto" | "command";
+  discord_reply_location?: "thread" | "channel";
+  discord_thread_warning?: string | null;
   /** 是否在群組回覆：off 不回覆、results 只回覆結果、all 另外通知已收到。 */
   reply_mode?: "off" | "results" | "all";
   trigger_version: number;

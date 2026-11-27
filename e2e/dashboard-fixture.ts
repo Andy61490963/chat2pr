@@ -153,6 +153,8 @@ export const group: DashboardGroup = {
   project_ids: [project.id],
   enabled: true,
   trigger_mode: "auto",
+  discord_reply_location: "thread",
+  discord_thread_warning: null,
   reply_mode: "all",
   trigger_version: 1,
   binding_version: bindingVersion,

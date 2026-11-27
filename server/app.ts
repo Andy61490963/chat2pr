@@ -1370,6 +1370,7 @@ export async function buildApp(
         name: z.string().min(1).max(402),
         project_ids: z.array(z.string().uuid()).max(30),
         trigger_mode: z.enum(["auto", "command"]).optional(),
+        discord_reply_location: z.enum(["thread", "channel"]).optional(),
         reply_mode: z.enum(["off", "results", "all"]).optional(),
         enabled: z.boolean(),
       })
@@ -1424,7 +1425,7 @@ export async function buildApp(
       );
       return (
         await c.query(
-          "UPDATE groups SET name=$2,enabled=$3,first_pending_at=CASE WHEN $4 THEN NULL ELSE first_pending_at END,last_pending_at=CASE WHEN $4 THEN NULL ELSE last_pending_at END,trigger_mode=$5,trigger_version=trigger_version+1,triage_failures=CASE WHEN $4 THEN 0 ELSE triage_failures END,triage_error=CASE WHEN $4 THEN NULL ELSE triage_error END,reply_mode=$6 WHERE id=$1 RETURNING *",
+          "UPDATE groups SET name=$2,enabled=$3,first_pending_at=CASE WHEN $4 THEN NULL ELSE first_pending_at END,last_pending_at=CASE WHEN $4 THEN NULL ELSE last_pending_at END,trigger_mode=$5,trigger_version=trigger_version+1,triage_failures=CASE WHEN $4 THEN 0 ELSE triage_failures END,triage_error=CASE WHEN $4 THEN NULL ELSE triage_error END,reply_mode=$6,discord_reply_location=COALESCE($7,discord_reply_location) WHERE id=$1 RETURNING *",
           [
             id,
             b.name,
@@ -1432,6 +1433,7 @@ export async function buildApp(
             resetPending,
             mode,
             b.reply_mode ?? old.reply_mode,
+            old.platform === "discord" ? b.discord_reply_location : null,
           ],
         )
       ).rows[0];

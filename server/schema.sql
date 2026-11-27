@@ -848,6 +848,11 @@ END $$;
 ALTER TABLE inference_probe_budget ADD COLUMN IF NOT EXISTS reserved_at timestamptz;
 ALTER TABLE inference_probe_budget ADD COLUMN IF NOT EXISTS early_attempts integer NOT NULL DEFAULT 0 CHECK(early_attempts BETWEEN 0 AND 2);
 CREATE INDEX IF NOT EXISTS audit_task_failure ON audit(task_id,created_at DESC,id DESC) WHERE kind='error';
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS discord_reply_location text NOT NULL DEFAULT 'thread' CHECK(discord_reply_location IN ('thread','channel'));
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS discord_thread_warning text;
+CREATE TABLE IF NOT EXISTS discord_request_threads (
+  thread_id text PRIMARY KEY, group_id text NOT NULL REFERENCES groups(id) ON DELETE CASCADE, source_id text NOT NULL UNIQUE
+);
 DELETE FROM service_health AS deferred USING service_health AS reading
 WHERE deferred.name='codex_probe_deferred' AND reading.name='codex_inference'
   AND reading.reading_ok IS NOT NULL AND deferred.checked_at<reading.checked_at
