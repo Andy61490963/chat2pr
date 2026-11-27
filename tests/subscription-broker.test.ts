@@ -859,3 +859,37 @@ it.each([
   expect(response.body).not.toContain(identity.accessToken);
   expect(f.lease.failure()).toEqual({ kind, status: 200 });
 });
+
+it("工作用戶端在等待上游時斷線，代理只記錄階段連線已取消", async () => {
+  let started!: () => void;
+  const pending = new Promise<void>(resolve => { started = resolve; });
+  const f = await fixture({
+    credentials: async () => identity,
+    upstreamFetch: async (_url, options) => new Promise<Response>((_resolve, reject) => {
+      options?.signal?.addEventListener("abort", () => reject(new Error("連線中斷")), { once: true });
+      started();
+    }),
+  });
+  const origin = await f.app.listen({ host: "127.0.0.1", port: 0 });
+  const client = new AbortController();
+  const request = fetch(`${origin}${f.lease.basePath}/responses`, {
+    method: "POST", signal: client.signal,
+    headers: { authorization: `Bearer ${f.lease.token}`, "content-type": "application/json" },
+    body: JSON.stringify({ model: "model-test", input: [], stream: true, store: false }),
+  });
+  try {
+    await pending;
+    client.abort();
+    await expect(request).rejects.toThrow();
+    await expect.poll(() => f.lease.failure()).toEqual({ kind: "phase_cancelled" });
+  } finally {
+    client.abort();
+    f.app.server.closeAllConnections();
+  }
+});
+
+it.each([
+  [404, []], [502, [30, 180]], [200, [30]],
+] as const)("訂閱任務依上游 HTTP %i 選擇退避", (status, delays) => {
+  expect(taskRetryDelays("config", { kind: "upstream_http", status })).toEqual(delays);
+});

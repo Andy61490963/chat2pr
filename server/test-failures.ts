@@ -58,11 +58,27 @@ export function parseTestFailures(output: string): TestFailures | null {
   const finish = () => {
     current = null;
   };
-  for (const raw of output.replace(ansi, "").split(/\r?\n/)) {
+  const specGroups = new Map<number, string>();
+  const rows = output.replace(ansi, "").split(/\r?\n/);
+  for (const [index, raw] of rows.entries()) {
+    const group = /^(\s*)▶ (.+)$/.exec(raw);
+    if (group) specGroups.set(group[1].length, group[2]);
     const header = headers
       .map(([kind, pattern]) => ({ kind, match: raw.match(pattern) }))
       .find((h) => h.match);
     if (header?.match) {
+      if (header.kind === "node") {
+        const indent = raw.length - raw.trimStart().length;
+        const groupName = specGroups.get(indent);
+        specGroups.delete(indent);
+        if (groupName === header.match[1]) { finish(); continue; }
+      }
+      if (header.kind === "tap") {
+        // Node 的 TAP 診斷會標示父層是因子測試失敗，葉節點則有自己的錯誤。
+        let i = index + 1;
+        while (i < rows.length && /^\s+(?:---$|(?:duration_ms|type|location):)/.test(rows[i])) i++;
+        if (/^\s+failureType: ['"]subtestsFailed['"]$/.test(rows[i] ?? "")) { finish(); continue; }
+      }
       const name = clip(safeDetail(header.match[1].trim()), NAME_LIMIT);
       if (!found.has(name)) found.set(name, []);
       const lines = found.get(name)!;

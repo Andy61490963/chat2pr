@@ -114,6 +114,13 @@ const resumableRules = [
 // 再認暫時性錯誤，避免測試輸出裡剛好出現的 ECONNREFUSED 被誤當成網路問題而重試。
 const rules: Rule[] = [
   {
+    category: "transient",
+    test: matches(/^工作容器遭強制終止（退出碼 137）$/),
+    plain: "工作容器遭強制終止（退出碼 137）",
+    action: "請確認執行主機的可用資源後重試",
+    group: "工作容器已中斷，請稍後重試。",
+  },
+  {
     category: "project",
     test: matches(/^沒有可提交的程式變更，Codex 未確認需求已符合/),
     plain: "Codex 沒有交付變更，也未確認需求已符合",

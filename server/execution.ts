@@ -45,7 +45,7 @@ import { hash } from "./auth.js";
 import { AppError, classifyRisk, redact, taipeiDay } from "./policy.js";
 import { subscriptionLimited } from "./triage.js";
 import { recordWorkInference, recordWorkInferenceFailure } from "./inference-health.js";
-import { parseUpstreamFailure, upstreamFailureText, type UpstreamFailure } from "../shared/upstream-failure.js";
+import { parseUpstreamFailure, taskRetryDelays, upstreamFailureText, type UpstreamFailure } from "../shared/upstream-failure.js";
 import {
   classifyFailure,
   failureDigest,
@@ -289,6 +289,8 @@ export class RunInferenceDiagnostics {
   ) {
     const observed = subscription && (name === "code" || name === "review");
     const observeFailure = async (failure: UpstreamFailure | undefined) => {
+      // 工作仍有效時，代理觀察到的用戶端斷線無法說明工作為何退出。
+      if (failure?.kind === "phase_cancelled") failure = undefined;
       this.failure = failure;
       if (!failure) return;
       try {
@@ -1506,6 +1508,8 @@ export class Execution {
               "UPDATE runs SET upstream_failure=$2 WHERE id=$1 AND run_content_visible(id)",
               [runId, failure],
             );
+          if (!failure && r.exitCode === 137 && !r.stderr.trim())
+            throw new Error("工作容器遭強制終止（退出碼 137）");
           const limited = failure
             ? failure.kind === "quota" || failure.kind === "quota_unavailable"
             : subscriptionLimited(r.stderr);
@@ -2521,8 +2525,8 @@ ${querySummary(answer)}`,
             [taskId, `%需求版本 ${current.version}，%`],
           ))!.n
         : 0;
-      const delay = (inference.failure ? upstreamRetryDelays : retryDelays)[used];
-      if (failure.category === "transient" && current && delay !== undefined) {
+      const delay = taskRetryDelays(failure.category, inference.failure)[used];
+      if (current && delay !== undefined) {
         const requeued = await this.db.transaction(async (client) => {
           const result = await client.query(
             "UPDATE tasks SET status='queued',retry_at=now()+make_interval(secs=>$4),last_error=$2,updated_at=now() WHERE id=$1 AND status IN ('running','reviewing') AND version=$3 AND approved_version=$3 RETURNING id",
@@ -2532,7 +2536,7 @@ ${querySummary(answer)}`,
           await this.db.audit(
             taskId,
             "auto_retry",
-            `暫時性錯誤，${delay} 秒後自動重試（需求版本 ${current.version}，第 ${used + 1} 次）：${where}：${failure.plain}${failure.detail ? `；${failure.detail}` : ""}`,
+            `${failure.category === "system" ? "系統錯誤" : "暫時性錯誤"}，${delay} 秒後自動重試（需求版本 ${current.version}，第 ${used + 1} 次）：${where}：${failure.plain}${failure.detail ? `；${failure.detail}` : ""}`,
             client,
           );
           return true;
@@ -2652,10 +2656,6 @@ export async function claimAutoResume(
     return { claimed: true, version: task.version };
   });
 }
-
-/** 每個需求版本的退避秒數。只有可信的訂閱上游暫時故障可再次排隊。 */
-const retryDelays = [30];
-const upstreamRetryDelays = [30, 180];
 
 /** 重跑通常就會成功的錯誤：連線中斷、逾時的網路請求、上游暫時無法服務。 */
 export function transientFailure(message: string, phase = "") {

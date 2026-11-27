@@ -24,6 +24,7 @@ const reasons = {
   response_limit: "訂閱回應大小超過上限",
   frame_limit: "訂閱回應的單一事件過大",
   invalid_event: "訂閱回應的事件格式無效",
+  stream_server_error: "訂閱上游暫時無法處理推論",
   stream_error: "訂閱推論串流回報錯誤",
   invalid_usage: "訂閱回應缺少有效用量",
   duplicate_completion: "訂閱回應重複回報完成",
@@ -62,6 +63,7 @@ const categories = {
   response_limit: "config",
   frame_limit: "system",
   invalid_event: "system",
+  stream_server_error: "transient",
   stream_error: "system",
   invalid_usage: "system",
   duplicate_completion: "system",
@@ -78,7 +80,17 @@ export function upstreamFailureCategory({ kind, status }: UpstreamFailure): Fail
 }
 
 export function isRetryableUpstreamFailure(failure: UpstreamFailure): boolean {
+  // 登入刷新失敗或上游已結束串流時，須重新取得階段授權。
+  if (failure.kind === "stream_server_error" || (failure.kind === "connection" && failure.status === 401)) return false;
   return upstreamFailureCategory(failure) === "transient";
+}
+
+export function taskRetryDelays(rawCategory: FailureCategory, failure?: UpstreamFailure): readonly number[] {
+  if (!failure || failure.kind === "phase_cancelled") return rawCategory === "transient" ? [30] : [];
+  const category = upstreamFailureCategory(failure);
+  if (category === "transient") return [30, 180];
+  if (category === "system" && failure.kind !== "protected_data") return [30];
+  return [];
 }
 
 function isKind(value: unknown): value is UpstreamFailure["kind"] {
