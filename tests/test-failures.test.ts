@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { describe, expect, it } from "vitest";
 import {
   describeTestFailures,
@@ -76,6 +77,29 @@ const pytest = [
 ].join("\n");
 
 describe("parseTestFailures 擷取失敗的測試", () => {
+  it("Node 的 TAP 只列出失敗測試並擷取斷言訊息", () => {
+    const output = [
+      "TAP version 13", "ok 1 - 空批次", "# Subtest: 計算兩批示範票數",
+      "not ok 2 - 計算兩批示範票數", "  ---", "  duration_ms: 0.762",
+      "  type: 'test'", "  failureType: 'testCodeFailure'", "  error: |-",
+      "    Expected values to be strictly equal:", "    ", "    -1 !== 5",
+      "  code: 'ERR_ASSERTION'", "  ...", "not ok 3 - 待辦案例 # TODO", "1..3",
+    ].join("\n");
+    expect(parseTestFailures(output)).toEqual({
+      tests: [{ name: "計算兩批示範票數", message: "Expected values to be strictly equal: -1 !== 5" }], more: 0,
+    });
+  });
+
+  it("Node 的文字報告合併重複的失敗名稱並排除統計與堆疊", () => {
+    const output = [
+      "✔ 空批次 (0.2ms)", "✖ 計算兩批示範票數 (0.9615ms)", "ℹ tests 2", "ℹ fail 1",
+      "✖ failing tests:", "test at tickets.test.mjs:3:1", "✖ 計算兩批示範票數 (0.9615ms)",
+      "  AssertionError [ERR_ASSERTION]: 示範票數有誤", "      at Test.run (node:internal/test_runner/test:1:1)",
+    ].join("\n");
+    expect(parseTestFailures(output)).toEqual({
+      tests: [{ name: "計算兩批示範票數", message: "AssertionError [ERR_ASSERTION]: 示範票數有誤" }], more: 0,
+    });
+  });
   it(".NET xUnit／dotnet test：同一個測試的兩種格式合併成一筆，訊息取第一段", () => {
     expect(parseTestFailures(xunit)).toEqual({
       tests: [
@@ -273,4 +297,16 @@ describe("測試階段失敗時保留失敗測試的錯誤區塊（執行紀錄�
       }).map((e) => e.kind),
     ).toEqual(["phase_end"]);
   });
+});
+
+it.each(["tap", "spec"])("Node 內建測試的 %s 報告只列真正失敗的葉節點", (reporter) => {
+  const program = `const { describe, it } = require("node:test");
+    describe("示範群組", () => describe("子群組", () => {
+      for (const name of ["甲項", "乙項"]) it(name, () => { throw Error("示範錯誤") });
+    }));`;
+  const run = spawnSync(process.execPath, [`--test-reporter=${reporter}`, "-e", program], { encoding: "utf8" });
+  expect(run.status).toBe(1);
+  const failures = parseTestFailures(run.stdout);
+  expect(failures?.tests.map(test => test.name)).toEqual(["甲項", "乙項"]);
+  expect(failures?.tests.every(test => test.message.includes("示範錯誤"))).toBe(true);
 });

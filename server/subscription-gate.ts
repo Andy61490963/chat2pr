@@ -90,18 +90,19 @@ export class SubscriptionGate {
     if (!state.ok) throw new SubscriptionBlocked(state.detail, storedQuotaKind(state.kind, state.detail));
   }
 
-  async exhausted() {
+  async exhausted(kind: "unknown" | "exhausted" = "exhausted") {
     await this.db.transaction(async (c) => {
       await lockSubscriptionGate(c);
       await c.query(
         `INSERT INTO service_health(name,ok,detail,probe_info,checked_at)
-         VALUES($1,false,$2,'{"kind":"exhausted"}',clock_timestamp())
+         VALUES($1,false,$2,$4,clock_timestamp())
          ON CONFLICT(name) DO UPDATE SET ok=false,detail=excluded.detail,probe_info=excluded.probe_info,checked_at=excluded.checked_at
          WHERE service_health.ok OR NOT COALESCE(service_health.probe_info->>'kind'='reserve',service_health.detail LIKE $3)`,
         [
           subscriptionGateName,
-          exhaustedSubscriptionQuota,
+          kind === "unknown" ? unknownSubscriptionQuota : exhaustedSubscriptionQuota,
           `${reservedQuotaHold}%`,
+          { kind },
         ],
       );
     });

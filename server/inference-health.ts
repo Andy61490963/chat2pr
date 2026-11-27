@@ -82,7 +82,7 @@ export async function recordWorkInference(db: Database, model: string | null, st
 
 type Capacity = { known: boolean; hold: string | null };
 export async function recordWorkInferenceFailure(db: Database, model: string | null, started: Date, failure: UpstreamFailure) {
-  const upstream = ['upstream_http','connection','redirect','auth','missing_body','invalid_stream','invalid_event','stream_error','invalid_usage','duplicate_completion','stream_interrupted'];
+  const upstream = ['upstream_http','model_unavailable','connection','redirect','auth','missing_body','invalid_stream','invalid_event','stream_error','stream_server_error','invalid_usage','duplicate_completion','stream_interrupted'];
   if (!upstream.includes(failure.kind) && !(failure.kind === 'quota' && failure.status !== undefined)) return;
   await recordHealth(db, inference, false, `實際訂閱工作推論失敗：${upstreamFailureText(failure)}。請檢查訂閱代理。`, {
     inferenceObservation: { model, started }, probe: { model, latencyMs: null, failure }, firstWorkFailure: true,
