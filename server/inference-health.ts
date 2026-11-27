@@ -26,7 +26,7 @@ export function visibleHealth(rows: Reading[], now = Date.now(), skipped = '') {
   const gate = rows.find(row => row.name === subscriptionGateName);
   const login = rows.find(row => row.name === 'codex');
   const reason = skipped || (gate && !gate.ok ? gate.detail : '') || (host && !host.ok ? host.detail : '') ||
-    (hold && (!probe || Number(hold.checked_at) > Number(probe.checked_at)) ? hold.detail : '');
+    (hold?.detail ?? '');
   const visible = rows.filter((row) => row.name !== inference && row.name !== deferred);
   for (const name of ["codex", subscriptionGateName]) {
     const index = visible.findIndex((row) => row.name === name);
@@ -56,8 +56,11 @@ export function visibleHealth(rows: Reading[], now = Date.now(), skipped = '') {
 
 export async function systemHealth(db: Database) {
   const [rows, settings] = await Promise.all([
-    db.query<Reading>(`SELECT h.* FROM service_health h WHERE name NOT IN ('codex_inference','codex_probe_deferred') OR
-      (probe_info->>'model') IS NOT DISTINCT FROM (SELECT value->>'codex_model' FROM settings WHERE id=1) ORDER BY name`),
+    db.query<Reading>(`SELECT h.* FROM service_health h WHERE (name NOT IN ('codex_inference','codex_probe_deferred') OR
+      (probe_info->>'model') IS NOT DISTINCT FROM (SELECT value->>'codex_model' FROM settings WHERE id=1))
+      AND NOT (name='codex_probe_deferred' AND EXISTS (SELECT 1 FROM service_health reading
+        WHERE reading.name='codex_inference' AND reading.reading_ok IS NOT NULL AND reading.checked_at>h.checked_at
+        AND (reading.probe_info->>'model') IS NOT DISTINCT FROM (h.probe_info->>'model'))) ORDER BY name`),
     db.settings(),
   ]);
   if (settings.ai_mode === 'api') return rows.filter(row => row.name !== inference && row.name !== deferred);

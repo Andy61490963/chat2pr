@@ -31,6 +31,54 @@ afterAll(() => db.close());
 
 const deferral = () => db.one<{ detail: string }>("SELECT detail FROM service_health WHERE name='codex_probe_deferred'");
 
+it.each([
+  ['完全同時', '000500', 'unknown'],
+  ['晚一微秒', '000501', 'unknown'],
+  ['早一微秒', '000499', 'failed'],
+])('延後紀錄與真實讀數%s時，系統頁與升級後顯示相同結果', async (_scenario, fraction, expected) => {
+  const second = '2026-01-01T00:00:00';
+  const probeTime = `${second}.000500Z`;
+  const now = vi.spyOn(Date, 'now').mockReturnValue(new Date(probeTime).getTime());
+  try {
+    await db.query(`INSERT INTO service_health(name,ok,detail,reading_ok,checked_at) VALUES
+      ('codex_inference',false,'上游回應 502',false,$1),
+      ('codex_probe_deferred',false,'稍後檢查',null,$2)`, [probeTime, `${second}.${fraction}Z`]);
+    const check = async () => {
+      const row = (await systemHealth(db)).find(item => item.name === 'codex');
+      expect(row).toMatchObject({ inferenceStatus: expected, detail: expected === 'unknown' ? '稍後檢查 上次真實讀數：上游回應 502' : '上游回應 502' });
+    };
+    await check();
+    await db.migrate();
+    await check();
+  } finally {
+    now.mockRestore();
+  }
+});
+
+it('首次失敗不把時間進位到未來，後續讀數保留觀測的微秒', async () => {
+  const started = new Date('2026-01-01T00:00:00Z');
+  const transaction = db.transaction.bind(db);
+  const clock = vi.spyOn(db, 'transaction').mockImplementation(fn => transaction(async client => {
+    await client.query(`CREATE SCHEMA test_probe_clock;
+      CREATE FUNCTION test_probe_clock.now() RETURNS timestamptz LANGUAGE sql AS $$ SELECT timestamptz '2026-01-01T00:00:00.000800Z' $$;
+      CREATE FUNCTION test_probe_clock.clock_timestamp() RETURNS timestamptz LANGUAGE sql AS $$ SELECT timestamptz '2026-01-01T00:00:01.000800Z' $$;
+      SET LOCAL search_path = test_probe_clock, pg_catalog, public`);
+    const result = await fn(client);
+    await client.query('DROP SCHEMA test_probe_clock CASCADE');
+    return result;
+  }));
+  try {
+    await recordWorkInferenceFailure(db, null, started, { kind: 'connection' });
+    expect(await db.one(`SELECT checked_at <= timestamptz '2026-01-01T00:00:00.000800Z' AS valid
+      FROM service_health WHERE name='codex_inference'`)).toEqual({ valid: true });
+    await recordWorkInference(db, null, new Date(started.getTime() + 1000));
+    expect(await db.one(`SELECT checked_at = timestamptz '2026-01-01T00:00:01.000800Z' AS valid
+      FROM service_health WHERE name='codex_inference'`)).toEqual({ valid: true });
+  } finally {
+    clock.mockRestore();
+  }
+});
+
 it.each(["成功", "失敗", "工作成功", "工作失敗"])("延後之後取得%s讀數，清除延後列且不產生獨立異常", async source => {
   const runner = new HttpRunner();
   const ok = source.endsWith("成功");

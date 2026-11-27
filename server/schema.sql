@@ -850,5 +850,5 @@ ALTER TABLE inference_probe_budget ADD COLUMN IF NOT EXISTS early_attempts integ
 CREATE INDEX IF NOT EXISTS audit_task_failure ON audit(task_id,created_at DESC,id DESC) WHERE kind='error';
 DELETE FROM service_health AS deferred USING service_health AS reading
 WHERE deferred.name='codex_probe_deferred' AND reading.name='codex_inference'
-  AND reading.reading_ok IS NOT NULL AND deferred.checked_at<=reading.checked_at
+  AND reading.reading_ok IS NOT NULL AND deferred.checked_at<reading.checked_at
   AND (deferred.probe_info->>'model') IS NOT DISTINCT FROM (reading.probe_info->>'model');
