@@ -5,6 +5,7 @@ import type { Database, DbClient } from "./db.js";
 import {
   discordRetryMs,
   discordStatus,
+  rawDiscordId,
   type DiscordChatPlatform,
 } from "./discord-platform.js";
 import { claimingNote, type QuickReply } from "./group-replies.js";
@@ -111,13 +112,15 @@ async function sendNextGroup(
     } = await c.query<{
       id: string;
       channel_id: string;
+      group_id: string;
+      managed: boolean;
       kind: string;
       text: string;
       origin: string | null;
       quick_replies: QuickReply[] | null;
     }>(
       // 撤回只移除引用，目的地仍是原頻道或討論串。較新的補送要先結算，才決定是否推播舊通知。
-      `SELECT n.id,n.kind,n.text,n.quick_replies,COALESCE(target.thread_id,g.id) AS channel_id,
+      `SELECT n.id,n.kind,n.text,n.quick_replies,g.id AS group_id,managed.thread_id IS NOT NULL AS managed,COALESCE(target.thread_id,g.id) AS channel_id,
          COALESCE(CASE WHEN NOT direct.revoked THEN COALESCE(direct.discord_reply_message_id,direct.discord_message_id) END,
            source.message_id) AS origin
        FROM notifications n JOIN groups g ON g.id=n.group_id
@@ -127,6 +130,7 @@ async function sendNextGroup(
          SELECT CASE WHEN n.source_message_id IS NOT NULL
            THEN COALESCE(n.discord_thread_id,direct.discord_thread_id) ELSE t.discord_thread_id END AS thread_id
        ) target
+       LEFT JOIN discord_request_threads managed ON managed.thread_id=target.thread_id AND managed.group_id=g.id
        LEFT JOIN LATERAL (
          SELECT COALESCE(m.discord_reply_message_id,m.discord_message_id) AS message_id
          FROM unnest(t.source_ids) WITH ORDINALITY AS s(id,pos)
@@ -156,12 +160,12 @@ async function sendNextGroup(
     }
     await sendNotice(c, n.id, async () => {
       if (n.kind === "group_received" && n.origin) {
-        await platform.react(n.channel_id, n.origin);
+        await platform.react(n.managed && n.origin === n.channel_id ? n.group_id : n.channel_id, n.origin);
         // 反應沒有自己的訊息識別碼，原文仍屬於群組成員。
         return null;
       }
-      const result = await platform.sendToGroup(
-        n.channel_id,
+      const send = (destination: string) => platform.sendToGroup(
+        destination,
         {
           text:
             n.kind === "group_answered"
@@ -170,9 +174,26 @@ async function sendNextGroup(
           quick: n.quick_replies,
         },
         n.id,
-        n.origin ?? undefined,
+        destination === n.channel_id && !(n.managed && n.origin === n.channel_id) ? n.origin ?? undefined : undefined,
       );
-      return result.messageId;
+      try {
+        const result = await send(n.channel_id);
+        if (n.managed && n.kind === "group_request_ack") {
+          await c.query("UPDATE groups SET discord_thread_warning=NULL WHERE id=$1 AND discord_thread_warning IS NOT NULL", [n.group_id]);
+        }
+        return result.messageId;
+      } catch (error) {
+        if (n.channel_id !== n.group_id && typeof error === "object" && error && "code" in error && error.code === 50083) {
+          try {
+            await platform.rest.patch(`/channels/${rawDiscordId(n.channel_id)}`, { body: { archived: false } });
+            return (await send(n.channel_id)).messageId;
+          } catch (retryError) { error = retryError; }
+        }
+        if (!n.managed) throw error;
+        if (discordStatus(error) !== 403 && discordStatus(error) !== 404) throw error;
+        await c.query("UPDATE groups SET discord_thread_warning=$2 WHERE id=$1", [n.group_id, discordDeliveryNotes.sendInThread]);
+        return (await send(n.group_id)).messageId;
+      }
     });
     return n.id;
   });

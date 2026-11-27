@@ -14,6 +14,7 @@ import {
 } from "../server/discord-interactions.js";
 import { cleanup, downloadPendingDocuments, downloadPendingImages } from "../server/maintenance.js";
 import { Line } from "../server/line.js";
+import { flushDiscordNotifications } from "../server/discord-notifications.js";
 import { dueTriageGroups } from "../server/triage-window.js";
 import { Triage } from "../server/triage.js";
 import { Budget } from "../server/budget.js";
@@ -30,6 +31,7 @@ import {
 import { answerPostbackData, askInGroup } from "../server/answers.js";
 import {
   claimingNote,
+  noProjectAck,
   notifyGroup,
   replyFailedNote,
 } from "../server/group-replies.js";
@@ -117,6 +119,7 @@ function fakeRest() {
     put: vi.fn<DiscordRest["put"]>(async () => null),
     post: vi.fn<DiscordRest["post"]>(async (route) => {
       if (route === "/users/@me/channels") return { id: dmChannel };
+      if (route.endsWith("/threads")) return { id: route.split("/").at(-2), type: 11 };
       return { id: String(nextId++) };
     }),
   };
@@ -142,6 +145,130 @@ async function discordTask() {
     ],
   );
 }
+
+it("頻道的需求預設從原訊息開串，收到確認只送進串內", async () => {
+  await discordTask();
+  const { rest, platform } = fakeRest();
+  const { event } = fakeGateway(platform);
+  await event(create("120", { text: "/任務 整理示範按鈕" }));
+  await new Line(db, platform).flushNotifications();
+  expect(rest.post).toHaveBeenCalledWith(`/channels/${channel}/messages/120/threads`, {
+    body: { name: "整理示範按鈕" },
+  });
+  expect(rest.post).toHaveBeenCalledWith("/channels/120/messages", expect.objectContaining({
+    body: expect.objectContaining({ content: expect.stringContaining("收到") }),
+  }));
+  expect(rest.post.mock.calls.map(([route]) => route)).not.toContain(`/channels/${channel}/messages`);
+});
+
+it.each([
+  ["系統暫停", "系統目前暫停處理新需求，這則已保留"],
+  ["額度無法確認", "暫時無法確認 AI 額度，這則已保留"],
+] as const)("%s時，討論串的收到訊息說明保留原因", async (reason, expected) => {
+  await discordTask();
+  const project = await fixture();
+  await db.query("INSERT INTO group_projects(group_id,project_id) VALUES($1,$2)", [group, project]);
+  if (reason === "系統暫停") {
+    await db.query(`UPDATE settings SET value=value||'{"paused":true}' WHERE id=1`);
+  } else {
+    await db.query(`UPDATE settings SET value=value||'{"ai_mode":"subscription"}' WHERE id=1`);
+    await db.query(`INSERT INTO service_health(name,ok,detail,probe_info)
+      VALUES('codex_subscription_gate',false,'無法取得讀數','{"kind":"unknown"}')
+      ON CONFLICT(name) DO UPDATE SET ok=false,detail=EXCLUDED.detail,probe_info=EXCLUDED.probe_info`);
+  }
+  const { rest, platform } = fakeRest();
+  try {
+    await fakeGateway(platform).event(create("127", { text: "/任務 整理示範清單" }));
+    await flushDiscordNotifications(db, platform);
+    expect(rest.post).toHaveBeenCalledWith("/channels/127/messages", expect.objectContaining({
+      body: expect.objectContaining({ content: expect.stringContaining(expected) }),
+    }));
+  } finally {
+    if (reason === "額度無法確認") await db.query("DELETE FROM service_health WHERE name='codex_subscription_gate'");
+  }
+});
+
+it("第一輪仍在等 Discord 回應時，租約時間經過也不會由第二輪重送同一則通知", async () => {
+  const task = await discordTask();
+  const { rest, platform } = fakeRest();
+  await notifyGroup(db.pool, task.id, "ready", "範例完成", "清單已完成");
+  let release!: () => void;
+  const delayed = new Promise<void>(resolve => { release = resolve; });
+  rest.post.mockImplementationOnce(async () => {
+    await delayed;
+    return { id: "128" };
+  });
+  const first = flushDiscordNotifications(db, platform);
+  try {
+    await vi.waitFor(() => expect(rest.post).toHaveBeenCalledOnce());
+    await db.query(`UPDATE notifications SET discord_retry_at=clock_timestamp()-interval '1 second'
+      WHERE id IN (SELECT id FROM notifications WHERE task_id=$1 AND discord_retry_at IS NOT NULL FOR UPDATE SKIP LOCKED)`, [task.id]);
+    await flushDiscordNotifications(db, platform);
+  } finally {
+    release();
+    await first;
+  }
+  await flushDiscordNotifications(db, platform);
+  expect(rest.post).toHaveBeenCalledTimes(1);
+});
+
+it("開串失敗仍保存需求並留下管理者可處理的原因", async () => {
+  await discordTask();
+  const { rest, platform } = fakeRest();
+  rest.post.mockRejectedValueOnce({ status: 403 });
+  await fakeGateway(platform).event(create("121", { text: "/任務 整理示範清單" }));
+  await new Line(db, platform).flushNotifications();
+  expect(rest.post).toHaveBeenCalledWith(`/channels/${channel}/messages`, expect.objectContaining({ body: expect.objectContaining({ content: noProjectAck }) }));
+  expect(await db.one("SELECT discord_thread_id FROM messages WHERE id=$1", [discordId("121")])).toMatchObject({ discord_thread_id: null });
+  expect(await db.one("SELECT discord_thread_warning FROM groups WHERE id=$1", [group])).toMatchObject({ discord_thread_warning: expect.stringContaining("建立公開討論串") });
+});
+
+it("設定回覆在頻道時不開串", async () => {
+  await discordTask();
+  await db.query("UPDATE groups SET discord_reply_location='channel' WHERE id=$1", [group]);
+  const { rest, platform } = fakeRest();
+  await fakeGateway(platform).event(create("122", { text: "/任務 整理示範清單" }));
+  expect(rest.post).not.toHaveBeenCalled();
+  expect(await db.one("SELECT discord_thread_id FROM messages WHERE id=$1", [discordId("122")])).toMatchObject({ discord_thread_id: null });
+});
+
+it("已封存的需求討論串解除封存後收到結果，不在頻道重送", async () => {
+  const task = await discordTask();
+  const { rest, platform } = fakeRest();
+  await fakeGateway(platform).event(create("123", { text: "/任務 整理示範清單" }));
+  await new Line(db, platform).flushNotifications();
+  await db.query("UPDATE tasks SET discord_thread_id=$2,source_ids=$3 WHERE id=$1", [task.id, discordId("123"), [discordId("123")]]);
+  await notifyGroup(db.pool, task.id, "ready", "範例完成", "清單已完成");
+  rest.post.mockClear();
+  rest.post.mockRejectedValueOnce({ code: 50083, status: 403 });
+  await new Line(db, platform).flushNotifications();
+  expect(rest.patch).toHaveBeenCalledWith("/channels/123", { body: { archived: false } });
+  expect(rest.post.mock.calls.map(([route]) => route)).toEqual(["/channels/123/messages", "/channels/123/messages"]);
+  expect(rest.post.mock.calls[1][1]?.body).not.toHaveProperty("message_reference");
+});
+
+it("父頻道進度附上機器人所開討論串的連結", async () => {
+  const task = await discordTask();
+  const { rest, platform } = fakeRest();
+  const gateway = fakeGateway(platform, applicationId);
+  await gateway.event(create("124", { text: "/任務 整理示範清單" }));
+  await db.query("UPDATE tasks SET discord_thread_id=$2 WHERE id=$1", [task.id,discordId("124")]);
+  await gateway.interaction?.({ ...interaction, kind: "progress" });
+  expect(rest.patch.mock.calls.at(-1)?.[1]?.body).toMatchObject({ content: expect.stringContaining("<#124>") });
+});
+
+it("機器人無法在自己的公開討論串發言時，收到確認改送父頻道", async () => {
+  await discordTask();
+  const { rest, platform } = fakeRest();
+  await fakeGateway(platform).event(create("125", { text: `<@${botId}> 整理示範清單` }));
+  rest.post.mockRejectedValueOnce({ status: 403, code: 50013 });
+  await new Line(db, platform).flushNotifications();
+  expect(rest.post).toHaveBeenCalledWith(`/channels/${channel}/messages`, expect.objectContaining({ body: expect.objectContaining({ content: noProjectAck }) }));
+  expect(await db.one("SELECT discord_thread_warning FROM groups WHERE id=$1", [group])).toMatchObject({ discord_thread_warning: expect.stringContaining("在討論串中傳送訊息") });
+  await ingestDiscord(db, create("126", { text: "/任務 再整理一份清單" }), platform);
+  await new Line(db, platform).flushNotifications();
+  expect(await db.one("SELECT discord_thread_warning FROM groups WHERE id=$1", [group])).toMatchObject({ discord_thread_warning: null });
+});
 
 it("Discord 群組送出補問、查詢答案、完成與失敗，收到需求只在原訊息加反應", async () => {
   const { rest, platform } = fakeRest();
@@ -209,10 +336,11 @@ it("Discord 群組送出補問、查詢答案、完成與失敗，收到需求�
   }
 });
 
-it("討論串沿用父頻道的設定，建立的需求在原討論串收到反應、補問及結果", async () => {
+it.each(["成員開串", "需求自動開串"])("%s沿用父頻道設定，補問、查詢、完成、失敗與成員回答都留在原串", async (entry) => {
   const { rest, platform } = fakeRest();
   const { event } = fakeGateway(platform);
-  const thread = "100000000000000021";
+  const managed = entry === "需求自動開串";
+  const thread = managed ? "22" : "100000000000000021";
   const inThread = { channel: thread, parentChannel: channel };
   const project = await fixture();
   await event(create("20", { ...inThread, text: "/任務 整理示範專案" }));
@@ -225,8 +353,7 @@ it("討論串沿用父頻道的設定，建立的需求在原討論串收到反�
     files: {},
     truncated: false,
   });
-  const classify = vi.fn(async () => [
-    {
+  const decision = {
       kind: "clarification" as const,
       projectId: project,
       title: "整理示範專案",
@@ -238,8 +365,10 @@ it("討論串沿用父頻道的設定，建立的需求在原討論串收到反�
       relatedTaskId: null,
       suggestions: [],
       question: { text: "要調整哪個按鈕？", choices: [] },
-    },
-  ]);
+    };
+  const classify = vi.fn(async () => managed ? [decision, {
+    ...decision, kind: "request" as const, title: "整理示範清單", question: null,
+  }] : [decision]);
   const line = new Line(db, platform);
   const triage = new Triage(db, { classify }, github, line, new Budget(db));
   await triage.process(group);
@@ -260,11 +389,16 @@ it("討論串沿用父頻道的設定，建立的需求在原討論串收到反�
     [group, project],
   );
   await event(create("21", { ...inThread, text: "小林正在整理按鈕。" }));
-  await event(create("22", { ...inThread, text: "/任務 整理示範專案" }));
+  await event(create("22", { ...(!managed && inThread), text: "/任務 整理示範專案" }));
   await event(create("23", { text: "/任務 整理父頻道的清單" }));
+  await line.flushNotifications();
+  rest.post.mockClear();
   await triage.process(group);
   expect(classify).toHaveBeenCalledOnce();
-  const task = await db.one<Task>("SELECT * FROM tasks WHERE group_id=$1", [
+  if (managed) expect(await db.query("SELECT discord_thread_id FROM tasks WHERE group_id=$1 ORDER BY title", [group])).toEqual([
+    { discord_thread_id: discordId(thread) }, { discord_thread_id: discordId(thread) },
+  ]);
+  const task = await db.one<Task>("SELECT * FROM tasks WHERE group_id=$1 AND question IS NOT NULL", [
     group,
   ]);
   expect(task).toMatchObject({
@@ -278,9 +412,11 @@ it("討論串沿用父頻道的設定，建立的需求在原討論串收到反�
   ).toMatchObject({ processed: false });
 
   await notifyGroup(db.pool, task.id, "ready", "範例：完成", "整理完成");
+  await notifyGroup(db.pool, task.id, "answered", "範例：回答", "清單共有兩項");
+  await notifyGroup(db.pool, task.id, "failed", "範例：失敗", "未能整理清單");
   await line.flushNotifications();
   expect(rest.put).toHaveBeenCalledWith(
-    `/channels/${thread}/messages/22/reactions/${encodeURIComponent("✅")}/@me`,
+    `/channels/${managed ? channel : thread}/messages/22/reactions/${encodeURIComponent("✅")}/@me`,
   );
   expect(rest.post).toHaveBeenCalledWith(
     `/channels/${thread}/messages`,
@@ -300,7 +436,7 @@ it("討論串沿用父頻道的設定，建立的需求在原討論串收到反�
   await event(
     create("24", {
       ...inThread,
-      quotedId: notice.sent_message_id.slice("discord:".length),
+      quotedId: managed ? undefined : notice.sent_message_id.slice("discord:".length),
       text: "調整查詢按鈕",
     }),
   );
@@ -535,6 +671,8 @@ it("Discord 註冊斜線指令，進度透過互動取回補問，任務指令�
     text: "請查詢示範專案",
     documents: [slashFile],
   });
+  expect(rest.post).toHaveBeenCalledWith(`/channels/${channel}/messages/${interactionReplyId}/threads`, { body: { name: "請查詢示範專案" } });
+  expect(rest.patch.mock.calls.at(-1)?.[1]?.body).toMatchObject({ content: "請查詢示範專案" });
   expect(await db.one("SELECT document_name,document_url,discord_message_id,discord_reply_message_id,processed FROM messages WHERE id=$1", [
     `${discordId(requestId)}:document:100000000000000006`,
   ])).toEqual({

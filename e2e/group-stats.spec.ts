@@ -5,6 +5,35 @@ import { group, mockDashboard } from "./dashboard-fixture";
 const hint = /近 30 天建立的修改需求多半被拒絕/;
 
 for (const width of [1440, 375]) {
+  test(`Discord 頻道可設定回覆位置（${width}px）`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    await mockDashboard(page, { state: { groups: [{ ...group, platform: "discord" }] } });
+    await page.goto("/groups");
+    await page.getByRole("button", { name: new RegExp(group.name) }).click();
+    const location = page.getByRole("combobox", { name: "回覆位置" });
+    await expect(location).toHaveText("每個需求開討論串");
+    await expect(location).toHaveAccessibleDescription(/公開討論串.*收到、補問與結果.*頻道只留需求/);
+    await expect(page.getByRole("status").filter({ hasText: /^目前：/ })).toContainText("在需求討論串內回覆");
+    await expect(page.getByText("收到、補問、整理進度與結果都在需求討論串內回覆。", { exact: true })).toBeVisible();
+    await location.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`公開討論串-${width}.png`) });
+    await location.click();
+    await page.getByRole("option", { name: "回覆在頻道" }).click();
+    await expect(location).toHaveText("回覆在頻道");
+    await expect(location).toHaveAccessibleDescription(/不另開討論串/);
+    await expect(page.getByRole("status").filter({ hasText: /^儲存後：/ })).toContainText("補問與結果會回到頻道");
+    await expect(page.getByText("收到需求時會在原訊息加上反應，補問與結果會回到頻道。", { exact: true })).toBeVisible();
+    await location.scrollIntoViewIfNeeded();
+    const screenshot = testInfo.outputPath(`頻道回覆位置-${width}.png`);
+    await page.screenshot({ path: screenshot });
+    await testInfo.attach(`頻道回覆位置-${width}`, { path: screenshot, contentType: "image/png" });
+    const saved = page.waitForRequest(req => req.method() === "PUT" && req.url().includes("/api/groups/"));
+    await page.getByRole("button", { name: "儲存變更" }).click();
+    expect((await saved).postDataJSON().discord_reply_location).toBe("channel");
+  });
+}
+
+for (const width of [1440, 375]) {
   test(`群組詳情顯示近 30 天修改需求數，拒絕多時建議改成指令觸發（${width}px）`, async ({
     page,
   }, testInfo) => {

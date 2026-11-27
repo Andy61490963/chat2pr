@@ -124,6 +124,9 @@ export const adminNotificationLabels = {
 } as const;
 
 export const discordDeliveryNotes = {
+  createThread: "無法建立需求討論串，後續會在頻道回覆。請在頻道權限允許機器人「建立公開討論串」。",
+  startThread: "Discord 未能建立需求討論串，後續會在頻道回覆。請確認原訊息仍存在、未開串，且頻道仍可建立討論串。",
+  sendInThread: "無法送到需求討論串，將改在頻道回覆。請確認討論串仍存在且未鎖定，並允許機器人「在討論串中傳送訊息」。",
   rate: "Discord 暫時限制送訊速度，系統會在解除限制後重試。",
   token: "Discord 未授權送訊。請管理者確認機器人權杖後再試。",
   permission: "Discord 拒絕送訊，機器人可能缺少頻道權限。請管理者檢查權限後再試。",
@@ -133,8 +136,16 @@ export const discordDeliveryNotes = {
   origin: "找不到原訊息，無法加入收到反應。請在看板查看需求。",
 } as const;
 export const discordGroupReplyLabels = {
-  all: "收到需求時會在原訊息加上反應，補問與結果會回到原頻道或討論串",
-  results: "補問與結果會回到原頻道或討論串",
+  thread: {
+    location: "每則需求開一個公開討論串。收到、補問與結果都在串內，頻道只留需求。",
+    all: "收到、補問、整理進度與結果都在需求討論串內回覆",
+    results: "收到、補問與結果都在需求討論串內回覆",
+  },
+  channel: {
+    location: "在提出需求的頻道回覆，不另開討論串。從既有討論串提出的需求仍在原串回覆。",
+    all: "收到需求時會在原訊息加上反應，補問與結果會回到頻道",
+    results: "補問與結果會回到頻道",
+  },
 } as const;
 export const statusLabels: Record<TaskStatus, string> = {
   awaiting_approval: "待審核",

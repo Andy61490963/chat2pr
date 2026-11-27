@@ -1,5 +1,5 @@
 import { splitQueryAnswer } from "../shared/query-answer.js";
-import type { QuotaHoldKind } from "../shared/subscription-quota.js";
+import { storedQuotaKind, subscriptionGateName, type QuotaHoldKind } from "../shared/subscription-quota.js";
 import { quotaShortPrefix } from "../shared/line-quota.js";
 /**
  * 回覆提出需求的群組。管理者私訊之外，群組成員也要知道需求收到了、結果是什麼。
@@ -143,6 +143,36 @@ export function ackFor(s: AckState) {
   return quotaWaitReason(s.quotaKind) === "quota"
     ? aiQuotaAck
     : "收到，系統暫時無法確認 AI 額度，這則已保留，確認可用後會自動處理，不用重新提出。";
+}
+
+/**
+ * 「收到」依收訊當下的系統狀態說實話（只改文字，不改審核、派工、判讀規則）：
+ * 系統或判讀暫停、本群組判讀連續失敗停止、群組沒有可用專案（條件同 triage-window.ts）、訂閱模式的 Codex 額度關卡關閉。
+ */
+export async function honestAck(c: DbClient, group: string, base = commandAck) {
+  const s = (
+    await c.query<{
+      paused: boolean;
+      triage_stopped: boolean;
+      quota_kind: QuotaHoldKind | null;
+      quota_detail: string | null;
+      no_project: boolean;
+    }>(
+      `SELECT COALESCE((s.value->>'paused')::boolean,false) OR COALESCE((s.value->>'triage_paused')::boolean,false) AS paused,
+         COALESCE((SELECT g.triage_failures>=3 FROM groups g WHERE g.id=$1),false) AS triage_stopped,
+         gate.probe_info->>'kind' AS quota_kind, gate.detail AS quota_detail,
+         NOT EXISTS(SELECT 1 FROM group_projects gp JOIN projects p ON p.id=gp.project_id WHERE gp.group_id=$1 AND p.enabled AND p.validated_at IS NOT NULL) AS no_project
+       FROM settings s LEFT JOIN service_health gate ON gate.name=$2 AND NOT gate.ok AND s.value->>'ai_mode'='subscription' WHERE s.id=1`,
+      [group, subscriptionGateName],
+    )
+  ).rows[0];
+  return ackFor({
+    base,
+    paused: !!s?.paused,
+    triageStopped: !!s?.triage_stopped,
+    noProject: !!s?.no_project,
+    quotaKind: s?.quota_detail != null ? storedQuotaKind(s.quota_kind, s.quota_detail) : null,
+  });
 }
 
 /** 給群組成員看的任務狀態（成員沒有看板帳號，用白話說明下一步在誰手上）。 */
@@ -397,8 +427,8 @@ export async function progressTasks(
 ) {
   const rows = (
     await c.query<ProgressTask & { total: string }>(
-      `SELECT t.title,t.status,(t.status='awaiting_approval' AND t.question IS NOT NULL) AS asking,count(*) OVER() AS total
-       FROM tasks t WHERE t.group_id=$1 AND t.discord_thread_id IS NOT DISTINCT FROM $3::text
+      `SELECT CASE WHEN $3::text IS NULL AND r.thread_id IS NOT NULL THEN t.title||' <#'||substr(r.thread_id,9)||'>' ELSE t.title END AS title,t.status,(t.status='awaiting_approval' AND t.question IS NOT NULL) AS asking,count(*) OVER() AS total
+       FROM tasks t LEFT JOIN discord_request_threads r ON r.group_id=t.group_id AND r.thread_id=t.discord_thread_id WHERE t.group_id=$1 AND (t.discord_thread_id IS NOT DISTINCT FROM $3::text OR ($3::text IS NULL AND r.thread_id IS NOT NULL))
        AND (t.status NOT IN ('merged','answered','closed','rejected','cancelled') OR t.updated_at>now()-interval '7 days')
        ORDER BY t.updated_at DESC,t.id LIMIT $2`,
       [groupId, limit, threadId],

@@ -32,7 +32,7 @@ import {
   lineChunks,
   groupText,
   groupRepliesOn,
-  ackFor,
+  honestAck,
   claimPendingGroupReplies,
   claimingNote,
   lockGroupReplyClaim,
@@ -47,7 +47,6 @@ import {
   staleAnswerAck,
   type GroupReplyClaim,
 } from "./group-replies.js";
-import { storedQuotaKind, subscriptionGateName, type QuotaHoldKind } from "../shared/subscription-quota.js";
 import { LINE_QUOTA } from "../shared/line-quota.js";
 import {
   answerByPostback,
@@ -434,7 +433,7 @@ export class Line {
           if (saved.rowCount && replyOn) {
             if (command || botReply) {
               const base = botReply ? await this.followupAck(c, group, e.message.quotedMessageId) : commandAck;
-              queueReply([eligible ? await this.honestAck(c, group, base) : disabledAck]);
+              queueReply([eligible ? await honestAck(c, group, base) : disabledAck]);
             } else if (settings.enabled) queueReply();
           }
           if (eligible && saved.rowCount)
@@ -507,35 +506,6 @@ export class Line {
       /。$/,
       minutes <= 1 ? "，大約 1 分鐘。" : `，大約 ${minutes} 分鐘。`,
     );
-  }
-  /**
-   * 「收到」依收訊當下的系統狀態說實話（只改文字，不改審核、派工、判讀規則）：
-   * 系統或判讀暫停、本群組判讀連續失敗停止、群組沒有可用專案（條件同 triage-window.ts）、訂閱模式的 Codex 額度關卡關閉。
-   */
-  private async honestAck(c: DbClient, group: string, base: string) {
-    const s = (
-      await c.query<{
-        paused: boolean;
-        triage_stopped: boolean;
-        quota_kind: QuotaHoldKind | null;
-        quota_detail: string | null;
-        no_project: boolean;
-      }>(
-        `SELECT COALESCE((s.value->>'paused')::boolean,false) OR COALESCE((s.value->>'triage_paused')::boolean,false) AS paused,
-           COALESCE((SELECT g.triage_failures>=3 FROM groups g WHERE g.id=$1),false) AS triage_stopped,
-           gate.probe_info->>'kind' AS quota_kind, gate.detail AS quota_detail,
-           NOT EXISTS(SELECT 1 FROM group_projects gp JOIN projects p ON p.id=gp.project_id WHERE gp.group_id=$1 AND p.enabled AND p.validated_at IS NOT NULL) AS no_project
-         FROM settings s LEFT JOIN service_health gate ON gate.name=$2 AND NOT gate.ok AND s.value->>'ai_mode'='subscription' WHERE s.id=1`,
-        [group, subscriptionGateName],
-      )
-    ).rows[0];
-    return ackFor({
-      base,
-      paused: !!s?.paused,
-      triageStopped: !!s?.triage_stopped,
-      noProject: !!s?.no_project,
-      quotaKind: s?.quota_detail != null ? storedQuotaKind(s.quota_kind, s.quota_detail) : null,
-    });
   }
   private async replyWithPending(
     group: string,

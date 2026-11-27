@@ -9,6 +9,7 @@ import {
   Toolbar,
 } from "@/components/ui/layout";
 import {
+  discordGroupReplyLabels,
   groupLabels,
   groupPageText,
   groupPlatformLabels,
@@ -517,6 +518,7 @@ function GroupCard({
     [ids, setIds] = useState(initialIds),
     [enabled, setEnabled] = useState(g.enabled),
     [triggerMode, setTriggerMode] = useState(g.trigger_mode),
+    [location, setLocation] = useState(g.discord_reply_location ?? "thread"),
     [replyMode, setReplyMode] = useState(g.reply_mode ?? "results"),
     [memo, setMemo] = useState(""),
     [memoProject, setMemoProject] = useState("none");
@@ -527,13 +529,17 @@ function GroupCard({
   useEffect(() => setIds(initialIds()), [savedIds, bindingProjectId]);
   useEffect(() => setEnabled(g.enabled), [g.enabled]);
   useEffect(() => setTriggerMode(g.trigger_mode), [g.trigger_mode]);
+  useEffect(() => setLocation(g.discord_reply_location ?? "thread"), [g.discord_reply_location]);
   useEffect(() => setReplyMode(g.reply_mode ?? "results"), [g.reply_mode]);
   const rename = name.trim() || g.name;
+  const replyChanged = location !== (g.discord_reply_location ?? "thread") ||
+    replyMode !== (g.reply_mode ?? "results");
+  const replyPreview = g.platform === "discord" && replyChanged;
   const dirty =
     rename !== g.name ||
     enabled !== g.enabled ||
     triggerMode !== g.trigger_mode ||
-    replyMode !== (g.reply_mode ?? "results") ||
+    replyChanged ||
     ids.join() !== savedIds;
   useUnsaved(`group:${g.id}`, dirty);
   // 儲存前先講清楚會連帶發生的事，不再默默丟掉訊息或把任務退回。
@@ -637,6 +643,20 @@ function GroupCard({
           </div>
         </details>
       </div>
+      {g.platform === "discord" && <div className="grid gap-2">
+        <label htmlFor={`location-${g.id}`} className="text-sm font-medium">回覆位置</label>
+        <Select value={location} onValueChange={value => setLocation(value as typeof location)}>
+          <SelectTrigger id={`location-${g.id}`} aria-describedby={`location-hint-${g.id}`} className="min-h-11 w-full sm:max-w-sm"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="thread">每個需求開討論串</SelectItem>
+            <SelectItem value="channel">回覆在頻道</SelectItem>
+          </SelectContent>
+        </Select>
+        <p id={`location-hint-${g.id}`} className="text-xs leading-relaxed text-muted-foreground">
+          {discordGroupReplyLabels[location].location}
+        </p>
+        {g.discord_thread_warning && <p role="status">{g.discord_thread_warning}</p>}
+      </div>}
       {g.change_stats && (
         <div className="grid gap-2">
           <h3 className="text-sm font-medium">{groupChangeStatsText.heading}</h3>
@@ -665,7 +685,8 @@ function GroupCard({
       )}
       <div className="grid gap-2">
         <p role="status" className="text-sm font-medium">
-          目前：{groupReplyStatus(g, state.settings, state.health).text}
+          {replyPreview ? "儲存後：" : "目前："}
+          {groupReplyStatus(replyPreview ? { ...g, discord_reply_location: location, reply_mode: replyMode } : g, state.settings, state.health).text}
           {!g.left_at && state.settings.group_replies === false && (
             <Button
               size="sm"
@@ -707,11 +728,11 @@ function GroupCard({
         <p className="text-xs text-muted-foreground">
           {replyMode === "off"
             ? "你儲存後，機器人會停止在這個群組回覆。"
-            : replyMode === "all"
-              ? g.platform === "discord"
-                ? "收到需求時會在原訊息加上反應，補問與結果會回到頻道。"
-                : "你儲存後，群組會收到需求等待確認的通知與處理結果。"
-              : "你儲存後，群組會收到查詢答案與處理結果。"}
+            : g.platform === "discord"
+              ? `${discordGroupReplyLabels[location][replyMode]}。`
+              : replyMode === "all"
+                ? "你儲存後，群組會收到需求等待確認的通知與處理結果。"
+                : "你儲存後，群組會收到查詢答案與處理結果。"}
         </p>
         {g.platform === "discord" ? (
           <p className="text-xs text-muted-foreground">
@@ -814,6 +835,7 @@ function GroupCard({
                       project_ids: ids,
                       enabled,
                       trigger_mode: triggerMode,
+                      ...(g.platform === "discord" && { discord_reply_location: location }),
                       reply_mode: replyMode,
                     }),
                   "群組設定已儲存",
@@ -830,6 +852,7 @@ function GroupCard({
                 setIds(g.project_ids);
                 setEnabled(g.enabled);
                 setTriggerMode(g.trigger_mode);
+                setLocation(g.discord_reply_location ?? "thread");
                 setReplyMode(g.reply_mode ?? "results");
               }}
             >

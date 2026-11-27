@@ -256,6 +256,10 @@ export function SystemView({
           </Card>
         )}
         {admin && <FrictionCard state={state} request={request} />}
+        {admin && state.groups.filter(group => group.platform === "discord" && group.discord_thread_warning).map(group => (
+          <Card key={group.id}><CardHeader><CardTitle>{group.name}的討論串回覆</CardTitle></CardHeader>
+            <CardContent>{group.discord_thread_warning}</CardContent></Card>
+        ))}
       </TabsContent>
       <TabsContent
         value="disk"
