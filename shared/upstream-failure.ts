@@ -1,5 +1,8 @@
+import type { FailureCategory } from "./failure-text.js";
+
 const reasons = {
   model_denied: "這個訂閱階段不允許使用指定的模型",
+  model_unavailable: "目前的訂閱模型不可用",
   invalid_request: "訂閱代理收到不符合要求的推論請求",
   invalid_tools: "訂閱代理收到無效的工具宣告",
   tool_denied: "訂閱代理不允許使用請求中的工具",
@@ -34,42 +37,48 @@ export interface UpstreamFailure {
   status?: number;
 }
 
-const retryPolicy = {
-  upstream_http: "5xx",
-  connection: true,
-  invalid_stream: true,
-  stream_interrupted: true,
-  model_denied: false,
-  invalid_request: false,
-  invalid_tools: false,
-  tool_denied: false,
-  tool_limit: false,
-  tool_choice_denied: false,
-  phase_deadline: false,
-  phase_cancelled: false,
-  concurrent_request: false,
-  usage_limit: false,
-  request_limit: false,
-  redirect: false,
-  auth: false,
-  quota: false,
-  quota_unavailable: false,
-  missing_body: false,
-  response_limit: false,
-  frame_limit: false,
-  invalid_event: false,
-  stream_error: false,
-  invalid_usage: false,
-  duplicate_completion: false,
-  output_limit: false,
-  protected_data: false,
-} satisfies Record<UpstreamFailure["kind"], boolean | "5xx">;
+const categories = {
+  upstream_http: "http",
+  connection: "transient",
+  invalid_stream: "transient",
+  stream_interrupted: "transient",
+  model_denied: "config",
+  model_unavailable: "config",
+  invalid_request: "config",
+  invalid_tools: "config",
+  tool_denied: "config",
+  tool_limit: "config",
+  tool_choice_denied: "config",
+  phase_deadline: "project",
+  phase_cancelled: "project",
+  concurrent_request: "system",
+  usage_limit: "config",
+  request_limit: "config",
+  redirect: "system",
+  auth: "config",
+  quota: "config",
+  quota_unavailable: "config",
+  missing_body: "system",
+  response_limit: "config",
+  frame_limit: "system",
+  invalid_event: "system",
+  stream_error: "system",
+  invalid_usage: "system",
+  duplicate_completion: "system",
+  output_limit: "config",
+  protected_data: "system",
+} satisfies Record<UpstreamFailure["kind"], FailureCategory | "http">;
+
+export function upstreamFailureCategory({ kind, status }: UpstreamFailure): FailureCategory {
+  const category = categories[kind];
+  if (category !== "http") return category;
+  if (status !== undefined && status >= 500 && status <= 599) return "transient";
+  if (status !== undefined && status >= 400 && status <= 499) return "config";
+  return "system";
+}
 
 export function isRetryableUpstreamFailure(failure: UpstreamFailure): boolean {
-  const policy = retryPolicy[failure.kind];
-  if (policy === "5xx")
-    return failure.status !== undefined && failure.status >= 500 && failure.status <= 599;
-  return policy;
+  return upstreamFailureCategory(failure) === "transient";
 }
 
 function isKind(value: unknown): value is UpstreamFailure["kind"] {

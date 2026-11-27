@@ -1,6 +1,6 @@
 import { validateLabel } from "../shared/project-setup.js";
 import { baselineFailurePlain } from "../shared/failure-text.js";
-import { upstreamFailureText, type UpstreamFailure } from "../shared/upstream-failure.js";
+import { upstreamFailureCategory, upstreamFailureText, type UpstreamFailure } from "../shared/upstream-failure.js";
 import { redact } from "./policy.js";
 import { clip } from "./pr-body.js";
 
@@ -426,18 +426,20 @@ export function classifyFailure(
   upstreamFailure?: UpstreamFailure,
 ): FailureExplanation {
   const body = redact(raw.replace(ansi, ""));
-  const rule = rules.find((r) => r.test(body, phase)) ?? fallback;
   if (upstreamFailure) {
     const reason = upstreamFailureText(upstreamFailure);
     const kept = resumableRules.find((r) => r.test(body));
+    const modelAction = upstreamFailure.kind === "model_unavailable"
+      ? "請到「設定」確認訂閱模型，選擇可用的模型後重試" : undefined;
     return {
-      category: rule.category,
+      category: upstreamFailureCategory(upstreamFailure),
       plain: kept ? `${reason}。${kept.plain}` : reason,
       detail: "未使用其他計費方式",
-      action: kept?.action ?? "請查看這次執行紀錄的訂閱失敗原因，再決定是否重試",
-      group: kept?.group ?? "請管理者查看這次執行紀錄，再決定是否重試。",
+      action: kept?.action ?? modelAction ?? "請查看這次執行紀錄的訂閱失敗原因，再決定是否重試",
+      group: kept?.group ?? (modelAction ? `${modelAction}。` : "請管理者查看這次執行紀錄，再決定是否重試。"),
     };
   }
+  const rule = rules.find((r) => r.test(body, phase)) ?? fallback;
   // 摘要只放錯誤重點；開頭的「安裝失敗：」這類前綴已經由白話說明表達。
   const stripped = `\n${body
     .replace(/^\s*[\p{Script=Han}A-Za-z ]{1,16}?(?:失敗|未通過驗證)：/u, "")
@@ -478,14 +480,18 @@ export function classifyFailure(
   };
 }
 
+function retryCountText(count: number) {
+  return count === 1 ? "一次" : count === 2 ? "兩次" : `${count} 次`;
+}
+
 /** 看板摘要與管理者通知用：分類、白話說明、錯誤重點與建議處理，不含堆疊。 */
 export function failureNotice(
   failure: FailureExplanation,
-  retried = false,
+  retryCount = 0,
   where = "",
 ) {
   const label = `${categoryLabels[failure.category]}${where ? `（${where}階段）` : ""}`;
-  const again = retried ? "（已自動重試一次，仍然失敗）" : "";
+  const again = retryCount ? `（已自動重試${retryCountText(retryCount)}，仍然失敗）` : "";
   const detail = failure.detail
     ? `\n錯誤重點：${failure.detail}`
     : failure.category === "environment"
@@ -498,6 +504,7 @@ export function failureNotice(
  * 群組訊息：固定的白話句子，不放原始錯誤、堆疊或路徑；
  * 只附系統整理過、已遮蔽的內容（基底驗證失敗的測試清單與上次通過的 commit）。
  */
-export function groupFailureText(failure: FailureExplanation, retried = false) {
-  return `這則需求處理時遇到${categoryLabels[failure.category]}：${failure.plain}。${retried ? "系統已自動重試一次，仍未成功。" : ""}${failure.group}${failure.groupDetail ? `\n${failure.groupDetail}` : ""}`;
+export function groupFailureText(failure: FailureExplanation, retryCount = 0) {
+  const again = retryCount ? `系統已自動重試${retryCountText(retryCount)}，仍未成功。` : "";
+  return `這則需求處理時遇到${categoryLabels[failure.category]}：${failure.plain}。${again}${failure.group}${failure.groupDetail ? `\n${failure.groupDetail}` : ""}`;
 }

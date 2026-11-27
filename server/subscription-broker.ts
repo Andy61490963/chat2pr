@@ -102,6 +102,29 @@ const subscriptionQuotaCodes = new Set([
   "usage_limit_reached",
   "rate_limit_exceeded",
 ]);
+
+async function modelNotFound(body: ReadableStream<Uint8Array>, signal: AbortSignal) {
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { value, done } = await interruptible(reader.read(), signal);
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > 8192) return false;
+      chunks.push(value);
+    }
+    const error = JSON.parse(Buffer.concat(chunks).toString("utf8"))?.error;
+    return (error?.code ?? error?.message) === "model_not_found";
+  } catch {
+    return false;
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
+
 type LocalTool = {
   type: "function" | "custom";
   name: string;
@@ -745,7 +768,10 @@ export class SubscriptionBroker {
             else if (upstreamStatus !== undefined && upstreamStatus >= 300 && upstreamStatus < 400)
               fallbackKind = "redirect";
             else fallbackKind = response?.ok ? "missing_body" : "upstream_http";
-            await response?.body?.cancel();
+            if (response?.status === 404 && response.body) {
+              if (await modelNotFound(response.body, controller.signal))
+                fallbackKind = "model_unavailable";
+            } else await response?.body?.cancel();
             throw safeError(
               status,
               status === 429

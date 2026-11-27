@@ -9,7 +9,7 @@ import { safeDetail } from "./observation.js";
  * 從測試輸出擷取失敗的測試名稱與第一段錯誤訊息（#248）。
  *
  * 認得 .NET（xUnit 執行器的 `[FAIL]` 行與 `dotnet test` 的 `Failed …`／`Error Message:`）、
- * Vitest（` FAIL  檔案 > 測試`）、Jest（`● 測試`）與 pytest（`FAILED 路徑::測試 - 訊息`）。
+ * Vitest（` FAIL  檔案 > 測試`）、Jest（`● 測試`）、pytest（`FAILED 路徑::測試 - 訊息`）與 Node 的 TAP、文字報告。
  * 認不出任何失敗的測試時回傳 null，呼叫端維持原本只挑錯誤行的做法。
  */
 export interface TestFailure {
@@ -29,7 +29,7 @@ const NAME_LIMIT = 200;
 const MESSAGE_LIMIT = 300;
 const MESSAGE_LINES = 3;
 
-type Kind = "xunit" | "dotnet" | "jest" | "vitest";
+type Kind = "xunit" | "dotnet" | "jest" | "vitest" | "tap" | "node";
 const ansi = /\x1b\[[0-9;]*[a-zA-Z]/g;
 const xunitPrefix = /^\[xUnit\.net [\d:.]+\]\s?/;
 const headers: [Kind, RegExp][] = [
@@ -39,8 +39,11 @@ const headers: [Kind, RegExp][] = [
   ["jest", /^\s*●\s+(?!Console\b)(.+?)\s*$/],
   // Vitest 每個測試寫成「檔案 > 區塊 > 測試」，整個檔案失敗時是「檔案 [ 檔案 ]」；Jest 只有檔案的 FAIL 行不算。
   ["vitest", /^\s*FAIL\s+(\S.*?(?: > .+?| \[ .+? \]))\s*$/],
+  ["tap", /^\s*not ok \d+ - (?!.*\s# (?:TODO|SKIP)\b)(.+?)\s*$/i],
+  ["node", /^\s*✖\s+(.+?)\s+\([\d.]+ms\)\s*$/],
 ];
 const pytest = /^(?:FAILED|ERROR)\s+(\S+)(?:\s+-\s+(.+?))?\s*$/;
+const nodeResultEnd = /^\s*(?:ok\s+\d+\b|not ok\s+\d+\b|1\.\.\d+|# |[✔✖ℹ﹣▶] )/;
 // 錯誤訊息到這裡就結束：堆疊、程式碼片段、下一段標題。
 const messageEnd =
   /^\s*(?:at\s|Stack Trace:|Standard (?:Output|Error) Messages:|Output:|❯|⎯|>?\s*\d+\s*\|)/;
@@ -50,7 +53,8 @@ const clip = (text: string, limit: number) =>
 
 export function parseTestFailures(output: string): TestFailures | null {
   const found = new Map<string, string[]>();
-  let current: { kind: Kind; lines: string[]; started: boolean } | null = null;
+  type Section = { kind: Kind; lines: string[]; started: boolean; indent?: number };
+  let current: Section | null = null;
   const finish = () => {
     current = null;
   };
@@ -77,13 +81,35 @@ export function parseTestFailures(output: string): TestFailures | null {
       finish();
       continue;
     }
-    const c = current as {
-      kind: Kind;
-      lines: string[];
-      started: boolean;
-    } | null;
+    const c = current as Section | null;
     if (!c) continue;
     let line = raw;
+    if ((c.kind === "node" || c.kind === "tap") && nodeResultEnd.test(line)) {
+      finish();
+      continue;
+    }
+    if (c.kind === "tap") {
+      if (c.indent === undefined) {
+        const error = /^(\s+)error:\s*(.*)$/.exec(line);
+        if (!error) continue;
+        if (!/^[|>][-+]?$/.test(error[2])) {
+          c.lines.push(error[2].replace(/^(['"])(.*)\1$/, "$2"));
+          finish();
+        } else {
+          c.indent = error[1].length;
+        }
+        continue;
+      }
+      if (!line.trim()) continue;
+      if (line.length - line.trimStart().length <= c.indent) {
+        finish();
+        continue;
+      }
+    }
+    if (c.kind === "node" && !/^\s/.test(line)) {
+      finish();
+      continue;
+    }
     if (c.kind === "xunit") {
       if (!xunitPrefix.test(line)) {
         finish();
@@ -147,19 +173,22 @@ const BLOCK_LINES = 40;
 export function failureBlocks(output: string, limit = 5000) {
   const blocks: string[] = [];
   let current: string[] | null = null;
+  let nodeBlock = false;
   const close = () => {
     if (current) blocks.push(clip(current.join("\n"), BLOCK_LIMIT));
     current = null;
   };
   for (const line of output.replace(ansi, "").split(/\r?\n/)) {
-    if (headers.some(([, p]) => p.test(line)) || pytestBlock.test(line)) {
+    const header = headers.find(([, pattern]) => pattern.test(line));
+    if (header || pytestBlock.test(line)) {
       close();
+      nodeBlock = header?.[0] === "node" || header?.[0] === "tap";
       current = [line];
     } else if (pytest.test(line)) {
       close();
       blocks.push(clip(line, BLOCK_LIMIT));
     } else if (current) {
-      if (blockEnd.test(line)) close();
+      if (blockEnd.test(line) || (nodeBlock && nodeResultEnd.test(line))) close();
       else if ((current as string[]).push(line) >= BLOCK_LINES) close();
     }
   }
