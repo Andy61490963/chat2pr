@@ -2,9 +2,48 @@ import type {
   ComponentPropsWithoutRef,
   HTMLAttributes,
   ReactNode,
+  Ref,
 } from "react";
 import { cn } from "@/lib/utils";
 import { Badge } from "./badge";
+
+export function PageHeader({
+  title,
+  description,
+  actions,
+  headingRef,
+  className,
+  descriptionClassName,
+}: {
+  title: ReactNode;
+  description?: ReactNode;
+  actions?: ReactNode;
+  headingRef?: Ref<HTMLHeadingElement>;
+  className?: string;
+  descriptionClassName?: string;
+}) {
+  return (
+    <header
+      className={cn("grid items-start gap-3", actions && "grid-cols-action", className)}
+    >
+      <div className="min-w-0">
+        <h1
+          ref={headingRef}
+          tabIndex={headingRef ? -1 : undefined}
+          className="heading-page outline-none"
+        >
+          {title}
+        </h1>
+        {description && (
+          <p className={cn("mt-0.5 text-sm text-muted-foreground", descriptionClassName)}>
+            {description}
+          </p>
+        )}
+      </div>
+      {actions}
+    </header>
+  );
+}
 
 export function SectionHeader({
   children,
@@ -214,14 +253,15 @@ export function InlineNotice({
 }: HTMLAttributes<HTMLElement> & {
   as?: "div" | "p";
   tone?: keyof typeof noticeColors;
-  variant?: "panel" | "strip";
+  variant?: "panel" | "strip" | "soft";
 }) {
   return (
     <Element
       className={cn(
         "px-3 py-2 text-sm",
-        variant === "strip" ? "border-b" : "rounded-sm border",
+        { panel: "rounded-sm border", strip: "border-b", soft: "rounded-md" }[variant],
         noticeColors[tone],
+        variant === "soft" && tone === "warn" && "text-warn",
         className,
       )}
       {...props}

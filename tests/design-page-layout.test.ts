@@ -92,7 +92,7 @@ it("既有與遷移頁的區塊標題、零筆計數與操作具有一致層級"
   );
 });
 
-it("側欄、警示對話框與頁首元件只在有正式看板呼叫端時提供", () => {
+it("看板主殼使用共用側欄與頁首，警示對話框有正式呼叫端才提供", () => {
   const source = (path: string) => readFileSync(path, "utf8");
   const app = [
     source("src/App.tsx"),
@@ -101,13 +101,11 @@ it("側欄、警示對話框與頁首元件只在有正式看板呼叫端時提�
       .map((file) => source("src/app/" + file)),
   ].join("\n");
   const layout = source("src/components/ui/layout.tsx");
-  if (layout.includes("export function PageHeader("))
-    expect(app).toMatch(/<PageHeader[\s>]/);
-  for (const name of ["sidebar", "alert-dialog"]) {
-    if (existsSync(`src/components/ui/${name}.tsx`)) {
-      expect(app.includes(`from "@/components/ui/${name}"`), name).toBe(true);
-    }
-  }
+  expect(layout).toContain("export function PageHeader(");
+  expect(app).toMatch(/<PageHeader[\s>]/);
+  expect(app).toMatch(/<Sidebar[\s>]/);
+  if (existsSync("src/components/ui/alert-dialog.tsx"))
+    expect(app).toContain('from "@/components/ui/alert-dialog"');
 });
 
 it("記憶總覽以二級標題區分摘要和清單", () => {

@@ -11,7 +11,7 @@
 | 動作與狀態 | 主動作使用 `primary`。運轉、警告、停機、資訊分別使用 `good`、`warn`、`danger`、`info` 搭配同名 `-soft` 表面；文字一併描述狀態。數量使用中性色。 |
 | 文字與行高 | `heading-page` 20px、`heading-section` 18px、`text-sm` 14px、`text-xs` 13px、`text-caption` 12px。標題行高 1.3、標籤 1.4、內文 1.5。中文用 Noto Sans TC，數字加 `tabular-nums`。 |
 | 間距 | `--spacing` 為 4px。常用 `gap-1/2/3/4` 為 4/8/12/16px，區塊間用 `gap-6`。手機按鈕至少 `min-h-11`（44px）。響應式清單沿用具名欄軌。 |
-| 圓角、焦點 | `rounded-none/xs/sm/md` 分別為 0/2/4/6px；點、數量徽章、頭像、單選指示器與膠囊形進度軌使用 `shape-pill`。舊面板的 `rounded-lg`、`rounded-2xl` 暫時對應 `--radius-md`（6px）；掃描器仍攔截新增用法，第二階段移除這兩個別名。互動元件用 `focus-visible:focus-frame`。焦點寬度與偏移共用主題變數。 |
+| 圓角、焦點 | `rounded-none/xs/sm/md` 分別為 0/2/4/6px；點、數量徽章、頭像、單選指示器與膠囊形進度軌使用 `shape-pill`。舊面板的 `rounded-lg`、`rounded-2xl` 暫時對應 `--radius-md`（6px）。#280 負責的 `src/app/system.tsx` 與 `src/app/friction.tsx` 是最後兩個待核對檔案。目前只有前者仍用 `rounded-lg`（10 處），全站已無 `rounded-2xl` 呼叫端。兩個別名保留至 #280 合併。互動元件用 `focus-visible:focus-frame`。焦點寬度與偏移共用主題變數。 |
 
 在 [styles.css](../src/styles.css) 的主題中定義尺度及兩種外觀，在元件組合代幣。動態進度、依 SVG 原尺寸計算的縮放寬度繼續由資料決定。Radix 的狀態選擇器及子元素選擇器可搭配具名工具。
 
@@ -25,11 +25,11 @@
 | Textarea、Checkbox、Tabs、Separator | `form-controls.tsx` | 已有原生文字區以及 Radix Checkbox、Tabs、Separator。標籤沿用 Label；Tabs 的鍵盤與面板對應由 Radix 負責。 |
 | Select | `select.tsx` | 保留 Radix Select 以及需要原生 change 事件的原生選單。選擇器的值與操作事件由原畫面持有。 |
 | Dialog、Tooltip | `dialog.tsx`、`tooltip.tsx` | 需要確認的操作使用 `app/confirm.tsx` 的 ConfirmButton，保留待處理、取消、確認及焦點還原。浮層共用表面與焦點樣式。 |
-| Sidebar、AlertDialog | 第二階段依實際使用處接入 | 側欄由 `App.tsx` 主殼負責，確認由 ConfirmButton 負責。新增元件時連同呼叫端、鍵盤操作與展示一起交付。 |
+| Sidebar、AlertDialog | `sidebar.tsx` 的 Sidebar、既有 ConfirmButton | Sidebar 提供桌面側欄與手機底部導覽。App 管理目前頁面、選單與離開草稿確認。確認對話框沿用 ConfirmButton。 |
 | Toggle Group、Scroll Area、Popover、Command | 現階段沿用 Tabs、原生捲動、DropdownMenu、Select | 看板切頁需要面板語意，列表使用原生捲動，現有選單已處理焦點與鍵盤。尚無命令搜尋介面；registry 的 Command 另需 cmdk。 |
 | Badge、鍵值列 | `badge.tsx`、`description-list.tsx` | Badge 統一狀態底色與文字，StatusBadge 接領域詞彙。DescriptionList 搭配 DescriptionItem 保留 dl/dt/dd；pairs 可選擇在寬螢幕並排兩組。 |
-| 標題、空狀態、工具列 | `layout.tsx` 的 SectionHeader、EmptyState、Toolbar | 區塊標題保留 h2–h4、id、數量及行動按鈕。空狀態說明目前情形與下一步。工具列在窄螢幕換行。 |
-| 清單、橫幅 | 同檔 DataList、ListRow、DataListFrame、DataListHeader、ListRowButton、InlineNotice | 群組與專案共用桌面欄頭與可點資料列；成員與記憶清單保留原生清單語意。橫幅的 alert 或 status 角色按原場景指定。 |
+| 標題、空狀態、工具列 | `layout.tsx` 的 PageHeader、SectionHeader、EmptyState、Toolbar | PageHeader 顯示頁名、說明與操作，切頁時接收一級標題的焦點。區塊標題保留 h2–h4、id、數量及行動按鈕。空狀態說明目前情形與下一步。工具列在窄螢幕換行。 |
+| 清單、橫幅 | 同檔 DataList、ListRow、DataListFrame、DataListHeader、ListRowButton、InlineNotice | 群組與專案共用桌面欄頭與可點資料列；成員與記憶清單保留原生清單語意。橫幅的 alert 或 status 角色按原場景指定。帶底色的無框提示使用 InlineNotice 的 soft 變體。 |
 
 ## 頁面重複樣式盤點
 
@@ -37,7 +37,7 @@
 
 | 樣式家族 | 收斂元件 | 修改前的檔案與次數（相對於 `src/`） |
 | --- | --- | --- |
-| 頁首 | `heading-page`，第二階段整合主殼時再建立 PageHeader | `App.tsx`（2） |
+| 頁首 | PageHeader | `App.tsx`（2） |
 | 區塊標題 | SectionHeader | `App.tsx`（1）、`app/capacity.tsx`（3）、`app/check-environments.tsx`（1）、`app/checks.tsx`（1）、`app/connection-secrets.tsx`（1）、`app/context-evidence.tsx`（1）、`app/docker-disk.tsx`（5）、`app/egress.tsx`（2）、`app/friction.tsx`（1）、`app/groups.tsx`（3）、`app/inbox.tsx`（5）、`app/members.tsx`（2）、`app/memory-overview.tsx`（3）、`app/pick-list.tsx`（1）、`app/project-context.tsx`（2）、`app/project-database.tsx`（3）、`app/project-ssh.tsx`（3）、`app/projects.tsx`（6）、`app/run-observer.tsx`（2）、`app/settings.tsx`（9）、`app/shared.tsx`（1）、`app/system.tsx`（10）、`app/task-clarification.tsx`（2）、`app/task-review-panel.tsx`（10）、`app/tasks.tsx`（1） |
 | 狀態標籤 | Badge；任務狀態沿用 StatusBadge 的詞彙對照 | `app/capacity.tsx`（3）、`app/chat.tsx`（1）、`app/checks.tsx`（4）、`app/docker-disk.tsx`（1）、`app/egress.tsx`（1）、`app/groups.tsx`（3）、`app/inbox.tsx`（1）、`app/members.tsx`（1）、`app/memory-overview.tsx`（1）、`app/project-ssh.tsx`（2）、`app/projects.tsx`（2）、`app/settings.tsx`（4）、`app/shared.tsx`（3）、`app/system.tsx`（2）、`app/task-clarification.tsx`（1）、`app/task-review-panel.tsx`（3） |
 | 空狀態 | EmptyState | `app/chat.tsx`（2）、`app/groups.tsx`（2）、`app/inbox.tsx`（3）、`app/projects.tsx`（1）、`app/review-workbench.tsx`（2）、`app/tasks.tsx`（3） |
@@ -48,7 +48,7 @@
 | 確認對話框 | Dialog 與 ConfirmButton | `app/checks.tsx`（1）、`app/confirm.tsx`（1）、`app/connection-secrets.tsx`（1）、`app/egress.tsx`（1）、`app/groups.tsx`（1）、`app/members.tsx`（2）、`app/pick-list.tsx`（1）、`app/project-database.tsx`（2）、`app/project-ssh.tsx`（1）、`app/projects.tsx`（3）、`app/settings.tsx`（1）、`app/task-actions.tsx`（1） |
 | 橫幅提示 | InlineNotice | `App.tsx`（10）、`app/alerts.tsx`（1）、`app/capacity.tsx`（2）、`app/chat.tsx`（2）、`app/check-environments.tsx`（2）、`app/checks.tsx`（9）、`app/connection-secrets.tsx`（3）、`app/docker-disk.tsx`（8）、`app/egress.tsx`（2）、`app/friction.tsx`（1）、`app/groups.tsx`（7）、`app/members.tsx`（1）、`app/page-notices.tsx`（1）、`app/project-context.tsx`（2）、`app/project-database.tsx`（10）、`app/project-ssh.tsx`（5）、`app/projects.tsx`（10）、`app/query-report.tsx`（2）、`app/review-workbench.tsx`（3）、`app/run-observer.tsx`（2）、`app/settings.tsx`（7）、`app/system.tsx`（3）、`app/task-actions.tsx`（2）、`app/task-branch-picker.tsx`（2）、`app/task-clarification.tsx`（1）、`app/task-review-panel.tsx`（5）、`app/tasks.tsx`（1） |
 | 分頁 | Tabs、TabsList、TabsTrigger、TabsContent | `app/projects.tsx`（1）、`app/review-workbench.tsx`（1）、`app/settings.tsx`（1）、`app/system.tsx`（1）、`app/task-review-panel.tsx`（1）、`app/tasks.tsx`（1） |
-| 側邊導覽 | 由主殼管理，第二階段收斂 | `App.tsx`（2）、`app/review-workbench.tsx`（1） |
+| 側邊導覽 | Sidebar 管理主殼的響應式導覽，審核佇列保留工作台自己的清單語意 | `App.tsx`（2）、`app/review-workbench.tsx`（1） |
 
 ## CI 檢查與既有基準
 
@@ -63,7 +63,7 @@
 
 Radix 狀態與子元素選擇器、媒體查詢斷點、IntersectionObserver 的 `rootMargin`、連結錨點、工單編號屬於選擇條件或資料。數字間距工具依 `--spacing` 的倍數運作；間距是否適合資料密度仍須看畫面。渲染後的對比、觸控範圍與版面由瀏覽器驗收檢查。第三方套件、應用程式執行時載入的圖形內容及 `src/`、`shared/` 以外的文件不屬於這份來源盤點。
 
-掃描器辨認 JSX 與物件的 `className`、`innerClassName`、`classNames` 等屬性，以及解構時給這些屬性的預設值。同檔函式與箭頭函式傳回的類別也會追蹤。`shared/` 會檢查匯出的陣列與物件，包括匯出函式直接傳回或依鍵取得的本檔對照值。一般敘述、物件鍵與網址不列入。另檢查 `cn` 等組合函式、DOM 樣式的字面屬性名稱及 `Object.assign(el.style, ...)`。跨檔函式回傳的類別、執行期拼出的完整類別，動態計算的 DOM 屬性名稱、混有未知自訂單字的匯出對照、經重匯出或展開建立的對照表，以及經 `{...props}` 隱含傳入的屬性須由審查者核對。具名資料變數按檔案登記在 `scripts/design-style-context.ts`。磁碟的 `--disk-used-width` 取自容量比例，查詢報告的 `--diagram-width` 取自 SVG 實測寬度與使用者縮放倍率，進度條的 `--progress-offset` 取自目前的完成比例。
+掃描器辨認 JSX 與物件的 `className`、`innerClassName`、`classNames` 等屬性，以及解構時給這些屬性的預設值。同檔函式與箭頭函式傳回的類別也會追蹤。`shared/` 會檢查匯出的陣列與物件，包括匯出函式直接傳回或依鍵取得的本檔對照值。一般敘述、物件鍵與網址不列入。另檢查 `cn` 等組合函式、DOM 樣式的字面屬性名稱及 `Object.assign(el.style, ...)`。跨檔函式回傳的類別、執行期拼出的完整類別，動態計算的 DOM 屬性名稱、混有未知自訂單字的匯出對照、經重匯出或展開建立的對照表，以及經 `{...props}` 隱含傳入的屬性須由審查者核對。具名資料變數按檔案登記在 `scripts/design-style-context.ts`。磁碟的 `--disk-used-width` 取自容量比例，查詢報告的 `--diagram-width` 取自 SVG 實測寬度與使用者縮放倍率，進度條的 `--progress-offset` 取自目前的完成比例。側欄與手機選單的 `--quota-left` 取自剩餘額度。架構圖的 `--scene-progress` 取自章節位置與 GSAP 播放進度。
 
 ### 審查者人工核對清單
 
@@ -153,12 +153,14 @@ Radix 狀態與子元素選擇器、媒體查詢斷點、IntersectionObserver �
 
 ## 分階段接手與重跑
 
-本階段遷移群組、記憶總覽、專案與連線、成員、定期檢查、聊天室、任務及報告，另包含系統頁內的容量、使用摩擦、磁碟與網路區塊。#277 與 #282 已合入主線。收件匣改版引入的樣式一併納入首次基準，留待第二階段遷移。
+第一階段建立設計代幣、共用元件、掃描器與 166 筆基準。第二階段清除 147 筆，保留 #280 負責的頁面。目前基準的 19 筆都在 `src/app/system.tsx`，`src/app/friction.tsx` 沒有基準列。
 
-第二階段依合併後的版本處理以下檔案，估計 2 至 4 個人日，包含鍵盤與版面驗收。
+- 主殼與登入頁使用 PageHeader。Sidebar 提供品牌、導覽與帳號區，手機底部使用不透明的側欄表面與安全區內距。導覽按鈕、目前頁面、手機「更多」選單與焦點還原由 App 控制。
+- 收件匣與審核面板共用欄軌、提示、列表及 12px 輔助字級。選取列以 3px 色條標示，手機分類列右側有更多內容時顯示細線。工作台兩種桌面欄寬分別是 360px 與 432px。設定與執行觀察沿用各自的表單與鍵值欄寬。
+- 獨立架構圖的字級由[圖表主題](architecture-flow.html)定義。SVG 以 1600 × 900 的座標繪圖，路徑長度、線段偏移、節點位置、尾跡透明度與鏡頭範圍隨場景及播放進度計算。這些繪圖資料保留原單位；文字、節點與線條使用圖表主題的字體與色彩。
 
-1. 導覽殼與通知的 `src/App.tsx`、`src/app/shared.tsx`、`src/app/page-notices.tsx`。待主殼接入時再實作 PageHeader 與側欄元件。
-2. #277 的收件匣與審核介面涵蓋 `src/App.tsx`、`src/app/inbox.tsx`、新增的 `review-queue-list.tsx`、更新的 `review-workbench.tsx`、`pick-list.tsx`、`task-actions.tsx` 與 `task-review-panel.tsx`。遷移時沿用 #277 的佇列、快速核准、分頁及鍵盤驗收。
-3. 系統、設定及紀錄的 `system.tsx`、`settings.tsx`、`run-observer.tsx`。獨立架構圖的 `src/flow/architecture-flow.js` 及 `docs/architecture-flow.html` 需一併驗證內嵌、獨立視窗與縮放。
+### 驗收與截圖
 
-驗收伺服器的展示入口為 `/e2e/design-system.html`。更新[展示元件](../e2e/design-system-gallery.tsx)後，執行[元件操作與截圖測試](../e2e/design-system.spec.ts)及[頁面對照測試](../e2e/design-pages.spec.ts)。PR 的「設計系統前後截圖」工作會保留「看板畫面對照」成品 14 天。下載後可對照「改版前」與「改版後」相同檔名的 PNG，`新增畫面.md` 列出只有新版才有的截圖。本輪新增[形狀驗收](../e2e/design-shapes.spec.ts)，只補收件匣、審核面板、設定、系統的 375px 與 1440px 淺色前後圖。需重建完整展示時，可手動執行「看板畫面對照」。設定 `DESIGN_SHOTS_DIR` 可在驗收環境指定輸出位置。
+[四頁桌面驗收](../e2e/design-shell.spec.ts)隨一般看板瀏覽器驗收執行，以虛構資料檢查收件匣、任務詳情、設定與執行觀察的鍵盤操作與焦點。[架構圖驗收](../e2e/design-flow.spec.ts)檢查獨立播放與看板內嵌時的縮放、主題和章節進度。
+
+驗收伺服器的展示入口為 `/e2e/design-system.html`。[展示元件](../e2e/design-system-gallery.tsx)另有[元件操作與截圖測試](../e2e/design-system.spec.ts)、[頁面對照測試](../e2e/design-pages.spec.ts)及[形狀驗收](../e2e/design-shapes.spec.ts)。在「看板畫面對照」成品下載深淺色及手機畫面。「改版前」與「改版後」採用相同檔名，成品保留 14 天。手動執行同名工作可重建展示，驗收環境可用 `DESIGN_SHOTS_DIR` 指定輸出位置。

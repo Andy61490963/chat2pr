@@ -342,7 +342,7 @@ export function ReviewWorkbench({
   const actionNotice = noticeText && (
     <div
       role="alert"
-      className="border-b bg-danger-soft px-4 py-3 text-sm text-danger [overflow-wrap:anywhere]"
+      className="border-b bg-danger-soft px-4 py-3 text-sm text-danger wrap-anywhere"
     >
       {noticeText}
     </div>
@@ -489,7 +489,7 @@ export function ReviewWorkbench({
         "min-w-0 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-foreground",
         items.length > 0 &&
           // 寬螢幕把佇列放寬，群組與頻道名稱才不會被狀態字樣擠到截斷。
-          "lg:grid lg:grid-cols-[22.5rem_minmax(0,1fr)] lg:items-start lg:gap-4 xl:grid-cols-[27rem_minmax(0,1fr)]",
+          "lg:grid lg:grid-cols-workbench lg:items-start lg:gap-4 xl:grid-cols-workbench-wide",
       )}
     >
       {items.length ? (

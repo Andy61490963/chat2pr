@@ -162,7 +162,7 @@ export function InboxReadState({ error, retry }: { error: string; retry: () => P
   return (
     <Card>
       <CardContent className="flex items-start gap-3">
-        <span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-lg bg-muted">
+        <span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-md bg-muted">
           {error
             ? <CircleAlert className="size-5 text-danger" />
             : <Loader2 className="size-5 motion-safe:animate-spin" />}
@@ -170,7 +170,7 @@ export function InboxReadState({ error, retry }: { error: string; retry: () => P
         <div className="min-w-0 flex-1">
           <div role={error ? "alert" : "status"}>
             <h2 className="font-semibold">{error ? "收件匣未能載入" : "正在讀取收件匣"}</h2>
-            <p className="mt-1 text-sm text-muted-foreground [overflow-wrap:anywhere]">
+            <p className="mt-1 text-sm text-muted-foreground wrap-anywhere">
               {networkError ? "連不上服務，請確認網路連線後重試。" : error || "正在取得待決策的任務與最近動態。"}
             </p>
           </div>
@@ -409,7 +409,7 @@ export function InboxView({
                 {steps.map((s) => (
                   <li
                     key={s.label}
-                    className="flex items-start gap-3 rounded-lg bg-muted/60 px-3 py-2.5"
+                    className="flex items-start gap-3 rounded-md bg-muted/60 px-3 py-2.5"
                   >
                     <Circle className="mt-0.5 size-4 shrink-0 text-warn" />
                     <span className="flex min-w-0 flex-1 flex-col">
@@ -445,7 +445,7 @@ export function InboxView({
       className="work-surface min-w-0 gap-3 md:gap-4"
     >
       <div className="flex min-w-0 flex-col border-b sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-3">
-        <TabsList ref={categoryList} aria-label="收件匣分類" className={cn("h-auto max-w-full flex-none justify-start gap-2 overflow-x-auto rounded-none bg-transparent p-0 sm:gap-0", moreCategories && "max-sm:[mask-image:linear-gradient(to_right,black_calc(100%-12px),transparent)]")}>
+        <TabsList ref={categoryList} aria-label="收件匣分類" className={cn("h-auto max-w-full flex-none justify-start gap-2 overflow-x-auto rounded-none bg-transparent p-0 sm:gap-0", moreCategories && "max-sm:border-e-2 max-sm:border-border-raised")}>
           {categories.map(({ value, label, count }) => (
             <TabsTrigger
               key={value}
@@ -549,7 +549,7 @@ export function InboxView({
           <Dialog open={confirmEnd} onOpenChange={setConfirmEnd}>
             <DialogContent
               showCloseButton={false}
-              className="max-h-[calc(100dvh-2rem)] overflow-y-auto motion-reduce:animate-none"
+              className="max-h-overlay overflow-y-auto motion-reduce:animate-none"
               onCloseAutoFocus={(event) => {
                 if (
                   !endButton.current &&
@@ -627,8 +627,8 @@ export function InboxView({
             {stuckTasks.map(({ taskId, title, reason, actionLabel, target }) => {
               const needsAdmin = target === "system" && !admin;
               return (
-                <li key={taskId} className="grid gap-2 px-4 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
-                  <div className="grid min-w-0 gap-1 [overflow-wrap:anywhere]">
+                <li key={taskId} className="grid gap-2 px-4 py-3 md:grid-cols-action md:items-center">
+                  <div className="grid min-w-0 gap-1 wrap-anywhere">
                     <span className="font-semibold">{title}</span>
                     <p className="text-sm text-muted-foreground">{reason}</p>
                     {needsAdmin && <p className="text-sm">請管理者查看系統。</p>}
@@ -862,7 +862,7 @@ function ActivityRow({
   const canExpand = !!taskId && (steps.length > 1 || status !== detail);
   const times = steps.find(({ event }) => event === latest)?.times ?? 1;
   return (
-    <div className="min-w-0 flex-1 pb-2 text-sm [overflow-wrap:anywhere]">
+    <div className="min-w-0 flex-1 pb-2 text-sm wrap-anywhere">
       {taskId && (
         <button
           type="button"
@@ -1067,12 +1067,12 @@ function WaitingRow({
         className="work-touch flex min-w-0 flex-col gap-1 text-left"
         onClick={() => open(t.id)}
       >
-        <span className="font-medium [overflow-wrap:anywhere]">
+        <span className="font-medium wrap-anywhere">
           {taskListTitle(t)}
         </span>
         <TaskRowFields task={t} state={state} />
         {reason && (
-          <span className="text-sm text-warn [overflow-wrap:anywhere]">
+          <span className="text-sm text-warn wrap-anywhere">
             {reason}
           </span>
         )}
@@ -1096,7 +1096,7 @@ function TaskRowFields({
   hide?: "project" | "group" | "none";
 }) {
   return (
-    <span className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+    <span className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground wrap-anywhere">
       <span>{task.mode === "query" ? "查詢" : "修改"}</span>
       {hide !== "group" && <span>群組 {groupName(state, task)}</span>}
       {hide !== "project" && <span>專案 {projectName(state, task)}</span>}
@@ -1124,7 +1124,7 @@ export function TaskRow({
   const why = t.status === "failed" ? failureBrief(t.last_error) : "";
   const held = t.status === "queued" && !!memoryHold(state);
   const description = (
-    <span className="flex min-w-0 flex-col gap-1 [overflow-wrap:anywhere]">
+    <span className="flex min-w-0 flex-col gap-1 wrap-anywhere">
       <span className="font-semibold">{taskListTitle(t)}</span>
       <TaskRowFields task={t} state={state} hide={hide} />
       {why && <span className="text-sm text-danger">{why}</span>}

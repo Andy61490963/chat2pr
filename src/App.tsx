@@ -1,5 +1,5 @@
 import { MemoryOverview } from "./app/memory-overview";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import {
   AlertCircle,
   BellOff,
@@ -35,6 +35,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { InlineNotice, PageHeader } from "@/components/ui/layout";
+import { Sidebar, SidebarButton } from "@/components/ui/sidebar";
 import { Wordmark } from "@/components/brand";
 import type {
   Action,
@@ -956,114 +958,16 @@ export function App() {
   return (
     <div
       className={cn(
-        "min-h-screen md:grid md:grid-cols-[15.5rem_minmax(0,1fr)]",
+        "min-h-screen md:grid md:grid-cols-shell",
         current.id === "chat" && "h-dvh min-h-0 overflow-hidden",
       )}
     >
-      <aside
-        className={cn(
-          "fixed inset-x-0 bottom-0 z-40 border-t bg-sidebar/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:sticky md:top-0 md:flex md:h-screen md:flex-col md:gap-6 md:border-t-0 md:border-r md:bg-sidebar md:px-3 md:py-4",
-          current.id === "chat" && "md:h-dvh md:overflow-y-auto",
-        )}
-      >
-        <div className="hidden items-center gap-2.5 px-2 md:flex">
-          <Wordmark />
-        </div>
-        <nav
-          aria-label="看板導覽"
-          className="flex justify-around md:flex-col md:justify-start md:gap-0.5"
-        >
-          {visible.map(({ id, label, icon: Icon, section }, i) => (
-            <div key={id} className="contents">
-              {section !== visible[i - 1]?.section && (
-                <p
-                  className={cn(
-                    "hidden px-3 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground md:block",
-                    i > 0 && "md:mt-4",
-                  )}
-                >
-                  {section}
-                </p>
-              )}
-              {/* 不設 aria-label：名稱由文字與徽章組成，讀屏才念得到待處理數量。 */}
-              <button
-                aria-current={current.id === id ? "page" : undefined}
-                onClick={() => go(id)}
-                className={cn(
-                  "relative flex min-h-[44px] flex-1 flex-col items-center justify-center gap-0.5 px-1 py-2 text-[11px] text-muted-foreground transition-colors hover:text-foreground md:min-h-0 md:flex-none md:flex-row md:justify-start md:gap-3 md:rounded-md md:px-3 md:py-1.5 md:text-sm md:hover:bg-sidebar-accent",
-                  current.id === id &&
-                    "bg-sidebar-accent font-medium text-foreground",
-                  section === "管理" && "hidden md:flex",
-                )}
-              >
-                <Icon
-                  className={cn(
-                    "size-5 md:size-4",
-                    current.id === id && "md:text-brand-foreground",
-                  )}
-                />
-                {label}
-                {id === "inbox" && needs.length > 0 && (
-                  <span className="absolute top-1 right-nav-count min-w-4 shape-pill bg-foreground px-1 text-caption leading-4 font-semibold text-background tabular-nums md:static md:ml-auto md:bg-muted md:px-1.5 md:text-xs md:text-foreground">
-                    <span aria-hidden="true">{needs.length}</span>
-                    <span className="sr-only">，{needs.length} 件待處理</span>
-                  </span>
-                )}
-              </button>
-            </div>
-          ))}
-          <DropdownMenu modal={false}>
-            <DropdownMenuTrigger asChild>
-              <button
-                aria-current={moreIsCurrent ? "page" : undefined}
-                className={cn(
-                  "flex min-h-[44px] flex-1 flex-col items-center justify-center gap-0.5 px-1 py-2 text-[11px] text-muted-foreground transition-colors hover:text-foreground md:hidden",
-                  moreIsCurrent &&
-                    "bg-sidebar-accent font-medium text-foreground",
-                )}
-              >
-                <Ellipsis className="size-5" />
-                更多
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              side="top"
-              align="end"
-              className="w-60"
-              onCloseAutoFocus={headingAfterMenu}
-            >
-              <DropdownMenuLabel className="flex items-center gap-2">
-                <Initials name={user.login} />
-                <span className="min-w-0 truncate">{user.login}</span>
-              </DropdownMenuLabel>
-              {state && (
-                <DropdownMenuLabel className="flex flex-col items-start gap-0.5 font-normal">
-                  <QuotaLines
-                    settings={state.settings}
-                    usage={state.usage}
-                    account={account}
-                  />
-                </DropdownMenuLabel>
-              )}
-              <DropdownMenuSeparator />
-              {morePages.map(({ id, label, icon: Icon }) => (
-                <DropdownMenuItem
-                  key={id}
-                  aria-current={current.id === id ? "page" : undefined}
-                  className="min-h-[44px] aria-[current=page]:font-semibold"
-                  onSelect={() => goFromMenu(id)}
-                >
-                  <Icon /> {label}
-                </DropdownMenuItem>
-              ))}
-              <DropdownMenuItem className="min-h-[44px]" onSelect={logout}>
-                <LogOut /> 登出
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </nav>
-        {state && (
-          <div className="mt-auto hidden flex-col gap-3 md:flex">
+      <Sidebar
+        label="看板導覽"
+        brand={<Wordmark />}
+        className={current.id === "chat" ? "md:h-dvh md:overflow-y-auto" : undefined}
+        footer={state && (
+          <>
             <ModeSummary
               settings={state.settings}
               usage={state.usage}
@@ -1086,9 +990,89 @@ export function App() {
                 <LogOut />
               </Button>
             </div>
-          </div>
+          </>
         )}
-      </aside>
+      >
+        {visible.map(({ id, label, icon: Icon, section }, i) => (
+          <div key={id} className="contents">
+            {section !== visible[i - 1]?.section && (
+              <p
+                className={cn(
+                  "hidden px-3 pb-1 text-caption font-medium tracking-wide text-muted-foreground md:block",
+                  i > 0 && "md:mt-4",
+                )}
+              >
+                {section}
+              </p>
+            )}
+            {/* 不設 aria-label：名稱由文字與徽章組成，讀屏才念得到待處理數量。 */}
+            <SidebarButton
+              aria-current={current.id === id ? "page" : undefined}
+              onClick={() => go(id)}
+              className={section === "管理" ? "hidden md:flex" : undefined}
+            >
+              <Icon
+                className={cn(
+                  "size-5 md:size-4",
+                  current.id === id && "md:text-brand-foreground",
+                )}
+              />
+              {label}
+              {id === "inbox" && needs.length > 0 && (
+                <span className="absolute top-1 right-nav-count min-w-4 shape-pill bg-foreground px-1 text-caption leading-4 font-semibold text-background tabular-nums md:static md:ml-auto md:bg-muted md:px-1.5 md:text-xs md:text-foreground">
+                  <span aria-hidden="true">{needs.length}</span>
+                  <span className="sr-only">，{needs.length} 件待處理</span>
+                </span>
+              )}
+            </SidebarButton>
+          </div>
+        ))}
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger asChild>
+            <SidebarButton
+              aria-current={moreIsCurrent ? "page" : undefined}
+              className="md:hidden"
+            >
+              <Ellipsis className="size-5" />
+              更多
+            </SidebarButton>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            side="top"
+            align="end"
+            className="w-60"
+            onCloseAutoFocus={headingAfterMenu}
+          >
+            <DropdownMenuLabel className="flex items-center gap-2">
+              <Initials name={user.login} />
+              <span className="min-w-0 truncate">{user.login}</span>
+            </DropdownMenuLabel>
+            {state && (
+              <DropdownMenuLabel className="flex flex-col items-start gap-0.5 font-normal">
+                <QuotaLines
+                  settings={state.settings}
+                  usage={state.usage}
+                  account={account}
+                />
+              </DropdownMenuLabel>
+            )}
+            <DropdownMenuSeparator />
+            {morePages.map(({ id, label, icon: Icon }) => (
+              <DropdownMenuItem
+                key={id}
+                aria-current={current.id === id ? "page" : undefined}
+                className="min-h-11 aria-[current=page]:font-semibold"
+                onSelect={() => goFromMenu(id)}
+              >
+                <Icon /> {label}
+              </DropdownMenuItem>
+            ))}
+            <DropdownMenuItem className="min-h-11" onSelect={logout}>
+              <LogOut /> 登出
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </Sidebar>
       <main
         className={cn(
           "mx-auto w-full max-w-6xl px-4 pt-5 pb-28 md:px-8 md:pt-7 md:pb-12",
@@ -1096,36 +1080,20 @@ export function App() {
           inbox && lineQuota && noticeCount === 1 &&
             "[&>:has(#line-quota-help)]:mb-2 [&>:has(#line-quota-help)]:border-border [&>:has(#line-quota-help)]:bg-transparent [&>:has(#line-quota-help)]:text-foreground",
           current.id === "chat" &&
-            "flex h-full min-h-0 flex-col overflow-hidden pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:pb-6",
+            "flex h-full min-h-0 flex-col overflow-hidden pb-bottom-nav md:pb-6",
         )}
       >
-        <header
+        <PageHeader
+          title={current.label}
+          headingRef={heading}
+          description={"hint" in current ? current.hint : undefined}
+          descriptionClassName={current.id === "groups" ? undefined : "hidden sm:block"}
           className={cn(
-            "mb-7 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3",
+            "mb-7",
             inbox && "mb-3 items-center md:mb-4",
             current.id === "chat" && "mb-4 shrink-0",
           )}
-        >
-          <div className="min-w-0">
-            <h1
-              ref={heading}
-              tabIndex={-1}
-              className="heading-page outline-none"
-            >
-              {current.label}
-            </h1>
-            {"hint" in current && (
-              <p
-                className={cn(
-                  "mt-0.5 text-sm text-muted-foreground",
-                  current.id !== "groups" && "hidden sm:block",
-                )}
-              >
-                {current.hint}
-              </p>
-            )}
-          </div>
-          {state && (
+          actions={state && (
             <div className="flex items-center gap-1.5">
               {dispatch && "ariaLabel" in dispatch ? (
                 <Button
@@ -1177,7 +1145,7 @@ export function App() {
               </Button>
             </div>
           )}
-        </header>
+        />
         <PageNotices incident={noticeIncident} count={noticeCount}>
           {admin && goneProjects.length > 0 && view !== "projects" && (
             <p
@@ -1261,7 +1229,7 @@ export function App() {
               ) : (
                 <CirclePause className="size-4 shrink-0" />
               )}
-              <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+              <span className="min-w-0 flex-1 wrap-anywhere">
                 {hostHold
                   ? `資源不足，派工自動暫停（${hostHold}），資源恢復後會自動繼續。`
                   : hold.startsWith(reservedQuotaHold)
@@ -1287,7 +1255,7 @@ export function App() {
             <div className={cn("px-2 text-sm", inbox && "px-0")}>
               <div role={inbox ? "status" : undefined} className="flex flex-wrap items-center gap-x-2">
                 {!inbox && (
-                  <p role="status" className="flex flex-[1_1_9rem] items-start gap-2 py-2">
+                  <p role="status" className="flex grow shrink basis-36 items-start gap-2 py-2">
                     {quotaSummary}
                   </p>
                 )}
@@ -1543,7 +1511,7 @@ export function App() {
         <div
           role={toast.error ? "alert" : "status"}
           className={cn(
-            "fixed bottom-24 left-1/2 z-[60] flex w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-2.5 rounded-lg border border-border-raised bg-popover py-2.5 pr-2 pl-3.5 text-sm text-popover-foreground shadow-raised animate-in fade-in-0 slide-in-from-bottom-2 md:bottom-6",
+            "fixed bottom-24 left-1/2 z-60 flex w-max max-w-overlay -translate-x-1/2 items-center gap-2.5 rounded-md border border-border-raised bg-popover py-2.5 pr-2 pl-3.5 text-sm text-popover-foreground shadow-raised animate-in fade-in-0 slide-in-from-bottom-2 md:bottom-6",
             toast.error && "border-danger/50 bg-danger-soft text-danger",
           )}
         >
@@ -1552,7 +1520,7 @@ export function App() {
           ) : (
             <CircleCheck className="size-4 shrink-0 text-good" />
           )}
-          <span className="min-w-0 [overflow-wrap:anywhere]">{toast.text}</span>
+          <span className="min-w-0 wrap-anywhere">{toast.text}</span>
           <Button
             variant="ghost"
             size="icon-xs"
@@ -1653,7 +1621,7 @@ function Login({
   retry: () => void;
 }) {
   return (
-    <div className="grid min-h-screen lg:grid-cols-[1.1fr_1fr]">
+    <div className="grid min-h-screen lg:grid-cols-login">
       <section className="hidden border-r bg-sidebar p-12 lg:flex lg:flex-col">
         <div className="flex items-center gap-2.5">
           <Wordmark />
@@ -1680,22 +1648,16 @@ function Login({
           <div className="flex items-center gap-2.5 lg:hidden">
             <Wordmark />
           </div>
-          <div className="flex flex-col gap-2">
-            <h1 className="text-2xl font-semibold tracking-tight">
-              登入控制台
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              在 LINE 群組或 Discord 頻道提需求，AI 整理成任務並交給 Codex 開發。
-            </p>
-          </div>
+          <PageHeader
+            title="登入控制台"
+            description="在 LINE 群組或 Discord 頻道提需求，AI 整理成任務並交給 Codex 開發。"
+            descriptionClassName="mt-2"
+          />
           {configured === null ? (
             <>
-              <p
-                role="alert"
-                className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
-              >
+              <InlineNotice as="p" tone="danger" variant="soft" role="alert">
                 你暫時連不上 chat2pr，服務可能正在重新啟動，請稍後再試。
-              </p>
+              </InlineNotice>
               <Button size="lg" className="w-full" onClick={retry}>
                 <RefreshCw /> 重新連線
               </Button>
@@ -1703,12 +1665,9 @@ function Login({
           ) : (
             <>
               {notice && (
-                <p
-                  role="status"
-                  className="rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn"
-                >
+                <InlineNotice as="p" tone="warn" variant="soft" role="status">
                   {notice}
-                </p>
+                </InlineNotice>
               )}
               <Button
                 size="lg"
@@ -1751,7 +1710,7 @@ function Login({
             {flow.map(([Icon, label, hint], index) => (
               <li
                 key={label}
-                className="flex items-start gap-2 rounded-lg border px-3 py-2.5 text-sm"
+                className="flex items-start gap-2 rounded-md border px-3 py-2.5 text-sm"
               >
                 <Icon
                   aria-hidden="true"
@@ -1822,10 +1781,10 @@ function QuotaLines(props: QuotaProps) {
         <span className="h-1.5 w-full overflow-hidden shape-pill bg-muted">
           <span
             className={cn(
-              "block h-full shape-pill",
+              "block h-full w-quota-left shape-pill",
               left < 15 ? "bg-danger" : left < 40 ? "bg-warn" : "bg-good",
             )}
-            style={{ width: `${left}%` }}
+            style={{ "--quota-left": `${left}%` } as CSSProperties}
           />
         </span>
       )}
@@ -1842,7 +1801,7 @@ function ModeSummary({ open, ...quota }: QuotaProps & { open?: () => void }) {
   // 一般成員進不了設定頁，只顯示用量、不可點。
   if (!open)
     return (
-      <div className="flex flex-col gap-2 rounded-lg border bg-background px-3 py-2.5">
+      <div className="flex flex-col gap-2 rounded-md border bg-background px-3 py-2.5">
         <QuotaLines {...quota} />
       </div>
     );
@@ -1851,7 +1810,7 @@ function ModeSummary({ open, ...quota }: QuotaProps & { open?: () => void }) {
       type="button"
       onClick={open}
       title="查看額度與 AI 設定"
-      className="flex flex-col gap-2 rounded-lg border bg-background px-3 py-2.5 text-left transition-colors hover:border-brand/40"
+      className="flex flex-col gap-2 rounded-md border bg-background px-3 py-2.5 text-left transition-colors hover:border-brand/40"
     >
       <QuotaLines {...quota} />
     </button>
