@@ -1493,8 +1493,11 @@ export class Execution {
               ["code", "review"].includes(name) &&
               error instanceof AppError &&
               error.statusCode === 429
-            )
-              await this.subscriptionGate.exhausted();
+            ) {
+              const kind = inference.failure?.kind === "quota_unavailable" ? "unknown" : "exhausted";
+              await this.subscriptionGate.exhausted(kind);
+              if (kind === "unknown") throw new SubscriptionBlocked(error.message, kind);
+            }
             throw error;
           });
         if (r.sqlReviewFailure) {
@@ -1516,8 +1519,9 @@ export class Execution {
             ? failure.kind === "quota" || failure.kind === "quota_unavailable"
             : subscriptionLimited(r.stderr);
           if (limited) {
-            await this.subscriptionGate.exhausted();
-            throw new AppError(429, failure ? upstreamFailureText(failure) : "Codex 訂閱額度已達上限");
+            const kind = failure?.kind === "quota_unavailable" ? "unknown" : "exhausted";
+            await this.subscriptionGate.exhausted(kind);
+            throw new SubscriptionBlocked(failure ? upstreamFailureText(failure) : "Codex 訂閱額度已達上限", kind);
           }
         }
         return r;

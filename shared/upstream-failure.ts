@@ -16,7 +16,7 @@ const reasons = {
   upstream_http: "訂閱上游回應失敗",
   connection: "無法連上訂閱服務",
   redirect: "訂閱上游要求重新導向",
-  auth: "訂閱登入已失效或無法刷新",
+  auth: "訂閱登入已失效或無法刷新，請重新登入 Codex",
   quota: "Codex 訂閱額度已達上限",
   quota_unavailable: "無法確認訂閱額度，已暫停新的推論",
   missing_body: "訂閱上游未回傳內容",

@@ -10,6 +10,7 @@ import {
   upstreamFailureText,
   type UpstreamFailure,
 } from "../shared/upstream-failure.js";
+import { accountConnectionFailed } from "./codex-account.js";
 import { AppError } from "./policy.js";
 import { runnerRequest } from "./runner-http.js";
 import {
@@ -91,7 +92,6 @@ const credentialErrors: PublicErrors = new Map([
   ["Codex 訂閱額度已達上限", [429, "quota"]],
   ["無法確認訂閱額度，暫停新的推論", [429, "quota_unavailable"]],
   ["服務需要有效的 ChatGPT 訂閱登入，未使用 API 計費", [503, "auth"]],
-  ["訂閱登入讀取或刷新失敗，請確認服務登入", [503, "connection"]],
 ]);
 function knownError(error: unknown, messages: PublicErrors) {
   if (!(error instanceof AppError)) return undefined;
@@ -299,7 +299,7 @@ export class SubscriptionBroker {
     } catch (error) {
       const known = knownError(error, credentialErrors);
       if (known) throw known;
-      throw refresh
+      throw accountConnectionFailed(error)
         ? safeError(502, connectionMessage, "connection")
         : safeError(503, "訂閱登入讀取失敗，未使用其他計費方式", "auth");
     }

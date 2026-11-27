@@ -768,10 +768,10 @@ describe("訂閱主憑證隔離與有限階段能力", () => {
       },
     });
     const response = await f.send();
-    expect(response.statusCode).toBe(502);
-    expect(response.json().error.message).toBe("訂閱推論連線失敗，未使用其他計費方式");
+    expect(response.statusCode).toBe(stage === "刷新登入" ? 503 : 502);
+    expect(response.json().error.message).toBe(stage === "刷新登入" ? "訂閱登入讀取失敗，未使用其他計費方式" : "訂閱推論連線失敗，未使用其他計費方式");
     expect(f.lease.failure()).toStrictEqual(stage === "連線" ? { kind: "connection" } :
-      stage === "刷新登入" ? { kind: "connection", status: 401 } : { kind: "stream_interrupted", status: 200 });
+      stage === "刷新登入" ? { kind: "auth", status: 401 } : { kind: "stream_interrupted", status: 200 });
     expect(f.broker.usage(f.runId)?.revoked).toBe(stage === "刷新登入");
   });
   it("發出授權前讀取登入失敗也只回固定訊息", async () => {
