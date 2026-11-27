@@ -166,7 +166,7 @@ export async function recordHealth(
     const inserted = await c.query(
       `INSERT INTO service_health(name,ok,detail,reading_ok,notified_ok,probe_info,checked_at,outage_started_at)
        SELECT $1,$2,$3,$2,$4,$5,coalesce(outage,now()),outage FROM
-         (SELECT CASE WHEN $1='codex_inference' AND NOT $2 THEN now()::timestamptz(3) END AS outage) initial
+         (SELECT CASE WHEN $1='codex_inference' AND NOT $2 THEN date_trunc('milliseconds',now()) END AS outage) initial
        ON CONFLICT(name) DO NOTHING RETURNING name`,
       [name, ok, detail, Object.hasOwn(noticeDelay, name) || ok, probe],
     );
@@ -186,10 +186,11 @@ export async function recordHealth(
     }
     if (!before) return;
     const {
-      rows: [{ observed_at: observedAt }],
-    } = await c.query<{ observed_at: Date }>(
-      "SELECT clock_timestamp() AS observed_at",
+      rows: [{ precise_at: preciseAt }],
+    } = await c.query<{ precise_at: string }>(
+      `SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS precise_at`,
     );
+    const observedAt = new Date(preciseAt);
     const {
       notifiedOk,
       outageStartedAt,
@@ -211,7 +212,7 @@ export async function recordHealth(
         name,
         ok,
         detail,
-        observedAt,
+        observation ? preciseAt : observedAt,
         notifiedOk,
         outageStartedAt,
         lineOutageConfirmed,
