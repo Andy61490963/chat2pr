@@ -55,7 +55,7 @@ it.each([
   }
 });
 
-it('首次失敗不把時間進位到未來，後續讀數保留觀測的微秒', async () => {
+it.each(['ISO, YMD', 'SQL, DMY'])('日期格式 %s：首次失敗不把時間進位到未來，後續讀數保留觀測的微秒', async dateStyle => {
   const started = new Date('2026-01-01T00:00:00Z');
   const transaction = db.transaction.bind(db);
   const clock = vi.spyOn(db, 'transaction').mockImplementation(fn => transaction(async client => {
@@ -63,6 +63,7 @@ it('首次失敗不把時間進位到未來，後續讀數保留觀測的微秒'
       CREATE FUNCTION test_probe_clock.now() RETURNS timestamptz LANGUAGE sql AS $$ SELECT timestamptz '2026-01-01T00:00:00.000800Z' $$;
       CREATE FUNCTION test_probe_clock.clock_timestamp() RETURNS timestamptz LANGUAGE sql AS $$ SELECT timestamptz '2026-01-01T00:00:01.000800Z' $$;
       SET LOCAL search_path = test_probe_clock, pg_catalog, public`);
+    await client.query("SELECT set_config('DateStyle',$1,true), set_config('TimeZone','Asia/Taipei',true)", [dateStyle]);
     const result = await fn(client);
     await client.query('DROP SCHEMA test_probe_clock CASCADE');
     return result;

@@ -186,10 +186,11 @@ export async function recordHealth(
     }
     if (!before) return;
     const {
-      rows: [{ observed_at: observedAt, precise_at: preciseAt }],
-    } = await c.query<{ observed_at: Date; precise_at: string }>(
-      "SELECT observed_at, observed_at::text AS precise_at FROM clock_timestamp() AS observed_at",
+      rows: [{ precise_at: preciseAt }],
+    } = await c.query<{ precise_at: string }>(
+      `SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS precise_at`,
     );
+    const observedAt = new Date(preciseAt);
     const {
       notifiedOk,
       outageStartedAt,
