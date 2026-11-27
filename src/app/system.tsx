@@ -21,6 +21,8 @@ import {
   type State,
   ago,
   date,
+  healthBadge,
+  healthStatus,
   memoryHold,
   message,
 } from "./shared";
@@ -30,6 +32,7 @@ import type { DiskLevel } from "../../shared/docker-disk.js";
 import { entryText, type EntryKind } from "../../shared/entry.js";
 import { phaseLabels } from "../../shared/observation.js";
 import {
+  inferenceStatusLabels,
   systemStatusLabels,
   workerImageLabels,
   workerImageStatus,
@@ -45,6 +48,7 @@ import {
 import { EgressCard } from "./egress";
 import { CheckEnvironmentCard } from "./check-environments";
 import { FrictionCard } from "./friction";
+import { subscriptionGateName } from "../../shared/subscription-quota.js";
 
 type ContainerStatus = {
   name: string;
@@ -173,12 +177,17 @@ export function SystemView({
       status: workerImageStatus(image.current, usedBy.length > 0),
     };
   });
+  const subscription = state.settings.ai_mode === "subscription";
+  const gate = state.health.find(row => row.name === subscriptionGateName);
+  const inference = state.health.find(row => row.name === "codex") ??
+    (gate?.inferenceStatus ? gate : undefined);
+  const inferenceState = healthStatus(inference);
   const counts: Record<SystemTab, number> = {
     execution: Number(
       !state.settings.paused &&
         !state.diskDispatchPaused &&
         !!memoryHold(state),
-    ),
+    ) + Number(subscription && inferenceState === "failed"),
     disk: diskAttentionCount({
       probeFailed: stale,
       services: services.map(({ condition }) => condition),
@@ -230,6 +239,22 @@ export function SystemView({
         className="space-y-6"
       >
         <CapacityCard request={request} />
+        {subscription && (
+          <Card role="region" aria-labelledby="codex-inference-title">
+            <CardHeader>
+              <h2 id="codex-inference-title" className="font-semibold">Codex 訂閱推論</h2>
+              <CardDescription>顯示最近的工作推論或健康檢查結果。檢查使用同一個訂閱代理，不占每日派工次數。</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm [overflow-wrap:anywhere]">
+              <Badge variant={healthBadge[inferenceState]}>
+                {inferenceStatusLabels[inferenceState]}
+              </Badge>
+              <p>{inference?.detail ?? "尚未完成真實推論檢查。"}</p>
+              {gate && !gate.ok && gate.detail !== inference?.detail && <p>{gate.detail}</p>}
+              {inference && inferenceState !== "unknown" && <p className="text-muted-foreground">最後確認 {ago(inference.checked_at)}</p>}
+            </CardContent>
+          </Card>
+        )}
         {admin && <FrictionCard state={state} request={request} />}
       </TabsContent>
       <TabsContent
@@ -526,7 +551,7 @@ function ServiceRow({
       <span
         aria-hidden
         className={cn(
-          "size-2 shrink-0 rounded-full",
+          "size-2 shrink-0 shape-pill",
           tone === "idle"
             ? "bg-border"
             : tone === "good"

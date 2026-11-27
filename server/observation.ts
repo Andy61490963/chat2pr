@@ -1,5 +1,10 @@
 import { z } from "zod";
 import type { RunEvent } from "../shared/observation.js";
+import {
+  WorkerThreadId,
+  type WorkerEventKindLabel,
+  type WorkerEventRejectionReason,
+} from "../shared/worker-event.js";
 import { Database } from "./db.js";
 import { redact } from "./policy.js";
 
@@ -52,29 +57,36 @@ const Event = z.object({
     "truncated",
     "observer_error",
     "observer_restored",
+    "upstream_retry",
+    "worker_event_rejected",
   ]),
   detail: z.string().max(24000).nullable().optional(),
-  threadId: z.string().uuid().optional(),
+  threadId: WorkerThreadId.optional(),
   containerId: z
     .string()
     .regex(/^[a-f0-9]{12,64}$/)
     .optional(),
-  exitCode: z.number().int().optional(),
+  exitCode: z.number().int().nullish(),
+  rejectedCount: z.number().int().positive().optional(),
 });
+const maxEvents = 2000;
 export async function saveEvents(
   db: Database,
   runId: string,
   source: string,
   events: unknown[],
 ) {
-  for (const raw of events.slice(0, 2001)) {
+  // 另留一筆截斷提示與一筆整次執行共用的拒收紀錄。
+  for (const raw of events.slice(0, maxEvents + 2)) {
     const parsed = Event.safeParse(raw);
     if (!parsed.success) continue;
     const e = parsed.data;
     await db.query(
-      `INSERT INTO run_events(run_id,source,seq,at,phase,kind,detail,thread_id,container_id,exit_code)
-      SELECT r.id,$2,$3,$4,$5,$6,CASE WHEN run_content_visible(r.id) THEN $7 ELSE NULL END,$8,$9,$10
-      FROM runs r WHERE r.id=$1 ON CONFLICT(run_id,source,seq) DO NOTHING`,
+      `INSERT INTO run_events(run_id,source,seq,at,phase,kind,detail,thread_id,container_id,exit_code,rejected_count)
+      SELECT r.id,$2,$3,$4,$5,$6,CASE WHEN run_content_visible(r.id) THEN $7 ELSE NULL END,$8,$9,$10,$11
+      FROM runs r WHERE r.id=$1 ON CONFLICT(run_id,source,seq) DO UPDATE SET rejected_count=EXCLUDED.rejected_count
+      WHERE run_events.kind='worker_event_rejected' AND EXCLUDED.kind='worker_event_rejected'
+        AND run_events.rejected_count < EXCLUDED.rejected_count`,
       [
         runId,
         source,
@@ -86,6 +98,7 @@ export async function saveEvents(
         e.threadId ?? null,
         e.containerId ?? null,
         e.exitCode ?? null,
+        e.rejectedCount ?? null,
       ],
     );
   }
@@ -93,13 +106,13 @@ export async function saveEvents(
 
 // 主機執行器僅暫存有界、已遮蔽的事件，完成後由應用程式保存。
 export class ObservationBuffer {
-  private runs = new Map<string, { at: number; events: RunEvent[] }>();
+  private runs = new Map<string, {
+    at: number;
+    events: RunEvent[];
+    rejection?: RunEvent & { rejectedCount: number };
+  }>();
   private closed = new Map<string, number>();
-  add(
-    runId: string,
-    phase: string,
-    event: Partial<RunEvent> & { kind: string },
-  ) {
+  private activeRun(runId: string) {
     const now = Date.now();
     for (const [id, at] of this.closed)
       if (now - at > 7200000) this.closed.delete(id);
@@ -111,8 +124,39 @@ export class ObservationBuffer {
         this.runs.delete(this.runs.keys().next().value!);
       this.runs.set(runId, { at: now, events: [] });
     }
-    const r = this.runs.get(runId)!;
-    if (r.events.length > 2000) return;
+    return this.runs.get(runId);
+  }
+  rejectWorkerEvent(
+    runId: string,
+    phase: z.infer<typeof Event>["phase"],
+    kind: WorkerEventKindLabel,
+    reason: WorkerEventRejectionReason,
+  ) {
+    const run = this.activeRun(runId);
+    if (!run) return;
+    if (run.rejection) {
+      run.rejection.rejectedCount++;
+      return;
+    }
+    run.rejection = {
+      seq: run.events.length + 1,
+      at: new Date().toISOString(),
+      phase,
+      kind: "worker_event_rejected",
+      rejectedCount: 1,
+      detail: `容器事件已丟棄（種類：${kind}，原因：${reason}）`,
+    };
+    run.events.push(run.rejection);
+  }
+  add(
+    runId: string,
+    phase: string,
+    event: Partial<RunEvent> & { kind: string },
+  ) {
+    const r = this.activeRun(runId);
+    if (!r) return;
+    const normalEvents = r.events.length - (r.rejection ? 1 : 0);
+    if (normalEvents > maxEvents) return;
     const candidate = Event.safeParse({
       ...event,
       seq: r.events.length + 1,
@@ -122,15 +166,18 @@ export class ObservationBuffer {
     if (!candidate.success) return;
     const e = candidate.data;
     r.events.push(
-      r.events.length === 2000
-        ? { seq: 2001, at: e.at, phase, kind: "truncated" }
+      normalEvents === maxEvents
+        ? { seq: e.seq, at: e.at, phase, kind: "truncated" }
         : { ...e, detail: e.detail ? safeDetail(e.detail) : null },
     );
   }
   read(runId: string, after = 0) {
     const run = this.runs.get(runId);
     if (run && Date.now() - run.at > 7200000) this.runs.delete(runId);
-    return (this.runs.get(runId)?.events ?? []).filter((e) => e.seq > after);
+    // 拒收紀錄的序號固定；輪詢已讀過該序號時，仍須同步最新累計。
+    return (this.runs.get(runId)?.events ?? []).filter(
+      (e) => e.seq > after || e.kind === "worker_event_rejected",
+    );
   }
   forget(runId: string) {
     this.runs.delete(runId);

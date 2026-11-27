@@ -1,5 +1,5 @@
 import { validateLabel } from "../shared/project-setup.js";
-import { parseFailure } from "../shared/failure-text.js";
+import { parseFailure, primaryFix } from "../shared/failure-text.js";
 import { describe, expect, it } from "vitest";
 import {
   classifyFailure,
@@ -18,14 +18,40 @@ import { codexSdkCrash, codexSdkStackOnly } from "./failure-samples.js";
 
 // 正式環境近 30 天看得到、但使用者看不懂的失敗訊息（#22），各自固定分類與白話說明。
 describe("實際錯誤樣本的分類", () => {
-  it("可信診斷保留原有分類，只顯示固定原因與上游狀態碼", () => {
-    const raw = `Codex 執行失敗：虛構的容器輸出${reportTailMark}訂閱轉送失敗`;
-    const failure = classifyFailure(raw, "code", "task", undefined, { kind: "upstream_http", status: 500 });
-    expect(failure.category).toBe(classifyFailure(raw, "code").category);
-    expect(failure.plain).toContain("500");
-    expect(failure.plain).toContain("訂閱上游回應失敗");
-    expect(groupFailureText(failure)).not.toContain("虛構的容器輸出");
+  it.each([
+    ["可信上游 502 遇到外層 403 仍可重試", 502, 403, "transient"],
+    ["可信上游 404 遇到外層 502 直接停止", 404, 502, "config"],
+  ] as const)("%s", (_name, status, outer, category) => {
+    const raw = `Codex 執行失敗：HTTP ${outer} 虛構的容器輸出`;
+    const failure = classifyFailure(raw, "code", "task", undefined, { kind: "upstream_http", status });
+    expect(failure.category).toBe(category);
+    for (const text of [failureNotice(failure), groupFailureText(failure)]) {
+      expect(text).toContain(`上游 HTTP ${status}`);
+      expect(text).not.toContain(String(outer));
+      expect(text).not.toContain("虛構的容器輸出");
+    }
   });
+  it.each([
+    { kept: "修改已保留", phase: "review", next: "從測試與獨立審查接續", groupNext: "從驗證接續" },
+    { kept: "修改與審查意見已保留", phase: "code", next: "直接進行唯一一次自動修復", groupNext: "接著自動修復" },
+  ])("$kept時，看板與群組同時說明代理原因與重試接續點", ({ kept, phase, next, groupNext }) => {
+    const failure = classifyFailure(
+      `${kept}，執行超過時間限制\n虛構的容器輸出`,
+      phase, "task", undefined, { kind: "phase_deadline" },
+    );
+    const notice = failureNotice(failure);
+    const parsed = parseFailure(notice);
+    const group = groupFailureText(failure);
+    for (const message of [notice, group]) {
+      expect(message).toContain(kept);
+      expect(message).toContain("訂閱階段已超過期限");
+      expect(message).not.toContain("虛構的容器輸出");
+    }
+    expect(parsed?.action).toContain(next);
+    expect(primaryFix(parsed)).toEqual({ kind: "retry" });
+    expect(group).toContain(groupNext);
+  });
+
   it("系統套件（#18）：來源被白名單擋下或計畫不再通過固定規則是設定問題，其他安裝失敗是環境問題", () => {
     for (const raw of [
       "系統套件安裝失敗（退出碼 100）：Err:1 https://deb.debian.org/debian bookworm InRelease\n  403  Forbidden [IP: 172.18.0.2 3128]",
@@ -60,7 +86,7 @@ describe("實際錯誤樣本的分類", () => {
     expect(f.category).toBe("environment");
     expect(f.plain).toContain("安裝依賴失敗");
     expect(f.detail).toBe("");
-    expect(failureNotice(f, true, "安裝依賴")).toContain(
+    expect(failureNotice(f, 1, "安裝依賴")).toContain(
       "工具沒有留下錯誤訊息，完整輸出見執行紀錄",
     );
   });
@@ -73,7 +99,7 @@ describe("實際錯誤樣本的分類", () => {
       const f = classifyFailure(raw, "code");
       expect(f.category).toBe("transient");
       expect(f.plain).toBe("AI 服務回應中斷或逾時");
-      const text = failureNotice(f, true, "Codex 修改程式");
+      const text = failureNotice(f, 1, "Codex 修改程式");
       expect(text).not.toMatch(
         /file:\/\/|\/opt\/agentflow|throw new Error|\bat /,
       );
@@ -313,7 +339,7 @@ describe("群組訊息", () => {
       ["TypeError: Cannot read properties of undefined (reading 'x')", "code"],
     ];
     for (const [raw, phase] of samples) {
-      const text = groupFailureText(classifyFailure(raw, phase), true);
+      const text = groupFailureText(classifyFailure(raw, phase), 1);
       expect(text).not.toMatch(
         /file:\/\/|\/opt\/|\/workspace|NU1101|TypeError|\bat /,
       );
@@ -369,7 +395,7 @@ describe("基底驗證失敗的整理過報告（#248）", () => {
     );
     expect(f.detail).toBe(report);
     expect(f.groupDetail).toBe(report);
-    const parsed = parseFailure(failureNotice(f, false, "執行測試"));
+    const parsed = parseFailure(failureNotice(f, 0, "執行測試"));
     expect(parsed?.detail).toBe(report);
     expect(parsed?.action).toContain("請 AI 修好目標分支");
     expect(groupFailureText(f)).toContain(

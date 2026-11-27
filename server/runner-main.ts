@@ -22,7 +22,7 @@ import {
 } from "./config.js";
 import { replyRunnerError } from "./error-reply.js";
 import { AppError } from "./policy.js";
-import { SubscriptionBroker } from "./subscription-broker.js";
+import { BrokerError, SubscriptionBroker } from "./subscription-broker.js";
 import { subscriptionIdentity } from "./subscription-identity.js";
 import {
   CaptureInput,
@@ -103,10 +103,13 @@ async function withCapability<T extends { exitCode: number }>(
     phase,
     model: typeof job.model === "string" ? job.model : undefined,
     deadline,
+    onRetry: phase === "code" || phase === "review"
+      ? (event) => observations.add(runId, phase, event)
+      : undefined,
   });
   try {
     const remaining = deadline - Date.now();
-    if (remaining <= 0) throw new AppError(408, "訂閱階段已超過期限");
+    if (remaining <= 0) throw new BrokerError(408, "訂閱階段已超過期限", "phase_deadline");
     const result = await execute(
       {
         ...job,
@@ -117,11 +120,13 @@ async function withCapability<T extends { exitCode: number }>(
       },
       remaining,
     );
-    const failure =
-      result.exitCode !== 0 && (phase === "code" || phase === "review")
-        ? capability.failure()
-        : undefined;
-    return failure ? { ...result, upstreamFailure: failure } : result;
+    if (phase === "code" || phase === "review") {
+      if (result.exitCode === 0 && capability.inferenceCompleted())
+        return { ...result, inferenceCompleted: true };
+      const failure = result.exitCode !== 0 && capability.failure();
+      if (failure) return { ...result, upstreamFailure: failure };
+    }
+    return result;
   } finally {
     capability.revoke();
   }
@@ -136,6 +141,8 @@ app.addContentTypeParser("application/octet-stream", (_req, payload, done) =>
 );
 app.setErrorHandler(replyRunnerError);
 registerRunnerSecrets(app);
+const brokerPort = subscriptionBrokerPort();
+broker.registerRunnerProbe(app, brokerPort);
 app.get("/health", async () => {
   await containers.docker.ping();
   return { ok: true, instance: containers.instance, subscriptionBroker: "v1" };
@@ -469,7 +476,7 @@ app.post("/derived-image", async (req) => {
   });
   return result;
 });
-app.post("/phase", async (req) => {
+app.post("/phase", async (req, reply) => {
   const b = Job.extend({
     phase: z.enum(["install", "test", "code", "review", "collect"]),
     command: z.string().max(8000).optional(),
@@ -568,6 +575,8 @@ app.post("/phase", async (req) => {
               ? { output: "collect" as const }
               : {}),
             ...(b.phase === "install" ? { nugetFeed: true } : {}),
+            onRejectedWorkerEvent: (kind, reason) =>
+              observations.rejectWorkerEvent(b.runId, b.phase, kind, reason),
             ...(b.env?.length && b.phase !== "collect" ? { env: b.env } : {}),
             ...(b.phase === "collect" && b.exclude
               ? { collectExclude: b.exclude }
@@ -587,6 +596,11 @@ app.post("/phase", async (req) => {
       kind: "error",
       detail: e instanceof Error ? e.message : "執行器階段失敗",
     });
+    if (ai && b.job?.mode === "subscription" && e instanceof BrokerError && e.kind) {
+      const upstreamFailure = { kind: e.kind };
+      for (const event of phaseEndEvents(b.phase, { exitCode: 1, stdout: "", stderr: "", upstreamFailure })) observe(event);
+      return reply.code(e.statusCode).send({ error: maskCredentials(e.message).slice(0, 2000), upstreamFailure });
+    }
     throw e;
   } finally {
     reviewDeadline?.close();
@@ -670,7 +684,6 @@ const listenPort = z.coerce
   .min(1024)
   .max(65535)
   .parse(process.env.RUNNER_LISTEN_PORT ?? 4312);
-const brokerPort = subscriptionBrokerPort();
 await brokerApp.listen({ port: brokerPort, host: "127.0.0.1" });
 app.addHook("onClose", async () => {
   broker.close();

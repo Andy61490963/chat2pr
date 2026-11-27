@@ -1,6 +1,6 @@
 import { validateLabel } from "../shared/project-setup.js";
 import { baselineFailurePlain } from "../shared/failure-text.js";
-import { upstreamFailureText, type UpstreamFailure } from "../shared/upstream-failure.js";
+import { upstreamFailureCategory, upstreamFailureText, type UpstreamFailure } from "../shared/upstream-failure.js";
 import { redact } from "./policy.js";
 import { clip } from "./pr-body.js";
 
@@ -90,9 +90,36 @@ const validationDefaults: Record<FailureCategory, Advice> = {
 };
 const matches = (pattern: RegExp) => (body: string) => pattern.test(body);
 
+const resumableRules = [
+  {
+    category: "project",
+    // 逾時前已收集到修改（execution.ts 加上前綴）：重試會從測試與獨立審查接續，縮小需求範圍不是對的處理（#241）。
+    test: matches(/^修改已保留，/),
+    plain: "時間用完前修改已完成，修改已保留，但測試或獨立審查還沒做完",
+    action: "按「重試」會沿用保留的修改，從測試與獨立審查接續",
+    group: "管理者重試後會從驗證接續。",
+  },
+  {
+    category: "project",
+    // 第一次修改驗證沒過、唯一一次自動修復途中逾時（execution.ts 加上前綴）：重試直接修復，不重做驗證（#241）。
+    test: matches(/^修改與審查意見已保留，/),
+    plain:
+      "時間用完前第一次修改的驗證沒有通過，修改與審查意見已保留，唯一一次自動修復還沒做完",
+    action: "按「重試」會沿用保留的修改與審查意見，直接進行唯一一次自動修復",
+    group: "管理者重試後會接著自動修復。",
+  },
+] satisfies Rule[];
+
 // 規則依序比對，先中先贏：先認「專案／設定」這類明確的訊息，
 // 再認暫時性錯誤，避免測試輸出裡剛好出現的 ECONNREFUSED 被誤當成網路問題而重試。
 const rules: Rule[] = [
+  {
+    category: "transient",
+    test: matches(/^工作容器遭強制終止（退出碼 137）$/),
+    plain: "工作容器遭強制終止（退出碼 137）",
+    action: "請確認執行主機的可用資源後重試",
+    group: "工作容器已中斷，請稍後重試。",
+  },
   {
     category: "project",
     test: matches(/^沒有可提交的程式變更，Codex 未確認需求已符合/),
@@ -200,23 +227,7 @@ const rules: Rule[] = [
     group: "這次修改的內容超過交付上限，請管理者依看板上的說明調整後重試。",
     keep: true,
   },
-  {
-    category: "project",
-    // 逾時前已收集到修改（execution.ts 加上前綴）：重試會從測試與獨立審查接續，縮小需求範圍不是對的處理（#241）。
-    test: matches(/^修改已保留，/),
-    plain: "時間用完前修改已完成，修改已保留，但測試或獨立審查還沒做完",
-    action: "按「重試」會沿用保留的修改，從測試與獨立審查接續",
-    group: "管理者重試後會從驗證接續。",
-  },
-  {
-    category: "project",
-    // 第一次修改驗證沒過、唯一一次自動修復途中逾時（execution.ts 加上前綴）：重試直接修復，不重做驗證（#241）。
-    test: matches(/^修改與審查意見已保留，/),
-    plain:
-      "時間用完前第一次修改的驗證沒有通過，修改與審查意見已保留，唯一一次自動修復還沒做完",
-    action: "按「重試」會沿用保留的修改與審查意見，直接進行唯一一次自動修復",
-    group: "管理者重試後會接著自動修復。",
-  },
+  ...resumableRules,
   {
     category: "project",
     // 訂閱代理在階段期限到了會回「訂閱階段已超過期限」（runner-main、subscription-broker）。
@@ -422,15 +433,20 @@ export function classifyFailure(
   upstreamFailure?: UpstreamFailure,
 ): FailureExplanation {
   const body = redact(raw.replace(ansi, ""));
-  const rule = rules.find((r) => r.test(body, phase)) ?? fallback;
-  if (upstreamFailure)
+  if (upstreamFailure) {
+    const reason = upstreamFailureText(upstreamFailure);
+    const kept = resumableRules.find((r) => r.test(body));
+    const modelAction = upstreamFailure.kind === "model_unavailable"
+      ? "請到「設定」確認訂閱模型，選擇可用的模型後重試" : undefined;
     return {
-      category: rule.category,
-      plain: upstreamFailureText(upstreamFailure),
+      category: upstreamFailureCategory(upstreamFailure),
+      plain: kept ? `${reason}。${kept.plain}` : reason,
       detail: "未使用其他計費方式",
-      action: "請查看這次執行紀錄的訂閱失敗原因，再決定是否重試",
-      group: "請管理者查看這次執行紀錄，再決定是否重試。",
+      action: kept?.action ?? modelAction ?? "請查看這次執行紀錄的訂閱失敗原因，再決定是否重試",
+      group: kept?.group ?? (modelAction ? `${modelAction}。` : "請管理者查看這次執行紀錄，再決定是否重試。"),
     };
+  }
+  const rule = rules.find((r) => r.test(body, phase)) ?? fallback;
   // 摘要只放錯誤重點；開頭的「安裝失敗：」這類前綴已經由白話說明表達。
   const stripped = `\n${body
     .replace(/^\s*[\p{Script=Han}A-Za-z ]{1,16}?(?:失敗|未通過驗證)：/u, "")
@@ -471,14 +487,18 @@ export function classifyFailure(
   };
 }
 
+function retryCountText(count: number) {
+  return count === 1 ? "一次" : count === 2 ? "兩次" : `${count} 次`;
+}
+
 /** 看板摘要與管理者通知用：分類、白話說明、錯誤重點與建議處理，不含堆疊。 */
 export function failureNotice(
   failure: FailureExplanation,
-  retried = false,
+  retryCount = 0,
   where = "",
 ) {
   const label = `${categoryLabels[failure.category]}${where ? `（${where}階段）` : ""}`;
-  const again = retried ? "（已自動重試一次，仍然失敗）" : "";
+  const again = retryCount ? `（已自動重試${retryCountText(retryCount)}，仍然失敗）` : "";
   const detail = failure.detail
     ? `\n錯誤重點：${failure.detail}`
     : failure.category === "environment"
@@ -491,6 +511,7 @@ export function failureNotice(
  * 群組訊息：固定的白話句子，不放原始錯誤、堆疊或路徑；
  * 只附系統整理過、已遮蔽的內容（基底驗證失敗的測試清單與上次通過的 commit）。
  */
-export function groupFailureText(failure: FailureExplanation, retried = false) {
-  return `這則需求處理時遇到${categoryLabels[failure.category]}：${failure.plain}。${retried ? "系統已自動重試一次，仍未成功。" : ""}${failure.group}${failure.groupDetail ? `\n${failure.groupDetail}` : ""}`;
+export function groupFailureText(failure: FailureExplanation, retryCount = 0) {
+  const again = retryCount ? `系統已自動重試${retryCountText(retryCount)}，仍未成功。` : "";
+  return `這則需求處理時遇到${categoryLabels[failure.category]}：${failure.plain}。${again}${failure.group}${failure.groupDetail ? `\n${failure.groupDetail}` : ""}`;
 }

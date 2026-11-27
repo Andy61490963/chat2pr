@@ -1,10 +1,12 @@
 import { dashboardAlerts } from "./dashboard-alerts.js";
+import { stuckTasks } from "./stuck-tasks.js";
 import { pickLists, registerPickLists } from "./pick-lists.js";
 import { createFollowup, relinkTask } from "./followup.js";
 import { createBaselineRepair } from "./baseline.js";
 import { probeSystem } from "./system-status.js";
 import { answerFromDashboard } from "./answers.js";
 import { frictionMetrics } from "./friction.js";
+import { maxExcludedGroups } from "../shared/friction.js";
 import {
   approveCheck,
   checkDetail,
@@ -42,6 +44,7 @@ import { registerConnectionSecrets } from "./secrets-api.js";
 import { registerMembers } from "./members.js";
 import { registerCapacity } from "./capacity-api.js";
 import { checkIntegrations } from "./integrations.js";
+import { systemHealth } from "./inference-health.js";
 import { registerChat } from "./chat.js";
 import { registerProjectContext } from "./project-context.js";
 import { registerProjectDatabase } from "./project-database.js";
@@ -186,6 +189,7 @@ export async function buildApp(
   runner: Pick<Runner, "call"> = new HttpRunner(),
   validationProgress?: import("./validation-queue.js").ValidationQueue["progress"],
   refreshDiscord?: () => void,
+  line = new Line(db),
 ) {
   const app = Fastify({
     logger: {
@@ -295,8 +299,7 @@ export async function buildApp(
       }
     },
   );
-  const line = new Line(db),
-    tasks = new Tasks(db),
+  const tasks = new Tasks(db),
     budget = new Budget(db),
     github = new GitHub();
   await registerAuth(app, db);
@@ -540,6 +543,7 @@ export async function buildApp(
       failures,
       validations,
       pendingLists,
+      stalls,
     ] = await Promise.all([
       diskPaused(db),
       // 看板的分頁數字與統計卡用資料庫的實際數量，不受清單載入範圍影響。
@@ -566,6 +570,8 @@ export async function buildApp(
       ),
       db.query<DashboardGroup>(
         `SELECT g.*,
+           (g.platform='line' AND g.id IN (SELECT n.group_id FROM notifications n
+             WHERE n.group_id IS NOT NULL AND n.sent_at IS NULL AND n.attempts<3 AND n.line_reply_policy IS NULL)) AS has_pending_line_push,
            COALESCE((SELECT array_agg(gp.project_id ORDER BY gp.created_at) FROM group_projects gp WHERE gp.group_id=g.id),'{}') AS project_ids,
            (SELECT count(*)::int FROM tasks t WHERE t.group_id=g.id AND t.status IN ('queued','budget_wait','failed','running','reviewing')) AS affected_tasks,
            -- 修改任務一律人工核准，有核准者的需求版本就代表管理者核准過。
@@ -595,7 +601,7 @@ export async function buildApp(
         [limits.tasks, unfinishedStatuses, UNFINISHED_LIMIT],
       ),
       budget.summary(),
-      db.query("SELECT * FROM service_health ORDER BY name"),
+      systemHealth(db),
       // 無任務的管理稽核可能含私訊內容；分頁資料與上方總數必須使用相同條件。
       db.query(
         "SELECT a.*,t.title AS task_title,t.mode AS task_mode FROM audit a LEFT JOIN tasks t ON t.id=a.task_id WHERE $2::boolean OR a.task_id IS NOT NULL ORDER BY a.id DESC LIMIT $1",
@@ -621,15 +627,14 @@ export async function buildApp(
       ),
       validationProgress?.() ?? [],
       admin ? pickLists(db) : [],
+      stuckTasks(db),
     ]);
     const progressByProject = new Map(
       validations.map((entry) => [entry.id, entry]),
     );
     const s = secrets();
     // 推播額度用完時，鈴鐺清單頂端放一行提示；鈴鐺讀資料庫，不需要推播。
-    const quota = (
-      health as { name: string; ok: boolean; checked_at: string }[]
-    ).find((h) => h.name === LINE_QUOTA && !h.ok);
+    const quota = health.find((h) => h.name === LINE_QUOTA && !h.ok);
     return {
       settings: {
         ...settings,
@@ -675,6 +680,8 @@ export async function buildApp(
       groups,
       tasks: tasks.map(withTaskEnd),
       pickLists: pendingLists,
+      stuckTasks: stalls.items,
+      stuckTasksTotal: stalls.total,
       rag,
       usage: { ...usage, runs_today: runsToday.count },
       diskDispatchPaused,
@@ -735,10 +742,34 @@ export async function buildApp(
     const q = z
       .object({
         days: z.coerce.number().int().min(1).max(90).default(7),
-        group_id: z.string().max(100).optional(),
+        group_id: z.string().min(1).max(100).optional(),
+        exclude_group_id: z
+          .union([
+            z.string().min(1).max(100),
+            z
+              .array(z.string().min(1).max(100))
+              .max(
+                maxExcludedGroups,
+                `最多可排除 ${maxExcludedGroups} 個群組。`,
+              ),
+          ])
+          .optional(),
       })
       .parse(req.query);
-    return frictionMetrics(db, q.days, q.group_id || null);
+    const excluded = [...new Set([q.exclude_group_id ?? []].flat())];
+    if (q.group_id && excluded.length)
+      throw new AppError(
+        400,
+        "查看單一群組時不能同時排除群組，請選擇一種範圍。",
+      );
+    const ids = q.group_id ? [q.group_id] : excluded;
+    if (
+      ids.length &&
+      (await db.query("SELECT id FROM groups WHERE id=ANY($1::text[])", [ids]))
+        .length !== ids.length
+    )
+      throw new AppError(400, "選取的群組不存在，請重新選擇。");
+    return frictionMetrics(db, q.days, q.group_id ?? null, excluded);
   });
   // 定期檢查：成員可以看；建立、修改、試跑、核准、暫停與刪除需要管理者。
   const checkId = (req: { params: unknown }) =>
@@ -1570,21 +1601,29 @@ export async function buildApp(
       );
       if (!checked.ok) throw new AppError(409, "請先執行串接檢查");
     }
-    // 同一個語句先鎖住、讀出舊值再更新，稽核寫的差異才對得上這次實際的改動。
-    // CTE 不叫 old：PostgreSQL 18 起 RETURNING 的 old／new 是保留別名。
-    const { before } = await db.one<{ before: Partial<Settings> }>(
-      `WITH prev AS (SELECT value FROM settings WHERE id=1 FOR UPDATE)
-       UPDATE settings s SET value=s.value || $1::jsonb FROM prev WHERE s.id=1
-       RETURNING prev.value AS before`,
-      [JSON.stringify(b)],
-    );
-    await db.audit(
-      null,
-      "settings",
-      `管理者 ${admin.login} 更新工作流程設定：${describeChanges(settingsDiff(before, b))}`,
-    );
-    if (b.paused && !before.paused)
-      await db.audit(null, "settings", "暫停新派工");
+    await db.transaction(async (client) => {
+      const { rows: [{ value: before }] } = await client.query<{ value: Partial<Settings> }>(
+        "SELECT value FROM settings WHERE id=1 FOR UPDATE",
+      );
+      const inferenceChanged = before.ai_mode !== b.ai_mode || (before.codex_model ?? null) !== b.codex_model;
+      await client.query(
+        `UPDATE settings SET value=value || $1::jsonb || CASE WHEN $2
+         THEN jsonb_build_object('inference_configured_at',clock_timestamp()) ELSE '{}'::jsonb END WHERE id=1`,
+        [JSON.stringify(b), inferenceChanged],
+      );
+      if (inferenceChanged) {
+        await client.query("DELETE FROM service_health WHERE name IN ('codex_inference','codex_probe_deferred')");
+        await client.query(
+          `UPDATE notifications SET sent_at=clock_timestamp(),last_error='已留在看板鈴鐺'
+           WHERE sent_at IS NULL AND kind IN ('service_down','service_up')
+           AND split_part(dedupe_key,':',2)='codex_inference'`,
+        );
+      }
+      await db.audit(null, "settings",
+        `管理者 ${admin.login} 更新工作流程設定：${describeChanges(settingsDiff(before, b))}`, client);
+      if (b.paused && !before.paused)
+        await db.audit(null, "settings", "暫停新派工", client);
+    });
     return { ok: true };
   });
   app.put("/api/settings/line-push", async (req) => {
@@ -1761,7 +1800,7 @@ export async function buildApp(
   app.post("/api/integrations/check", async (req) => {
     await requireAdmin(db, req);
     await checkIntegrations(db, github, embedder);
-    return db.query("SELECT * FROM service_health");
+    return systemHealth(db);
   });
   if (existsSync(resolve("dist/web"))) {
     await app.register(serveStatic, { root: resolve("dist/web") });

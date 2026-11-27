@@ -116,6 +116,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS runs_one_active_per_task ON runs(task_id) WHER
 UPDATE settings SET value='{"max_runs":2}'::jsonb || value WHERE id=1;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS outcome text;
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS observed boolean NOT NULL DEFAULT false;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS upstream_failure jsonb;
 CREATE TABLE IF NOT EXISTS run_events(
  id bigserial PRIMARY KEY, run_id uuid NOT NULL REFERENCES runs(id) ON DELETE CASCADE,
  source text NOT NULL, seq integer NOT NULL, at timestamptz NOT NULL, phase text NOT NULL,
@@ -123,6 +124,7 @@ CREATE TABLE IF NOT EXISTS run_events(
  UNIQUE(run_id,source,seq)
 );
 CREATE INDEX IF NOT EXISTS run_events_run ON run_events(run_id,id);
+ALTER TABLE run_events ADD COLUMN IF NOT EXISTS rejected_count integer;
 CREATE TABLE IF NOT EXISTS usage (
  id bigserial PRIMARY KEY, reservation_id uuid REFERENCES reservations(id), model text NOT NULL, input_tokens bigint NOT NULL,
  cached_tokens bigint NOT NULL, output_tokens bigint NOT NULL, cost numeric(12,6) NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
@@ -139,8 +141,15 @@ ALTER TABLE notifications ADD COLUMN IF NOT EXISTS discord_thread_id text;
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS discord_thread_id text;
 -- 私訊摘要先保存批次，再對 LINE 推播；重試同一批沿用同一個 LINE 重試鍵。
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_digest_id uuid;
+-- free 可隨群組發言送出。manual 可用 /進度 取回；重要免費回覆送達未確認時，冷卻五分鐘後可隨新發言再補送一次。
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_reply_policy text CHECK (line_reply_policy IN ('free','manual'));
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_reply_uncertain_at timestamptz;
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_reply_alert_id uuid REFERENCES notifications(id) ON DELETE SET NULL;
+CREATE INDEX IF NOT EXISTS notifications_reply_alert ON notifications(line_reply_alert_id) WHERE line_reply_alert_id IS NOT NULL;
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_reply_retry_count integer NOT NULL DEFAULT 0;
 ALTER TABLE notifications ADD COLUMN IF NOT EXISTS line_outage_started_at timestamptz;
 CREATE TABLE IF NOT EXISTS service_health (name text PRIMARY KEY, ok boolean NOT NULL, detail text NOT NULL, checked_at timestamptz NOT NULL DEFAULT now());
+ALTER TABLE service_health ADD COLUMN IF NOT EXISTS probe_info jsonb;
 ALTER TABLE projects ADD COLUMN IF NOT EXISTS config_version integer NOT NULL DEFAULT 1;
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS triage_failures integer NOT NULL DEFAULT 0;
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS triage_error text;
@@ -233,6 +242,9 @@ BEGIN
  IF NEW.revoked OR NEW.received_at<=message_retention_cutoff() THEN
   UPDATE run_events SET detail=NULL WHERE run_id IN (
    SELECT r.id FROM runs r JOIN tasks t ON t.id=r.task_id WHERE t.group_id=NEW.group_id AND NEW.id=ANY(t.source_ids)
+  );
+  UPDATE runs SET upstream_failure=NULL WHERE upstream_failure IS NOT NULL AND task_id IN (
+   SELECT t.id FROM tasks t WHERE t.group_id=NEW.group_id AND NEW.id=ANY(t.source_ids)
   );
   UPDATE runs SET result=erase_candidate_quotes(result) WHERE result ? 'candidate' AND task_id IN (
    SELECT t.id FROM tasks t WHERE t.group_id=NEW.group_id AND NEW.id=ANY(t.source_ids)
@@ -465,8 +477,10 @@ END $legacy_images$;
 
 CREATE INDEX IF NOT EXISTS tasks_sources_gin ON tasks USING gin(source_ids);
 CREATE INDEX IF NOT EXISTS tasks_updated_id ON tasks (updated_at DESC, id DESC);
-CREATE INDEX IF NOT EXISTS audit_task_ending ON audit (task_id, created_at DESC, id DESC)
-  WHERE kind IN ('reject','cancel','closed','unsend','duplicate');
+CREATE INDEX IF NOT EXISTS audit_task_terminal ON audit (task_id, created_at DESC, id DESC)
+  WHERE kind IN ('reject','cancel','closed','answered','merged');
+DROP INDEX IF EXISTS audit_task_end_transition;
+DROP INDEX IF EXISTS audit_task_ending;
 CREATE INDEX IF NOT EXISTS runs_task_started ON runs (task_id, started_at DESC, id DESC);
 CREATE TABLE IF NOT EXISTS chat_revision(id integer PRIMARY KEY CHECK(id=1),revision bigint NOT NULL DEFAULT 0);
 INSERT INTO chat_revision(id) VALUES(1) ON CONFLICT DO NOTHING;
@@ -488,6 +502,7 @@ ALTER TABLE groups ADD COLUMN IF NOT EXISTS name_synced_at timestamptz;
 -- 群組推播依人數計費：快取群組人數，判斷剩餘推播額度夠不夠送；24 小時更新一次，讀不到時為 NULL（未知）。
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS member_count integer;
 ALTER TABLE groups ADD COLUMN IF NOT EXISTS member_count_at timestamptz;
+ALTER TABLE groups ADD COLUMN IF NOT EXISTS member_count_estimate integer;
 -- 查詢任務：只調查並回覆，不修改程式、不開 PR；調查結果存在 answer。
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS mode text NOT NULL DEFAULT 'change';
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS answer text;
@@ -814,3 +829,26 @@ CREATE TABLE IF NOT EXISTS baseline_passes (
 );
 -- 「修復目標分支」任務（#248）：只能從基底驗證失敗的任務建立，可以在基底為紅時開始，結束時的關卡不變。
 ALTER TABLE tasks ADD COLUMN IF NOT EXISTS baseline_repair boolean NOT NULL DEFAULT false;
+
+CREATE TABLE IF NOT EXISTS task_stalls (
+ episode text PRIMARY KEY, task_id uuid NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+ version integer NOT NULL, status text NOT NULL, reason text NOT NULL, action_label text NOT NULL,
+ target text NOT NULL CHECK(target IN ('task','system')), since timestamptz NOT NULL, notice_id uuid
+);
+CREATE INDEX IF NOT EXISTS task_stalls_notice ON task_stalls(notice_id) WHERE notice_id IS NOT NULL;
+CREATE TABLE IF NOT EXISTS inference_probe_budget (
+ id boolean PRIMARY KEY CHECK(id), day date NOT NULL, attempts integer NOT NULL CONSTRAINT inference_probe_count CHECK(attempts BETWEEN 0 AND 8)
+);
+DO $$ BEGIN
+ IF EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid='inference_probe_budget'::regclass AND conname='inference_probe_budget_attempts_check') THEN
+   ALTER TABLE inference_probe_budget DROP CONSTRAINT inference_probe_budget_attempts_check,
+     ADD CONSTRAINT inference_probe_count CHECK(attempts BETWEEN 0 AND 8);
+ END IF;
+END $$;
+ALTER TABLE inference_probe_budget ADD COLUMN IF NOT EXISTS reserved_at timestamptz;
+ALTER TABLE inference_probe_budget ADD COLUMN IF NOT EXISTS early_attempts integer NOT NULL DEFAULT 0 CHECK(early_attempts BETWEEN 0 AND 2);
+CREATE INDEX IF NOT EXISTS audit_task_failure ON audit(task_id,created_at DESC,id DESC) WHERE kind='error';
+DELETE FROM service_health AS deferred USING service_health AS reading
+WHERE deferred.name='codex_probe_deferred' AND reading.name='codex_inference'
+  AND reading.reading_ok IS NOT NULL AND deferred.checked_at<reading.checked_at
+  AND (deferred.probe_info->>'model') IS NOT DISTINCT FROM (reading.probe_info->>'model');

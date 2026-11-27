@@ -19,21 +19,14 @@ import "@fontsource-variable/inter";
   function setTheme(t) { if (t === "dark" || t === "light") document.documentElement.setAttribute("data-theme", t); }
   setTheme(params.get("theme"));
 
-  // 顏色一律走 style，主題切換時跟著變。
-  var STYLE_PROPS = { fill: 1, stroke: 1 };
   function el(tag, attrs, parent, text) {
-    var n = document.createElementNS(NS, tag), st = "";
-    for (var k in attrs) {
-      if (STYLE_PROPS[k] && String(attrs[k]).indexOf("var(") === 0) st += k + ":" + attrs[k] + ";";
-      else if (k === "style") st += attrs[k];
-      else n.setAttribute(k, attrs[k]);
-    }
-    if (st) n.setAttribute("style", st);
+    var n = document.createElementNS(NS, tag);
+    for (var k in attrs) n.setAttribute(k, attrs[k]);
     if (text != null) n.textContent = text;
     if (parent) parent.appendChild(n);
     return n;
   }
-  function op(n, v) { n.style.opacity = v; }
+  function op(n, v) { gsap.set(n, { opacity: v }); }
 
   // lucide 圖示（24×24、線寬 1.75）
   var ICON = {
@@ -64,7 +57,7 @@ import "@fontsource-variable/inter";
     file: '<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>'
   };
   function icon(name, x, y, size, color, parent) {
-    var g = el("g", { transform: "translate(" + x + "," + y + ") scale(" + size / 24 + ")", fill: "none", "stroke-width": 1.75, "stroke-linecap": "round", "stroke-linejoin": "round", style: "stroke:" + color + ";" }, parent);
+    var g = el("g", { transform: "translate(" + x + "," + y + ") scale(" + size / 24 + ")", fill: "none", "stroke-width": 1.75, "stroke-linecap": "round", "stroke-linejoin": "round", stroke: color }, parent);
     g.innerHTML = ICON[name];
     return g;
   }
@@ -79,7 +72,7 @@ import "@fontsource-variable/inter";
     var left = opts.anchor === "end" ? x - w : x;
     var g = el("g", {}, parent);
     var r = el("rect", { x: left, y: y, width: w, height: h, rx: opts.rx || 6, fill: bg }, g);
-    var t = el("text", { x: left + w / 2, y: y + h / 2 + 4.5, "text-anchor": "middle", style: "fill:" + fg + ";font:600 12px var(--font)" }, g, text);
+    var t = el("text", { x: left + w / 2, y: y + h / 2 + 4.5, "text-anchor": "middle", fill: fg, class: "t-badge" }, g, text);
     return { g: g, r: r, t: t };
   }
 
@@ -94,7 +87,7 @@ import "@fontsource-variable/inter";
   var C = {
     line: { x: 40, y: 110, w: 250, h: 430, title: "LINE 與 Discord", sub: "範例群組", tint: "var(--line)", soft: "var(--line-soft)", ic: "msg" },
     admin: { x: 40, y: 600, w: 250, h: 250, title: "你（管理者）", sub: "看板與聊天私訊", tint: "var(--brand)", soft: "var(--brand-soft)", ic: "dash" },
-    tunnel: { x: 360, y: 150, w: 210, h: 104, title: entry[0], ts: 15.5, sub: entry[1], tint: "var(--cf)", soft: "var(--cf-soft)", ic: "cloud" },
+    tunnel: { x: 360, y: 150, w: 210, h: 104, title: entry[0], titleClass: "t-title t-title-entry", sub: entry[1], tint: "var(--cf)", soft: "var(--cf-soft)", ic: "cloud" },
     app: { x: 600, y: 110, w: 300, h: 336, title: "app 容器", port: ":4310", tint: "var(--brand)", soft: "var(--brand-soft)", ic: "server",
       lines: ["LINE 驗簽與 Discord Gateway", "等群組安靜再判讀", "任務與看板 API", "佇列 pg-boss", "群組回覆與管理者通知"] },
     db: { x: 600, y: 480, w: 140, h: 130, title: "PostgreSQL", sub: "訊息・任務", tint: "var(--db)", soft: "var(--db-soft)", ic: "db" },
@@ -115,21 +108,21 @@ import "@fontsource-variable/inter";
     var dot = el("circle", { class: "livedot", cx: c.x + c.w - 14, cy: c.y + 14, r: 4, fill: c.tint }, g);
     if (c.w <= 150) {
       tile(c.ic, c.x + 14, c.y + 14, c.tint, c.soft, g);
-      el("text", { x: c.x + 14, y: c.y + 76, class: "t-title", style: "font-size:16.5px" }, g, c.title);
-      el("text", { x: c.x + 14, y: c.y + 96, class: "t-sub", style: "font-size:12.5px" }, g, c.sub);
+      el("text", { x: c.x + 14, y: c.y + 76, class: "t-title t-title-narrow" }, g, c.title);
+      el("text", { x: c.x + 14, y: c.y + 96, class: "t-sub t-sub-narrow" }, g, c.sub);
     } else if (c.row) {
       tile(c.ic, c.x + 14, c.y + (c.h - 34) / 2, c.tint, c.soft, g);
       el("text", { x: c.x + 60, y: c.y + c.h / 2 - 2, class: "t-title" }, g, c.title);
       el("text", { x: c.x + 60, y: c.y + c.h / 2 + 18, class: c.port ? "t-mono" : "t-sub" }, g, c.port || c.sub);
     } else {
       tile(c.ic, c.x + 14, c.y + 14, c.tint, c.soft, g);
-      el("text", { x: c.x + 58, y: c.y + 30, class: "t-title", style: c.ts ? "font-size:" + c.ts + "px" : "" }, g, c.title);
+      el("text", { x: c.x + 58, y: c.y + 30, class: c.titleClass || "t-title" }, g, c.title);
       el("text", { x: c.x + 58, y: c.y + 49, class: c.port ? "t-mono" : "t-sub" }, g, c.port || c.sub);
     }
     if (c.lines) c.lines.forEach(function (t, i) {
       var y = c.y + 84 + i * 40;
       el("rect", { x: c.x + 14, y: y, width: c.w - 28, height: 32, rx: 8, fill: "var(--muted)" }, g);
-      el("text", { x: c.x + 26, y: y + 21, style: "fill:var(--muted-fg);font:600 11.5px var(--mono)" }, g, String(i + 1).padStart(2, "0"));
+      el("text", { x: c.x + 26, y: y + 21, fill: "var(--muted-fg)", class: "t-step-number" }, g, String(i + 1).padStart(2, "0"));
       el("text", { x: c.x + 52, y: y + 21, class: "t-line" }, g, t);
     });
     nodes[id] = { g: g, dot: dot };
@@ -139,11 +132,11 @@ import "@fontsource-variable/inter";
   // app 狀態列與倒數
   el("rect", { x: 614, y: 392, width: 272, height: 40, rx: 10, fill: "var(--brand-soft)" }, nodes.app.g);
   var appDot = el("circle", { cx: 634, cy: 412, r: 5, fill: "var(--brand)" }, nodes.app.g);
-  var appStatus = el("text", { x: 648, y: 417, style: "fill:var(--brand-fg);font:600 14px var(--font)" }, nodes.app.g, "");
+  var appStatus = el("text", { x: 648, y: 417, fill: "var(--brand-fg)", class: "t-status" }, nodes.app.g, "");
   var ring = el("g", { style: "opacity:0" }, nodes.app.g);
   el("circle", { cx: 860, cy: 140, r: 18, fill: "none", stroke: "var(--border)", "stroke-width": 4 }, ring);
   var ringArc = el("circle", { cx: 860, cy: 140, r: 18, fill: "none", stroke: "var(--brand)", "stroke-width": 4, "stroke-dasharray": 113.1, "stroke-dashoffset": 0, transform: "rotate(-90 860 140)", "stroke-linecap": "round" }, ring);
-  var ringText = el("text", { x: 860, y: 144.5, "text-anchor": "middle", style: "fill:var(--fg);font:600 12px var(--mono)" }, ring, "60");
+  var ringText = el("text", { x: 860, y: 144.5, "text-anchor": "middle", fill: "var(--fg)", class: "t-clock" }, ring, "60");
 
   // ---------- 連線 ----------
   var P = {
@@ -184,7 +177,7 @@ import "@fontsource-variable/inter";
   el("rect", { x: 52, y: 166, width: 226, height: 362, rx: 10, fill: "var(--chat-bg)" }, chat);
   el("rect", { x: 52, y: 166, width: 226, height: 30, rx: 10, fill: "var(--card)" }, chat);
   icon("chevron", 58, 172, 18, "var(--muted-fg)", chat);
-  el("text", { x: 165, y: 186, "text-anchor": "middle", style: "fill:var(--fg);font:600 12.5px var(--font)" }, chat, "產品討論群（5）");
+  el("text", { x: 165, y: 186, "text-anchor": "middle", fill: "var(--fg)", class: "t-chat-title" }, chat, "產品討論群（5）");
   var chatBody = el("g", { "clip-path": "url(#clip-chat)" }, chat);
   var bubbles = {};
   function bubble(id, side, lines, y) {
@@ -196,15 +189,15 @@ import "@fontsource-variable/inter";
     if (side === "me") {
       var x = 270 - w;
       el("rect", { x: x, y: top, width: w, height: h, rx: 12, fill: "var(--chat-me)" }, g);
-      lines.forEach(function (t, i) { el("text", { x: x + 9, y: top + 19 + i * lh, style: "fill:var(--chat-me-fg);font:400 12.5px var(--font)" }, g, t); });
-      el("text", { x: x - 4, y: top + h - 3, "text-anchor": "end", style: "fill:var(--fg);opacity:.55;font:400 9.5px var(--font)" }, g, "已讀 4");
+      lines.forEach(function (t, i) { el("text", { x: x + 9, y: top + 19 + i * lh, fill: "var(--chat-me-fg)", class: "t-chat-message" }, g, t); });
+      el("text", { x: x - 4, y: top + h - 3, "text-anchor": "end", fill: "var(--fg)", class: "t-receipt", opacity: 0.55 }, g, "已讀 4");
     } else {
       el("circle", { cx: 72, cy: top + 13, r: 12, fill: "var(--brand)" }, g);
       icon("pr", 65, top + 6, 14, "var(--on-brand)", g);
-      el("text", { x: 90, y: top + 9, style: "fill:var(--fg);opacity:.75;font:500 10.5px var(--font)" }, g, "chat2pr");
+      el("text", { x: 90, y: top + 9, fill: "var(--fg)", class: "t-sender", opacity: 0.75 }, g, "chat2pr");
       top += 14;
       el("rect", { x: 90, y: top, width: w, height: h, rx: 12, fill: "var(--chat-bot)" }, g);
-      lines.forEach(function (t, i) { el("text", { x: 99, y: top + 19 + i * lh, style: "fill:var(--fg);font:400 12.5px var(--font)" }, g, t); });
+      lines.forEach(function (t, i) { el("text", { x: 99, y: top + 19 + i * lh, fill: "var(--fg)", class: "t-chat-message" }, g, t); });
     }
     bubbles[id] = g;
     return top + h;
@@ -233,11 +226,11 @@ import "@fontsource-variable/inter";
   var adm = el("g", {}, extras);
   el("rect", { x: 54, y: 670, width: 222, height: 166, rx: 10, fill: "var(--muted)" }, adm);
   var admPill = pill(66, 682, "收件匣", "var(--muted-fg)", "var(--card)", adm);
-  var admTitle = el("text", { x: 66, y: 732, style: "fill:var(--fg);font:600 14px var(--font)" }, adm, "目前沒有待處理");
-  var admRepo = el("text", { x: 66, y: 754, style: "fill:var(--muted-fg);font:400 11.5px var(--mono)" }, adm, "");
+  var admTitle = el("text", { x: 66, y: 732, fill: "var(--fg)", class: "t-status" }, adm, "目前沒有待處理");
+  var admRepo = el("text", { x: 66, y: 754, fill: "var(--muted-fg)", class: "t-repository" }, adm, "");
   var admBtn = el("g", { style: "opacity:0" }, adm);
   el("rect", { x: 66, y: 772, width: 198, height: 34, rx: 8, fill: "var(--brand)" }, admBtn);
-  el("text", { x: 165, y: 794, "text-anchor": "middle", style: "fill:var(--on-brand);font:600 13px var(--font)" }, admBtn, "確認專案並核准修改");
+  el("text", { x: 165, y: 794, "text-anchor": "middle", fill: "var(--on-brand)", class: "t-action" }, admBtn, "確認專案並核准修改");
   var cursor = el("g", { style: "opacity:0" }, adm);
   el("path", { d: "M0 0 L0 18 L5 13 L9 21 L12 20 L8 12 L15 12 Z", fill: "var(--fg)", stroke: "var(--card)", "stroke-width": 1.5 }, cursor);
 
@@ -251,21 +244,21 @@ import "@fontsource-variable/inter";
   var netBadge = el("g", { style: "opacity:0" }, slot);
   el("rect", { x: 1268, y: 258, width: 108, height: 26, rx: 6, fill: "var(--danger-soft)" }, netBadge);
   icon("wifioff", 1276, 263, 16, "var(--danger)", netBadge);
-  el("text", { x: 1298, y: 276, style: "fill:var(--danger);font:600 12px var(--font)" }, netBadge, "沒有網路");
+  el("text", { x: 1298, y: 276, fill: "var(--danger)", class: "t-badge" }, netBadge, "沒有網路");
   var roBadge = el("g", { style: "opacity:0" }, slot);
   el("rect", { x: 1268, y: 258, width: 108, height: 26, rx: 6, fill: "var(--info-soft)" }, roBadge);
   icon("lock", 1276, 263, 16, "var(--info)", roBadge);
-  el("text", { x: 1298, y: 276, style: "fill:var(--info);font:600 12px var(--font)" }, roBadge, "唯讀審查");
-  el("text", { x: 976, y: 608, style: "fill:var(--muted-fg);font:400 12px var(--font)" }, slot, "沒有 Docker socket・限 CPU 與記憶體・最長 30 分鐘");
+  el("text", { x: 1298, y: 276, fill: "var(--info)", class: "t-badge" }, roBadge, "唯讀審查");
+  el("text", { x: 976, y: 608, fill: "var(--muted-fg)", class: "t-note" }, slot, "沒有 Docker socket・限 CPU 與記憶體・最長 30 分鐘");
   var PH = [["download", "準備原始碼"], ["pkg", "安裝相依套件"], ["code", "Codex 修改程式"], ["diff", "收集差異"], ["flask", "跑測試"], ["eye", "獨立審查"]];
   var phases = PH.map(function (p, i) {
     var y = 306 + i * 47;
     var g = el("g", {}, slot);
     el("rect", { x: 976, y: y, width: 398, height: 40, rx: 9, fill: "var(--muted)" }, g);
     var bar = el("rect", { x: 976, y: y, width: 0, height: 40, rx: 9, fill: "var(--brand-soft)" }, g);
-    el("text", { x: 990, y: y + 25, style: "fill:var(--muted-fg);font:600 11.5px var(--mono)" }, g, String(i));
+    el("text", { x: 990, y: y + 25, fill: "var(--muted-fg)", class: "t-step-number" }, g, String(i));
     icon(p[0], 1006, y + 11, 18, "var(--fg)", g);
-    el("text", { x: 1034, y: y + 25, style: "fill:var(--fg);font:500 14px var(--font)" }, g, p[1]);
+    el("text", { x: 1034, y: y + 25, fill: "var(--fg)", class: "t-phase" }, g, p[1]);
     var stG = el("g", {}, g);
     return { g: g, bar: bar, stG: stG, y: y };
   });
@@ -279,8 +272,8 @@ import "@fontsource-variable/inter";
   [300, 220, 260, 140].forEach(function (w, i) { el("rect", { class: "skel", x: 980, y: 318 + i * 27, width: w, height: 14, rx: 7, fill: "var(--muted)", style: "animation-delay:" + i * 0.12 + "s" }, triSkel); });
   var triRows = [0, 1, 2, 3].map(function (i) {
     var g = el("g", { style: "opacity:0" }, tri);
-    var k = el("text", { x: 980, y: 330 + i * 27, style: "fill:var(--muted-fg);font:500 12.5px var(--font)" }, g, "");
-    var v = el("text", { x: 1040, y: 330 + i * 27, style: "fill:var(--fg);font:500 13.5px var(--font)" }, g, "");
+    var k = el("text", { x: 980, y: 330 + i * 27, fill: "var(--muted-fg)", class: "t-field-label" }, g, "");
+    var v = el("text", { x: 1040, y: 330 + i * 27, fill: "var(--fg)", class: "t-field-value" }, g, "");
     return { g: g, k: k, v: v };
   });
   var TRI = {
@@ -292,27 +285,27 @@ import "@fontsource-variable/inter";
   var prTag = el("g", { style: "opacity:0" }, extras);
   el("rect", { x: 1450, y: 510, width: 132, height: 30, rx: 8, fill: "var(--good-soft)" }, prTag);
   icon("pr", 1460, 516, 18, "var(--good)", prTag);
-  var prText = el("text", { x: 1484, y: 530, style: "fill:var(--good);font:600 13px var(--mono)" }, prTag, "PR #42");
+  var prText = el("text", { x: 1484, y: 530, fill: "var(--good)", class: "t-pr" }, prTag, "PR #42");
   var noEntry = el("g", { style: "opacity:0" }, extras);
   el("circle", { cx: 1370, cy: 732, r: 14, fill: "var(--danger-soft)", stroke: "var(--danger)", "stroke-width": 2 }, noEntry);
   icon("x", 1362, 724, 16, "var(--danger)", noEntry);
-  el("text", { x: 1340, y: 772, style: "fill:var(--danger);font:600 12px var(--font)" }, noEntry, "白名單外，拒絕");
+  el("text", { x: 1340, y: 772, fill: "var(--danger)", class: "t-badge" }, noEntry, "白名單外，拒絕");
 
   // ---------- 封包與彗星尾巴 ----------
   var packet = document.getElementById("packet"), tailG = document.getElementById("tail");
   var pHalo = el("circle", { r: 26, fill: "var(--brand)", filter: "url(#blur6)", style: "opacity:.45" }, packet);
   var pCore = el("circle", { r: 15, fill: "var(--brand)", stroke: "var(--card)", "stroke-width": 3 }, packet);
-  var pIcon = el("g", { transform: "translate(-8,-8) scale(.6667)", fill: "none", "stroke-width": 2.25, "stroke-linecap": "round", "stroke-linejoin": "round", style: "stroke:var(--card)" }, packet);
-  var tails = [0.03, 0.06, 0.09, 0.12, 0.15].map(function (lag, i) { return { lag: lag, c: el("circle", { r: 9 - i * 1.5, fill: "var(--brand)", style: "opacity:0" }, tailG) }; });
+  var pIcon = el("g", { transform: "translate(-8,-8) scale(.6667)", fill: "none", "stroke-width": 2.25, "stroke-linecap": "round", "stroke-linejoin": "round", stroke: "var(--card)" }, packet);
+  var tails = [0.03, 0.06, 0.09, 0.12, 0.15].map(function (lag, i) { return { lag: lag, c: el("circle", { r: 9 - i * 1.5, fill: "var(--brand)", opacity: 0 }, tailG) }; });
   var PICON = { "訊息": "msg", "補充": "msg", "追問": "msg", "收到": "msg", "群組": "msg", "私訊": "msg", "存檔": "db", "結果": "db", "檢索": "scan", "比對": "scan",
     "判讀": "sparkles", "推論": "sparkles", "回應": "sparkles", "審查": "eye", "通過": "check", "待審核": "dash", "核准": "check", "任務 #128": "box",
     "原始碼": "download", "下載": "pkg", "套件": "pkg", "外連": "x", "PR": "pr", "報告": "file", "合併": "pr", "Webhook": "github" };
   function setPacket(label, color) {
     var c = color || "var(--brand)";
-    pHalo.style.fill = c; pCore.style.fill = c;
-    tails.forEach(function (t) { t.c.style.fill = c; });
+    pHalo.setAttribute("fill", c); pCore.setAttribute("fill", c);
+    tails.forEach(function (t) { t.c.setAttribute("fill", c); });
     pIcon.innerHTML = ICON[PICON[label] || "msg"];
-    pIcon.style.stroke = c === "var(--fg)" ? "var(--bg)" : "var(--card)";
+    pIcon.setAttribute("stroke", c === "var(--fg)" ? "var(--bg)" : "var(--card)");
   }
   function pointOn(id, t) { var p = pathEls[id]; return p.getPointAtLength(Math.max(0, Math.min(1, t)) * p.getTotalLength()); }
   function placeAt(id, t, rev) {
@@ -320,12 +313,12 @@ import "@fontsource-variable/inter";
     packet.setAttribute("transform", "translate(" + pt.x + "," + pt.y + ")");
     tails.forEach(function (tl, i) {
       var tt = t - tl.lag;
-      if (tt <= 0) { tl.c.style.opacity = 0; return; }
+      if (tt <= 0) { tl.c.setAttribute("opacity", 0); return; }
       var q = pointOn(id, rev ? 1 - tt : tt);
-      tl.c.setAttribute("cx", q.x); tl.c.setAttribute("cy", q.y); tl.c.style.opacity = 0.55 - i * 0.12;
+      tl.c.setAttribute("cx", q.x); tl.c.setAttribute("cy", q.y); tl.c.setAttribute("opacity", 0.55 - i * 0.12);
     });
   }
-  function hideTail() { tails.forEach(function (t) { t.c.style.opacity = 0; }); }
+  function hideTail() { tails.forEach(function (t) { t.c.setAttribute("opacity", 0); }); }
 
   // ---------- 鏡頭 ----------
   var CAM = { full: [0, 0, 1600, 900], entry: [10, 20, 960, 540], core: [500, 70, 860, 484], ai: [660, 50, 940, 529], work: [720, 220, 880, 495], approve: [0, 205, 1150, 647] };
@@ -524,7 +517,7 @@ import "@fontsource-variable/inter";
   };
   function setAdmin(s) {
     var m = ADM[s] || ADM.none;
-    admPill.t.textContent = m[0]; admPill.t.style.fill = m[1]; admPill.r.style.fill = m[2];
+    admPill.t.textContent = m[0]; admPill.t.setAttribute("fill", m[1]); admPill.r.setAttribute("fill", m[2]);
     var w = m[0].length * 12.6 + 20; admPill.r.setAttribute("width", w); admPill.t.setAttribute("x", 66 + w / 2);
     admTitle.textContent = m[3]; admRepo.textContent = m[4];
     op(admBtn, m[5] ? 1 : 0);
@@ -572,12 +565,12 @@ import "@fontsource-variable/inter";
     var o = { t: 0 }, c = color || "var(--brand)", trail = trailEls[id], flow = flowEls[id], L = pathEls[id].getTotalLength();
     tl.call(function () {
       setPacket(label, c); placeAt(id, 0, rev); op(packet, 1);
-      trail.style.stroke = c; trail.style.strokeDasharray = L; trail.style.strokeDashoffset = rev ? -L : L; trail.style.opacity = 0.85;
-      flow.style.stroke = c; flow.style.opacity = 0.9;
+      trail.setAttribute("stroke", c); trail.setAttribute("stroke-dasharray", L); trail.setAttribute("stroke-dashoffset", rev ? -L : L); trail.style.opacity = 0.85;
+      flow.setAttribute("stroke", c); flow.style.opacity = 0.9;
     }, null, at);
     tl.fromTo(pCore, { attr: { r: 6 } }, { attr: { r: 15 }, duration: 0.22, ease: "back.out(2.5)" });
     tl.to(o, { t: 1, duration: RM ? 0.05 : dur, ease: "power2.inOut", onUpdate: function () {
-      placeAt(id, o.t, rev); trail.style.strokeDashoffset = (rev ? -1 : 1) * L * (1 - o.t);
+      placeAt(id, o.t, rev); trail.setAttribute("stroke-dashoffset", (rev ? -1 : 1) * L * (1 - o.t));
     } }, "<");
     tl.call(hideTail);
     tl.to([trail, flow], { opacity: 0, duration: 0.5 }, ">-0.02");
@@ -675,6 +668,9 @@ import "@fontsource-variable/inter";
         .replace(/<no>/g, '<span class="no">').replace(/<\/no>/g, "</span>") || " ") + "</span>";
     }).join("");
   }
+  function setSceneProgress(tick, fraction) {
+    tick.firstChild.style.setProperty("--scene-progress", (fraction * 100) + "%");
+  }
   function caption(i, animate) {
     var s = scenes[i], tot = String(scenes.length).padStart(2, "0"), n = String(i + 1).padStart(2, "0");
     document.getElementById("cap-idx").textContent = "步驟 " + n + " / " + tot;
@@ -689,7 +685,7 @@ import "@fontsource-variable/inter";
     document.getElementById("lower-num").textContent = n;
     document.getElementById("lower-title").textContent = pick(s.title);
     document.getElementById("lower-text").textContent = text.split("。")[0] + "。";
-    ticks.forEach(function (b, k) { b.firstChild.style.width = k < i ? "100%" : "0"; });
+    ticks.forEach(function (b, k) { setSceneProgress(b, k < i ? 1 : 0); });
     chaps.forEach(function (b, k) { b.classList.toggle("done", k < i); if (k === i) b.setAttribute("aria-current", "step"); else b.removeAttribute("aria-current"); });
     if (animate && hasGsap && !RM) {
       gsap.fromTo(lower, { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.45, ease: "power2.out" });
@@ -705,7 +701,7 @@ import "@fontsource-variable/inter";
     caption(cur, autoplay);
     if (!hasGsap) { applyState(stateBefore(cur + 1)); return; }
     tl = gsap.timeline({ paused: true,
-      onUpdate: function () { if (ticks[cur]) ticks[cur].firstChild.style.width = (tl.progress() * 100) + "%"; },
+      onUpdate: function () { if (ticks[cur]) setSceneProgress(ticks[cur], tl.progress()); },
       onComplete: function () {
         applyState(stateBefore(cur + 1));
         if (playing) timer = setTimeout(function () { if (cur < scenes.length - 1) go(cur + 1, true); else setPlaying(false); }, 350 / speed);

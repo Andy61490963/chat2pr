@@ -1,4 +1,6 @@
 import { splitQueryAnswer } from "../shared/query-answer.js";
+import type { QuotaHoldKind } from "../shared/subscription-quota.js";
+import { quotaShortPrefix } from "../shared/line-quota.js";
 /**
  * 回覆提出需求的群組。管理者私訊之外，群組成員也要知道需求收到了、結果是什麼。
  *
@@ -11,6 +13,7 @@ import { splitQueryAnswer } from "../shared/query-answer.js";
 import type { DbClient } from "./db.js";
 import type { ChatButton as QuickReply } from "./chat-platform.js";
 import { redact } from "./policy.js";
+import { importantLineGroupNotice, staleNotification } from "./line-quota.js";
 import type { TaskStatus } from "../shared/types.js";
 
 export type ReplyMode = "off" | "results" | "all";
@@ -75,7 +78,7 @@ export async function notifyGroupDirect(
   );
 }
 
-/** 判讀沒有建立新任務時，回給用 /任務 提出的群組的說明（推播，不用 reply token）。 */
+/** 判讀沒有建立新任務時，回給用 /任務 提出的群組的說明。 */
 export const triageDuplicateText = (title: string) =>
   `這則和「${title}」是同一件事，已記在那題，處理完會一起回報，不用重新提出。`;
 /** 記住的內容回到群組前先遮罩憑證格式，並以字元（非 UTF-16 單位）截到 100 字，避免切壞表情符號。 */
@@ -119,9 +122,6 @@ export const staleAnswerAck = "這題已經回答過或需求已更新，請看�
 /** 用「回覆」回答補問、內容卻含憑證格式：不收、不交給 AI，也不能回「收到」讓人以為已收下。 */
 export const credentialAnswerAck =
   "這則回答看起來含有密碼或金鑰，沒有收下，也不會交給 AI。請先收回這則訊息，機密改由管理者在看板輸入；其他內容請不含機密再回覆一次。";
-export const undeliveredHint = (n: number) =>
-  `有 ${n} 則先前沒送達的回覆，打 /進度 取回。`;
-
 export interface AckState {
   /** 原本要回的 commandAck 或 followupAck（可能已附上預估時間）。 */
   base: string;
@@ -132,24 +132,17 @@ export interface AckState {
   /** 群組沒有已啟用且已驗證的綁定專案（與 triage-window.ts 的條件相同）。 */
   noProject: boolean;
   /** 訂閱模式且 Codex 額度關卡關閉。 */
-  aiQuotaOut: boolean;
-  /** 先前沒送達、可以用 /進度 取回的群組回覆數；0 表示不提。 */
-  undelivered: number;
+  quotaKind: QuotaHoldKind | null;
 }
 /** 依優先序挑「收到」的文字：暫停 → 判讀停止 → 沒有可用專案 → AI 額度 → 原文字。 */
 export function ackFor(s: AckState) {
-  const text = s.paused
-    ? pausedAck
-    : s.triageStopped
-      ? triageStoppedAck
-      : s.noProject
-        ? noProjectAck
-        : s.aiQuotaOut
-          ? aiQuotaAck
-          : s.base;
-  return s.undelivered > 0
-    ? `${text}\n${undeliveredHint(s.undelivered)}`
-    : text;
+  if (s.paused) return pausedAck;
+  if (s.triageStopped) return triageStoppedAck;
+  if (s.noProject) return noProjectAck;
+  if (!s.quotaKind) return s.base;
+  return quotaWaitReason(s.quotaKind) === "quota"
+    ? aiQuotaAck
+    : "收到，系統暫時無法確認 AI 額度，這則已保留，確認可用後會自動處理，不用重新提出。";
 }
 
 /** 給群組成員看的任務狀態（成員沒有看板帳號，用白話說明下一步在誰手上）。 */
@@ -180,6 +173,7 @@ export function progressSummary(
   pending: number,
   // Discord 的「群組」是頻道；用使用者看到的詞。
   place: "群組" | "頻道" | "討論串" = "群組",
+  hasUnconfirmedReply = false,
 ) {
   const lines = tasks.map(
     (t) =>
@@ -189,9 +183,8 @@ export function progressSummary(
   const head = tasks.length
     ? `這個${place}最近的需求（還沒結束或 7 天內有變動）：\n${lines.join("\n")}`
     : `這個${place}最近 7 天沒有需求。`;
-  return groupText(
-    `${head}\n\n${pending ? "下面是先前沒送到的回覆。" : "目前沒有待取回的結果。"}`,
-  );
+  if (hasUnconfirmedReply) return groupText(`${head}\n\n下面是這次取回的回覆，包含先前送達狀態未確認的訊息。`);
+  return groupText(`${head}\n\n${pending ? "下面是先前沒送到的回覆。" : "目前沒有待取回的結果。"}`);
 }
 export const progressMoreNote = (n: number) => `還有 ${n} 則，再輸入 /進度。`;
 
@@ -216,6 +209,7 @@ export interface GroupReplyClaim {
   ids: string[];
   /** 保留 PostgreSQL 的微秒精度，用來核對目前仍是同一輪領取。 */
   claimedAt: string;
+  retryIds?: string[];
 }
 
 /** 核對領取時間，並鎖住此次仍持有的通知直到寫回結果。 */
@@ -261,14 +255,14 @@ export async function reclaimStaleClaims(c: Queryable) {
  * - 本群組、未送出、7 天內；不看 attempts，推播失敗被放棄的正是要取回的。
  * - 排除很快就過時的 group_waiting；補問只取任務仍在等這一版回答的（與 answers.ts questionByQuote 相同）；
  *   group_received 只在仍待確認、group_failed 只在仍是失敗、group_resumed（自動接續）只在這個版本的接續還沒結束時才送。
- * - 排除 group_triage（判讀說明「和某題是同一件事」）：它掛在被重複的那題上，若算進「每個任務只取最新一則」，
- *   會把那題還在等回答的補問標成已被取代。
+ * - LINE 的指令判讀說明由 pendingFrom 另外取回。「和某題是同一件事」掛在被重複的那題上，
+ *   若算進「每個任務只取最新一則」，會把那題還在等回答的補問標成已被取代。
  * - 排除以 /進度 補送已被 LINE 拒收 REPLY_FAILURE_LIMIT 次的：reply token 一次只能用一次、整批一起成敗，
  *   一直取回同一則會讓這個群組的 /進度 永遠失敗。
  */
-const retrievable = (n: string, includeDiscordClaims = false) =>
-  `${n}.group_id=$1 AND t.group_id=$1
-   AND (${n}.sent_at IS NULL${includeDiscordClaims ? ` OR ($2='discord' AND ${n}.last_error=$3 AND ${n}.sent_message_id IS NULL)` : ""})
+const retrievable = (n: string, group: string, inFlight: string) =>
+  `${n}.group_id=${group} AND t.group_id=${group}
+   AND (${n}.sent_at IS NULL${inFlight})
    AND ${n}.created_at>now()-interval '7 days' AND ${n}.kind NOT IN ('group_waiting','group_triage')
    AND ${n}.reply_failures<${REPLY_FAILURE_LIMIT}
    AND (${n}.kind<>'group_question' OR (t.status='awaiting_approval' AND t.question IS NOT NULL AND ${n}.dedupe_key='group:question:'||t.id||':'||t.version))
@@ -284,23 +278,29 @@ const retrievable = (n: string, includeDiscordClaims = false) =>
 const newer = (a: string, b: string) =>
   `(${a}.kind<>'group_received',${a}.created_at,${a}.id)>(${b}.kind<>'group_received',${b}.created_at,${b}.id)`;
 // Discord 補送期間群組仍可執行 /進度，已佔住的新通知仍要擋住同任務的舊通知。
-const newestOfTask = `NOT EXISTS(SELECT 1 FROM notifications m WHERE m.task_id=n.task_id AND ${retrievable("m", true)} AND ${newer("m", "n")})`;
-const pendingFrom = `FROM notifications n JOIN tasks t ON t.id=n.task_id JOIN groups g ON g.id=n.group_id
-  WHERE g.platform=$2 AND ${retrievable("n")} AND ${newestOfTask}
+export function pendingGroupRepliesFrom(automatic: boolean, forAlert = false) {
+  const group = forAlert ? "g.id" : "$1";
+  const platform = forAlert ? "'line'" : "$2";
+  const thread = forAlert ? "NULL::text" : "$4::text";
+  const claimed = forAlert ? ` OR (n.last_error='${claimingNote}' AND n.sent_message_id IS NULL)` : "";
+  const newerClaim = forAlert ? "" : " OR ($2='discord' AND m.last_error=$3 AND m.sent_message_id IS NULL)";
+  const newestOfTask = `NOT EXISTS(SELECT 1 FROM notifications m WHERE m.task_id=n.task_id AND ${retrievable("m", group, newerClaim)} AND ${newer("m", "n")})`;
+  return `FROM notifications n LEFT JOIN tasks t ON t.id=n.task_id JOIN groups g ON g.id=n.group_id
+  WHERE g.platform=${platform} AND (g.platform<>'line' OR n.line_digest_id IS NULL
+    OR n.last_error LIKE '${quotaShortPrefix}%'
+    OR (n.line_reply_policy IS NOT NULL AND NOT EXISTS (
+      SELECT 1 FROM notifications p WHERE p.line_digest_id=n.line_digest_id AND p.sent_at IS NULL
+        AND p.attempts<3 AND p.line_reply_policy IS NULL AND COALESCE(p.last_error,'') NOT LIKE '${quotaShortPrefix}%')))
+  AND (n.line_reply_policy IS DISTINCT FROM 'free' OR NOT (${staleNotification}))
+  AND ((${retrievable("n", group, claimed)} AND ${newestOfTask}) OR (
+    g.platform='line' AND n.group_id=${group} AND (n.sent_at IS NULL${claimed}) AND n.reply_failures<${REPLY_FAILURE_LIMIT}
+    AND (n.task_id IS NULL OR t.group_id=${group}) AND NOT (${staleNotification})
+    AND (n.kind IN ('group_check','group_triage') OR (n.kind='group_waiting'
+      AND ${automatic ? "true" : "n.line_reply_policy IS NOT NULL"}))))
   AND (g.platform<>'discord' OR (n.kind<>'group_received' AND
     (n.discord_retry_at IS NULL OR n.discord_retry_at<=now()) AND
     (CASE WHEN n.source_message_id IS NOT NULL THEN n.discord_thread_id ELSE t.discord_thread_id END)
-      IS NOT DISTINCT FROM $4::text))`;
-
-/** 本群組可用 /進度 取回的通知數，以及其中是否有推播失敗過的。 */
-export async function pendingGroupReplies(c: DbClient, groupId: string) {
-  const r = (
-    await c.query<{ count: string; failed: boolean | null }>(
-      `SELECT count(*) AS count,bool_or(n.last_error IS NOT NULL) AS failed ${pendingFrom}`,
-      [groupId, "line", claimingNote, null],
-    )
-  ).rows[0];
-  return { count: Number(r?.count ?? 0), failed: r?.failed === true };
+      IS NOT DISTINCT FROM ${thread}))`;
 }
 
 /**
@@ -316,23 +316,40 @@ export async function claimPendingGroupReplies(
   limit: number,
   platform: "line" | "discord" = "line",
   threadId: string | null = null,
+  automatic?: "important" | "all",
+  freshEvent = true,
 ) {
-  const rows = (
-    await c.query<ClaimedReply & { kind: string }>(
-      `SELECT n.id,n.kind,n.text,n.quick_replies ${pendingFrom}
-       ORDER BY n.created_at,n.id FOR UPDATE OF n SKIP LOCKED`,
-      [groupId, platform, claimingNote, threadId],
+  const candidates = (
+    await c.query<ClaimedReply & { kind: string; unconfirmed: boolean; important: boolean; retryable: boolean }>(
+      `SELECT n.id,n.kind,n.text,n.quick_replies,n.line_reply_policy IS NOT DISTINCT FROM 'manual' AS unconfirmed,
+         ${importantLineGroupNotice} AS important,
+         (n.line_reply_retry_count=0 AND
+           n.line_reply_uncertain_at <= $5::timestamptz - interval '5 minutes') AS retryable
+       ${pendingGroupRepliesFrom(!!automatic)}
+       ${automatic ? `AND g.enabled AND g.left_at IS NULL AND g.reply_mode<>'off' AND ${groupRepliesOn}` : ""}
+       ${automatic === "important" ? `AND (${importantLineGroupNotice} OR n.line_reply_policy='free')` : ""}
+       ORDER BY ${automatic ? `(${importantLineGroupNotice}) DESC,` : ""} n.created_at,n.id FOR UPDATE OF n SKIP LOCKED`,
+      [groupId, platform, claimingNote, threadId, new Date(Date.now())],
     )
   ).rows;
-  const picked = rows.slice(0, limit);
+  const rows = automatic
+    ? candidates.filter((r) => !r.unconfirmed || (freshEvent && r.important && r.retryable))
+    : candidates;
+  // LINE 只顯示最後一則訊息的快速回覆。其他補問先摘要，下一次發言仍能收到可直接作答的原訊息。
+  const question = automatic && rows.find((r) => r.quick_replies?.length);
+  const picked = rows.filter((r) => !question || !r.quick_replies?.length || r === question).slice(0, limit);
+  if (question) picked.sort((a, b) => Number(a === question) - Number(b === question));
+  const pickedIds = new Set(picked.map((r) => r.id));
   let claim: GroupReplyClaim | undefined;
   if (picked.length) {
     const ids = picked.map((r) => r.id);
     const stamped = await c.query<{ claimed_at: string }>(
-      "UPDATE notifications SET sent_at=statement_timestamp(),last_error=$2 WHERE id=ANY($1::uuid[]) RETURNING sent_at::text AS claimed_at",
-      [ids, claimingNote],
+      `UPDATE notifications SET sent_at=statement_timestamp(),last_error=$2,
+         line_reply_retry_count=line_reply_retry_count + CASE WHEN $3 AND line_reply_policy='manual' THEN 1 ELSE 0 END
+       WHERE id=ANY($1::uuid[]) RETURNING sent_at::text AS claimed_at`,
+      [ids, claimingNote, !!automatic],
     );
-    claim = { ids, claimedAt: stamped.rows[0].claimed_at };
+    claim = { ids, claimedAt: stamped.rows[0].claimed_at, retryIds: automatic ? picked.filter((r) => r.unconfirmed).map((r) => r.id) : [] };
     if (platform === "line") await supersedeOlderGroupReplies(c, groupId, ids);
   }
   return {
@@ -341,7 +358,12 @@ export async function claimPendingGroupReplies(
         ? { ...r, text: splitQueryAnswer(r.text).body }
         : r,
     ),
+    uncertain: candidates.filter((r) => r.unconfirmed && r.important && !pickedIds.has(r.id)).length,
     remaining: rows.length - picked.length,
+    summaries: automatic ? rows.filter((r) => !pickedIds.has(r.id)).slice(0, 20).map((r) => {
+      const text = r.kind === "group_answered" ? splitQueryAnswer(r.text).body : r.text;
+      return `- ${Array.from(redact(text).replace(/\s+/g, " ")).slice(0, 100).join("")}`;
+    }) : [],
     claim,
   };
 }
@@ -357,7 +379,9 @@ export async function supersedeOlderGroupReplies(
     `UPDATE notifications u SET sent_at=now(),last_error=$3
        FROM (SELECT o.id FROM notifications o JOIN notifications p ON p.task_id=o.task_id AND p.id=ANY($2::uuid[])
          WHERE o.group_id=$1 AND o.sent_at IS NULL AND o.kind<>'group_waiting' AND o.id<>p.id AND o.created_at<=p.created_at
+         AND p.kind NOT IN ('group_waiting','group_triage','group_check')
          AND ($4='line' OR o.kind<>'group_received')
+         AND ($4<>'line' OR o.line_digest_id IS NULL)
          FOR UPDATE OF o SKIP LOCKED) s
        WHERE u.id=s.id`,
     [groupId, ids, supersededNote, platform],
@@ -387,7 +411,10 @@ export async function progressTasks(
 }
 
 /** 等待原因：每日執行次數用完、Codex 額度用完、系統暫停、執行位置已滿（排隊）。 */
-export type WaitReason = "daily" | "quota" | "paused" | "busy";
+export function quotaWaitReason(kind: QuotaHoldKind) {
+  return kind === "exhausted" || kind === "reserve" ? "quota" : "quota_unconfirmed";
+}
+export type WaitReason = "daily" | ReturnType<typeof quotaWaitReason> | "paused" | "busy";
 /** 排隊時的位置與預估：沒有歷史耗時就不寫時間。 */
 export interface QueuePlace {
   position: number;
@@ -406,6 +433,8 @@ const waitText: Record<WaitReason, string> = {
     "今天的執行次數用完了，這件事已經保留，明天凌晨會自動繼續處理，不用重新提出。",
   quota:
     "chat2pr 暫時沒有可用的 AI 額度，這件事已經保留，額度恢復後會自動繼續處理，不用重新提出。",
+  quota_unconfirmed:
+    "系統暫時無法確認 AI 額度，這件事已經保留，確認可用後會自動繼續處理，不用重新提出。",
   paused:
     "系統目前暫停中，這件事已經保留，恢復後會自動繼續處理，不用重新提出。",
 };

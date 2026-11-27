@@ -47,7 +47,7 @@ describe("parseFailure 拆解 failureNotice 的實際輸出", () => {
       const f = classifyFailure(raw, phase);
       expect(f.category).toBe(category);
       for (const where of ["", "測試"]) {
-        const parsed = parseFailure(failureNotice(f, false, where));
+        const parsed = parseFailure(failureNotice(f, 0, where));
         expect(parsed).not.toBeNull();
         expect(parsed!.category).toBe(category);
         expect(parsed!.plain).toBe(f.plain);
@@ -78,7 +78,7 @@ describe("parseFailure 拆解 failureNotice 的實際輸出", () => {
 
   it("已自動重試的說明留在白話說明裡", () => {
     const f = classifyFailure("執行器連線失敗：socket hang up", "code");
-    const parsed = parseFailure(`Error: ${failureNotice(f, true)}`);
+    const parsed = parseFailure(`Error: ${failureNotice(f, 1)}`);
     expect(parsed?.category).toBe("transient");
     expect(parsed?.plain).toBe(`${f.plain}（已自動重試一次，仍然失敗）`);
   });
@@ -142,8 +142,8 @@ describe("失敗卡片的主按鈕與前往頁面", () => {
 
 // 收件匣卡片與任務詳情共用 primaryFix 決定主按鈕；輸入用 failureNotice 的實際輸出。
 describe("primaryFix：失敗主按鈕依原因調整", () => {
-  const notice = (raw: string, phase = "code", retried = false) =>
-    parseFailure(failureNotice(classifyFailure(raw, phase), retried));
+  const notice = (raw: string, phase = "code", retryCount = 0) =>
+    parseFailure(failureNotice(classifyFailure(raw, phase), retryCount));
 
   it("執行期間設定被變更：分類是設定問題，但主按鈕仍是重試", () => {
     for (const raw of ["需求版本已改變", "專案設定已變更", "群組已停用"]) {
@@ -155,11 +155,11 @@ describe("primaryFix：失敗主按鈕依原因調整", () => {
   });
 
   it("逾時時主按鈕是修改這一題，不是前往設定", () => {
-    for (const [raw, retried] of [
-      ["Codex 執行超過 30 分鐘限制", false],
-      ["訂閱階段已超過期限", true],
+    for (const [raw, retryCount] of [
+      ["Codex 執行超過 30 分鐘限制", 0],
+      ["訂閱階段已超過期限", 1],
     ] as const) {
-      const parsed = notice(raw, "code", retried);
+      const parsed = notice(raw, "code", retryCount);
       expect(parsed?.plain).toContain("時間限制");
       // 建議文字提到「設定」，舊規則會把主按鈕變成「前往設定」。
       expect(fixPage(parsed?.action)).toBe("settings");

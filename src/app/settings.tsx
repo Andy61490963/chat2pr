@@ -1,10 +1,11 @@
+import { InlineNotice } from "@/components/ui/layout";
 import { groupReplyStatus } from "../../shared/group-reply-status.js";
 import { useEffect, useRef, useState } from "react";
 import { Check, Copy, RefreshCw, Send } from "lucide-react";
 import type { NotificationFailures, Settings } from "../../shared/types.js";
 import { ConnectionSecrets } from "./connection-secrets";
 import { linePushService } from "../../shared/group-delivery.js";
-import { LINE_QUOTA, linePushPanel } from "../../shared/line-quota.js";
+import { LINE_QUOTA, linePushPanel, pushCost } from "../../shared/line-quota.js";
 import {
   lineGroupReserveLabel,
   linePrivateDefaults,
@@ -21,6 +22,7 @@ import {
   discordServiceLabels,
   discordServiceText,
   groupPlatformLabels,
+  inferenceStatusLabels,
   networkStatusLabels,
   systemStatusLabels,
 } from "../../shared/status-glossary.js";
@@ -86,6 +88,8 @@ import {
   type State,
   ago,
   date,
+  healthBadge,
+  healthStatus,
 } from "./shared";
 import { useUnsaved } from "./unsaved";
 
@@ -172,8 +176,8 @@ const services = [
   { key: "github", name: "GitHub App", hint: "讀取專案、建立 Issue 與 PR" },
   {
     key: "codex",
-    name: "Codex 訂閱登入",
-    hint: "訂閱模式的 AI",
+    name: "Codex 訂閱推論",
+    hint: "尚未完成真實推論檢查。排程會透過工作使用的訂閱代理確認，不計每日派工次數。",
     mode: "subscription",
   },
   { key: "openai", name: "OpenAI API", hint: "API 模式的 AI", mode: "api" },
@@ -276,15 +280,15 @@ function QuotaCard({
         {account === null ? (
           <p className="text-sm text-muted-foreground">讀取中…</p>
         ) : typeof account === "string" ? (
-          <p className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">
+          <InlineNotice as="p" tone="danger" variant="soft">
             {account}
-          </p>
+          </InlineNotice>
         ) : (
           <>
             {account.allowed === false && (
-              <p className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">
+              <InlineNotice as="p" tone="danger" variant="soft">
                 目前已無法使用一般額度，工作會保留到額度重置後自動重試。
-              </p>
+              </InlineNotice>
             )}
             {account.limits.flatMap((l) =>
               l.windows.map((w, i) => (
@@ -317,7 +321,7 @@ function QuotaCard({
                 </div>
               )),
             )}
-            <p className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+            <p className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground wrap-anywhere">
               <span>方案 {account.plan ?? "未知"}</span>
               <span>更新於 {ago(account.checkedAt)}</span>
             </p>
@@ -591,7 +595,7 @@ function AiCard({
               <label
                 key={id}
                 className={cn(
-                  "relative flex cursor-pointer flex-col gap-0.5 rounded-lg border p-3 text-left transition-colors hover:bg-accent has-focus-visible:outline-2 has-focus-visible:outline-offset-2",
+                  "relative flex cursor-pointer flex-col gap-0.5 rounded-md border p-3 text-left transition-colors hover:bg-accent has-focus-visible:outline-2 has-focus-visible:outline-offset-2",
                   form.ai_mode === id &&
                     "border-primary bg-accent ring-1 ring-primary",
                 )}
@@ -790,7 +794,7 @@ function AiCard({
             </DialogHeader>
             <ul className="flex flex-col gap-3 text-sm">
               {pending?.changes.map((c) => (
-                <li key={c.key} className="rounded-lg bg-warn-soft px-3 py-2">
+                <li key={c.key} className="rounded-md bg-warn-soft px-3 py-2">
                   <p className="font-medium text-warn">
                     {c.label}：{c.from} → {c.to}
                   </p>
@@ -857,7 +861,7 @@ function ThemeCard() {
               data-state={theme === value ? "active" : "inactive"}
               className={cn(
                 segmentedItemClass,
-                "work-touch h-auto cursor-pointer has-focus-visible:border-ring has-focus-visible:ring-[3px] has-focus-visible:ring-ring/50 has-focus-visible:outline-1",
+                "work-touch h-auto cursor-pointer has-focus-visible:border-ring has-focus-visible:ring-3 has-focus-visible:ring-ring/50 has-focus-visible:outline-1",
               )}
             >
               <input
@@ -893,7 +897,7 @@ function SettingsPanel({
       hidden={active !== value}
       className="@container min-w-0"
     >
-      <div className="grid grid-cols-1 items-start gap-4 @3xl:grid-cols-[repeat(auto-fit,minmax(20rem,1fr))]">
+      <div className="grid grid-cols-1 items-start gap-4 @3xl:grid-cols-settings">
         {children}
       </div>
     </TabsContent>
@@ -984,7 +988,7 @@ function AdminNotifications({
           </Button>
         </div>
         {pairing && (
-          <div className="rounded-lg bg-muted p-3 text-sm">
+          <div className="rounded-md bg-muted p-3 text-sm">
             <p className="text-muted-foreground">
               請在 10 分鐘內私訊 {groupPlatformLabels[platform]} 機器人以下文字。
             </p>
@@ -1049,6 +1053,16 @@ export function SettingsView({
     s.line_group_reserve_percent ??
     linePrivateDefaults.line_group_reserve_percent;
   const push = linePushPanel(state.health, failures, reserve);
+  const estimatedGroups = state.groups.filter((g) =>
+    g.platform === "line" && !g.left_at && g.reply_mode !== "off" &&
+    (g.member_count == null || (g.member_count_estimate ?? 0) > g.member_count)
+  );
+  const idleEstimates = estimatedGroups.filter((g) => !g.has_pending_line_push);
+  const estimateRow = (g: (typeof estimatedGroups)[number]) => (
+    <p key={g.id} className="break-words text-sm text-muted-foreground">
+      {g.name}：{g.member_count == null ? "目前人數未知" : `上次查得 ${g.member_count} 人`}，以 {pushCost(g.member_count ?? null, g.member_count_estimate)} 人估算每次推播用量。
+    </p>
+  );
   const [allServicesOpen, setAllServicesOpen] = useState(false);
   const serviceRows = services
     .filter((i) => !i.mode || i.mode === s.ai_mode)
@@ -1058,6 +1072,8 @@ export function SettingsView({
       const h = disabled
         ? undefined
         : state.health.find((h) => h.name === i.key);
+      const status = healthStatus(h);
+      const inference = i.key === "codex";
       // 判讀與檢索在使用時更新，顯示最近一次結果；其他服務由每小時檢查確認，
       // 超過一天沒有再確認的結果不能當成「正常」，只代表上次正常。
       const onUse = [
@@ -1069,6 +1085,7 @@ export function SettingsView({
       ].includes(i.key);
       const stale =
         !onUse &&
+        !h?.inferenceStatus &&
         !!h?.ok &&
         Date.now() - new Date(h.checked_at).getTime() > 86400000;
       const pushService =
@@ -1077,7 +1094,13 @@ export function SettingsView({
           : undefined;
       const quota = pushService?.quota;
       const detail = pushService ? pushService.detail : h?.detail;
-      const action = !disabled && !quota && (stale || (h ? !h.ok : !onUse));
+      const action = !disabled && !quota &&
+        (stale || status === "failed" || (!h && !onUse && !inference));
+      const label = disabled ? connectionStatusLabels.disabled
+        : stale ? connectionStatusLabels.stale
+        : inference ? inferenceStatusLabels[status]
+        : h ? (h.ok ? connectionStatusLabels.healthy : connectionStatusLabels.needsAttention)
+        : onUse ? connectionStatusLabels.noRecord : connectionStatusLabels.unchecked;
       return {
         action,
         row: (
@@ -1087,17 +1110,17 @@ export function SettingsView({
           >
             <span
               className={cn(
-                "size-2 shrink-0 rounded-full bg-border",
-                !quota && h?.ok && !stale && "bg-good",
+                "size-2 shrink-0 shape-pill bg-border",
+                !quota && status === "healthy" && !stale && "bg-good",
                 stale && "bg-warn",
-                !quota && h && !h.ok && "bg-danger",
+                !quota && status === "failed" && "bg-danger",
               )}
             />
             <span className="flex min-w-0 flex-1 flex-col">
               <span className="text-sm font-medium">{i.name}</span>
-              <span className="text-xs text-muted-foreground [overflow-wrap:anywhere]">
+              <span className="text-xs text-muted-foreground wrap-anywhere">
                 {detail ?? i.hint}
-                {h && !quota && (
+                {h && !quota && status !== "unknown" && (
                   <span className={cn("block", stale && "text-warn")}>
                     {onUse ? "最近一次" : "最後確認"} {ago(h.checked_at)}
                     {stale && "，每小時會自動確認；可按「檢查連線」立即更新"}
@@ -1106,23 +1129,8 @@ export function SettingsView({
               </span>
             </span>
             {!quota && (
-              <Badge
-                variant={
-                  h ? (stale ? "warn" : h.ok ? "good" : "danger") : "secondary"
-                }
-              >
-                {disabled
-                  ? connectionStatusLabels.disabled
-                  : h
-                    ? stale
-                      ? connectionStatusLabels.stale
-                      : h.ok
-                        ? connectionStatusLabels.healthy
-                        : connectionStatusLabels.needsAttention
-                    : // 使用時才更新的項目沒有紀錄，代表還沒用到，不是漏了檢查。
-                      onUse
-                      ? connectionStatusLabels.noRecord
-                      : connectionStatusLabels.unchecked}
+              <Badge variant={stale ? "warn" : healthBadge[status]}>
+                {label}
               </Badge>
             )}
           </li>
@@ -1224,8 +1232,8 @@ export function SettingsView({
               LINE 推播（群組回覆與私訊）
             </CardTitle>
             <CardDescription>
-              過去 {linePrivateDigestMinutes}{" "}
-              分鐘未送出摘要時，新通知會立即送出。接下來累積的通知會在上一則送出滿{" "}
+              管理者私訊在過去 {linePrivateDigestMinutes}{" "}
+              分鐘未送出摘要時會立即送出。接下來累積的私訊會在上一則送出滿{" "}
               {linePrivateDigestMinutes} 分鐘時合併送出，每則最多列 5
               件，完整通知在看板鈴鐺。
             </CardDescription>
@@ -1236,13 +1244,22 @@ export function SettingsView({
                 {push.usage}
               </p>
             )}
+            {push.forecast && (
+              <p className="text-sm text-muted-foreground">{push.forecast}</p>
+            )}
+            {estimatedGroups.filter((g) => g.has_pending_line_push).map(estimateRow)}
+            {idleEstimates.length > 0 && (
+              <details className="text-sm">
+                <summary className="min-h-11 cursor-pointer py-3">
+                  其他群組的推播估值（{idleEstimates.length}）
+                </summary>
+                {idleEstimates.map(estimateRow)}
+              </details>
+            )}
             {push.notice && (s.admin_line_id || push.blocked) && (
-              <p
-                role="status"
-                className="rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn"
-              >
+              <InlineNotice as="p" tone="warn" variant="soft" role="status">
                 {push.notice}
-              </p>
+              </InlineNotice>
             )}
             <LinePushForm
               key={`${mode}:${reserve}`}
@@ -1273,7 +1290,7 @@ export function SettingsView({
             {push.failedText && (
               <div
                 role="status"
-                className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn"
+                className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-md bg-warn-soft px-3 py-2 text-sm text-warn"
               >
                 <span className="min-w-0 flex-1">{push.failedText}</span>
                 <ConfirmButton

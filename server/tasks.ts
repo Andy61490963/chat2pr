@@ -39,7 +39,7 @@ import {
   type SourceMessage,
   type Task,
 } from "../shared/types.js";
-import { deliveryState, type GroupDelivery } from "../shared/group-delivery.js";
+import { deliveryState, type DeliveryRow, type GroupDelivery } from "../shared/group-delivery.js";
 import { lineQuotaBlocked } from "./line-quota.js";
 import {
   taskEndColumns,
@@ -699,6 +699,7 @@ export class Tasks {
              WHEN result->>'prUrl'=$2 AND version=$3 AND starts_with(result->>'report','只執行了部分測試。未涵蓋：')
                THEN '{"kind":"partial"}'::jsonb
            END AS verification_scope,
+           CASE WHEN r.upstream_failure IS NOT NULL AND run_content_visible(r.id) THEN r.upstream_failure END AS upstream_failure,
            version,status,outcome,observed,model,started_at,completed_at,heartbeat_at,deadline,install_report,
            COALESCE((SELECT jsonb_agg(jsonb_build_object('phase',e.phase,'threadId',e.thread_id) ORDER BY e.id)
              FROM run_events e WHERE e.run_id=r.id AND e.kind='thread'),'[]') AS threads,
@@ -760,20 +761,16 @@ export class Tasks {
    * 管理者要看得出來並能複製內容代為轉達；原始 last_error 與 LINE 訊息 ID 不回傳。
    */
   private async groupDeliveries(id: string): Promise<GroupDelivery[]> {
-    const rows = await this.db.query<{
+    const rows = await this.db.query<DeliveryRow & {
       id: string;
       kind: string;
       text: string | null;
-      sent_at: string | null;
-      has_message_id: boolean;
-      attempts: number;
-      last_error: string | null;
       created_at: string;
       platform: ChatPlatformId | null;
     }>(
       // 原文與聊天室同樣受保存期限限制：到期後只回狀態，不回文字，也就不能複製。
       `SELECT n.id,n.kind,CASE WHEN n.created_at>message_retention_cutoff() THEN left(n.text,4500) END AS text,
-         n.sent_at,n.sent_message_id IS NOT NULL AS has_message_id,n.attempts,n.last_error,n.created_at,g.platform
+         n.sent_at,n.sent_message_id IS NOT NULL AS has_message_id,n.attempts,n.last_error,n.line_reply_policy,n.created_at,g.platform
        FROM notifications n LEFT JOIN groups g ON g.id=n.group_id
        WHERE n.task_id=$1 AND n.group_id IS NOT NULL ORDER BY n.created_at,n.id`,
       [id],
@@ -802,7 +799,7 @@ export class Tasks {
     const rows = await this.db.query<{ seq: number }>(
       `SELECT id::int AS seq,at,phase,kind,
       CASE WHEN run_content_visible(run_id) THEN detail ELSE NULL END AS detail,
-      thread_id AS "threadId",container_id AS "containerId",exit_code AS "exitCode"
+      thread_id AS "threadId",container_id AS "containerId",exit_code AS "exitCode",rejected_count AS "rejectedCount"
       FROM run_events WHERE run_id=$1 AND ($2::bigint IS NULL OR id<$2) ORDER BY id DESC LIMIT 201`,
       [runId, before ?? null],
     );

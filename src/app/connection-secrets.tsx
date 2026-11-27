@@ -1,3 +1,4 @@
+import { DataList, SectionHeader, Toolbar } from "@/components/ui/layout";
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -32,10 +33,10 @@ export function ConnectionSecrets({
   return (
     <Card className="col-span-full min-w-0" role="region" aria-labelledby="connection-secrets-title">
       <CardHeader>
-        <h2 id="connection-secrets-title" className="font-semibold">連線金鑰</h2>
+        <SectionHeader id="connection-secrets-title">連線金鑰</SectionHeader>
       </CardHeader>
       <CardContent>
-        <ul className="divide-y">
+        <DataList>
           {connectionSecretFields.map((field) => (
             <ConnectionSecretRow
               key={field}
@@ -44,7 +45,7 @@ export function ConnectionSecrets({
               {...actions}
             />
           ))}
-        </ul>
+        </DataList>
       </CardContent>
     </Card>
   );
@@ -118,7 +119,7 @@ function ConnectionSecretRow({
             : connectionSecretStatusLabels.unknownUpdatedAt}
         </span>
       </div>
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
+      <Toolbar className="min-w-0">
         <Input
           id={inputId}
           type="password"
@@ -166,7 +167,7 @@ function ConnectionSecretRow({
         >
           更新
         </ConfirmButton>
-      </div>
+      </Toolbar>
       {error && (
         <p id={`${inputId}-error`} role="alert" className="text-sm text-danger">
           {error}

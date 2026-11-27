@@ -1,5 +1,5 @@
 import { MemoryOverview } from "./app/memory-overview";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
 import {
   AlertCircle,
   BellOff,
@@ -35,6 +35,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { InlineNotice, PageHeader } from "@/components/ui/layout";
+import { Sidebar, SidebarButton } from "@/components/ui/sidebar";
 import { Wordmark } from "@/components/brand";
 import type {
   Action,
@@ -61,7 +63,7 @@ import {
 import { cn } from "@/lib/utils";
 import { GroupsView } from "./app/groups";
 import { ChatView } from "./app/chat";
-import { InboxView } from "./app/inbox";
+import { InboxReadState, InboxView } from "./app/inbox";
 import { pickListReviewId } from "../shared/review-queue.js";
 import { ProjectForm, ProjectsView } from "./app/projects";
 import { saveProject } from "./app/project-form";
@@ -75,6 +77,7 @@ import {
   attention,
   cash,
   countOf,
+  healthStatus,
   Initials,
   memoryHold,
   message,
@@ -120,7 +123,6 @@ const views = [
     label: "收件匣",
     icon: Inbox,
     section: "工作區",
-    hint: "需要你決定的事、進行中的工作與最新動態",
   },
   {
     id: "tasks",
@@ -214,7 +216,7 @@ const writeUrl = (view: View, task: string | null, push = true) => {
 const vital: Record<string, string> = {
   line: "LINE",
   github: "GitHub App",
-  codex: "Codex 訂閱登入",
+  codex: "Codex 訂閱推論",
   openai: "OpenAI API",
   runner: "隔離執行器",
   tunnel: "HTTPS 入口",
@@ -234,6 +236,7 @@ export function App() {
     [lineQuotaHelpOpen, setLineQuotaHelpOpen] = useState(false),
     [state, setState] = useState<State | null>(null),
     [user, setUser] = useState<{
+      id: string;
       csrf: string;
       login: string;
       role?: "admin" | "member";
@@ -312,18 +315,18 @@ export function App() {
   const guard = useGuard();
   // 動態只載入最近的一部分；按「載入更多」才加大範圍。
   const activityLimit = useRef(80);
-  const refresh = useCallback(async () => {
+  const refreshSnapshot = useCallback(async () => {
     try {
-      setState(
-        await request<State>(`/api/state?activity=${activityLimit.current}`),
-      );
+      const snapshot = await request<State>(`/api/state?activity=${activityLimit.current}`);
+      setState(snapshot);
       setError("");
-      return true;
+      return snapshot;
     } catch (e) {
       setError(message(e));
-      return false;
+      return null;
     }
   }, [request]);
+  const refresh = useCallback(async () => (await refreshSnapshot()) !== null, [refreshSnapshot]);
   // 通道停了會回 502／530 的 HTML 頁：當成暫時連不上（configured=null），
   // 登入頁給「重新連線」，不要叫使用者去執行 npm run setup。
   const connect = useCallback(async (signal?: AbortSignal) => {
@@ -591,7 +594,7 @@ export function App() {
   const run = async <T,>(
     fn: () => Promise<T>,
     done: string | ((result: T) => string) = "已儲存",
-    onError = (text: string) => setToast({ text, error: true }),
+    onError: (text: string) => void | Promise<void> = (text) => setToast({ text, error: true }),
   ) => {
     setBusy(true);
     try {
@@ -600,7 +603,7 @@ export function App() {
         const result = await fn();
         toastText = typeof done === "function" ? done(result) : done;
       } catch (e) {
-        onError(message(e));
+        await onError(message(e));
         return false;
       }
       setToast({ text: toastText });
@@ -836,7 +839,7 @@ export function App() {
   const lineQuota = state?.health.find((h) => h.name === LINE_QUOTA && !h.ok);
   const down = (state?.health ?? []).filter(
     (h) =>
-      !h.ok &&
+      healthStatus(h) === "failed" &&
       vital[h.name] &&
       // 額度用完時推播失敗是預期中的，由下方黃色橫幅說明，不算「連線異常」。
       !(lineQuota && h.name === "notifications") &&
@@ -845,6 +848,14 @@ export function App() {
   );
   const visible = views.filter((v) => admin || v.section === "工作區");
   const current = visible.find((v) => v.id === view) ?? visible[0];
+  const inbox = current.id === "inbox";
+  const quotaSummary = lineQuota && (
+    <>
+      <BellOff aria-hidden="true" className={cn("size-4 shrink-0", inbox ? "text-warn" : "mt-0.5")} />
+      <span>LINE 本月推播額度已用完<span className={inbox ? "max-md:hidden" : undefined}>，你仍可在看板查看通知。</span></span>
+    </>
+  );
+  const noticeError = inbox && !state ? "" : error;
   const morePages = visible.filter((v) => v.section === "管理");
   const moreIsCurrent = current.section === "管理";
   const hostHold = state?.diskDispatchPaused
@@ -852,7 +863,8 @@ export function App() {
     : memoryHold(state);
   const reserve = state?.settings.codex_reserve_percent ?? 0;
   const accountSnapshot = typeof account === "object" ? account : null;
-  const quotaCheck = state?.health.find((h) => h.name === subscriptionGateName);
+  const gate = state?.health.find((h) => h.name === subscriptionGateName);
+  const quotaCheck = gate && "quota" in gate ? gate.quota : gate;
   const subscriptionHold = !subscription
     ? null
     : reserve > 0 &&
@@ -864,7 +876,7 @@ export function App() {
         ? null
         : quotaCheck.detail
       : accountSnapshot && (reserve > 0 || accountSnapshot.allowed === false)
-        ? subscriptionQuotaHold(accountSnapshot, reserve)
+        ? subscriptionQuotaHold(accountSnapshot, reserve)?.detail ?? null
         : null;
   const hold = state?.settings.paused ? null : (hostHold ?? subscriptionHold);
   const holdView = hostHold ? "system" : "settings";
@@ -915,7 +927,7 @@ export function App() {
       visible: true,
     },
     offline && { key: "offline", visible: true },
-    error && { key: "error", visible: true },
+    noticeError && { key: "error", visible: true },
   ].filter((notice) => typeof notice === "object" && notice !== null);
   const noticeCount = notices.filter((notice) => notice.visible).length;
   const noticeIncident = notices.length
@@ -936,7 +948,7 @@ export function App() {
     <>
       <span
         className={cn(
-          "inline-flex size-1.5 rounded-full",
+          "inline-flex size-1.5 shape-pill",
           live ? "bg-good" : "bg-warn",
         )}
       />
@@ -946,114 +958,16 @@ export function App() {
   return (
     <div
       className={cn(
-        "min-h-screen md:grid md:grid-cols-[15.5rem_minmax(0,1fr)]",
+        "min-h-screen md:grid md:grid-cols-shell",
         current.id === "chat" && "h-dvh min-h-0 overflow-hidden",
       )}
     >
-      <aside
-        className={cn(
-          "fixed inset-x-0 bottom-0 z-40 border-t bg-sidebar/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:sticky md:top-0 md:flex md:h-screen md:flex-col md:gap-6 md:border-t-0 md:border-r md:bg-sidebar md:px-3 md:py-4",
-          current.id === "chat" && "md:h-dvh md:overflow-y-auto",
-        )}
-      >
-        <div className="hidden items-center gap-2.5 px-2 md:flex">
-          <Wordmark />
-        </div>
-        <nav
-          aria-label="看板導覽"
-          className="flex justify-around md:flex-col md:justify-start md:gap-0.5"
-        >
-          {visible.map(({ id, label, icon: Icon, section }, i) => (
-            <div key={id} className="contents">
-              {section !== visible[i - 1]?.section && (
-                <p
-                  className={cn(
-                    "hidden px-3 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground md:block",
-                    i > 0 && "md:mt-4",
-                  )}
-                >
-                  {section}
-                </p>
-              )}
-              {/* 不設 aria-label：名稱由文字與徽章組成，讀屏才念得到待處理數量。 */}
-              <button
-                aria-current={current.id === id ? "page" : undefined}
-                onClick={() => go(id)}
-                className={cn(
-                  "relative flex min-h-[44px] flex-1 flex-col items-center justify-center gap-0.5 px-1 py-2 text-[11px] text-muted-foreground transition-colors hover:text-foreground md:min-h-0 md:flex-none md:flex-row md:justify-start md:gap-3 md:rounded-md md:px-3 md:py-1.5 md:text-sm md:hover:bg-sidebar-accent",
-                  current.id === id &&
-                    "bg-sidebar-accent font-medium text-foreground",
-                  section === "管理" && "hidden md:flex",
-                )}
-              >
-                <Icon
-                  className={cn(
-                    "size-5 md:size-4",
-                    current.id === id && "md:text-brand-foreground",
-                  )}
-                />
-                {label}
-                {id === "inbox" && needs.length > 0 && (
-                  <span className="absolute top-1 right-[calc(50%-1.25rem)] min-w-4 rounded-full bg-foreground px-1 text-[10px] leading-4 font-semibold text-background tabular-nums md:static md:ml-auto md:bg-muted md:px-1.5 md:text-xs md:text-foreground">
-                    <span aria-hidden="true">{needs.length}</span>
-                    <span className="sr-only">，{needs.length} 件待處理</span>
-                  </span>
-                )}
-              </button>
-            </div>
-          ))}
-          <DropdownMenu modal={false}>
-            <DropdownMenuTrigger asChild>
-              <button
-                aria-current={moreIsCurrent ? "page" : undefined}
-                className={cn(
-                  "flex min-h-[44px] flex-1 flex-col items-center justify-center gap-0.5 px-1 py-2 text-[11px] text-muted-foreground transition-colors hover:text-foreground md:hidden",
-                  moreIsCurrent &&
-                    "bg-sidebar-accent font-medium text-foreground",
-                )}
-              >
-                <Ellipsis className="size-5" />
-                更多
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              side="top"
-              align="end"
-              className="w-60"
-              onCloseAutoFocus={headingAfterMenu}
-            >
-              <DropdownMenuLabel className="flex items-center gap-2">
-                <Initials name={user.login} />
-                <span className="min-w-0 truncate">{user.login}</span>
-              </DropdownMenuLabel>
-              {state && (
-                <DropdownMenuLabel className="flex flex-col items-start gap-0.5 font-normal">
-                  <QuotaLines
-                    settings={state.settings}
-                    usage={state.usage}
-                    account={account}
-                  />
-                </DropdownMenuLabel>
-              )}
-              <DropdownMenuSeparator />
-              {morePages.map(({ id, label, icon: Icon }) => (
-                <DropdownMenuItem
-                  key={id}
-                  aria-current={current.id === id ? "page" : undefined}
-                  className="min-h-[44px] aria-[current=page]:font-semibold"
-                  onSelect={() => goFromMenu(id)}
-                >
-                  <Icon /> {label}
-                </DropdownMenuItem>
-              ))}
-              <DropdownMenuItem className="min-h-[44px]" onSelect={logout}>
-                <LogOut /> 登出
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        </nav>
-        {state && (
-          <div className="mt-auto hidden flex-col gap-3 md:flex">
+      <Sidebar
+        label="看板導覽"
+        brand={<Wordmark />}
+        className={current.id === "chat" ? "md:h-dvh md:overflow-y-auto" : undefined}
+        footer={state && (
+          <>
             <ModeSummary
               settings={state.settings}
               usage={state.usage}
@@ -1076,42 +990,110 @@ export function App() {
                 <LogOut />
               </Button>
             </div>
-          </div>
+          </>
         )}
-      </aside>
+      >
+        {visible.map(({ id, label, icon: Icon, section }, i) => (
+          <div key={id} className="contents">
+            {section !== visible[i - 1]?.section && (
+              <p
+                className={cn(
+                  "hidden px-3 pb-1 text-caption font-medium tracking-wide text-muted-foreground md:block",
+                  i > 0 && "md:mt-4",
+                )}
+              >
+                {section}
+              </p>
+            )}
+            {/* 不設 aria-label：名稱由文字與徽章組成，讀屏才念得到待處理數量。 */}
+            <SidebarButton
+              aria-current={current.id === id ? "page" : undefined}
+              onClick={() => go(id)}
+              className={section === "管理" ? "hidden md:flex" : undefined}
+            >
+              <Icon
+                className={cn(
+                  "size-5 md:size-4",
+                  current.id === id && "md:text-brand-foreground",
+                )}
+              />
+              {label}
+              {id === "inbox" && needs.length > 0 && (
+                <span className="absolute top-1 right-nav-count min-w-4 shape-pill bg-foreground px-1 text-caption leading-4 font-semibold text-background tabular-nums md:static md:ml-auto md:bg-muted md:px-1.5 md:text-xs md:text-foreground">
+                  <span aria-hidden="true">{needs.length}</span>
+                  <span className="sr-only">，{needs.length} 件待處理</span>
+                </span>
+              )}
+            </SidebarButton>
+          </div>
+        ))}
+        <DropdownMenu modal={false}>
+          <DropdownMenuTrigger asChild>
+            <SidebarButton
+              aria-current={moreIsCurrent ? "page" : undefined}
+              className="md:hidden"
+            >
+              <Ellipsis className="size-5" />
+              更多
+            </SidebarButton>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent
+            side="top"
+            align="end"
+            className="w-60"
+            onCloseAutoFocus={headingAfterMenu}
+          >
+            <DropdownMenuLabel className="flex items-center gap-2">
+              <Initials name={user.login} />
+              <span className="min-w-0 truncate">{user.login}</span>
+            </DropdownMenuLabel>
+            {state && (
+              <DropdownMenuLabel className="flex flex-col items-start gap-0.5 font-normal">
+                <QuotaLines
+                  settings={state.settings}
+                  usage={state.usage}
+                  account={account}
+                />
+              </DropdownMenuLabel>
+            )}
+            <DropdownMenuSeparator />
+            {morePages.map(({ id, label, icon: Icon }) => (
+              <DropdownMenuItem
+                key={id}
+                aria-current={current.id === id ? "page" : undefined}
+                className="min-h-11 aria-[current=page]:font-semibold"
+                onSelect={() => goFromMenu(id)}
+              >
+                <Icon /> {label}
+              </DropdownMenuItem>
+            ))}
+            <DropdownMenuItem className="min-h-11" onSelect={logout}>
+              <LogOut /> 登出
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </Sidebar>
       <main
         className={cn(
           "mx-auto w-full max-w-6xl px-4 pt-5 pb-28 md:px-8 md:pt-7 md:pb-12",
+          inbox && "pt-3 md:pt-4",
+          inbox && lineQuota && noticeCount === 1 &&
+            "[&>:has(#line-quota-help)]:mb-2 [&>:has(#line-quota-help)]:border-border [&>:has(#line-quota-help)]:bg-transparent [&>:has(#line-quota-help)]:text-foreground",
           current.id === "chat" &&
-            "flex h-full min-h-0 flex-col overflow-hidden pb-[calc(4.5rem+env(safe-area-inset-bottom))] md:pb-6",
+            "flex h-full min-h-0 flex-col overflow-hidden pb-bottom-nav md:pb-6",
         )}
       >
-        <header
+        <PageHeader
+          title={current.label}
+          headingRef={heading}
+          description={"hint" in current ? current.hint : undefined}
+          descriptionClassName={current.id === "groups" ? undefined : "hidden sm:block"}
           className={cn(
-            "mb-7 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3",
+            "mb-7",
+            inbox && "mb-3 items-center md:mb-4",
             current.id === "chat" && "mb-4 shrink-0",
           )}
-        >
-          <div className="min-w-0">
-            <h1
-              ref={heading}
-              tabIndex={-1}
-              className="heading-page outline-none"
-            >
-              {current.label}
-            </h1>
-            {"hint" in current && (
-              <p
-                className={cn(
-                  "mt-0.5 text-sm text-muted-foreground",
-                  current.id !== "groups" && "hidden sm:block",
-                )}
-              >
-                {current.hint}
-              </p>
-            )}
-          </div>
-          {state && (
+          actions={state && (
             <div className="flex items-center gap-1.5">
               {dispatch && "ariaLabel" in dispatch ? (
                 <Button
@@ -1163,7 +1145,7 @@ export function App() {
               </Button>
             </div>
           )}
-        </header>
+        />
         <PageNotices incident={noticeIncident} count={noticeCount}>
           {admin && goneProjects.length > 0 && view !== "projects" && (
             <p
@@ -1247,7 +1229,7 @@ export function App() {
               ) : (
                 <CirclePause className="size-4 shrink-0" />
               )}
-              <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+              <span className="min-w-0 flex-1 wrap-anywhere">
                 {hostHold
                   ? `資源不足，派工自動暫停（${hostHold}），資源恢復後會自動繼續。`
                   : hold.startsWith(reservedQuotaHold)
@@ -1270,26 +1252,27 @@ export function App() {
             </p>
           )}
           {lineQuota && (
-            <div className="px-2 text-sm">
-              <div className="flex flex-wrap items-center gap-x-2">
-                <p
-                  role="status"
-                  className="flex flex-[1_1_9rem] items-start gap-2 py-2"
-                >
-                  <BellOff
-                    aria-hidden="true"
-                    className="mt-0.5 size-4 shrink-0"
-                  />
-                  <span>LINE 本月推播額度已用完，你仍可在看板查看通知。</span>
-                </p>
+            <div className={cn("px-2 text-sm", inbox && "px-0")}>
+              <div role={inbox ? "status" : undefined} className="flex flex-wrap items-center gap-x-2">
+                {!inbox && (
+                  <p role="status" className="flex grow shrink basis-36 items-start gap-2 py-2">
+                    {quotaSummary}
+                  </p>
+                )}
                 <button
                   type="button"
                   aria-expanded={lineQuotaHelpOpen}
                   aria-controls="line-quota-help"
                   onClick={() => setLineQuotaHelpOpen((open) => !open)}
-                  className="work-touch inline-flex items-center font-medium underline underline-offset-4"
+                  className={cn(
+                    "work-touch inline-flex items-center",
+                    inbox && "w-full gap-1.5 rounded-sm py-1 text-left focus-visible:outline-2 focus-visible:outline-ring",
+                  )}
                 >
-                  {lineQuotaHelpOpen ? "收起說明" : "怎麼辦"}
+                  {inbox && quotaSummary}
+                  <span className="ml-auto shrink-0 font-medium underline underline-offset-4">
+                    {lineQuotaHelpOpen ? "收起說明" : "怎麼辦"}
+                  </span>
                 </button>
               </div>
               <div
@@ -1297,6 +1280,7 @@ export function App() {
                 hidden={!lineQuotaHelpOpen}
                 className="pb-2"
               >
+                {inbox && <p className="md:hidden">你仍可在看板查看通知。</p>}
                 <p>
                   額度通常在下個月初重置，你可以先從任務詳情複製結果貼回群組，或在群組輸入
                   /進度 取回。
@@ -1314,7 +1298,9 @@ export function App() {
             >
               <WifiOff className="size-4 shrink-0" />
               <span className="min-w-0 flex-1">
-                即時更新中斷了，正在重新連線；畫面可能不是最新狀態。
+                {inbox && state
+                  ? "即時更新中斷，正在重新連線。收件匣仍顯示上次讀取的內容。"
+                  : "即時更新中斷了，正在重新連線；畫面可能不是最新狀態。"}
               </span>
               <Button
                 variant="outline"
@@ -1325,13 +1311,13 @@ export function App() {
               </Button>
             </p>
           )}
-          {error && (
+          {noticeError && (
             <p
               role="alert"
               className="flex flex-wrap items-center gap-2 px-2 py-2 text-sm text-danger"
             >
               <AlertCircle className="size-4 shrink-0" />
-              <span className="min-w-0 flex-1">{error}</span>
+              <span className="min-w-0 flex-1">{noticeError}</span>
               <Button
                 variant="outline"
                 size="xs"
@@ -1343,9 +1329,13 @@ export function App() {
           )}
         </PageNotices>
         {!state ? (
-          <div className="flex min-h-60 items-center justify-center gap-2 text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" /> 載入中…
-          </div>
+          inbox ? (
+            <InboxReadState error={error} retry={refresh} />
+          ) : (
+            <div className="flex min-h-60 items-center justify-center gap-2 text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" /> 載入中…
+            </div>
+          )
         ) : (
           <>
             {current.id === "inbox" && (
@@ -1366,6 +1356,16 @@ export function App() {
                 }
                 loadTaskDetail={loadTaskDetail}
                 reviewActions={{
+                  approveFromQueue: (task, body, onError) =>
+                    run(() => postTaskAction(task, "approve", body), "已確認專案並核准，開始排程", async (text) => {
+                      const snapshot = await refreshSnapshot();
+                      const updated = snapshot?.tasks.find(({ id }) => id === task.id);
+                      if (!snapshot || updated) onError(text, updated);
+                    }),
+                  verifyQuickActor: async () => {
+                    const current = await request<NonNullable<typeof user>>("/api/me");
+                    return !!user.id && current.id === user.id && current.role === "admin" && user.role === "admin";
+                  },
                   go,
                   open: showTask,
                   followup: followupTask,
@@ -1511,7 +1511,7 @@ export function App() {
         <div
           role={toast.error ? "alert" : "status"}
           className={cn(
-            "fixed bottom-24 left-1/2 z-[60] flex w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 items-center gap-2.5 rounded-lg border border-border-raised bg-popover py-2.5 pr-2 pl-3.5 text-sm text-popover-foreground shadow-raised animate-in fade-in-0 slide-in-from-bottom-2 md:bottom-6",
+            "fixed bottom-24 left-1/2 z-60 flex w-max max-w-overlay -translate-x-1/2 items-center gap-2.5 rounded-md border border-border-raised bg-popover py-2.5 pr-2 pl-3.5 text-sm text-popover-foreground shadow-raised animate-in fade-in-0 slide-in-from-bottom-2 md:bottom-6",
             toast.error && "border-danger/50 bg-danger-soft text-danger",
           )}
         >
@@ -1520,7 +1520,7 @@ export function App() {
           ) : (
             <CircleCheck className="size-4 shrink-0 text-good" />
           )}
-          <span className="min-w-0 [overflow-wrap:anywhere]">{toast.text}</span>
+          <span className="min-w-0 wrap-anywhere">{toast.text}</span>
           <Button
             variant="ghost"
             size="icon-xs"
@@ -1621,7 +1621,7 @@ function Login({
   retry: () => void;
 }) {
   return (
-    <div className="grid min-h-screen lg:grid-cols-[1.1fr_1fr]">
+    <div className="grid min-h-screen lg:grid-cols-login">
       <section className="hidden border-r bg-sidebar p-12 lg:flex lg:flex-col">
         <div className="flex items-center gap-2.5">
           <Wordmark />
@@ -1648,22 +1648,16 @@ function Login({
           <div className="flex items-center gap-2.5 lg:hidden">
             <Wordmark />
           </div>
-          <div className="flex flex-col gap-2">
-            <h1 className="text-2xl font-semibold tracking-tight">
-              登入控制台
-            </h1>
-            <p className="text-sm text-muted-foreground">
-              在 LINE 群組或 Discord 頻道提需求，AI 整理成任務並交給 Codex 開發。
-            </p>
-          </div>
+          <PageHeader
+            title="登入控制台"
+            description="在 LINE 群組或 Discord 頻道提需求，AI 整理成任務並交給 Codex 開發。"
+            descriptionClassName="mt-2"
+          />
           {configured === null ? (
             <>
-              <p
-                role="alert"
-                className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
-              >
+              <InlineNotice as="p" tone="danger" variant="soft" role="alert">
                 你暫時連不上 chat2pr，服務可能正在重新啟動，請稍後再試。
-              </p>
+              </InlineNotice>
               <Button size="lg" className="w-full" onClick={retry}>
                 <RefreshCw /> 重新連線
               </Button>
@@ -1671,12 +1665,9 @@ function Login({
           ) : (
             <>
               {notice && (
-                <p
-                  role="status"
-                  className="rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn"
-                >
+                <InlineNotice as="p" tone="warn" variant="soft" role="status">
                   {notice}
-                </p>
+                </InlineNotice>
               )}
               <Button
                 size="lg"
@@ -1719,7 +1710,7 @@ function Login({
             {flow.map(([Icon, label, hint], index) => (
               <li
                 key={label}
-                className="flex items-start gap-2 rounded-lg border px-3 py-2.5 text-sm"
+                className="flex items-start gap-2 rounded-md border px-3 py-2.5 text-sm"
               >
                 <Icon
                   aria-hidden="true"
@@ -1787,13 +1778,13 @@ function QuotaLines(props: QuotaProps) {
         )}
       </span>
       {left !== null && (
-        <span className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+        <span className="h-1.5 w-full overflow-hidden shape-pill bg-muted">
           <span
             className={cn(
-              "block h-full rounded-full",
+              "block h-full w-quota-left shape-pill",
               left < 15 ? "bg-danger" : left < 40 ? "bg-warn" : "bg-good",
             )}
-            style={{ width: `${left}%` }}
+            style={{ "--quota-left": `${left}%` } as CSSProperties}
           />
         </span>
       )}
@@ -1810,7 +1801,7 @@ function ModeSummary({ open, ...quota }: QuotaProps & { open?: () => void }) {
   // 一般成員進不了設定頁，只顯示用量、不可點。
   if (!open)
     return (
-      <div className="flex flex-col gap-2 rounded-lg border bg-background px-3 py-2.5">
+      <div className="flex flex-col gap-2 rounded-md border bg-background px-3 py-2.5">
         <QuotaLines {...quota} />
       </div>
     );
@@ -1819,7 +1810,7 @@ function ModeSummary({ open, ...quota }: QuotaProps & { open?: () => void }) {
       type="button"
       onClick={open}
       title="查看額度與 AI 設定"
-      className="flex flex-col gap-2 rounded-lg border bg-background px-3 py-2.5 text-left transition-colors hover:border-brand/40"
+      className="flex flex-col gap-2 rounded-md border bg-background px-3 py-2.5 text-left transition-colors hover:border-brand/40"
     >
       <QuotaLines {...quota} />
     </button>

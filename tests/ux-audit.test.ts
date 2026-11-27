@@ -553,7 +553,7 @@ describe("LINE 推播額度與重送", () => {
     const alerts = (await state()).alerts;
     expect(alerts[0]).toMatchObject({
       kind: "line_quota",
-      text: "LINE 推播額度用完，群組回覆與私訊暫停，看板通知照常",
+      text: "LINE 推播額度用完，群組有人發言時會補送重要通知，看板通知照常",
     });
     await recordHealth(db, "line_quota", true, "本月已用 3／上限 200 則");
     expect(

@@ -224,8 +224,9 @@ test("375px 首屏上半部顯示第一張任務，鍵盤可開關篩選並保�
 test("收件匣標題與舊的任務分頁網址會開啟對應的狀態篩選", async ({ page }) => {
   await mockTasks(page, [task, held, working, ready]);
   await page.goto("/");
+  await page.getByRole("tab", { name: /^進行中\s*1$/ }).click();
   await page
-    .getByRole("heading", { name: "進行中 1" })
+    .getByRole("heading", { name: /^進行中/ })
     .getByRole("button")
     .click();
   await expect(page).toHaveURL(/\/tasks\?filter=active&status=moving$/);

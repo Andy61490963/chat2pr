@@ -196,7 +196,7 @@ it("任務清單先篩選再分批，相同更新時間也不會漏列或重複"
   }
 });
 
-it("狀態快照、已結束清單與詳情都只採用該任務最後一筆結束稽核", async () => {
+it("取消後的新訊息判為重複時，狀態快照、已結束清單與詳情保留取消原因", async () => {
   const project = await fixture();
   const task = await db.one<{ id: string }>(
     `INSERT INTO tasks(project_id,group_id,title,summary,status,dedupe_key)
@@ -208,7 +208,8 @@ it("狀態快照、已結束清單與詳情都只採用該任務最後一筆結�
        ($1,'reject','小林 拒絕（需求版本 1）','2026-11-20T02:30:00Z'),
        ($1,'cancel','小陳 取消（需求版本 2；目標分支 main），原因：改由小林整理','2026-11-20T02:30:00Z'),
        ($1,'note','範例群組的其他紀錄','2026-11-20T02:31:00Z'),
-       (NULL,'unsend','來源訊息已撤回','2026-11-20T02:32:00Z')`,
+       (NULL,'unsend','來源訊息已撤回','2026-11-20T02:32:00Z'),
+       ($1,'duplicate','已辨識重複需求，未重複派工','2026-11-20T02:59:00Z')`,
     [task.id],
   );
   const app = await buildApp(db);
@@ -217,17 +218,103 @@ it("狀態快照、已結束清單與詳情都只採用該任務最後一筆結�
     for (const url of ["/api/state", "/api/tasks?filter=closed", `/api/tasks/${task.id}`]) {
       const response = await app.inject({ url, headers });
       expect(response.statusCode).toBe(200);
-      const body = response.json<{ task?: Task; tasks?: Task[] }>();
+      const body = response.json<{ task?: Task; tasks?: Task[]; history?: { kind: string }[] }>();
       const entry = body.task ?? body.tasks?.find((candidate) => candidate.id === task.id);
       expect(entry?.end_summary).toEqual({
         kind: "cancel", actor: "小陳", at: "2026-11-20T02:30:00.000Z",
         reason: "改由小林整理", station: null,
       });
       expect(entry).not.toHaveProperty("ending_audit");
+      if (body.task) expect(body.history?.at(-1)).toMatchObject({
+        kind: "duplicate", detail: "已辨識重複需求，未重複派工", created_at: "2026-11-20T02:59:00.000Z",
+      });
     }
   } finally {
     await app.close();
   }
+});
+
+it("已回答、補充後再次回答，採用最新回答時間並保留之後的重複判讀", async () => {
+  const project = await fixture();
+  const at = "2026-11-20T02:30:00.000Z";
+  const task = await db.one<{ id: string }>(
+    `INSERT INTO tasks(project_id,group_id,title,summary,mode,status,version,answer,dedupe_key,updated_at)
+     VALUES ($1,'group-a','範例報表查詢','查詢報表','query','answered',2,'補充後的回答','demo-answer',$2) RETURNING id`,
+    [project, "2026-11-20T03:20:00.000Z"],
+  );
+  await db.query(
+    `INSERT INTO audit(task_id,kind,detail,created_at) VALUES
+       ($1,'answered','查詢已回覆：範例報表查詢','2026-11-19T01:00:00Z'),
+       ($1,'amend','小林 補充需求（需求版本 2）','2026-11-20T01:00:00Z'),
+       ($1,'answered','查詢已回覆：範例報表查詢',$2),
+       ($1,'duplicate','已辨識重複需求，未重複派工','2026-11-20T03:16:00Z')`,
+    [task.id, at],
+  );
+  const app = await buildApp(db);
+  try {
+    const response = await app.inject({ url: `/api/tasks/${task.id}`, headers: await session() });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.task).toMatchObject({ status: "answered", version: 2, answer: "補充後的回答", end_summary: { kind: "other", at } });
+    expect(body.history.map((event: { kind: string }) => event.kind)).toEqual(["answered", "amend", "answered", "duplicate"]);
+  } finally {
+    await app.close();
+  }
+});
+
+it.each([
+  ["closed", "closed", "PR #12 已在 GitHub 關閉", "closed"],
+  ["rejected", "reject", "小林 拒絕（需求版本 1），原因：需求還沒定案", "reject"],
+] as const)("%s 任務結束後的重複判讀與來源撤回只顯示在時間軸", async (status, action, detail, kind) => {
+  const project = await fixture();
+  const at = "2026-11-20T02:30:00.000Z";
+  const task = await db.one<{ id: string }>(
+    `INSERT INTO tasks(project_id,group_id,title,summary,status,dedupe_key,updated_at)
+     VALUES ($1,'group-a','範例撤回任務','整理報表',$3,'demo-unsend',$2) RETURNING id`,
+    [project, at, status],
+  );
+  await db.query(
+    `INSERT INTO audit(task_id,kind,detail,created_at) VALUES
+       ($1,$3,$4,$2),($1,'duplicate','已辨識重複需求，未重複派工','2026-11-20T02:50:00Z'),
+       ($1,'unsend','來源訊息已撤回；請確認已整理需求及既有 PR','2026-11-20T03:00:00Z')`,
+    [task.id, at, action, detail],
+  );
+  const app = await buildApp(db);
+  try {
+    const response = await app.inject({ url: `/api/tasks/${task.id}`, headers: await session() });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    expect(body.task.end_summary).toMatchObject({ kind, at });
+    expect(body.history.map((event: { kind: string }) => event.kind)).toEqual([action, "duplicate", "unsend"]);
+  } finally {
+    await app.close();
+  }
+});
+
+it.each([
+  ["沒有本次 PR 的合併稽核時採用任務更新時間", null, "2026-11-20T02:30:00.000Z"],
+  ["收到 GitHub 合併事件時採用該事件時間", "PR #12 已在 GitHub 合併", "2026-11-20T02:26:00.000Z"],
+  ["定期同步確認合併時採用同步時間", "PR #12 已在 GitHub 合併（定期同步）", "2026-11-20T02:26:00.000Z"],
+] as const)("已合併的任務%s", async (_name, mergeDetail, at) => {
+  const project = await fixture();
+  const task = await db.one<{ id: string }>(
+    `INSERT INTO tasks(project_id,group_id,title,summary,status,pr_number,dedupe_key,updated_at)
+     VALUES ($1,'group-a','範例欄位','新增報表欄位','merged',12,'demo-merged','2026-11-20T02:30:00Z') RETURNING id`,
+    [project],
+  );
+  await db.query(
+    `INSERT INTO audit(task_id,kind,detail,created_at) VALUES
+       ($1,'merged','PR #8 已在 GitHub 合併','2026-11-20T01:00:00Z'),
+       ($1,'merged','已併入群組補充訊息，存成需求版本 2，等待審核','2026-11-20T02:00:00Z'),
+       ($1,'duplicate','已辨識重複需求，未重複派工','2026-11-20T03:00:00Z')`,
+    [task.id],
+  );
+  if (mergeDetail) await db.query(
+    "INSERT INTO audit(task_id,kind,detail,created_at) VALUES ($1,'merged',$2,$3)",
+    [task.id, mergeDetail, at],
+  );
+  const shown = (await state()).tasks.find((entry) => entry.id === task.id);
+  expect(shown?.end_summary).toMatchObject({ kind: "other", at, station: "pr" });
 });
 
 it("任務詳情回傳驗證範圍，歷史建置紀錄也不公開測試輸出", async () => {

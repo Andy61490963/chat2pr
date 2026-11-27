@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { deployPlan } from "./lib/deploy-plan.mjs";
+import { smokeHealth } from "./lib/smoke-health.mjs";
 import {
   bringHostBack,
   hostStateAdvice,
@@ -43,10 +44,11 @@ function run(command, commandArgs, { shell = false, what } = {}) {
     stop(`${what ?? `${command} ${commandArgs.join(" ")}`} 失敗`);
 }
 /** 執行指令並取回輸出；失敗回傳 undefined。 */
-function capture(command, commandArgs) {
+function capture(command, commandArgs, timeout) {
   const result = spawnSync(command, commandArgs, {
     cwd: root,
     encoding: "utf8",
+    timeout,
     windowsHide: true,
   });
   return result.status === 0 ? result.stdout.trim() : undefined;
@@ -60,7 +62,7 @@ const powershell = (code) =>
     "-Command",
     code,
   ]);
-const sql = (query) =>
+const sql = (query, timeout) =>
   capture("docker", [
     "compose",
     "exec",
@@ -73,7 +75,7 @@ const sql = (query) =>
     "agentflow",
     "-Atc",
     query,
-  ]);
+  ], timeout);
 const localSecrets = () =>
   JSON.parse(readFileSync(".local/secrets.json", "utf8"));
 
@@ -165,7 +167,7 @@ function stopRunner() {
 
 // ── 冒煙測試 ────────────────────────────────────────────────────────
 
-async function smoke() {
+async function smoke(readyAt) {
   step("冒煙測試");
   const results = [];
   const add = (name, ok, detail, warning = false) =>
@@ -246,9 +248,7 @@ async function smoke() {
     add("通道狀態檔", tunnel.ok, tunnel.detail);
   } else add("對外入口 /health", false, "尚未設定固定公開網址", true);
 
-  const failing = sql(
-    "SELECT name FROM service_health WHERE NOT ok ORDER BY 1",
-  );
+  const failing = await smokeHealth(sql, readyAt, until);
   add(
     "看板「系統」頁的檢查項目",
     failing === "",
@@ -447,6 +447,7 @@ async function apply(before) {
       "主機執行器沒有恢復，請查看 .local\\runner.log 與排程工作 LINE-AgentFlow",
     );
   console.log("  執行器已恢復。");
+  const readyAt = new Date();
   if (existsSync(".local/tunnel-status.json")) {
     // 通道重新連線、狀態檔更新需要一點時間。只重啟 app 時也要等：通道程序每 30 秒探測一次公開網址，
     // 剛好在 app 重建期間探測會寫下「尚未就緒」，不等下一次更新冒煙測試就會誤報失敗。
@@ -461,7 +462,7 @@ async function apply(before) {
       }
     }, 90);
   }
-  await smoke();
+  await smoke(readyAt);
   if (plan.workerChanged)
     console.log("\n工作映像有更新：到看板「專案」頁對受影響的專案重新驗證。");
   console.log(`\n部署完成：${short(git("rev-parse", "HEAD"))}`);

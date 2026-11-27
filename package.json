@@ -29,7 +29,8 @@
     "tunnel": "tsx scripts/tunnel.ts",
     "deploy": "node scripts/deploy.mjs",
     "smoke": "node scripts/deploy.mjs --smoke-only",
-    "restore": "tsx scripts/restore.ts"
+    "restore": "tsx scripts/restore.ts",
+    "worker:fingerprint": "node scripts/worker-fingerprint.mjs"
   },
   "dependencies": {
     "@fastify/cookie": "^11.0.2",

@@ -26,6 +26,24 @@ import {
 } from "../server/maintenance.js";
 beforeEach(reset);
 afterAll(() => db.close());
+it.each(["重試成功", "撤回", "到期"])("圖片下載失敗後，最後一張失敗圖片%s才解除異常", async ending => {
+  await fixture();
+  await db.query("INSERT INTO messages(id,group_id,type) VALUES ('pictureA','group-a','image'),('pictureB','group-a','image')");
+  const health = () => db.one("SELECT ok FROM service_health WHERE name='images'");
+  const image = vi.fn(async (id: string) => {
+    if (id === "pictureB") throw new Error("圖片暫時無法下載");
+    return { data: Buffer.from("image"), mime: "image/png" };
+  });
+  image.mockRejectedValueOnce(new Error("圖片暫時無法下載"));
+  await downloadPendingImages(db, { image });
+  await downloadPendingImages(db, { image });
+  expect(await health()).toEqual({ ok: false });
+  if (ending === "重試成功") image.mockResolvedValue({ data: Buffer.from("image"), mime: "image/png" });
+  if (ending === "撤回") await db.query("UPDATE messages SET revoked=true WHERE id='pictureB'");
+  if (ending === "到期") await db.query("UPDATE messages SET received_at=now()-interval '60 days' WHERE id='pictureB'");
+  await downloadPendingImages(db, { image });
+  expect(await health()).toEqual({ ok: true });
+});
 it("到期原文與圖片清除；加密備份保留摘要而不納入來源或憑證", async () => {
   const dir = await mkdtemp(join(tmpdir(), "agentflow-test-"));
   process.env.TEST_BACKUP_DIR = dir;

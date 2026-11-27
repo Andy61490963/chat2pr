@@ -61,6 +61,8 @@ export const groupDeliveryText = {
   closedNotice: "結束通知",
   quota: "LINE 本月推播額度已用完",
   groupSize: "LINE 剩餘推播額度不夠這個群組的人數",
+  quotaPriority: "剩餘推播額度保留給重要通知，群組發言時會以免費回覆補送，也可輸入 /進度 取回",
+  botLeft: "機器人已離開群組，未送出",
   lineRate: "LINE 暫時限制推播速度",
   lineRejected: "LINE 沒有收下這則訊息",
   lineError: "LINE 回應錯誤",
@@ -76,6 +78,9 @@ export const groupDeliveryText = {
   superseded: "已有較新的回覆",
   retry: "系統會再試",
   replyFailed: "透過 /進度 補送失敗",
+  replyUncertain: "LINE 未確認是否已送達",
+  replyUncertainLabel: "送達待確認",
+  manualProgress: "需要時可請群組成員輸入 /進度 取回",
   forward: "需要時請在看板查看並轉達",
   tryProgress: "可請群組成員用 /進度 取回，或在看板查看並轉達",
   enableReplies: "如需恢復通知，請確認群組回覆設定",
@@ -177,6 +182,7 @@ export const inboxStatusLabels = {
   chooseProject: "等你決定：選專案",
   review: "等你決定：確認需求",
   approveChange: "等你核准修改",
+  risk: "有風險",
   chooseOption: "等你決定：選方案",
   chooseTasks: "等你決定：挑選任務",
   amend: "等你補充：修改需求",
@@ -213,7 +219,12 @@ export const taskEndLabels = {
   cancel: { badge: "已取消", event: "取消" },
   closed: { badge: "PR 已關閉", event: "在 GitHub 關閉" },
   unsend: { badge: "來源已撤回", event: "來源訊息被撤回" },
-  duplicate: { badge: "重複需求", event: "辨識為重複需求" },
+  duplicate: {
+    badge: "重複需求",
+    event: "辨識為重複需求",
+    rejected: "以重複需求拒絕",
+    cancelled: "以重複需求取消",
+  },
   other: { badge: taskListLabels.ended, event: "結束" },
 } as const;
 
@@ -242,7 +253,6 @@ export const endReasonText = {
   required: "請選一個拒絕原因",
 } as const;
 
-export const taskEndSystemActor = "系統";
 export const taskCompletionEvents = {
   merged: "合併",
   answered: "回覆",
@@ -272,6 +282,7 @@ export const projectQuotaWaitPrefix = `${statusLabels.budget_wait}｜`;
 
 export const notificationLabels = {
   action: "需要你處理",
+  replyUncertain: "群組回覆待確認",
   privatePushPaused: "私訊暫停",
   serviceDown: "服務異常",
   serviceUp: "服務已恢復",
@@ -365,6 +376,12 @@ export const connectionStatusLabels = {
   needsAttention: "需處理",
   noRecord: "尚無紀錄",
   unchecked: "未檢查",
+} as const;
+
+export const inferenceStatusLabels = {
+  healthy: "正常",
+  failed: "異常",
+  unknown: "未確認",
 } as const;
 
 export const systemStatusLabels = {

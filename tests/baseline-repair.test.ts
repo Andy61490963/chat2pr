@@ -203,6 +203,20 @@ it("基底驗證失敗：看板與群組列出失敗的測試名稱與錯誤訊�
   expect(group!.text).toContain("請 AI 修好目標分支");
 });
 
+it("Node 基底失敗時，看板、群組與待核准的修復任務沿用同一份測試清單", async () => {
+  const s = await autoScenario([ok, {
+    exitCode: 1, stdout: "TAP version 13\nnot ok 1 - 計算示範票數\n  ---\n  error: '票數應為五張'\n  ...\n1..1", stderr: "",
+  }]);
+  await s.execution.execute(s.task.id);
+  const detail = parseFailure((await s.reload()).last_error)!.detail;
+  expect(detail.split("\n").slice(0, 2)).toEqual(["失敗的測試（共 1 個）：", "1. 計算示範票數：票數應為五張"]);
+  const group = await db.one<{ text: string }>("SELECT text FROM notifications WHERE task_id=$1 AND kind='group_failed'", [s.task.id]);
+  expect(group.text).toContain(detail);
+  const repair = await createBaselineRepair(db, s.task.id, "示範管理者");
+  expect(repair.status).toBe("awaiting_approval");
+  expect(repair.summary).toContain(detail);
+});
+
 it("有上次通過的紀錄：說明上次通過的短 SHA、之後的新 commit 數與比較連結", async () => {
   const s = await autoScenario([
     { exitCode: 0, stdout: "", stderr: "" },

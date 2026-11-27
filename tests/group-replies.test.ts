@@ -17,7 +17,10 @@ vi.mock("../server/config.js", async (original) => ({
     lineToken: "fictional-line-token",
   }),
 }));
-import { db, reset, fixture, session } from "./helpers.js";
+import { db, reset, fixture, session, confirmTask } from "./helpers.js";
+import { SubscriptionGate } from "../server/subscription-gate.js";
+import { Execution } from "../server/execution.js";
+import { Budget } from "../server/budget.js";
 import { buildApp } from "../server/app.js";
 import { Line } from "../server/line.js";
 import { discordId } from "../server/chat-platform.js";
@@ -38,12 +41,12 @@ import {
   replyFailedNote,
   replyGaveUpNote,
   tellGroupWaiting,
-  undeliveredHint,
 } from "../server/group-replies.js";
 import { askInGroup } from "../server/answers.js";
 import { approvalNotice } from "../server/project-routing.js";
 import { dueTriageGroups } from "../server/triage-window.js";
 import { GitHub } from "../server/github.js";
+import { deliveryLabel, deliveryNotice } from "../shared/group-delivery.js";
 import { expiredNote, quotaExhaustedDetail } from "../shared/line-quota.js";
 import {
   expireStaleNotifications,
@@ -53,6 +56,7 @@ import { recordHealth } from "../server/health.js";
 import type { Task } from "../shared/types.js";
 
 let app: Awaited<ReturnType<typeof buildApp>>;
+let line: Line;
 let headers: Awaited<ReturnType<typeof session>>;
 let project: string;
 let sent: { url: string; body: any }[];
@@ -61,7 +65,8 @@ beforeEach(async () => {
   await reset();
   project = await fixture();
   headers = await session();
-  app = await buildApp(db);
+  line = new Line(db);
+  app = await buildApp(db, undefined, undefined, undefined, undefined, undefined, undefined, line);
   sent = [];
   vi.stubGlobal(
     "fetch",
@@ -449,13 +454,13 @@ describe("LINE 每月推播額度用完", () => {
     push: () => Response;
     quota?: { limit: number | null; used: number };
   }) => {
-    const pushes: { to: string; text: string }[] = [];
+    const pushes: { to: string; texts: string[] }[] = [];
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string, init?: RequestInit) => {
         if (url.endsWith("/v2/bot/message/push")) {
           const body = JSON.parse(String(init?.body));
-          pushes.push({ to: body.to, text: body.messages[0].text });
+          pushes.push({ to: body.to, texts: body.messages.map((m: { text: string }) => m.text) });
           return opts.push();
         }
         if (url.endsWith("/v2/bot/message/quota") && opts.quota)
@@ -600,7 +605,7 @@ describe("LINE 每月推播額度用完", () => {
       detail: "本月已用 3／上限 200 則",
     });
     await new Line(db).flushNotifications();
-    expect(pushes.map((p) => p.text)).toEqual(["目前的問題", "剛完成的結果"]);
+    expect(pushes.map((p) => p.texts)).toEqual([["目前的問題", "剛完成的結果"]]);
     const expired = await db.query<{ text: string }>(
       "SELECT text FROM notifications WHERE group_id IS NOT NULL AND last_error='已過期，未補送' AND sent_at IS NOT NULL ORDER BY created_at",
     );
@@ -730,15 +735,17 @@ describe("LINE 每月推播額度用完", () => {
     expect(calls.members).toBe(1);
     expect(calls.pushes).toEqual(["fictional-admin"]);
 
-    // 額度夠了（例如升級方案後連線檢查寫入新用量）：照送，每則依人數累加。
+    // 額度夠了，十一則分成三批。每一批依群組人數計八則。
     await setQuota(true, "本月已用 100／上限 200 則");
     await line.flushNotifications();
-    expect(calls.pushes.filter((to) => to === "group-a")).toHaveLength(10);
-    expect((await quota())?.detail).toBe("本月已用 180／上限 200 則");
-    // 一輪最多 10 則；下一輪送出最後 1 則（8 人），剩 12 則。
-    await line.flushNotifications();
-    expect(calls.pushes.filter((to) => to === "group-a")).toHaveLength(11);
-    expect((await quota())?.detail).toBe("本月已用 188／上限 200 則");
+    expect(calls.messages.at(-1)?.messages).toHaveLength(5);
+    for (const size of [5, 1]) {
+      await db.query("UPDATE notifications SET sent_at=now()-interval '2 minutes' WHERE group_id='group-a' AND sent_at IS NOT NULL");
+      await line.flushNotifications();
+      expect(calls.messages.at(-1)?.messages).toHaveLength(size);
+    }
+    expect(calls.pushes.filter((to) => to === "group-a")).toHaveLength(3);
+    expect((await quota())?.detail).toBe("本月已用 124／上限 200 則");
   });
 
   it("群組推播撞到每月上限但額度 API 還剩 3 則：不封鎖、私訊照送；剩 0 則才封鎖並保留用量", async () => {
@@ -775,15 +782,16 @@ describe("LINE 每月推播額度用完", () => {
     );
     expect(second.attempts).toBe(0);
     expect(second.sent_at).toBeNull();
-    // 記下這個群組至少要 4 則，24 小時內不再對它撞 429。
-    expect(
-      await db.one("SELECT member_count FROM groups WHERE id='group-a'"),
-    ).toEqual({ member_count: 4 });
+    // 剩 3 則並不能推得有 4 人；人數仍未知，維持保守估值。
+    const state = await app.inject({ url: "/api/state", headers });
+    expect(state.json().groups.find((g: { id: string }) => g.id === "group-a")).toMatchObject({
+      member_count: null, member_count_estimate: 8,
+    });
     await line.flushNotifications();
     // 私訊與群組分開送，誰先送出不固定；只核對兩邊各送一次。
     expect([...calls.pushes].sort()).toEqual(["fictional-admin", "group-a"]);
     expect((await rows())[1].last_error).toBe(
-      "推播額度剩 2 則，不足這個群組 4 人，額度恢復後再送",
+      "推播額度剩 2 則，不足這個群組的人數，額度恢復後再送",
     );
 
     // 額度 API 顯示剩 0 則：整個封鎖，說明保留用量，私訊也不再送。
@@ -804,6 +812,30 @@ describe("LINE 每月推播額度用完", () => {
     });
     expect((await directRow("direct:2"))?.sent_at).toBeNull();
     expect((await rows()).map((r) => r.attempts)).toEqual([0, 0]);
+  });
+
+  it.each([
+    { scenario: "尚未能重新查得人數", members: null, cost: 12 },
+    { scenario: "重新查得兩人", members: 2, cost: 2 },
+  ])("人數未知且剩十一則仍被拒收，$scenario 時按 $cost 人計費", async ({ members, cost }) => {
+    const id = await task();
+    await notifyGroup(db, id, "answered", "answered:estimated", "示範答案");
+    billedApi({ push: monthlyLimit, quota: { limit: 200, used: 189 }, members: null });
+    await line.flushNotifications();
+    const dashboardGroup = async () => {
+      const state = await app.inject({ url: "/api/state", headers });
+      return state.json().groups.find((g: { id: string }) => g.id === "group-a");
+    };
+    expect(await dashboardGroup()).toMatchObject({ member_count: null, member_count_estimate: 12 });
+    await setQuota(true, "本月已用 20／上限 200 則");
+    if (members !== null)
+      await db.query("UPDATE groups SET member_count_at=now()-interval '25 hours' WHERE id='group-a'");
+    const resume = billedApi({ push: delivered, quota: null, members });
+    await line.flushNotifications();
+    expect(resume.pushes).toEqual(["group-a"]);
+    expect(resume.members).toBe(members === null ? 0 : 1);
+    expect(await dashboardGroup()).toMatchObject({ member_count: members, member_count_estimate: members === null ? 12 : null });
+    expect((await quota())?.detail).toBe(`本月已用 ${20 + cost}／上限 200 則`);
   });
 
   it("私訊撞到每月上限就封鎖；額度 API 讀不到時沿用原本說明裡的用量，不把看板的用量蓋掉", async () => {
@@ -872,6 +904,7 @@ describe("LINE 每月推播額度用完", () => {
     expect(calls.pushes).toEqual(["group-a"]);
     expect((await quota())?.detail).toBe("本月已用 60／上限 200 則");
     await notifyGroup(db, id, "answered", "answered:another", "另一件範例結果");
+    await db.query("UPDATE notifications SET sent_at=now()-interval '2 minutes' WHERE dedupe_key='group:answered:example'");
     await line.flushNotifications();
     expect(calls.pushes).toEqual(["group-a", "group-a"]);
     expect(await directRow("direct:hold")).toMatchObject({ sent_at: null, attempts: 0 });
@@ -1040,11 +1073,12 @@ describe("用 reply token 取回與說實話", () => {
       "DELETE FROM service_health WHERE name IN ('line_quota','notifications','codex_subscription_gate')",
     );
   let pushes: { to: string; text: string }[];
-  let replyCalls: { token: string; messages: { text: string }[] }[];
+  let replyCalls: { token: string; messages: { text: string; quickReply?: unknown }[] }[];
   let push: () => Promise<Response>;
   let replyStatus: number;
   let replyMessage: string;
   let replyTimeout: boolean;
+  let connectRefused: boolean;
   beforeEach(async () => {
     await clearHealth();
     pushes = [];
@@ -1052,6 +1086,7 @@ describe("用 reply token 取回與說實話", () => {
     replyStatus = 200;
     replyMessage = "Invalid reply token";
     replyTimeout = false;
+    connectRefused = false;
     push = async () =>
       Response.json({ message: "Too many requests" }, { status: 429 });
     // 模擬 LINE：reply 成功時依序回傳每則訊息的 ID（reply-第幾次-第幾則）。
@@ -1066,6 +1101,8 @@ describe("用 reply token 取回與說實話", () => {
         if (url.endsWith("/v2/bot/message/reply")) {
           replyCalls.push({ token: body.replyToken, messages: body.messages });
           const n = replyCalls.length;
+          if (connectRefused)
+            throw new TypeError("fetch failed", { cause: Object.assign(new Error(), { code: "ECONNREFUSED" }) });
           if (replyTimeout)
             throw new DOMException(
               "The operation was aborted due to timeout",
@@ -1088,14 +1125,16 @@ describe("用 reply token 取回與說實話", () => {
   async function send(
     id: string,
     text: string,
-    opts: { quoted?: string; group?: string } = {},
+    opts: { quoted?: string; group?: string; timestamp?: number; redelivery?: boolean } = {},
   ) {
     const payload = JSON.stringify({
       events: [
         {
           webhookEventId: `event-${id}`,
           type: "message",
-          replyToken: `fictional-reply-${id}`,
+          replyToken: `fictionalReply${id.replace(/[^a-z0-9]/gi, "")}`,
+          timestamp: opts.timestamp ?? Date.now(),
+          deliveryContext: { isRedelivery: opts.redelivery ?? false },
           source: {
             type: "group",
             groupId: opts.group ?? "group-a",
@@ -1180,11 +1219,11 @@ describe("用 reply token 取回與說實話", () => {
     const asking = await askingTask("匯出問題");
     const line = new Line(db);
     for (let n = 0; n < 3; n++) await line.flushNotifications();
-    expect(pushes).toHaveLength(6);
+    expect(pushes).toHaveLength(3);
     expect((await notice(answered)).attempts).toBe(3);
     // 試滿 3 次後推播不再送，只能靠 /進度 取回。
     await line.flushNotifications();
-    expect(pushes).toHaveLength(6);
+    expect(pushes).toHaveLength(3);
 
     await send("p1", "/進度");
     expect(replyCalls).toHaveLength(1);
@@ -1488,24 +1527,29 @@ describe("用 reply token 取回與說實話", () => {
   );
 
   it.each([200, 503])(
-    "補送完成或歸還前，租約仍由本輪持有（HTTP %i）",
+    "補送等待 LINE 回應時釋放資料列鎖，但下一輪仍無法重領（HTTP %i）",
     async (status) => {
       await settings();
       const id = await answeredTask("等待寫回結果的範例");
-      let unlocked: unknown[] | undefined;
+      let unlocked: number | undefined;
+      let nextClaim: string[] | undefined;
       vi.stubGlobal("fetch", async () => {
-        // 模擬回應尚未寫回的瞬間；另一個領取者只能看到沒有被鎖住的列。
-        unlocked = await db.query(
-          "SELECT id FROM notifications WHERE task_id=$1 AND last_error=$2 FOR UPDATE SKIP LOCKED",
-          [id, claimingNote],
-        );
+        await db.transaction(async (c) => {
+          unlocked = (await c.query(
+            "SELECT id FROM notifications WHERE task_id=$1 AND last_error=$2 FOR UPDATE SKIP LOCKED",
+            [id, claimingNote],
+          )).rows.length;
+          const pending = await claimPendingGroupReplies(c, "group-a", 4);
+          nextClaim = pending.replies.map((notice) => notice.id);
+        });
         return Response.json(
           { sentMessages: [{ id: "summary" }, { id: "reply-result" }] },
           { status },
         );
       });
       await send("settle-lease", "/進度");
-      expect(unlocked).toEqual([]);
+      expect(unlocked).toBe(1);
+      expect(nextClaim).toEqual([]);
       expect(await notice(id)).toMatchObject(
         status === 200
           ? { sent_message_id: "reply-result", last_error: null }
@@ -1604,7 +1648,7 @@ describe("用 reply token 取回與說實話", () => {
     expect(await failures(flaky)).toBe(0);
     expect(await notice(flaky)).toMatchObject({
       sent_at: null,
-      last_error: replyFailedNote,
+      sent_message_id: null,
     });
     replyTimeout = false;
     await send("p7", "/進度");
@@ -1614,11 +1658,11 @@ describe("用 reply token 取回與說實話", () => {
 
   it("/進度表 不觸發；不回覆設定或總開關關閉時不回；群組停用時說明沒有啟用", async () => {
     await settings();
-    await answeredTask("查詢");
     await send("p1", "/進度表");
     await send("p2", "有人說 /進度");
     expect(replyCalls).toHaveLength(0);
 
+    await answeredTask("查詢");
     await settings({ reply_mode: "off" });
     await send("p3", "/進度");
     expect(replyCalls).toHaveLength(0);
@@ -1638,6 +1682,41 @@ describe("用 reply token 取回與說實話", () => {
         "SELECT 1 FROM notifications WHERE group_id='group-a' AND sent_at IS NULL",
       ),
     ).toHaveLength(1);
+  });
+
+  it.each([
+    ["執行器拒絕連線", "runner_unreachable", false],
+    ["讀數過期", "unknown", false],
+    ["已達上限", "exhausted", true],
+    ["觸及保留門檻", "reserve", true],
+  ] as const)("額度%s時，群組收到回覆與等待推播都說明正確原因", async (scenario, kind, limited) => {
+    await settings({ reply_mode: "all" });
+    await setSettings({ ai_mode: "subscription", codex_reserve_percent: 10 });
+    const gate = new SubscriptionGate(db, async () => {
+      if (scenario === "執行器拒絕連線")
+        throw new TypeError("連線失敗", { cause: { code: "ECONNREFUSED" } });
+      return {
+        allowed: scenario !== "已達上限",
+        checkedAt: new Date(scenario === "讀數過期" ? 0 : Date.now()).toISOString(),
+        limits: [{ windows: [{ usedPercent: scenario === "觸及保留門檻" ? 90 : 0, resetsAt: null }] }],
+      };
+    });
+    await expect(gate.ensure()).rejects.toThrow();
+    await send("quota1", "/任務 調整按鈕顏色");
+    expect.soft(lastReply()[0]).toContain(limited ? "額度暫時用完" : "暫時無法確認 AI 額度");
+    const task = await db.one<{ id: string }>(
+      "INSERT INTO tasks(project_id,group_id,title,summary,acceptance,status,approved_version,dedupe_key) VALUES($1,'group-a','範例工作','調整按鈕','[]','queued',1,'quota1') RETURNING id",
+      [project],
+    );
+    await confirmTask(task.id);
+    const runner = { call: vi.fn(), upload: vi.fn() };
+    await new Execution(db, new GitHub(), line, new Budget(db), runner).execute(task.id);
+    push = async () => Response.json({});
+    await line.flushNotifications();
+    const waiting = pushes.find(message => message.to === "group-a")?.text;
+    expect.soft(waiting).toContain(limited ? "沒有可用的 AI 額度" : "暫時無法確認 AI 額度");
+    if (!limited) expect([lastReply()[0], waiting].join(" ")).not.toMatch(/用完|沒有可用/);
+    expect(await db.one("SELECT probe_info->>'kind' AS kind FROM service_health WHERE name='codex_subscription_gate'")).toEqual({ kind });
   });
 
   it("「收到」依暫停、判讀暫停、沒有可用專案、AI 額度關閉說明；正常時維持原文字", async () => {
@@ -1699,26 +1778,292 @@ describe("用 reply token 取回與說實話", () => {
     ]);
   });
 
-  it("推播額度用完或有回覆沒送到時，「收到」只加一句 /進度 提示", async () => {
+  it("推播額度用完時，群組下一則普通發言直接帶出本群組的重要結果與補問", async () => {
     await settings();
-    const id = await answeredTask("查訂單欄位");
-    // 剛排入、推播還沒輪到的不提示。
-    await send("m1", "/任務 調整按鈕顏色");
-    expect(lastReply()).toEqual([commandAck]);
-
     await db.query(
       "INSERT INTO service_health(name,ok,detail) VALUES('line_quota',false,'LINE 本月推播額度已用完')",
     );
-    await send("m2", "/任務 調整按鈕顏色");
-    expect(lastReply()).toEqual([`${commandAck}\n${undeliveredHint(1)}`]);
-    expect(lastReply()[0]).not.toContain("查詢結果");
-
-    await db.query("DELETE FROM service_health WHERE name='line_quota'");
+    const answer = await answeredTask("示範報表");
     await db.query(
-      "UPDATE notifications SET attempts=3,last_error='LINE 通知失敗（500）' WHERE task_id=$1",
-      [id],
+      "UPDATE notifications SET text=text||' password=ExampleKey123' WHERE task_id=$1",
+      [answer],
     );
-    await send("m3", "/任務 調整按鈕顏色");
-    expect(lastReply()).toEqual([`${commandAck}\n${undeliveredHint(1)}`]);
+    const question = await askingTask("示範匯出");
+    const stale = await askingTask("過期問題", "cancelled");
+    const waiting = await task("等候整理");
+    await notifyGroup(db, waiting, "received", "received:demo", "等候整理的中間進度");
+    await db.query("INSERT INTO groups(id,name,enabled) VALUES('group-b','群組乙',true)");
+    const other = await answeredTask("群組乙的查詢", "group-b");
+
+    await send("chat", "大家早安");
+    expect(replyCalls).toHaveLength(1);
+    const messages = lastReply().join("\n");
+    expect(messages).toContain("示範報表");
+    expect(messages).toContain("是按了沒下載，還是內容不對？");
+    expect(messages).toContain("[已遮蔽]");
+    expect(messages).not.toMatch(/ExampleKey123|等候整理的中間進度|群組乙的查詢|過期問題/);
+    expect((await notice(answer)).sent_message_id).toMatch(/^reply-1-/);
+    expect((await notice(question.id)).sent_message_id).toMatch(/^reply-1-/);
+    for (const id of [stale.id, other, waiting]) expect((await notice(id)).sent_at).toBeNull();
+    await send("chat", "大家早安");
+    expect(replyCalls).toHaveLength(1);
+    expect(pushes).toHaveLength(0);
+  });
+
+  it("指令的收到與待送結果共用一次免費回覆，送達後不再推播", async () => {
+    await settings();
+    const answer = await answeredTask("示範日期");
+    await send("command", "/任務 更新日期");
+    expect(replyCalls).toHaveLength(1);
+    expect(lastReply()[0]).toBe(commandAck);
+    expect(lastReply()[1]).toContain("示範日期");
+    expect((await notice(answer)).sent_message_id).toBe("reply-1-1");
+    await line.flushNotifications();
+    expect(pushes).toHaveLength(0);
+  });
+
+  it.each([
+    { firstMessage: "早安", cause: "逾時", status: 200 },
+    { firstMessage: "/進度", cause: "逾時", status: 200 },
+    { firstMessage: "早安", cause: "伺服器錯誤", status: 503 },
+  ])("「$firstMessage」的免費回覆發生$cause 後，冷卻期間成員可輸入 /進度 取回", async ({ firstMessage, status }) => {
+    await settings();
+    const id = await answeredTask("示範回答");
+    replyTimeout = status === 200;
+    replyStatus = status;
+    await send("initial", firstMessage);
+    expect(lastReply().join("\n")).toContain("示範回答");
+    replyTimeout = false;
+    replyStatus = 200;
+    await line.flushNotifications();
+    expect(pushes).toHaveLength(0);
+    await send("ordinary", "午安");
+    expect(replyCalls).toHaveLength(1);
+
+    replyStatus = 400;
+    await send("expiredToken", "/進度");
+    expect(lastReply().join("\n")).toContain("示範回答");
+    await line.flushNotifications();
+    expect(pushes).toHaveLength(0);
+    expect(replyCalls).toHaveLength(2);
+    const chat = await app.inject({ url: "/api/groups/group-a/messages", headers });
+    const { delivery } = chat.json().bot_messages.find((m: { task_id: string }) => m.task_id === id);
+    expect(deliveryLabel(delivery)).toBe("送達待確認");
+    expect(deliveryNotice(delivery, "group_answered")).toContain("/進度");
+
+    replyStatus = 200;
+    await send("retrieve", "/進度");
+    expect(lastReply()[0]).not.toContain("先前沒送到");
+    expect(lastReply()[1]).toContain("示範回答");
+    expect((await notice(id)).sent_message_id).toBe("reply-3-1");
+    await send("done", "/進度");
+    expect(lastReply()).toHaveLength(1);
+  });
+
+  it("補問免費回覆逾時後，冷卻五分鐘才在群組發言時補送，保留前綴與作答按鈕", async () => {
+    await settings();
+    const asking = await askingTask("範例匯出問題");
+    replyTimeout = true;
+    await send("firstQuestion", "早安");
+    replyTimeout = false;
+    await send("earlyQuestion", "午安");
+    expect(replyCalls).toHaveLength(1);
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 301000);
+    try {
+      await line.flushNotifications();
+      expect(pushes).toHaveLength(0);
+      expect(replyCalls).toHaveLength(1);
+      await send("retryQuestion", "晚安");
+      expect(replyCalls).toHaveLength(2);
+      expect(lastReply()[0]).toMatch(/^（補送：先前可能沒送到，看過可略過）/);
+      expect(lastReply()[0]).toContain("是按了沒下載");
+      expect(replyCalls[0].messages[0]).toHaveProperty("quickReply.items");
+      expect(replyCalls[1].messages[0].quickReply).toEqual(replyCalls[0].messages[0].quickReply);
+      expect((await notice(asking.id)).sent_message_id).toBe("reply-2-0");
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("重要答案補送仍遇到伺服器錯誤時，後續指令只附未確認數量，成員仍可用 /進度 取回", async () => {
+    await settings();
+    const id = await answeredTask("範例運費答案");
+    replyStatus = 503;
+    await send("firstAnswer", "早安");
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now + 301000);
+    try {
+      await send("retryAnswer", "午安");
+      expect(replyCalls).toHaveLength(2);
+      replyStatus = 200;
+      clock.mockReturnValue(now + 602000);
+      await send("plain", "晚安");
+      expect(replyCalls).toHaveLength(2);
+      await send("command", "/任務 新增匯出欄位");
+      expect(lastReply().join("\n")).toContain("有 1 則回覆不確定是否送達，需要時輸入 /進度 取回");
+      expect(lastReply().join("\n")).not.toContain("範例運費答案");
+      await line.flushNotifications();
+      expect(pushes).toHaveLength(0);
+      await send("manual", "/進度");
+      expect(lastReply().at(-1)).toContain("範例運費答案");
+      expect((await notice(id)).sent_message_id).toBe("reply-4-1");
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("免費回覆建立連線遭拒時，排程仍能推播該則回答", async () => {
+    await settings();
+    const id = await answeredTask("連線恢復後的回答");
+    connectRefused = true;
+    await send("connect", "早安");
+    connectRefused = false;
+    push = async () => Response.json({ sentMessages: [{ id: "ExamplePush1" }] });
+    await line.flushNotifications();
+    expect(pushes).toHaveLength(1);
+    expect(pushes[0].text).toContain("連線恢復後的回答");
+    expect((await notice(id)).sent_message_id).toBe("ExamplePush1");
+  });
+
+  it("額度充足的摘要提示可用 /進度 取回，其餘結果可在群組再發言前推播", async () => {
+    await settings();
+    await db.query("INSERT INTO service_health(name,ok,detail) VALUES('line_quota',true,'本月已用 12／上限 200 則')");
+    for (let i = 1; i <= 6; i++) await answeredTask(`虛構結果${i}`);
+    push = async () => Response.json({ sentMessages: [{ id: "ExamplePush2" }] });
+    await send("summary", "早安");
+    const summary = lastReply().at(-1)!;
+    expect(summary).toContain("虛構結果6");
+    expect(summary).toContain("/進度");
+    expect(summary).not.toContain("下次群組發言時會繼續補送");
+    await line.flushNotifications();
+    expect(pushes.map((call) => call.text).join("\n")).toContain("虛構結果6");
+  });
+
+  it("重要結果超過五則時，同一個回覆也會摘要其餘項目，仍可取回可引用的原訊息", async () => {
+    await settings();
+    for (let i = 1; i <= 6; i++) await answeredTask(`範例結果${i}`);
+    await db.query(
+      "INSERT INTO service_health(name,ok,detail) VALUES('line_quota',false,'LINE 本月推播額度已用完')",
+    );
+    await send("summary", "早安");
+    expect(replyCalls).toHaveLength(1);
+    expect(lastReply().length).toBeLessThanOrEqual(5);
+    for (let i = 1; i <= 6; i++) expect(lastReply().join("\n")).toContain(`範例結果${i}`);
+    expect(lastReply().join("\n")).toContain("/進度");
+    await send("progress", "/進度");
+    expect(lastReply().some((text) => text.includes(detailHint))).toBe(true);
+  });
+
+  it("同時有兩個補問時，回覆的最後一則保留可點的問題，另一題列在摘要等下次發言", async () => {
+    await settings();
+    const a = await askingTask("第一題");
+    const b = await askingTask("第二題");
+    await answeredTask("可先閱讀的結果");
+    await send("questions", "早安");
+    expect(lastReply().at(-1)).toContain("第一題");
+    expect(replyCalls[0].messages.at(-1)).toHaveProperty("quickReply.items");
+    expect(lastReply().join("\n")).toContain("第二題");
+    expect(lastReply().join("\n")).toContain("可先閱讀的結果");
+    expect((await notice(a.id)).sent_message_id).not.toBeNull();
+    expect((await notice(b.id)).sent_at).toBeNull();
+    await send("next", "還有嗎");
+    expect(lastReply().at(-1)).toContain("第二題");
+    expect(replyCalls[1].messages.at(-1)).toHaveProperty("quickReply.items");
+  });
+
+  it("一般發言後一分鐘內排入的通知優先用還沒用過的回覆，之後不重用權杖", async () => {
+    await settings();
+    await send("recent", "大家早安");
+    expect(replyCalls).toHaveLength(0);
+    const answer = await answeredTask("剛完成的查詢");
+    await line.flushNotifications();
+    expect(replyCalls.map((call) => call.token)).toEqual(["fictionalReplyrecent"]);
+    expect(lastReply().join("\n")).toContain("剛完成的查詢");
+    expect((await notice(answer)).sent_message_id).toMatch(/^reply-1-/);
+    expect(pushes).toHaveLength(0);
+    await answeredTask("後來的查詢");
+    await line.flushNotifications();
+    expect(replyCalls).toHaveLength(1);
+  });
+
+  it("過期發言與已關閉回覆的群組都不消耗回覆權杖", async () => {
+    await settings();
+    await send("expired", "早安", { timestamp: Date.now() - 61000 });
+    await send("unused", "午安");
+    await answeredTask("示範進度");
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 61000);
+    try {
+      await line.flushNotifications();
+    } finally {
+      clock.mockRestore();
+    }
+    expect(replyCalls).toHaveLength(0);
+    await settings({ reply_mode: "off" });
+    await send("off", "有人嗎");
+    expect(replyCalls).toHaveLength(0);
+    await settings({ reply_mode: "results" });
+    await setSettings({ group_replies: false });
+    await send("systemOff", "有人嗎");
+    await line.flushNotifications();
+    expect(replyCalls).toHaveLength(0);
+  });
+
+  it("免費回覆也能送出收到通知，權杖失效後留給下一次發言重試", async () => {
+    await settings({ reply_mode: "all" });
+    const id = await task("示範修改");
+    await notifyGroup(db, id, "received", "received:reply", "已收到示範修改", "all");
+    replyStatus = 400;
+    replyMessage = "Invalid reply token";
+    await send("oldReply", "早安");
+    expect(lastReply()).toEqual(["已收到示範修改"]);
+    expect(await notice(id)).toMatchObject({ sent_at: null, attempts: 0, last_error: replyFailedNote });
+    expect(await failures(id)).toBe(0);
+    replyStatus = 200;
+    await send("newReply", "午安");
+    expect(lastReply()).toEqual(["已收到示範修改"]);
+    expect((await notice(id)).sent_message_id).toBe("reply-2-0");
+    expect(pushes).toHaveLength(0);
+  });
+
+  it.each([false, true])("延遲送達且首次收到的事件，可在收件後一分鐘回覆一次（重送 %s）", async (redelivery) => {
+    await settings();
+    await answeredTask("範例結果");
+    const event = { timestamp: Date.now() - 2 * 60_000, redelivery };
+    await send("delayed", "/任務 示範調整", event);
+    await send("delayed", "/任務 示範調整", { ...event, redelivery: true });
+    expect(replyCalls).toHaveLength(1);
+    expect(lastReply()[0]).toBe(commandAck);
+    expect(lastReply()[1]).toContain("範例結果");
+  });
+
+  it("原事件已過二十分鐘的重送不消耗權杖，待送結果留給下一則有效發言", async () => {
+    await settings();
+    const answer = await answeredTask("範例效期");
+    await send("late", "/進度", { timestamp: Date.now() - 20 * 60_000, redelivery: true });
+    expect(replyCalls).toHaveLength(0);
+    expect((await notice(answer)).sent_at).toBeNull();
+    await send("fresh", "早安");
+    expect(lastReply().join("\n")).toContain("範例效期");
+  });
+
+  it.each([
+    { status: 400, message: "The request body has 1 error(s)", calls: 2 },
+    { status: 400, message: "Invalid reply token", calls: 1 },
+    { status: 503, message: "Internal server error", calls: 1 },
+  ])("指令併送遭 HTTP $status 拒收，只在確認內容問題時單送指令回覆（$message）", async ({ status, message, calls }) => {
+    await settings();
+    const answer = await answeredTask("等待補送的答案");
+    const payloads: string[][] = [];
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+      const { messages } = JSON.parse(String(init.body)) as { messages: { text: string }[] };
+      payloads.push(messages.map((m) => m.text));
+      return messages.length > 1
+        ? Response.json({ message }, { status })
+        : Response.json({ sentMessages: [{ id: "Confirmed" }] });
+    });
+    await send("ack", "/任務 範例修改");
+    expect(payloads).toHaveLength(calls);
+    if (calls === 2) expect(payloads[1]).toEqual([commandAck]);
+    expect((await notice(answer)).sent_at).toBeNull();
   });
 });

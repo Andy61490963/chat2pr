@@ -1,0 +1,24 @@
+name: 看板設計基準
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  baseline:
+    name: 基準只能刪減
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: 對照合併前版本的樣式基準
+        env:
+          BEFORE: ${{ github.event.before }}
+        run: node --import tsx scripts/check-design-baseline.ts "$GITHUB_EVENT_NAME" "$BEFORE"

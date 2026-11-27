@@ -1,3 +1,4 @@
+import { InlineNotice, Toolbar } from "@/components/ui/layout";
 import { useEffect, useRef, useState } from "react";
 import type { Project } from "../../shared/types.js";
 import {
@@ -296,7 +297,7 @@ export function ProjectDatabase({
 
   return (
     <section
-      className="space-y-4 rounded-lg border p-4"
+      className="space-y-4 rounded-md border p-4"
       aria-label="資料庫連線"
     >
       <div>
@@ -309,10 +310,7 @@ export function ProjectDatabase({
       </div>
 
       {loadError ? (
-        <div
-          role="alert"
-          className="space-y-2 rounded-lg bg-danger-soft px-3 py-2.5 text-sm text-danger"
-        >
+        <InlineNotice tone="danger" role="alert" className="space-y-2">
           <p className="break-words">讀取資料庫連線設定失敗：{loadError}</p>
           <Button
             variant="outline"
@@ -322,7 +320,7 @@ export function ProjectDatabase({
           >
             重新讀取
           </Button>
-        </div>
+        </InlineNotice>
       ) : (
         !loaded && (
           <p role="status" className="text-sm text-muted-foreground">
@@ -366,7 +364,7 @@ export function ProjectDatabase({
       <fieldset disabled={!loaded} className="min-w-0 space-y-4">
         <section
           aria-labelledby="db-ai-title"
-          className="space-y-2 rounded-lg border p-3"
+          className="space-y-2 rounded-md border p-3"
         >
           <h4 id="db-ai-title" className="text-sm font-medium">
             交給 AI 整理
@@ -386,7 +384,7 @@ export function ProjectDatabase({
             placeholder="例如示範資料庫在 db.example.test，連接埠 1433，帳號 reader"
             onChange={(e) => setDescribe(e.target.value)}
           />
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          <Toolbar className="gap-x-3 gap-y-2">
             <Button
               type="button"
               variant="outline"
@@ -401,7 +399,7 @@ export function ProjectDatabase({
             <p id="db-ai-recipient" className="text-sm text-muted-foreground">
               送出後，AI 模型會收到原文。
             </p>
-          </div>
+          </Toolbar>
           <p className="text-xs text-muted-foreground">
             整理結果會填到下方，伺服器也會測試提到的位址。請核對欄位後再儲存。
           </p>
@@ -428,11 +426,11 @@ export function ProjectDatabase({
               )}
               {(extracted.vpn.needed ||
                 extracted.endpoints.some((e) => !e.reachable)) && (
-                <p className="rounded bg-warn-soft px-3 py-2 text-warn">
+                <InlineNotice as="p" tone="warn">
                   {extracted.vpn.note || "有位址連不到。"}
                   請讓這台伺服器本身連上 VPN 或 Tailscale subnet router；VPN
                   帳密不用給 chat2pr，設定一次後任務就連得到。
-                </p>
+                </InlineNotice>
               )}
               {extracted.notes.map((n) => (
                 <p key={n} className="text-muted-foreground">
@@ -444,7 +442,7 @@ export function ProjectDatabase({
         </section>
         <section
           aria-labelledby="db-manual-title"
-          className="space-y-4 rounded-lg border p-3"
+          className="space-y-4 rounded-md border p-3"
         >
           <div className="space-y-2">
             <h4 id="db-manual-title" className="text-sm font-medium">
@@ -499,7 +497,7 @@ export function ProjectDatabase({
           </div>
 
           {draft.useSsh && (
-            <div className="space-y-3 rounded-lg border p-3">
+            <div className="space-y-3 rounded-md border p-3">
               <p className="text-xs text-muted-foreground">
                 主機無法直接連到資料庫時使用：先登入跳板，再由跳板連到上面的資料庫主機與連接埠。私鑰與密碼擇一。
               </p>
@@ -563,7 +561,7 @@ export function ProjectDatabase({
             </p>
           </div>
 
-          <div className="flex flex-wrap gap-2">
+          <Toolbar>
             <Button
               className="work-touch"
               aria-describedby="db-manual-help"
@@ -636,7 +634,7 @@ export function ProjectDatabase({
                 刪除快照
               </ConfirmButton>
             )}
-          </div>
+          </Toolbar>
           {dirty && connection && (
             <p className="text-xs text-muted-foreground">
               有尚未儲存的修改；儲存後才能測試或擷取。
@@ -646,12 +644,9 @@ export function ProjectDatabase({
       </fieldset>
 
       {actionError && (
-        <p
-          role="alert"
-          className="whitespace-pre-wrap break-words rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
-        >
+        <InlineNotice as="p" tone="danger" role="alert" className="whitespace-pre-wrap break-words">
           {actionError}
-        </p>
+        </InlineNotice>
       )}
       {tested && (
         <div className="space-y-1 text-sm" role="status">

@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { DataList, InlineNotice, Toolbar } from "@/components/ui/layout";
+import { type CSSProperties, useCallback, useEffect, useMemo, useState } from "react";
 import { HardDrive, RefreshCw, Trash2 } from "lucide-react";
 import {
   diskRules,
@@ -44,8 +45,6 @@ const levels = {
   critical: "danger",
   unknown: "secondary",
 } as const;
-const switchTouchArea =
-  "relative max-md:after:absolute max-md:after:top-1/2 max-md:after:left-1/2 max-md:after:size-11 max-md:after:-translate-1/2";
 
 const ruleHelp: Record<DiskRule, string> = {
   workspaces:
@@ -230,7 +229,7 @@ export function DockerDiskCard({
                 : "盤點中…（映像與資料卷多時需要一點時間）"}
           </CardDescription>
         </div>
-        <div className="flex shrink-0 flex-wrap justify-end gap-2">
+        <Toolbar className="shrink-0 justify-end">
           <Button
             variant="outline"
             size="sm"
@@ -246,48 +245,42 @@ export function DockerDiskCard({
           >
             <Trash2 /> 立即清理
           </Button>
-        </div>
+        </Toolbar>
       </CardHeader>
       <CardContent className="flex flex-col gap-5">
         {reportError && (
-          <div
-            role="alert"
-            className="flex flex-col gap-1 rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
-          >
+          <InlineNotice tone="danger" role="alert" className="flex flex-col gap-1">
             {reportError}
-          </div>
+          </InlineNotice>
         )}
         {settingsError && !draft && (
-          <p
-            role="alert"
-            className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger"
-          >
+          <InlineNotice as="p" tone="danger" role="alert">
             {settingsError}
-          </p>
+          </InlineNotice>
         )}
         {notice && (
-          <p className="rounded-lg bg-good-soft px-3 py-2 text-sm text-good">
+          <InlineNotice as="p" tone="good">
             {notice}
-          </p>
+          </InlineNotice>
         )}
         {report?.paused && (
-          <p className="rounded-lg bg-danger-soft px-3 py-2 text-sm text-danger">
+          <InlineNotice as="p" tone="danger">
             可用空間低於 {report.settings.pause_percent}%，已暫停派新工作。
             排隊中的任務會留在佇列，空間回升後自動執行；清理後按「重新盤點」確認。
-          </p>
+          </InlineNotice>
         )}
         {report?.level === "low" && (
-          <p className="rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn">
+          <InlineNotice as="p" tone="warn">
             Docker 可用空間低於 {report.settings.warn_percent}
             %。請查看下方用量，並用「立即清理」確認可清理的項目。
-          </p>
+          </InlineNotice>
         )}
         {report?.level === "critical" && !report.paused && (
-          <p className="rounded-lg bg-warn-soft px-3 py-2 text-sm text-warn">
+          <InlineNotice as="p" tone="warn">
             可用空間低於 {report.settings.pause_percent}
             %。「空間不足時暫停派工」沒有開啟，
             新工作仍會執行，可能因為磁碟滿而在安裝或建置時失敗。請查看下方用量，並用「立即清理」確認可清理的項目。
-          </p>
+          </InlineNotice>
         )}
         {report && (
           <>
@@ -308,17 +301,17 @@ export function DockerDiskCard({
                             {(free * 100).toFixed(1)}%）
                           </span>
                         </span>
-                        <span className="h-1.5 overflow-hidden rounded-full bg-muted">
+                        <span className="h-1.5 overflow-hidden rounded-sm bg-muted">
                           <span
                             className={cn(
-                              "block h-full rounded-full",
+                              "block h-full w-disk-used rounded-sm",
                               free * 100 < report.settings.pause_percent
                                 ? "bg-danger"
                                 : free * 100 < report.settings.warn_percent
                                   ? "bg-warn"
                                   : "bg-good",
                             )}
-                            style={{ width: `${(1 - free) * 100}%` }}
+                            style={{ "--disk-used-width": `${(1 - free) * 100}%` } as CSSProperties}
                           />
                         </span>
                       </li>
@@ -336,7 +329,7 @@ export function DockerDiskCard({
               <h3 className="text-xs font-medium text-muted-foreground">
                 用量
               </h3>
-              <div className="overflow-x-auto rounded-lg border">
+              <div className="overflow-x-auto rounded-md border">
                 <table className="w-full text-sm max-sm:table-fixed max-sm:[&_th]:px-1 max-sm:[&_td]:px-1 max-sm:[&_td]:wrap-anywhere">
                   <thead className="text-xs text-muted-foreground">
                     <tr className="border-b">
@@ -406,7 +399,7 @@ export function DockerDiskCard({
           </>
         )}
         {draft && (
-          <section className="flex flex-col gap-3 rounded-lg border p-3">
+          <section className="flex flex-col gap-3 rounded-md border p-3">
             <h3 className="text-sm font-medium">提醒與清理規則</h3>
             <p className="text-xs text-muted-foreground">
               清理規則預設全部關閉；開啟後每天自動執行一次並寫進活動紀錄。
@@ -429,7 +422,6 @@ export function DockerDiskCard({
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
               <label className="work-touch flex items-center gap-2">
                 <Switch
-                  className={switchTouchArea}
                   checked={draft.pause_enabled}
                   onCheckedChange={(v) =>
                     setDraft({ ...draft, pause_enabled: v })
@@ -460,7 +452,7 @@ export function DockerDiskCard({
             </div>
             <label className="flex items-start gap-2 text-sm">
               <Switch
-                className={cn("mt-0.5", switchTouchArea)}
+                className="mt-0.5"
                 checked={draft.daily_cleanup}
                 onCheckedChange={(v) =>
                   setDraft({ ...draft, daily_cleanup: v })
@@ -486,7 +478,7 @@ export function DockerDiskCard({
                   <li key={rule} className="flex items-start gap-2 text-sm">
                     <Switch
                       id={`disk-rule-${rule}`}
-                      className={cn("mt-0.5", switchTouchArea)}
+                      className="mt-0.5"
                       checked={r.enabled}
                       onCheckedChange={(v) => setRule(rule, { enabled: v })}
                     />
@@ -545,7 +537,7 @@ export function DockerDiskCard({
                 {settingsError}
               </p>
             )}
-            <div className="flex flex-wrap items-center gap-3">
+            <Toolbar className="gap-3">
               <Button
                 size="sm"
                 disabled={!dirty || saving}
@@ -558,15 +550,15 @@ export function DockerDiskCard({
                   目前只盤點與提醒，不會自動刪除。
                 </span>
               )}
-            </div>
+            </Toolbar>
           </section>
         )}
         {report && report.protected.length > 0 && (
-          <details className="rounded-lg border px-3 py-2 text-sm">
+          <details className="rounded-md border px-3 py-2 text-sm">
             <summary className="min-h-11 cursor-pointer content-center md:min-h-0">
               只列出、不會刪除的項目（{report.protected.length}）
             </summary>
-            <ul className="mt-2 divide-y">
+            <DataList className="mt-2">
               {report.protected.map((p) => (
                 <li key={p.key} className="flex items-center gap-3 py-1.5">
                   <span className="flex min-w-0 flex-1 flex-col">
@@ -580,7 +572,7 @@ export function DockerDiskCard({
                   </span>
                 </li>
               ))}
-            </ul>
+            </DataList>
           </details>
         )}
       </CardContent>
@@ -590,7 +582,7 @@ export function DockerDiskCard({
       >
         <DialogContent
           showCloseButton={false}
-          className="max-h-[85vh] overflow-y-auto sm:max-w-2xl"
+          className="max-h-sheet overflow-y-auto sm:max-w-2xl"
         >
           <DialogHeader>
             <DialogTitle>確認要清理的項目</DialogTitle>
@@ -623,7 +615,7 @@ export function DockerDiskCard({
                     />
                     {ruleLabels[rule]}（{group.length} 項）
                   </label>
-                  <ul className="ml-6 divide-y rounded-md border text-xs">
+                  <DataList variant="bordered" className="ml-6 text-xs">
                     {group.map((c) => (
                       <li key={c.key} className="flex gap-3 px-2 py-1.5">
                         <span className="flex min-w-0 flex-1 flex-col">
@@ -637,7 +629,7 @@ export function DockerDiskCard({
                         </span>
                       </li>
                     ))}
-                  </ul>
+                  </DataList>
                 </section>
               );
             })}

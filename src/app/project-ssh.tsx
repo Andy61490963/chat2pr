@@ -1,3 +1,4 @@
+import { Toolbar } from "@/components/ui/layout";
 import { useEffect, useState } from "react";
 import type { Project } from "../../shared/types.js";
 import {
@@ -245,7 +246,7 @@ export function ProjectSsh({
       {hosts && hosts.length > 0 && (
         <ul className="flex flex-col gap-2">
           {hosts.map((h) => (
-            <li key={h.id} className="rounded-lg border p-3 text-sm">
+            <li key={h.id} className="rounded-md border p-3 text-sm">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-medium">{h.name}</span>
                 <span className="break-all text-muted-foreground">
@@ -315,7 +316,7 @@ export function ProjectSsh({
       )}
       <section
         aria-labelledby="ssh-ai-title"
-        className="space-y-2 rounded-lg border p-3"
+        className="space-y-2 rounded-md border p-3"
       >
         <h4 id="ssh-ai-title" className="text-sm font-medium">
           交給 AI 整理
@@ -337,7 +338,7 @@ export function ProjectSsh({
           placeholder="例如示範主機 ssh.example.test，帳號 reader，日誌在 C:/logs"
           aria-describedby="ssh-describe-help"
         />
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <Toolbar className="gap-x-3 gap-y-2">
           <Button
             variant="outline"
             size="sm"
@@ -353,7 +354,7 @@ export function ProjectSsh({
           <p id="ssh-ai-recipient" className="text-sm text-muted-foreground">
             送出後，AI 模型會收到原文。
           </p>
-        </div>
+        </Toolbar>
         <p className="text-xs text-muted-foreground">
           可以一次描述多台主機。整理後按「核對草稿」，在下方欄位補齊憑證，再確認並儲存。
         </p>
@@ -378,7 +379,7 @@ export function ProjectSsh({
                 return (
                   <li
                     key={host.index}
-                    className="space-y-1 rounded-lg border p-3 text-sm"
+                    className="space-y-1 rounded-md border p-3 text-sm"
                   >
                     <p className="font-medium">{host.name || "未命名的主機"}</p>
                     <p className="break-all text-muted-foreground">
@@ -405,7 +406,7 @@ export function ProjectSsh({
                         {host.probe.detail}
                       </p>
                     )}
-                    <div className="flex flex-wrap gap-2">
+                    <Toolbar>
                       <Button
                         variant="outline"
                         size="sm"
@@ -424,7 +425,7 @@ export function ProjectSsh({
                       >
                         略過草稿
                       </Button>
-                    </div>
+                    </Toolbar>
                   </li>
                 );
               })}
@@ -434,7 +435,7 @@ export function ProjectSsh({
       </section>
       <section
         aria-labelledby="ssh-manual-title"
-        className="space-y-3 rounded-lg border p-3"
+        className="space-y-3 rounded-md border p-3"
       >
         <h4 id="ssh-manual-title" className="text-sm font-medium">
           手動登記

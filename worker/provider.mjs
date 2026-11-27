@@ -21,8 +21,8 @@ export function providerOptions(job, shellEnv, toolEnv = shellEnv) {
           wire_api: "responses",
           requires_openai_auth: false,
           supports_websockets: false,
-          request_max_retries: 0,
-          stream_max_retries: 0,
+          request_max_retries: job.mode === "subscription" ? 4 : 0,
+          stream_max_retries: job.mode === "subscription" ? 4 : 0,
           stream_idle_timeout_ms: Math.max(
             1000,
             Math.min(Number(job.timeoutMs) || 1800000, 1800000),

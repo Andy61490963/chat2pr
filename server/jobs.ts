@@ -1,5 +1,6 @@
 import { HttpEmbedder, type Embedder } from "./embedder.js";
 import { checkIntegrations } from "./integrations.js";
+import { capacitySample, InferenceSchedule, lastInference, probeInference, readCapacity } from "./inference-health.js";
 import { RepoIndexer, scheduleRepoIndex } from "./repo-index.js";
 import { Retrieval } from "./retrieval.js";
 import { PgBoss, type JobWithMetadata, type WorkHandler } from "pg-boss";
@@ -14,7 +15,7 @@ import { Budget } from "./budget.js";
 import { GitHub } from "./github.js";
 import { Line } from "./line.js";
 import type { DiscordChatPlatform } from "./discord-platform.js";
-import { tellGroupWaiting, waitNotificationBucket, waitNotificationKey } from "./group-replies.js";
+import { quotaWaitReason, tellGroupWaiting, waitNotificationBucket, waitNotificationKey } from "./group-replies.js";
 import { dueTriageGroups } from "./triage-window.js";
 import {
   Triage,
@@ -27,6 +28,7 @@ import { cleanup, backup, downloadPendingImages, downloadPendingDocuments } from
 import { runDueChecks, syncCheckEnvironments } from "./checks.js";
 import { announceNewGroups, syncGroupNames } from "./line-groups.js";
 import { recordHealth } from "./health.js";
+import { checkStuckTasks } from "./stuck-tasks.js";
 import { syncOpenPullRequests } from "./pr-sync.js";
 import { syncProjectRepos } from "./repo-missing.js";
 import { redact } from "./policy.js";
@@ -38,7 +40,6 @@ import {
   queueSnapshot,
   RECOVER_LOCK,
   RUN_LOCK,
-  checkHostResources,
   hostHold,
 } from "./capacity.js";
 import { tunnelReading } from "./tunnel-provider.js";
@@ -156,6 +157,7 @@ export async function startJobs(
     "validate",
     "maintenance",
     "pr-sync",
+    "stuck-tasks",
     "backup",
     "notifications",
     "images",
@@ -178,6 +180,7 @@ export async function startJobs(
       pollingIntervalSeconds?: number;
     } = {},
   ) => boss.work<T>(name, options, safeQueueHandler(handler));
+  const inferenceSchedule = new InferenceSchedule(Date.now, model => lastInference(db, model));
   const budget = new Budget(db),
     github = adapters.github ?? new GitHub(),
     line = new Line(db, adapters.discord),
@@ -197,7 +200,7 @@ export async function startJobs(
       budget,
       retrieval,
     ),
-    execution = new Execution(db, github, line, budget, runner, retrieval);
+    execution = new Execution(db, github, line, budget, runner, retrieval, () => inferenceSchedule.request());
   await work<{ groupId: string }>(
     "triage",
     async (jobs) => {
@@ -324,6 +327,8 @@ export async function startJobs(
       await syncKnowledge(db, github, line, j.data.projectId);
   });
   await boss.schedule("maintenance", "10 * * * *");
+  await work("stuck-tasks", async () => { await checkStuckTasks(db); });
+  await boss.schedule("stuck-tasks", "* * * * *");
   // 每 10 分鐘確認儲存庫還在（搬家就跟過去），並補同步 PR 合併／關閉狀態，避免 Webhook 延遲時看板停在待合併。
   await boss.schedule("pr-sync", "*/10 * * * *");
   await boss.schedule("backup", "0 3 * * *", null, { tz: "Asia/Taipei" });
@@ -377,6 +382,7 @@ export async function startJobs(
         "SELECT value,revision FROM settings WHERE id=1",
       );
       const s = snapshot.value;
+      const capacity = capacitySample(() => readCapacity(db, runner));
       const limit = maxRuns(s);
       await resizeExecuteWorkers(limit);
       await db.query(
@@ -443,11 +449,14 @@ export async function startJobs(
           for (const t of held)
             if (!told.has(t.group_id)) {
               told.add(t.group_id);
-              await tellGroupWaiting(db, t.id, "quota");
+              await tellGroupWaiting(db, t.id, quotaWaitReason(error.kind));
             }
           return;
         }
         // 真正重新確認訂閱額度恢復，且尚未達每日執行上限，才重新排隊。
+        void inferenceSchedule.tick(early => probeInference(db, runner, snapshot.revision, capacity, early), s.codex_model ?? null)?.catch(error =>
+          console.warn("真實推論檢查：", redact(String(error))),
+        );
         await db.query(
           `UPDATE tasks SET status='queued',last_error=NULL,updated_at=now() WHERE status='budget_wait'
            AND EXISTS(SELECT 1 FROM settings WHERE id=1 AND revision=$1 AND value->>'ai_mode'<>'api' AND NOT (value->>'paused')::boolean
@@ -489,7 +498,7 @@ export async function startJobs(
       // 原因顯示在系統頁。暫停中佇列清空也繼續讀，回升的穩定期與異常通知的計時才不會中斷。
       const hold =
         queued.length || (await hostHold(db.pool))
-          ? await checkHostResources(db, () => runner.call("resources", {}, 5000))
+          ? (await capacity()).hold
           : null;
       const tasks = hold ? [] : queued;
       for (const t of tasks) {
@@ -561,12 +570,14 @@ export async function startJobs(
   await scheduleTriage();
   return {
     boss,
+    line,
     enqueueValidation: validationQueue.enqueue,
     validationProgress: validationQueue.progress,
     stop: async () => {
       clearInterval(timer);
       clearInterval(triageTimer);
       await triageBusy;
+      await inferenceSchedule.idle();
       await boss.stop({ graceful: true, timeout: 10000 });
     },
   };

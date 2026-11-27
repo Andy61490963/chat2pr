@@ -1,0 +1,20 @@
+檔案	待遷移原因	樣式	來源識別
+src/app/system.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	08e0c835813a593f
+src/app/system.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	a01004f5716416a1
+src/app/system.tsx	任意工具值須改用具名 token	[overflow-wrap:anywhere]	ee7c9b5520e51821
+src/app/system.tsx	任意工具值須改用具名 token	flex-[1_1_12rem]	00cfbcd8dc8579f8
+src/app/system.tsx	任意工具值須改用具名 token	grid-cols-[1fr_auto]	6f3386d80535fde2
+src/app/system.tsx	任意工具值須改用具名 token	grid-cols-[auto_minmax(0,1fr)]	762c30fcc641ef20
+src/app/system.tsx	任意工具值須改用具名 token	grid-cols-[minmax(0,2fr)_minmax(0,1fr)]	f7f36411728a1d8b
+src/app/system.tsx	任意工具值須改用具名 token	max-w-[40%]	44e1c8d9d2a2afc1
+src/app/system.tsx	動態樣式須使用已登記的 CSS 變數	height	d196116ff7362e25
+src/app/system.tsx	大圓角須改用規範圓角	rounded-lg	01df8961447e59c7
+src/app/system.tsx	大圓角須改用規範圓角	rounded-lg	05847efe4c01a665
+src/app/system.tsx	大圓角須改用規範圓角	rounded-lg	05847efe4c01a665
+src/app/system.tsx	大圓角須改用規範圓角	rounded-lg	05847efe4c01a665
+src/app/system.tsx	大圓角須改用規範圓角	rounded-lg	091cf232b043d545
+src/app/system.tsx	大圓角須改用規範圓角	rounded-lg	1a12b941beab4e45
+src/app/system.tsx	大圓角須改用規範圓角	rounded-lg	6f3386d80535fde2
+src/app/system.tsx	大圓角須改用規範圓角	rounded-lg	bc8772197082cc83
+src/app/system.tsx	大圓角須改用規範圓角	rounded-lg	da19b9669cfacd25
+src/app/system.tsx	大圓角須改用規範圓角	rounded-lg	de06192da5f06382

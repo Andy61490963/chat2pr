@@ -1,4 +1,5 @@
-import { useId, useRef, useState, type Ref } from "react";
+import { DataList } from "@/components/ui/layout";
+import { useId, useRef, useState, type ReactElement, type ReactNode, type Ref } from "react";
 import { ChevronRight, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox, Label, Textarea } from "@/components/ui/form-controls";
@@ -67,6 +68,7 @@ export function AssignProject({
   onBound,
   onPrimaryMount,
   inWorkbench = false,
+  renderSubmit = (button) => <div className="flex flex-wrap gap-2">{button}</div>,
 }: {
   task: Task;
   state: State;
@@ -78,6 +80,7 @@ export function AssignProject({
   onBound?: () => unknown;
   onPrimaryMount?: (button: HTMLButtonElement | null) => void;
   inWorkbench?: boolean;
+  renderSubmit?: (button: ReactElement) => ReactNode;
 }) {
   const group = state.groups.find((g) => g.id === t.group_id);
   const bound = state.projects.filter((p) => group?.project_ids.includes(p.id));
@@ -129,7 +132,7 @@ export function AssignProject({
             return (
               <li
                 key={project.id}
-                className="min-w-0 space-y-1 [overflow-wrap:anywhere]"
+                className="min-w-0 space-y-1 wrap-anywhere"
               >
                 <p className="font-semibold">
                   看起來是 {project.name}（尚未綁定這個群組）
@@ -199,7 +202,7 @@ export function AssignProject({
                 : `已選滿 ${maxRelatedProjects} 個參考專案，取消勾選後即可更換。`}
             </p>
           )}
-          <ul role="list" className="mt-2 divide-y rounded-lg border bg-background">
+          <DataList role="list" variant="bordered" className="mt-2 bg-background">
             {bound.map((p) => {
               const choiceId = `${fieldId}-${p.id}-choice`;
               const titleId = `${fieldId}-${p.id}-name`;
@@ -230,7 +233,7 @@ export function AssignProject({
                         )
                       }
                     />
-                    <span className="min-w-0 [overflow-wrap:anywhere]">
+                    <span className="min-w-0 wrap-anywhere">
                       <span id={titleId} className="block font-medium">
                         {p.name}
                       </span>
@@ -263,7 +266,7 @@ export function AssignProject({
                 </li>
               );
             })}
-          </ul>
+          </DataList>
         </fieldset>
       )}
       {!options.length && (
@@ -291,7 +294,7 @@ export function AssignProject({
         </p>
       )}
       {chosen && (
-        <Label className="min-h-11 font-normal text-muted-foreground [overflow-wrap:anywhere]">
+        <Label className="min-h-11 font-normal text-muted-foreground wrap-anywhere">
           <Checkbox
             checked={remember}
             onCheckedChange={(v) => setRemember(v === true)}
@@ -299,7 +302,7 @@ export function AssignProject({
           <span className="min-w-0">記住：{rule}</span>
         </Label>
       )}
-      <div className="flex flex-wrap gap-2">
+      {renderSubmit(
         <Button
           ref={onPrimaryMount}
           variant={
@@ -323,9 +326,9 @@ export function AssignProject({
           }
         >
           指定專案
-        </Button>
-        {/* 「結束任務」由審核面板的動作列提供，這裡不再放一個，避免同一畫面出現兩個。 */}
-      </div>
+        </Button>,
+      )}
+      {/* 「結束任務」由審核面板的動作列提供，這裡不再放一個，避免同一畫面出現兩個。 */}
     </div>
   );
 }
@@ -480,7 +483,7 @@ function RejectTaskButton({
       </DialogTrigger>
       <DialogContent
         showCloseButton={false}
-        className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg motion-reduce:animate-none"
+        className="max-h-overlay overflow-y-auto sm:max-w-lg motion-reduce:animate-none"
       >
         <DialogHeader className="text-left">
           <DialogTitle>結束任務？</DialogTitle>

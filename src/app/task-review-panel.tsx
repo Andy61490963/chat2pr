@@ -1,7 +1,9 @@
+import { InlineNotice } from "@/components/ui/layout";
 import { splitQueryAnswer } from "../../shared/query-answer.js";
 import { fullTaskTitle, taskListTitle } from "../../shared/task-title.js";
 import { riskNotes } from "../../shared/risk-notes.js";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { TaskContextEvidence } from "./context-evidence";
 import { RunObserver } from "./run-observer";
 import { QueryReport } from "./query-report";
@@ -18,6 +20,7 @@ import {
   AlertCircle,
   Check,
   CheckCircle2,
+  ChevronDown,
   Clock,
   ExternalLink,
   RefreshCw,
@@ -99,7 +102,7 @@ function GroupDeliveryNotes({
             role="status"
             aria-label="群組訊息送達狀態"
             className={cn(
-              "flex gap-2 rounded-lg px-3 py-2.5 text-sm",
+              "flex gap-2 rounded-md px-3 py-2.5 text-sm",
               d.delivery.status === "sent"
                 ? "bg-good-soft text-good"
                 : !pending
@@ -119,11 +122,11 @@ function GroupDeliveryNotes({
               <Clock className="mt-0.5 size-4 shrink-0" />
             )}
             <div className="flex min-w-0 flex-1 flex-col gap-1">
-              <p className="font-medium [overflow-wrap:anywhere]">
+              <p className="font-medium wrap-anywhere">
                 {deliveryNotice(d.delivery, d.kind)}
               </p>
               {pending && d.kind === "group_question" && (
-                <p className="text-xs [overflow-wrap:anywhere]">
+                <p className="text-xs wrap-anywhere">
                   成員可能還沒看到這則補問。可以在下方直接「送出回答」，或複製後貼到群組請成員回覆。
                 </p>
               )}
@@ -157,6 +160,10 @@ const clock = (v: string) =>
     hour12: false,
   });
 
+function sourcePreview(text: string) {
+  return Array.from(text.split("\n", 3).join("\n")).slice(0, 90).join("");
+}
+
 export type TaskReviewPanelProps = {
   detail: Detail;
   state: State;
@@ -164,6 +171,7 @@ export type TaskReviewPanelProps = {
   admin: boolean;
   reviewStatus?: string;
   actionNotice?: ReactNode;
+  actionDock?: HTMLElement | null;
   onPrimaryMount?: (button: HTMLButtonElement | null) => void;
   go: (v: View, projectId?: string | null) => void;
   act: Act;
@@ -186,6 +194,7 @@ export function TaskReviewPanel({
   admin,
   reviewStatus,
   actionNotice,
+  actionDock,
   onPrimaryMount,
   go,
   act,
@@ -196,6 +205,8 @@ export function TaskReviewPanel({
   relink,
 }: TaskReviewPanelProps) {
   const inWorkbench = reviewStatus !== undefined;
+  const [sourceExpanded, setSourceExpanded] = useState(false);
+  const sourceId = useId();
   const Title = inWorkbench ? "h2" : SheetTitle;
   const t = detail.task;
   const title = detail.fullTitle ?? fullTaskTitle(t.title, t.summary);
@@ -403,6 +414,7 @@ export function TaskReviewPanel({
     t.status === "awaiting_approval" &&
     !t.project_id &&
     !canAnswer;
+  const dockProjectSubmit = assignPrimary && !!actionDock;
   const amendButton = canAmend && (
     <Button
       variant={amendPrimary ? "default" : "outline"}
@@ -451,41 +463,54 @@ export function TaskReviewPanel({
       />
     </section>
   );
+  const sourceRows = detail.sources.map((source) => {
+    const text = source.availability === "revoked"
+      ? unavailableMessageLabels.revoked
+      : source.availability === "expired"
+        ? unavailableMessageLabels.expired(state.settings.retention_days)
+        : source.text ?? (source.type === "image" ? "（圖片）" : "（沒有文字內容）");
+    const preview = inWorkbench && source.availability === "readable" ? sourcePreview(text) : text;
+    return { source, text, preview };
+  });
+  const canExpandSources = inWorkbench &&
+    (sourceRows.length > 4 || sourceRows.some(({ text, preview }) => text !== preview));
+  const previewSources = canExpandSources && !sourceExpanded;
+  const visibleSources = previewSources ? sourceRows.slice(0, 4) : sourceRows;
   const sourceMessages = (
     <>
       {detail.sources.length ? (
-        <div className="flex flex-col gap-2">
-          {detail.sources.map((m) => (
+        <div className={inWorkbench ? "divide-y rounded-md border bg-muted/30 px-3.5" : "flex flex-col gap-2"}>
+          {visibleSources.map(({ source: m, text, preview }) => (
             <div
               key={m.id}
-              className="min-w-0 max-w-full self-start rounded-2xl rounded-tl-sm bg-muted px-3.5 py-2.5 text-sm"
+              className={inWorkbench
+                ? "flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 py-2 text-sm"
+                : "min-w-0 max-w-full self-start rounded-md rounded-tl-sm bg-muted px-3.5 py-2.5 text-sm"}
             >
               {m.availability === "readable" && m.sender && (
                 <span className="mb-0.5 block text-xs font-medium text-muted-foreground">
                   {m.sender}
                 </span>
               )}
-              <p className="whitespace-pre-wrap [overflow-wrap:anywhere]">
-                {m.availability === "revoked"
-                  ? unavailableMessageLabels.revoked
-                  : m.availability === "expired"
-                    ? unavailableMessageLabels.expired(
-                        state.settings.retention_days,
-                      )
-                    : (m.text ??
-                      (m.type === "image" ? "（圖片）" : "（沒有文字內容）"))}
+              <p className={cn("whitespace-pre-wrap wrap-anywhere", inWorkbench && "order-1 w-full")}>
+                {previewSources && preview !== text ? preview.trimEnd() + "…" : text}
               </p>
               {m.has_image && m.availability === "readable" && (
-                <img
-                  className={cn(
-                    "mt-2 max-w-full rounded-lg",
-                    inWorkbench && "max-h-32 object-contain",
-                  )}
-                  src={`/api/messages/${m.id}/image`}
-                  alt="來源圖片"
-                />
+                inWorkbench ? (
+                  <a
+                    href={`/api/messages/${m.id}/image`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="order-2 inline-flex min-h-11 min-w-11 items-center rounded-md focus-visible:outline-2 focus-visible:outline-ring"
+                  >
+                    <img className="max-h-20 max-w-28 rounded-md object-contain" src={`/api/messages/${m.id}/image`} alt="來源圖片" />
+                    <span className="sr-only">在新分頁檢視原圖</span>
+                  </a>
+                ) : (
+                  <img className="mt-2 max-w-full rounded-md" src={`/api/messages/${m.id}/image`} alt="來源圖片" />
+                )
               )}
-              <span className="mt-1 block text-[11px] text-muted-foreground">
+              <span className={cn("block text-caption text-muted-foreground", inWorkbench ? "ml-auto tabular-nums" : "mt-1")}>
                 {date(m.received_at)}
               </span>
             </div>
@@ -500,7 +525,7 @@ export function TaskReviewPanel({
     <>
       <section
         aria-label="處理專案"
-        className="min-w-0 rounded-lg border bg-muted/40 p-3 text-sm"
+        className="min-w-0 rounded-md border bg-muted/40 p-3 text-sm"
       >
         {inWorkbench ? (
           <h3 className="font-semibold">處理專案</h3>
@@ -573,7 +598,7 @@ export function TaskReviewPanel({
                 {sources.map((s) => (
                   <li
                     key={s.repo}
-                    className="flex flex-wrap gap-x-3 gap-y-1 [overflow-wrap:anywhere]"
+                    className="flex flex-wrap gap-x-3 gap-y-1 wrap-anywhere"
                   >
                     <span>{s.name}（{s.repo}）</span>
                     <span>{s.branch}</span>
@@ -665,6 +690,7 @@ export function TaskReviewPanel({
             onPrimaryMount={
               assignPrimary && !amendPrimary ? onPrimaryMount : undefined
             }
+            renderSubmit={dockProjectSubmit ? renderActions : undefined}
           />
         )}
       </section>
@@ -682,13 +708,13 @@ export function TaskReviewPanel({
           </h3>
           <ul className="list-disc space-y-1.5 pl-5">
             {visibleAcceptance.map((a, i) => (
-              <li key={i} className="text-sm [overflow-wrap:anywhere]">
+              <li key={i} className="text-sm wrap-anywhere">
                 {a}
               </li>
             ))}
           </ul>
           {verification && (
-            <p className="text-sm text-muted-foreground [overflow-wrap:anywhere]">
+            <p className="text-sm text-muted-foreground wrap-anywhere">
               {verification.kind === "build"
                 ? taskAcceptanceLabels.build
                 : `${taskAcceptanceLabels.partial} ${
@@ -705,19 +731,47 @@ export function TaskReviewPanel({
   const riskSection = (
     <>
       {notes.length > 0 && (
-        <div className="flex gap-2 rounded-lg bg-warn-soft px-3 py-2.5 text-sm text-warn">
+        <InlineNotice tone="warn" variant="soft" className="flex gap-2 py-2.5">
           <AlertCircle aria-hidden className="mt-0.5 size-4 shrink-0" />
           <ul
-            className="min-w-0 list-disc space-y-0.5 pl-4 [overflow-wrap:anywhere]"
+            className="min-w-0 list-disc space-y-0.5 pl-4 wrap-anywhere"
             aria-label="風險與待確認事項"
           >
             {notes.map((note) => (
               <li key={note}>{note}</li>
             ))}
           </ul>
-        </div>
+        </InlineNotice>
       )}
     </>
+  );
+  const failureSection = t.last_error && (
+    <div
+      ref={failureNotice}
+      tabIndex={reviewFailureFirst ? -1 : undefined}
+      className={cn(
+        "flex gap-2 rounded-md px-3 py-2.5 text-sm",
+        t.last_error.startsWith("AI 等你回答") ||
+          t.status === "budget_wait"
+          ? "bg-warn-soft text-warn"
+          : retrying
+            ? "bg-info-soft text-info"
+            : "bg-danger-soft text-danger",
+      )}
+    >
+      {retrying ? (
+        <RefreshCw className="mt-0.5 size-4 shrink-0" />
+      ) : (
+        <AlertCircle className="mt-0.5 size-4 shrink-0" />
+      )}
+      <div className="flex min-w-0 flex-col gap-0.5">
+        {retrying && <p className="font-medium">上一次嘗試</p>}
+        <span className="whitespace-pre-wrap wrap-anywhere">
+          <Linkified text={t.last_error.replace(/^Error: /, "")} />
+        </span>
+        {quotaWaitHint && <p className="text-xs">{quotaWaitHint}</p>}
+      </div>
+    </div>
   );
   const clarificationSection = (
     <>
@@ -800,7 +854,7 @@ export function TaskReviewPanel({
       />
     </>
   );
-  const actions = (
+  const actionBar = (projectSubmit?: ReactNode) => (
     <>
       {(t.status === "awaiting_approval" ||
         ["failed", "budget_wait", "queued", "running", "reviewing"].includes(
@@ -809,17 +863,10 @@ export function TaskReviewPanel({
         <SheetFooter
           className={cn(
             "shrink-0 items-center",
-            inWorkbench && "mt-0 border-t-0 border-b",
+            inWorkbench && "mt-0 bg-surface px-4 py-3 max-lg:grid max-lg:max-h-review-actions max-lg:grid-cols-2 max-lg:gap-2 max-lg:overflow-y-auto max-lg:pb-safe-compact max-lg:[&>button]:h-auto max-lg:[&>button]:min-h-11 max-lg:[&>button]:min-w-0 max-lg:[&>button]:whitespace-normal max-lg:[&>[data-variant=default]]:col-span-full lg:border-t-0 lg:border-b lg:pt-1",
           )}
         >
-          {inWorkbench && (
-            <div className="basis-full">
-              <h3 className="text-sm font-semibold">下一步</h3>
-              <p className="mt-1 text-sm text-muted-foreground">
-                {reviewStatus}
-              </p>
-            </div>
-          )}
+          {projectSubmit}
           {canAnswer && (
             <Button ref={onPrimaryMount} onClick={focusAnswer}>
               {taskClarificationLabels.action}
@@ -950,6 +997,10 @@ export function TaskReviewPanel({
       )}
     </>
   );
+  function renderActions(projectSubmit?: ReactNode) {
+    const bar = actionBar(projectSubmit);
+    return actionDock ? createPortal(bar, actionDock) : bar;
+  }
   const metadata = (
     <DescriptionList pairs={2} className="max-w-xl text-xs">
       {(
@@ -969,11 +1020,14 @@ export function TaskReviewPanel({
     </DescriptionList>
   );
   const header = (
-    <SheetHeader className={cn("shrink-0 gap-2", inWorkbench && "pr-4")}>
+    <SheetHeader className={cn("shrink-0 gap-2", inWorkbench && "gap-2 border-b-0 px-4 pt-4 pb-2")}>
       <Title
         data-task-title=""
         tabIndex={-1}
-        className="text-lg leading-snug [overflow-wrap:anywhere] focus-visible:outline-hidden!"
+        className={cn(
+          "text-lg leading-snug wrap-anywhere focus-visible:outline-hidden!",
+          inWorkbench && "font-semibold",
+        )}
       >
         {taskListTitle(t, title)}
       </Title>
@@ -985,7 +1039,28 @@ export function TaskReviewPanel({
           </span>
         </p>
       )}
-      {inWorkbench ? metadata : (
+      {inWorkbench ? (
+        <>
+          <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+            <h3 className="text-sm text-muted-foreground">下一步</h3>
+            <p className="text-base font-semibold">{reviewStatus}</p>
+            {notes.length > 0 && (
+              <span className="text-sm text-warn">請確認下列風險與疑點</span>
+            )}
+          </div>
+          <details className="group/meta min-w-0 text-xs">
+            <summary className="flex w-fit max-w-full cursor-pointer items-center gap-2 rounded-sm py-1 text-muted-foreground underline-offset-4 hover:underline focus-visible:outline-2 focus-visible:outline-ring">
+              <span className="shrink-0">任務資料</span>
+              <span className="truncate font-medium text-foreground">
+                {t.project_id ? (review?.project_name ?? projectName(state, t)) : (review?.group_name ?? groupName(state, t))}
+              </span>
+              {t.target_branch && <code className="min-w-0 truncate">{t.target_branch}</code>}
+              <ChevronDown aria-hidden className="size-4 shrink-0 group-open/meta:rotate-180" />
+            </summary>
+            <div className="pt-2">{metadata}</div>
+          </details>
+        </>
+      ) : (
         <SheetDescription asChild>{metadata}</SheetDescription>
       )}
 
@@ -1006,31 +1081,48 @@ export function TaskReviewPanel({
   return (
     <>
       {inWorkbench ? (
-        <div className="lg:sticky lg:top-4 lg:z-10 lg:bg-surface">
+        <div className="rounded-t-inherit bg-surface lg:sticky lg:top-4 lg:z-10">
           {actionNotice}
           {header}
-          {actions}
+          {!dockProjectSubmit && renderActions()}
         </div>
       ) : header}
       <div
         className={cn(
           "flex min-h-0 flex-1 flex-col gap-6 p-5",
-          !inWorkbench && "overflow-y-auto",
+          inWorkbench ? "gap-4 px-4 py-4" : "overflow-y-auto",
         )}
       >
         {inWorkbench && (
           <>
+            {riskSection}
+            {failureSection}
+            {canAnswer && clarificationSection}
+            {assignPrimary && projectSection}
             <section
               aria-label="來源原文"
               className="flex min-w-0 flex-col gap-2"
             >
-              <h3 className="text-sm font-semibold">來源原文</h3>
-              {sourceMessages}
+              <div className="flex flex-wrap items-center justify-between gap-x-2">
+                <h3 className="text-sm font-semibold">來源原文</h3>
+                {canExpandSources && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="link"
+                    aria-expanded={sourceExpanded}
+                    aria-controls={sourceId}
+                    onClick={() => setSourceExpanded((expanded) => !expanded)}
+                  >
+                    {sourceExpanded ? "收合來源原文" : "展開來源原文"}
+                  </Button>
+                )}
+              </div>
+              <div id={sourceId}>{sourceMessages}</div>
             </section>
-            {projectSection}
+            {!assignPrimary && projectSection}
             {acceptanceSection}
-            {riskSection}
-            {clarificationSection}
+            {!canAnswer && clarificationSection}
             {externalLinks}
             {stationTrack}
           </>
@@ -1064,7 +1156,7 @@ export function TaskReviewPanel({
         )}
         {t.status === "answered" && resultReport}
         {title !== t.title && (
-          <details className="text-sm [overflow-wrap:anywhere]">
+          <details className="text-sm wrap-anywhere">
             <summary className="cursor-pointer">查看完整標題</summary>
             <p className="mt-2">{title}</p>
           </details>
@@ -1072,7 +1164,7 @@ export function TaskReviewPanel({
         {!!(thread?.before.length || thread?.after.length) && (
           <section
             aria-label="對話串"
-            className="min-w-0 rounded-lg border p-3 text-sm"
+            className="min-w-0 rounded-md border p-3 text-sm"
           >
             <p className="font-semibold">對話串</p>
             <ol className="mt-2 flex flex-col gap-1">
@@ -1106,7 +1198,7 @@ export function TaskReviewPanel({
           </section>
         )}
         {canRelink && (relinkOptions.length > 0 || t.parent_id) && (
-          <details className="rounded-lg border px-3 py-2 text-sm">
+          <details className="rounded-md border px-3 py-2 text-sm">
             <summary className="cursor-pointer text-muted-foreground">
               接錯題了？
             </summary>
@@ -1148,15 +1240,15 @@ export function TaskReviewPanel({
           <div
             role="status"
             aria-label="排隊原因"
-            className="flex gap-2 rounded-lg bg-info-soft px-3 py-2.5 text-sm text-info"
+            className="flex gap-2 rounded-md bg-info-soft px-3 py-2.5 text-sm text-info"
           >
             <Clock className="mt-0.5 size-4 shrink-0" />
             <div className="flex min-w-0 flex-1 flex-col gap-1">
-              <p className="[overflow-wrap:anywhere]">
+              <p className="wrap-anywhere">
                 排隊中（第 {queue.position} 位）：{queue.text}
               </p>
               {queue.hint && (
-                <p className="flex flex-wrap items-center gap-x-2 text-xs [overflow-wrap:anywhere]">
+                <p className="flex flex-wrap items-center gap-x-2 text-xs wrap-anywhere">
                   <span>建議：{queue.hint}</span>
                   {queuePage && (
                     <Button
@@ -1176,34 +1268,7 @@ export function TaskReviewPanel({
             </div>
           </div>
         )}
-        {t.last_error && (
-          <div
-            ref={failureNotice}
-            tabIndex={reviewFailureFirst ? -1 : undefined}
-            className={cn(
-              "flex gap-2 rounded-lg px-3 py-2.5 text-sm",
-              t.last_error.startsWith("AI 等你回答") ||
-                t.status === "budget_wait"
-                ? "bg-warn-soft text-warn"
-                : retrying
-                  ? "bg-info-soft text-info"
-                  : "bg-danger-soft text-danger",
-            )}
-          >
-            {retrying ? (
-              <RefreshCw className="mt-0.5 size-4 shrink-0" />
-            ) : (
-              <AlertCircle className="mt-0.5 size-4 shrink-0" />
-            )}
-            <div className="flex min-w-0 flex-col gap-0.5">
-              {retrying && <p className="font-medium">上一次嘗試</p>}
-              <span className="whitespace-pre-wrap [overflow-wrap:anywhere]">
-                <Linkified text={t.last_error.replace(/^Error: /, "")} />
-              </span>
-              {quotaWaitHint && <p className="text-xs">{quotaWaitHint}</p>}
-            </div>
-          </div>
-        )}
+        {!inWorkbench && failureSection}
         {!inWorkbench && riskSection}
         <GroupDeliveryNotes
           deliveries={detail.groupDeliveries}
@@ -1248,7 +1313,7 @@ export function TaskReviewPanel({
               </Button>
               <p
                 id={followupHelpId}
-                className="min-w-0 flex-[1_1_12rem] text-xs text-muted-foreground"
+                className="min-w-0 grow shrink basis-48 text-xs text-muted-foreground"
               >
                 {adding
                   ? t.status === "ready"
@@ -1264,7 +1329,7 @@ export function TaskReviewPanel({
           </div>
         )}
         {["awaiting_approval", "failed", "budget_wait"].includes(t.status) && (
-          <div className="flex flex-wrap items-center gap-2 rounded-lg border px-4 py-3 text-sm">
+          <div className="flex flex-wrap items-center gap-2 rounded-md border px-4 py-3 text-sm">
             <span className="flex-1 text-muted-foreground">
               {t.mode === "query"
                 ? "查詢任務：只調查並回覆報告，不修改程式、不開 PR。"
@@ -1289,7 +1354,7 @@ export function TaskReviewPanel({
         )}
         <section className="flex flex-col gap-2">
           <h3 className="text-sm font-semibold">需求</h3>
-          <p className="text-sm leading-relaxed whitespace-pre-wrap [overflow-wrap:anywhere]">
+          <p className="text-sm leading-relaxed whitespace-pre-wrap wrap-anywhere">
             {t.summary}
           </p>
         </section>
@@ -1312,7 +1377,7 @@ export function TaskReviewPanel({
                 <div
                   key={i}
                   className={cn(
-                    "relative flex gap-3 rounded-lg border px-3.5 py-3 text-left transition-colors hover:bg-muted/40 has-focus-visible:outline-2 has-focus-visible:outline-offset-2",
+                    "relative flex gap-3 rounded-md border px-3.5 py-3 text-left transition-colors hover:bg-muted/40 has-focus-visible:outline-2 has-focus-visible:outline-offset-2",
                     pick === i && "border-primary bg-primary/5",
                   )}
                 >
@@ -1328,7 +1393,7 @@ export function TaskReviewPanel({
                   />
                   <span
                     className={cn(
-                      "mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border",
+                      "mt-0.5 grid size-4 shrink-0 place-items-center shape-pill border",
                       pick === i &&
                         "border-primary bg-primary text-primary-foreground",
                     )}
@@ -1381,7 +1446,7 @@ export function TaskReviewPanel({
         {canAmend && (
           <section
             id="amend-task"
-            className="rounded-lg border"
+            className="rounded-md border"
             hidden={!amendOpen}
           >
             <h3 className="px-4 pt-4 text-sm font-medium">
@@ -1407,7 +1472,7 @@ export function TaskReviewPanel({
               {stale && (
                 <p
                   role="status"
-                  className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-warn-soft px-3 py-2 text-xs text-warn"
+                  className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md bg-warn-soft px-3 py-2 text-xs text-warn"
                 >
                   你編輯的時候，這個任務已更新到版本 {t.version}
                   ；下面仍是你還沒儲存的內容。
@@ -1571,7 +1636,7 @@ export function TaskReviewPanel({
           )}
         </Tabs>
       </div>
-      {!inWorkbench && actions}
+      {!inWorkbench && actionBar()}
     </>
   );
 }

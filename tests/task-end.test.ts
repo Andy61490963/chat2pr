@@ -45,24 +45,6 @@ describe("任務結束摘要", () => {
       "pr",
     ],
     [
-      "撤回來源",
-      "unsend",
-      "來源訊息已撤回；請確認已整理需求及既有 PR",
-      "unsend",
-      null,
-      null,
-      null,
-    ],
-    [
-      "重複需求",
-      "duplicate",
-      "已辨識重複需求，未重複派工",
-      "duplicate",
-      "系統",
-      null,
-      null,
-    ],
-    [
       "其他結束方式",
       "closed",
       "示範專案已刪除，PR 不再追蹤",
@@ -83,6 +65,13 @@ describe("任務結束摘要", () => {
       });
     },
   );
+
+  it("以重複為由取消時保留操作者與結案時間", () => {
+    expect(taskEndSummary(
+      { ...task, end_reason: "duplicate" },
+      audit("cancel", "小林 取消（需求版本 1），原因：重複"),
+    )).toEqual({ kind: "duplicate", actor: "小林", at, reason: "重複", station: null });
+  });
 
   it("取出新版取消格式的說明，並依執行階段保留站別", () => {
     expect(
