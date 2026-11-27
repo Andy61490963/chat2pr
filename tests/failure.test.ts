@@ -18,13 +18,18 @@ import { codexSdkCrash, codexSdkStackOnly } from "./failure-samples.js";
 
 // 正式環境近 30 天看得到、但使用者看不懂的失敗訊息（#22），各自固定分類與白話說明。
 describe("實際錯誤樣本的分類", () => {
-  it("可信診斷保留原有分類，只顯示固定原因與上游狀態碼", () => {
-    const raw = `Codex 執行失敗：虛構的容器輸出${reportTailMark}訂閱轉送失敗`;
-    const failure = classifyFailure(raw, "code", "task", undefined, { kind: "upstream_http", status: 500 });
-    expect(failure.category).toBe(classifyFailure(raw, "code").category);
-    expect(failure.plain).toContain("500");
-    expect(failure.plain).toContain("訂閱上游回應失敗");
-    expect(groupFailureText(failure)).not.toContain("虛構的容器輸出");
+  it.each([
+    ["可信上游 502 遇到外層 403 仍可重試", 502, 403, "transient"],
+    ["可信上游 404 遇到外層 502 直接停止", 404, 502, "config"],
+  ] as const)("%s", (_name, status, outer, category) => {
+    const raw = `Codex 執行失敗：HTTP ${outer} 虛構的容器輸出`;
+    const failure = classifyFailure(raw, "code", "task", undefined, { kind: "upstream_http", status });
+    expect(failure.category).toBe(category);
+    for (const text of [failureNotice(failure), groupFailureText(failure)]) {
+      expect(text).toContain(`上游 HTTP ${status}`);
+      expect(text).not.toContain(String(outer));
+      expect(text).not.toContain("虛構的容器輸出");
+    }
   });
   it.each([
     { kept: "修改已保留", phase: "review", next: "從測試與獨立審查接續", groupNext: "從驗證接續" },

@@ -94,6 +94,26 @@ async function fixture(
   return { app, broker, runId, lease, send, calls: () => calls };
 }
 describe("訂閱上游診斷的白名單", () => {
+  it.each([
+    ["代碼指出模型不存在", { code: "model_not_found", message: identity.accessToken }, true],
+    ["訊息恰為模型不存在代碼", { message: "model_not_found" }, true],
+    ["一般說明恰好提及代碼", { message: `model_not_found ${identity.accessToken}` }, false],
+    ["其他資源不存在", { code: "resource_not_found", message: identity.accessToken }, false],
+    ["錯誤本文超過大小上限", { code: "model_not_found", message: "甲".repeat(9000) }, false],
+  ] as const)("上游 404 的固定原因：%s", async (_label, error, modelMissing) => {
+    const f = await fixture({
+      credentials: async () => identity,
+      upstreamFetch: async () => Response.json({ error }, { status: 404 }),
+    });
+    const reply = await f.send();
+    expect(reply.statusCode).toBe(502);
+    expect(reply.body).not.toContain(identity.accessToken);
+    expect(f.lease.failure()).toStrictEqual({ kind: modelMissing ? "model_unavailable" : "upstream_http", status: 404 });
+    const text = upstreamFailureText(f.lease.failure()!);
+    expect(text.includes("模型不可用")).toBe(modelMissing);
+    expect(text).toContain("上游 HTTP 404");
+    expect((await f.send()).statusCode).toBe(403);
+  });
   it("代理明細有無上游 HTTP 狀態碼都能還原原本的診斷", () => {
     for (const failure of [
       { kind: "connection" },
