@@ -240,6 +240,10 @@ for (const width of [375, 1440]) {
     expect(
       await page.evaluate(() => document.documentElement.scrollWidth),
     ).toBeLessThanOrEqual(width);
+    if (width === 375) {
+      await page.setViewportSize({ width, height: (await card.evaluate(element => element.scrollHeight)) + 240 });
+      await card.evaluate(element => element.scrollIntoView({ block: "center", behavior: "instant" }));
+    }
     await card.screenshot({ path: info.outputPath(`等待時間-${width}.png`) });
     await page
       .getByRole("button", { name: "清除", exact: true })
