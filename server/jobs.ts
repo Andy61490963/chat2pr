@@ -15,7 +15,7 @@ import { Budget } from "./budget.js";
 import { GitHub } from "./github.js";
 import { Line } from "./line.js";
 import type { DiscordChatPlatform } from "./discord-platform.js";
-import { tellGroupWaiting, waitNotificationBucket, waitNotificationKey } from "./group-replies.js";
+import { quotaWaitReason, tellGroupWaiting, waitNotificationBucket, waitNotificationKey } from "./group-replies.js";
 import { dueTriageGroups } from "./triage-window.js";
 import {
   Triage,
@@ -449,7 +449,7 @@ export async function startJobs(
           for (const t of held)
             if (!told.has(t.group_id)) {
               told.add(t.group_id);
-              await tellGroupWaiting(db, t.id, "quota");
+              await tellGroupWaiting(db, t.id, quotaWaitReason(error.kind));
             }
           return;
         }

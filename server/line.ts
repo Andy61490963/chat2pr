@@ -47,7 +47,7 @@ import {
   staleAnswerAck,
   type GroupReplyClaim,
 } from "./group-replies.js";
-import { subscriptionGateName } from "./subscription-gate.js";
+import { storedQuotaKind, subscriptionGateName, type QuotaHoldKind } from "../shared/subscription-quota.js";
 import { LINE_QUOTA } from "../shared/line-quota.js";
 import {
   answerByPostback,
@@ -517,14 +517,15 @@ export class Line {
       await c.query<{
         paused: boolean;
         triage_stopped: boolean;
-        ai_out: boolean;
+        quota_kind: QuotaHoldKind | null;
+        quota_detail: string | null;
         no_project: boolean;
       }>(
         `SELECT COALESCE((s.value->>'paused')::boolean,false) OR COALESCE((s.value->>'triage_paused')::boolean,false) AS paused,
            COALESCE((SELECT g.triage_failures>=3 FROM groups g WHERE g.id=$1),false) AS triage_stopped,
-           COALESCE(s.value->>'ai_mode','')='subscription' AND COALESCE((SELECT NOT ok FROM service_health WHERE name=$2),false) AS ai_out,
+           gate.probe_info->>'kind' AS quota_kind, gate.detail AS quota_detail,
            NOT EXISTS(SELECT 1 FROM group_projects gp JOIN projects p ON p.id=gp.project_id WHERE gp.group_id=$1 AND p.enabled AND p.validated_at IS NOT NULL) AS no_project
-         FROM settings s WHERE s.id=1`,
+         FROM settings s LEFT JOIN service_health gate ON gate.name=$2 AND NOT gate.ok AND s.value->>'ai_mode'='subscription' WHERE s.id=1`,
         [group, subscriptionGateName],
       )
     ).rows[0];
@@ -533,7 +534,7 @@ export class Line {
       paused: !!s?.paused,
       triageStopped: !!s?.triage_stopped,
       noProject: !!s?.no_project,
-      aiQuotaOut: !!s?.ai_out,
+      quotaKind: s?.quota_detail != null ? storedQuotaKind(s.quota_kind, s.quota_detail) : null,
     });
   }
   private async replyWithPending(

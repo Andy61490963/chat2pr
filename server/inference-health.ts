@@ -3,7 +3,7 @@ import {
   type UpstreamFailure,
   upstreamFailureText,
 } from "../shared/upstream-failure.js";
-import { subscriptionGateName } from "../shared/subscription-quota.js";
+import { runnerUnreachableQuota, subscriptionGateName, unknownSubscriptionQuota, type QuotaHoldKind } from "../shared/subscription-quota.js";
 import { checkHostResources, parseResources } from "./capacity.js";
 import type { Database } from "./db.js";
 import type { Runner } from "./execution.js";
@@ -13,7 +13,7 @@ import { lineServiceOutageMinutes } from "../shared/line-private.js";
 const inference = "codex_inference";
 const interval = 6 * 3600_000;
 type Prerequisite = { ok: boolean; detail: string; checked_at: Date };
-type Reading = Prerequisite & { name: string; quota?: Prerequisite | null; inferenceStatus?: 'healthy' | 'failed' | 'unknown' };
+type Reading = Prerequisite & { name: string; probe_info?: { kind?: QuotaHoldKind } | null; quota?: Prerequisite | null; inferenceStatus?: 'healthy' | 'failed' | 'unknown' };
 const deferred = 'codex_probe_deferred';
 const confirmation = lineServiceOutageMinutes * 60000;
 const recoveryInterval = 2 * 3600000;
@@ -25,7 +25,9 @@ export function visibleHealth(rows: Reading[], now = Date.now(), skipped = '') {
   const host = rows.find(row => row.name === 'host_resources');
   const gate = rows.find(row => row.name === subscriptionGateName);
   const login = rows.find(row => row.name === 'codex');
-  const reason = skipped || (gate && !gate.ok ? gate.detail : '') || (host && !host.ok ? host.detail : '') ||
+  const gateDetail = gate?.probe_info?.kind === "runner_unreachable" ? runnerUnreachableQuota
+    : gate?.probe_info?.kind === "unknown" ? unknownSubscriptionQuota : gate?.detail;
+  const reason = skipped || (gate && !gate.ok ? gateDetail : '') || (host && !host.ok ? host.detail : '') ||
     (hold && (!probe || Number(hold.checked_at) > Number(probe.checked_at)) ? hold.detail : '');
   const visible = rows.filter((row) => row.name !== inference && row.name !== deferred);
   for (const name of ["codex", subscriptionGateName]) {
@@ -44,7 +46,7 @@ export function visibleHealth(rows: Reading[], now = Date.now(), skipped = '') {
       result.quota = prerequisite
         ? {
             ok: prerequisite.ok,
-            detail: prerequisite.detail,
+            detail: gateDetail ?? prerequisite.detail,
             checked_at: prerequisite.checked_at,
           }
         : null;

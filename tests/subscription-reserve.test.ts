@@ -44,7 +44,7 @@ it("保留 60% 時，39% 可用，任一視窗達 40% 都會等待", async () =>
 });
 
 it("多個視窗達上限時，顯示最晚的重置時間", () => {
-  expect(subscriptionQuotaHold(account(40, 42), 60)).toContain(
+  expect(subscriptionQuotaHold(account(40, 42), 60)?.detail).toContain(
     "預計臺北時間 2/6 12:30 重置",
   );
 });

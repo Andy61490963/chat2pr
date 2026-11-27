@@ -13,6 +13,7 @@ import { Line } from "../server/line.js";
 import { Budget } from "../server/budget.js";
 import type { Task } from "../shared/types.js";
 import { Tasks } from "../server/tasks.js";
+import { systemHealth } from "../server/inference-health.js";
 
 beforeEach(async () => {
   await reset();
@@ -98,6 +99,21 @@ it.each([
   });
   await expect(gate.ensure()).rejects.toThrow(reason);
   expect(await db.one("SELECT ok,detail FROM service_health WHERE name=$1", [subscriptionGateName])).toMatchObject({ ok: false, detail: expect.stringContaining(reason) });
+});
+
+it("系統頁依額度關卡原因區分執行器拒絕連線與未知額度", async () => {
+  await subscription();
+  for (const [kind, expected] of [
+    ["runner_unreachable", "無法連上主機執行器"],
+    ["unknown", "無法確認 Codex 訂閱額度"],
+  ]) {
+    await db.query(
+      `INSERT INTO service_health(name,ok,detail,probe_info) VALUES($1,false,'舊版說明',$2)
+       ON CONFLICT(name) DO UPDATE SET probe_info=excluded.probe_info`,
+      [subscriptionGateName, { kind }],
+    );
+    expect((await systemHealth(db)).find(row => row.name === subscriptionGateName)?.quota?.detail).toContain(expected);
+  }
 });
 
 it("正向額度快取最多 30 秒；下次讀到 false 就停止", async () => {

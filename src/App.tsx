@@ -874,7 +874,7 @@ export function App() {
         ? null
         : quotaCheck.detail
       : accountSnapshot && (reserve > 0 || accountSnapshot.allowed === false)
-        ? subscriptionQuotaHold(accountSnapshot, reserve)
+        ? subscriptionQuotaHold(accountSnapshot, reserve)?.detail ?? null
         : null;
   const hold = state?.settings.paused ? null : (hostHold ?? subscriptionHold);
   const holdView = hostHold ? "system" : "settings";
