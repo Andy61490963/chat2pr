@@ -558,7 +558,7 @@ export function StationTrack({
       >
         <StatusBadge status={status} label={statusLabel ?? label} />
         {(!compact || ended) && (
-          <span className="min-w-0 text-xs text-muted-foreground [overflow-wrap:anywhere]">
+          <span className="min-w-0 text-xs text-muted-foreground wrap-anywhere">
             {ended ? (
               <>
                 {!duplicateAction && end?.actor &&
@@ -673,7 +673,7 @@ export function Clamped({ text, lines = 4 }: { text: string; lines?: 2 | 4 }) {
       <span
         ref={ref}
         className={cn(
-          "whitespace-pre-wrap [overflow-wrap:anywhere]",
+          "whitespace-pre-wrap wrap-anywhere",
           !open && (lines === 2 ? "line-clamp-2" : "line-clamp-4"),
         )}
       >

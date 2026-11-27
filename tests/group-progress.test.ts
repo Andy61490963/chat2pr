@@ -73,7 +73,7 @@ describe("「收到」依狀態選文字", () => {
     paused: false,
     triageStopped: false,
     noProject: false,
-    aiQuotaOut: false,
+    quotaKind: null,
   };
   it("正常狀態維持原本的 commandAck／followupAck", () => {
     expect(ackFor(normal)).toBe(commandAck);
@@ -85,14 +85,14 @@ describe("「收到」依狀態選文字", () => {
       paused: true,
       triageStopped: true,
       noProject: true,
-      aiQuotaOut: true,
+      quotaKind: "exhausted" as const,
     };
     expect(ackFor(all)).toBe(pausedAck);
     expect(ackFor({ ...all, paused: false })).toBe(triageStoppedAck);
-    expect(ackFor({ ...normal, noProject: true, aiQuotaOut: true })).toBe(
+    expect(ackFor({ ...normal, noProject: true, quotaKind: "exhausted" })).toBe(
       noProjectAck,
     );
-    expect(ackFor({ ...normal, aiQuotaOut: true })).toBe(aiQuotaAck);
+    expect(ackFor({ ...normal, quotaKind: "exhausted" })).toBe(aiQuotaAck);
     expect(ackFor({ ...normal, triageStopped: true, base: followupAck })).toBe(
       triageStoppedAck,
     );

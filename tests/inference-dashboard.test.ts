@@ -31,6 +31,55 @@ afterAll(() => db.close());
 
 const deferral = () => db.one<{ detail: string }>("SELECT detail FROM service_health WHERE name='codex_probe_deferred'");
 
+it.each([
+  ['完全同時', '000500', 'unknown'],
+  ['晚一微秒', '000501', 'unknown'],
+  ['早一微秒', '000499', 'failed'],
+])('延後紀錄與真實讀數%s時，系統頁與升級後顯示相同結果', async (_scenario, fraction, expected) => {
+  const second = '2026-01-01T00:00:00';
+  const probeTime = `${second}.000500Z`;
+  const now = vi.spyOn(Date, 'now').mockReturnValue(new Date(probeTime).getTime());
+  try {
+    await db.query(`INSERT INTO service_health(name,ok,detail,reading_ok,checked_at) VALUES
+      ('codex_inference',false,'上游回應 502',false,$1),
+      ('codex_probe_deferred',false,'稍後檢查',null,$2)`, [probeTime, `${second}.${fraction}Z`]);
+    const check = async () => {
+      const row = (await systemHealth(db)).find(item => item.name === 'codex');
+      expect(row).toMatchObject({ inferenceStatus: expected, detail: expected === 'unknown' ? '稍後檢查 上次真實讀數：上游回應 502' : '上游回應 502' });
+    };
+    await check();
+    await db.migrate();
+    await check();
+  } finally {
+    now.mockRestore();
+  }
+});
+
+it.each(['ISO, YMD', 'SQL, DMY'])('日期格式 %s：首次失敗不把時間進位到未來，後續讀數保留觀測的微秒', async dateStyle => {
+  const started = new Date('2026-01-01T00:00:00Z');
+  const transaction = db.transaction.bind(db);
+  const clock = vi.spyOn(db, 'transaction').mockImplementation(fn => transaction(async client => {
+    await client.query(`CREATE SCHEMA test_probe_clock;
+      CREATE FUNCTION test_probe_clock.now() RETURNS timestamptz LANGUAGE sql AS $$ SELECT timestamptz '2026-01-01T00:00:00.000800Z' $$;
+      CREATE FUNCTION test_probe_clock.clock_timestamp() RETURNS timestamptz LANGUAGE sql AS $$ SELECT timestamptz '2026-01-01T00:00:01.000800Z' $$;
+      SET LOCAL search_path = test_probe_clock, pg_catalog, public`);
+    await client.query("SELECT set_config('DateStyle',$1,true), set_config('TimeZone','Asia/Taipei',true)", [dateStyle]);
+    const result = await fn(client);
+    await client.query('DROP SCHEMA test_probe_clock CASCADE');
+    return result;
+  }));
+  try {
+    await recordWorkInferenceFailure(db, null, started, { kind: 'connection' });
+    expect(await db.one(`SELECT checked_at <= timestamptz '2026-01-01T00:00:00.000800Z' AS valid
+      FROM service_health WHERE name='codex_inference'`)).toEqual({ valid: true });
+    await recordWorkInference(db, null, new Date(started.getTime() + 1000));
+    expect(await db.one(`SELECT checked_at = timestamptz '2026-01-01T00:00:01.000800Z' AS valid
+      FROM service_health WHERE name='codex_inference'`)).toEqual({ valid: true });
+  } finally {
+    clock.mockRestore();
+  }
+});
+
 it.each(["成功", "失敗", "工作成功", "工作失敗"])("延後之後取得%s讀數，清除延後列且不產生獨立異常", async source => {
   const runner = new HttpRunner();
   const ok = source.endsWith("成功");
@@ -72,12 +121,39 @@ it("未採用的工作失敗讀數保留延後原因，不把舊探測時間當�
 
 it("部署冒煙不列出延後說明，但仍列出真實推論失敗", async () => {
   const deploy = readFileSync(new URL("../scripts/deploy.mjs", import.meta.url), "utf8");
-  expect(deploy).toMatch(/const failing\s*=\s*smokeHealth\(sql\)/);
+  expect(deploy).toContain("await smokeHealth(sql, readyAt, until)");
   const { smokeHealth } = await import("../scripts/lib/smoke-health.mjs");
   await db.query("INSERT INTO service_health(name,ok,detail) VALUES ('codex_probe_deferred',false,'稍後檢查'),('codex_inference',false,'上游回應失敗')");
-  const failures = (await smokeHealth(query => db.query(query))).map(row => row.name);
+  const failures = await smokeHealth(async query => (await db.query(query)).map(row => row.name).join("\n"));
   expect(failures).toContain("codex_inference");
   expect(failures).not.toContain("codex_probe_deferred");
+});
+
+it.each([
+  ["重讀成功", true, "額度可用"],
+  ["重讀仍失敗", false, "無法確認額度"],
+  ["額度達上限", false, "訂閱額度已達上限"],
+] as const)("部署後首次連線失敗，%s時以新讀數回報", async (_, ok, detail) => {
+  const { smokeHealth } = await import("../scripts/lib/smoke-health.mjs");
+  const gate = "codex_subscription_gate";
+  const readyAt = new Date();
+  await db.query("INSERT INTO service_health(name,ok,detail,checked_at) VALUES($1,false,'尚未連上執行器',now()-interval '1 minute')", [gate]);
+  const failures = await smokeHealth(async query => (await db.query(query)).map(row => row.name).join("\n"), readyAt, async (check, seconds) => {
+    expect(seconds).toBe(120);
+    expect(await check()).toBe(false);
+    await db.query("UPDATE service_health SET ok=$2,detail=$3,checked_at=$4 WHERE name=$1", [gate, ok, detail, new Date(+readyAt + 1000)]);
+    await db.query("INSERT INTO service_health(name,ok,detail) VALUES('codex_inference',false,'推論失敗')");
+    return check();
+  });
+  expect(failures?.split("\n").includes(gate)).toBe(!ok);
+  expect(failures).toContain("codex_inference");
+});
+
+it.each(["缺少讀數", "只有重啟前的成功讀數"])("部署後%s，逾時仍列出額度檢查", async kind => {
+  const { smokeHealth } = await import("../scripts/lib/smoke-health.mjs");
+  if (kind !== "缺少讀數") await db.query("INSERT INTO service_health(name,ok,detail,checked_at) VALUES('codex_subscription_gate',true,'可用',now()-interval '1 day')");
+  const failures = await smokeHealth(async query => (await db.query(query)).map(row => row.name).join("\n"), new Date(), async check => check());
+  expect(failures).toContain("codex_subscription_gate");
 });
 
 it("升級時只清除同模型已被真實讀數取代的舊延後說明", async () => {

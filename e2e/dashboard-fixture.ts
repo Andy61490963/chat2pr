@@ -1221,6 +1221,14 @@ export async function mockDashboard(
       relinked: 0,
       firstReplySeconds: null,
       answerSeconds: null,
+      excludedGroupIds: [],
+      answerSamples: 0,
+      answerSources: 0,
+      answerP95Seconds: null,
+      firstReplySamples: 0,
+      firstReplySources: 0,
+      firstReplyP95Seconds: null,
+      cancelled: 0,
       reworkRate: null,
       reworkBase: 0,
     },
@@ -1267,6 +1275,16 @@ export async function mockDashboard(
       return route.abort();
     if (!pathname.startsWith("/api/")) return route.continue();
     if (request.method() === "GET" && Object.hasOwn(routes, pathname)) {
+      if (pathname === "/api/metrics/friction") {
+        const query = new URL(request.url()).searchParams;
+        return route.fulfill({
+          json: {
+            ...(routes[pathname] as object),
+            groupId: query.get("group_id"),
+            excludedGroupIds: query.getAll("exclude_group_id"),
+          },
+        });
+      }
       return route.fulfill({ json: routes[pathname] });
     }
     if (request.method() === "GET" && pathname === reviewImagePath) {

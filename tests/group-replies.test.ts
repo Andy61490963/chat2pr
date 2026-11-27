@@ -17,7 +17,10 @@ vi.mock("../server/config.js", async (original) => ({
     lineToken: "fictional-line-token",
   }),
 }));
-import { db, reset, fixture, session } from "./helpers.js";
+import { db, reset, fixture, session, confirmTask } from "./helpers.js";
+import { SubscriptionGate } from "../server/subscription-gate.js";
+import { Execution } from "../server/execution.js";
+import { Budget } from "../server/budget.js";
 import { buildApp } from "../server/app.js";
 import { Line } from "../server/line.js";
 import { discordId } from "../server/chat-platform.js";
@@ -1679,6 +1682,41 @@ describe("用 reply token 取回與說實話", () => {
         "SELECT 1 FROM notifications WHERE group_id='group-a' AND sent_at IS NULL",
       ),
     ).toHaveLength(1);
+  });
+
+  it.each([
+    ["執行器拒絕連線", "runner_unreachable", false],
+    ["讀數過期", "unknown", false],
+    ["已達上限", "exhausted", true],
+    ["觸及保留門檻", "reserve", true],
+  ] as const)("額度%s時，群組收到回覆與等待推播都說明正確原因", async (scenario, kind, limited) => {
+    await settings({ reply_mode: "all" });
+    await setSettings({ ai_mode: "subscription", codex_reserve_percent: 10 });
+    const gate = new SubscriptionGate(db, async () => {
+      if (scenario === "執行器拒絕連線")
+        throw new TypeError("連線失敗", { cause: { code: "ECONNREFUSED" } });
+      return {
+        allowed: scenario !== "已達上限",
+        checkedAt: new Date(scenario === "讀數過期" ? 0 : Date.now()).toISOString(),
+        limits: [{ windows: [{ usedPercent: scenario === "觸及保留門檻" ? 90 : 0, resetsAt: null }] }],
+      };
+    });
+    await expect(gate.ensure()).rejects.toThrow();
+    await send("quota1", "/任務 調整按鈕顏色");
+    expect.soft(lastReply()[0]).toContain(limited ? "額度暫時用完" : "暫時無法確認 AI 額度");
+    const task = await db.one<{ id: string }>(
+      "INSERT INTO tasks(project_id,group_id,title,summary,acceptance,status,approved_version,dedupe_key) VALUES($1,'group-a','範例工作','調整按鈕','[]','queued',1,'quota1') RETURNING id",
+      [project],
+    );
+    await confirmTask(task.id);
+    const runner = { call: vi.fn(), upload: vi.fn() };
+    await new Execution(db, new GitHub(), line, new Budget(db), runner).execute(task.id);
+    push = async () => Response.json({});
+    await line.flushNotifications();
+    const waiting = pushes.find(message => message.to === "group-a")?.text;
+    expect.soft(waiting).toContain(limited ? "沒有可用的 AI 額度" : "暫時無法確認 AI 額度");
+    if (!limited) expect([lastReply()[0], waiting].join(" ")).not.toMatch(/用完|沒有可用/);
+    expect(await db.one("SELECT probe_info->>'kind' AS kind FROM service_health WHERE name='codex_subscription_gate'")).toEqual({ kind });
   });
 
   it("「收到」依暫停、判讀暫停、沒有可用專案、AI 額度關閉說明；正常時維持原文字", async () => {

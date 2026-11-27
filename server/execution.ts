@@ -80,6 +80,7 @@ import {
   groupText,
   notifyGroup,
   tellGroupWaiting,
+  quotaWaitReason,
 } from "./group-replies.js";
 import { snapshotDirectory } from "../shared/project-database.js";
 import {
@@ -1228,7 +1229,8 @@ export class Execution {
           await tellGroupWaiting(
             this.db,
             task.id,
-            e.message.includes("今日執行次數") ? "daily" : "quota",
+            e instanceof SubscriptionBlocked ? quotaWaitReason(e.kind)
+              : e.message.includes("今日執行次數") ? "daily" : "quota",
           );
         }
       };
@@ -2451,7 +2453,7 @@ ${querySummary(answer)}`,
             ? e.message
             : `${e.message}，工作已保留，額度恢復後自動繼續。`,
         );
-        await tellGroupWaiting(this.db, taskId, "quota");
+        await tellGroupWaiting(this.db, taskId, e instanceof SubscriptionBlocked ? quotaWaitReason(e.kind) : "quota");
         return;
       }
       // 看板、通知與群組只看分類後的白話說明；堆疊與完整輸出只在上面的執行紀錄。

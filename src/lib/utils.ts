@@ -13,15 +13,17 @@ const twMerge = extendTailwindMerge({
     classGroups: {
       "grid-cols": [{ "grid-cols": [
         "action", "group", "project", "form-action", "status-options",
-        "task-tabs", "description", "description-pairs",
+        "task-tabs", "description", "description-pairs", "login", "shell",
+        "workbench", "workbench-wide", "review-row", "run-details", "settings",
       ] }],
-      w: ["w-media-dialog", "w-disk-used"],
+      "grid-rows": [{ "grid-rows": ["review-touch", "review-compact"] }],
+      w: ["w-media-dialog", "w-disk-used", "w-quota-left"],
       h: ["h-select-trigger"],
       "min-w": ["min-w-select-trigger"],
       "max-w": ["max-w-overlay", "max-w-media-dialog", "max-w-select-available"],
-      "max-h": ["max-h-sheet", "max-h-media", "max-h-notifications", "max-h-floating"],
+      "max-h": ["max-h-sheet", "max-h-media", "max-h-notifications", "max-h-floating", "max-h-review-actions", "max-h-overlay"],
       "transform-origin": ["origin-floating"],
-      pb: ["pb-safe"],
+      pb: ["pb-safe", "pb-safe-compact", "pb-safe-inset", "pb-bottom-nav"],
     },
   },
 });

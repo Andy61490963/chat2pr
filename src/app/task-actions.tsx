@@ -1,3 +1,4 @@
+import { DataList } from "@/components/ui/layout";
 import { useId, useRef, useState, type ReactElement, type ReactNode, type Ref } from "react";
 import { ChevronRight, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -131,7 +132,7 @@ export function AssignProject({
             return (
               <li
                 key={project.id}
-                className="min-w-0 space-y-1 [overflow-wrap:anywhere]"
+                className="min-w-0 space-y-1 wrap-anywhere"
               >
                 <p className="font-semibold">
                   看起來是 {project.name}（尚未綁定這個群組）
@@ -201,7 +202,7 @@ export function AssignProject({
                 : `已選滿 ${maxRelatedProjects} 個參考專案，取消勾選後即可更換。`}
             </p>
           )}
-          <ul role="list" className="mt-2 divide-y rounded-lg border bg-background">
+          <DataList role="list" variant="bordered" className="mt-2 bg-background">
             {bound.map((p) => {
               const choiceId = `${fieldId}-${p.id}-choice`;
               const titleId = `${fieldId}-${p.id}-name`;
@@ -232,7 +233,7 @@ export function AssignProject({
                         )
                       }
                     />
-                    <span className="min-w-0 [overflow-wrap:anywhere]">
+                    <span className="min-w-0 wrap-anywhere">
                       <span id={titleId} className="block font-medium">
                         {p.name}
                       </span>
@@ -265,7 +266,7 @@ export function AssignProject({
                 </li>
               );
             })}
-          </ul>
+          </DataList>
         </fieldset>
       )}
       {!options.length && (
@@ -293,7 +294,7 @@ export function AssignProject({
         </p>
       )}
       {chosen && (
-        <Label className="min-h-11 font-normal text-muted-foreground [overflow-wrap:anywhere]">
+        <Label className="min-h-11 font-normal text-muted-foreground wrap-anywhere">
           <Checkbox
             checked={remember}
             onCheckedChange={(v) => setRemember(v === true)}
@@ -482,7 +483,7 @@ function RejectTaskButton({
       </DialogTrigger>
       <DialogContent
         showCloseButton={false}
-        className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-lg motion-reduce:animate-none"
+        className="max-h-overlay overflow-y-auto sm:max-w-lg motion-reduce:animate-none"
       >
         <DialogHeader className="text-left">
           <DialogTitle>結束任務？</DialogTitle>

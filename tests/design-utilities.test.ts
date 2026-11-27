@@ -25,6 +25,7 @@ const forbidden = [
   "drop-shadow-lg",
   "text-shadow-lg",
 ];
+const radiusAliases = ["rounded-lg", "rounded-2xl"];
 const valid = [
   "bg-background",
   "border-input",
@@ -71,6 +72,7 @@ beforeAll(async () => {
   const path = resolve("src/styles.css");
   const candidates = [
     ...forbidden,
+    ...radiusAliases,
     ...valid,
     ...Object.keys(dynamic),
     ...legacy,
@@ -94,9 +96,7 @@ it("基準中的工具類別仍產生樣式，遷移中的圓角統一為六像�
     [...rules.keys()].map((s) => s.slice(1).replace(/\\(.)/g, "$1")),
   );
   expect(legacy.filter((candidate) => !generated.has(candidate))).toEqual([]);
-  for (const name of legacy.filter((value) =>
-    ["rounded-lg", "rounded-2xl"].includes(value),
-  )) {
+  for (const name of radiusAliases) {
     expect(rules.get("." + name)?.toString()).toMatch(
       /border-radius:\s*var\(--radius-md\)/,
     );

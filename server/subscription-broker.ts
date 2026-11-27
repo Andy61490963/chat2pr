@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { Transform } from "node:stream";
 import { z } from "zod";
-import { maxCodexReserve, subscriptionQuotaHold, unknownSubscriptionQuota, type SubscriptionUsage } from "../shared/subscription-quota.js";
+import { maxCodexReserve, subscriptionQuotaHold, type SubscriptionUsage } from "../shared/subscription-quota.js";
 import {
   isRetryableUpstreamFailure,
   parseUpstreamFailure,
@@ -305,7 +305,7 @@ export class SubscriptionBroker {
     }
     if (probeReservePercent !== undefined) {
       const hold = subscriptionQuotaHold(identity.quota ?? { allowed: null }, probeReservePercent);
-      if (hold) throw safeError(429, hold, hold === unknownSubscriptionQuota ? "quota_unavailable" : "quota");
+      if (hold) throw safeError(429, hold.detail, hold.kind === "unknown" ? "quota_unavailable" : "quota");
     }
     return identity;
   }

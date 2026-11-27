@@ -3,8 +3,21 @@ export const maxCodexReserve = 90;
 export const reserveLabel = "保留給你個人使用";
 export const unknownSubscriptionQuota =
   "無法確認 Codex 訂閱額度，已保留訊息與工作，稍後會重新檢查";
+export const runnerUnreachableQuota =
+  "無法連上主機執行器，無法確認 Codex 訂閱額度；已保留訊息與工作，稍後會重新檢查";
 export const exhaustedSubscriptionQuota = "Codex 訂閱額度已達上限";
 export const reservedQuotaHold = "已用到 chat2pr 可用的上限";
+
+export type QuotaHoldKind = "exhausted" | "reserve" | "unknown" | "runner_unreachable";
+type QuotaHold = { kind: QuotaHoldKind; detail: string };
+
+export function storedQuotaKind(kind: QuotaHoldKind | null, detail: string): QuotaHoldKind {
+  if (kind) return kind;
+  if (detail.startsWith(exhaustedSubscriptionQuota)) return "exhausted";
+  if (detail.startsWith(reservedQuotaHold)) return "reserve";
+  if (detail === runnerUnreachableQuota) return "runner_unreachable";
+  return "unknown";
+}
 
 type QuotaWindow = { usedPercent: number; resetsAt: string | null };
 export type SubscriptionUsage = {
@@ -35,7 +48,7 @@ function resetNote(windows: QuotaWindow[]) {
 export function subscriptionQuotaHold(
   account: SubscriptionUsage,
   reserve: number,
-): string | null {
+): QuotaHold | null {
   const windows = account.limits?.flatMap((l) => l.windows) ?? [];
   const reached =
     reserve > 0
@@ -45,17 +58,14 @@ export function subscriptionQuotaHold(
         )
       : [];
   if (reached.length)
-    return `${reservedQuotaHold}（保留 ${reserve}% 給你）${resetNote(reached)}，額度恢復或你調低保留比例至額度可用後會自動繼續。`;
+    return { kind: "reserve", detail: `${reservedQuotaHold}（保留 ${reserve}% 給你）${resetNote(reached)}，額度恢復或你調低保留比例至額度可用後會自動繼續。` };
   if (account.allowed === false)
-    return (
-      exhaustedSubscriptionQuota +
-      resetNote(windows.filter((w) => w.usedPercent >= 100))
-    );
+    return { kind: "exhausted", detail: exhaustedSubscriptionQuota + resetNote(windows.filter((w) => w.usedPercent >= 100)) };
   if (
     account.allowed !== true ||
     (reserve > 0 &&
       (!windows.length || windows.some((w) => !Number.isFinite(w.usedPercent))))
   )
-    return unknownSubscriptionQuota;
+    return { kind: "unknown", detail: unknownSubscriptionQuota };
   return null;
 }
